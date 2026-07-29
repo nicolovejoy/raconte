@@ -52,6 +52,17 @@ struct Manifest: Codable, Sendable, Equatable {
     var lastKnownFrameOffset: Int
     var interruptions: [InterruptionLogEntry]
     var final: FinalRef
+    // Operational fields referenced by the §2 transition table. Optional so they
+    // stay absent (nil → key omitted under synthesized Codable, like
+    // AudioFormatDescriptor.bytesPerFrame) until a transition sets them.
+    /// Set true when finalize gives up after its retry budget (row 18): raw PCM is kept forever.
+    var needsAttention: Bool?
+    /// Last error tag, e.g. "diskFull" (row 19).
+    var lastError: String?
+    /// Resume-reacquire failures so far (row 10).
+    var retryCount: Int?
+    /// Finalize encode/verify attempts so far (rows 17/18).
+    var finalizeAttempts: Int?
 
     static let currentSchemaVersion = 1
 
@@ -65,7 +76,11 @@ struct Manifest: Codable, Sendable, Equatable {
          segmentCount: Int = 0,
          lastKnownFrameOffset: Int = 0,
          interruptions: [InterruptionLogEntry] = [],
-         final: FinalRef = FinalRef()) {
+         final: FinalRef = FinalRef(),
+         needsAttention: Bool? = nil,
+         lastError: String? = nil,
+         retryCount: Int? = nil,
+         finalizeAttempts: Int? = nil) {
         self.captureID = captureID
         self.schemaVersion = schemaVersion
         self.createdAt = createdAt
@@ -77,5 +92,9 @@ struct Manifest: Codable, Sendable, Equatable {
         self.lastKnownFrameOffset = lastKnownFrameOffset
         self.interruptions = interruptions
         self.final = final
+        self.needsAttention = needsAttention
+        self.lastError = lastError
+        self.retryCount = retryCount
+        self.finalizeAttempts = finalizeAttempts
     }
 }

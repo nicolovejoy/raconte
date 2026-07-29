@@ -1,0 +1,53 @@
+name: Raconte
+options:
+  bundleIdPrefix: org.recountly
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 8UK463WB83
+schemes:
+  Raconte:
+    build:
+      targets:
+        Raconte: all
+    test:
+      targets: [RaconteTests]
+    run:
+      config: Debug
+targets:
+  Raconte:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [Raconte]
+    info:
+      path: Raconte/Info.plist
+      properties:
+        CFBundleDisplayName: Raconte
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: Raconte records your spoken journal entries.
+        UIBackgroundModes: [audio]
+    entitlements:
+      path: Raconte/Raconte.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.device.audio-input: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.recountly.raconte
+        ENABLE_HARDENED_RUNTIME: false
+  RaconteTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources: [RaconteTests]
+    dependencies:
+      - target: Raconte
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        "TEST_HOST[sdk=macosx*]": $(BUILT_PRODUCTS_DIR)/Raconte.app/Contents/MacOS/Raconte

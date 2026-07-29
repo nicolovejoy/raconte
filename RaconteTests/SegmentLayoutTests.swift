@@ -176,6 +176,37 @@ final class SegmentLayoutTests: XCTestCase {
         XCTAssertTrue(json.contains("\"durationFrames\" : null"))
     }
 
+    /// Operational fields (§2 rows 10/17/18/19) are optional: absent when nil,
+    /// present + round-tripping when set.
+    func testManifestOperationalFieldsRoundTripAndOmission() throws {
+        var m = Manifest(
+            captureID: "01J000000000000000000000",
+            createdAt: fixedPointDate("2026-07-29T15:00:00.000Z"),
+            state: .captured, stateSeq: 9,
+            stateUpdatedAt: fixedPointDate("2026-07-29T15:05:00.000Z"),
+            format: AudioFormatDescriptor(sampleRate: 48000, channels: 1,
+                                          commonFormat: .pcmFormatFloat32, interleaved: false))
+
+        let bare = try CaptureCoding.encoder().encode(m)
+        let bareJSON = String(decoding: bare, as: UTF8.self)
+        for key in ["needsAttention", "lastError", "retryCount", "finalizeAttempts"] {
+            XCTAssertFalse(bareJSON.contains("\"\(key)\""), "\(key) omitted when nil")
+        }
+        XCTAssertEqual(try CaptureCoding.decoder().decode(Manifest.self, from: bare), m)
+
+        m.needsAttention = true
+        m.lastError = "diskFull"
+        m.retryCount = 2
+        m.finalizeAttempts = 3
+        let full = try CaptureCoding.encoder().encode(m)
+        XCTAssertEqual(try CaptureCoding.decoder().decode(Manifest.self, from: full), m)
+        let fullJSON = String(decoding: full, as: UTF8.self)
+        XCTAssertTrue(fullJSON.contains("\"needsAttention\" : true"))
+        XCTAssertTrue(fullJSON.contains("\"lastError\" : \"diskFull\""))
+        XCTAssertTrue(fullJSON.contains("\"retryCount\" : 2"))
+        XCTAssertTrue(fullJSON.contains("\"finalizeAttempts\" : 3"))
+    }
+
     func testManifestDefaultFinalRef() {
         let m = Manifest(captureID: "x", createdAt: Date(), state: .preparing,
                          stateSeq: 0, stateUpdatedAt: Date(),

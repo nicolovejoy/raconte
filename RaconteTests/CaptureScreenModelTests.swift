@@ -97,6 +97,66 @@ final class CaptureScreenModelTests: XCTestCase {
                       "final m4a missing — live finalize did not complete")
     }
 
+    /// Doc test 22 (rapid start/stop cycles): every cycle must land as its own
+    /// finalized entry — none merged, none dropped, no stuck non-idle state after.
+    func testRapidRecordDoneCyclesProduceTenSeparateEntries() async throws {
+        let recorder = ModelFakeRecorder()
+        let encoder = FakeAudioEncoder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: encoder)
+        await model.bootstrap()
+
+        for cycle in 1...10 {
+            let live = model.coordinator
+            await model.record()
+            recorder.feed(frames: 100)
+            await model.done()
+            await waitUntil({ live.finalizeQueue.isEmpty == false },
+                            "cycle \(cycle) never committed")
+            model.handleFinalizeQueue()   // the view's onChange relay
+            await waitUntil({ model.finished.count == cycle && model.coordinator !== live },
+                            "cycle \(cycle) did not finalize + respawn")
+        }
+
+        XCTAssertEqual(model.finished.count, 10)
+        XCTAssertEqual(Set(model.finished.map(\.captureID)).count, 10, "entries must be distinct")
+        XCTAssertEqual(encoder.calls.count, 10)
+        XCTAssertEqual(model.coordinator.phase, .idle, "stuck non-idle state after last cycle")
+    }
+
+    /// Doc test 7 (idle relaunch): a fresh launch over a root holding only complete
+    /// captures shows no spurious recovery banner and keeps the entries playable.
+    func testIdleRelaunchShowsNoSpuriousRecoveryBannerAndKeepsRecordings() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        let live = model.coordinator
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.done()
+        await waitUntil({ live.finalizeQueue.isEmpty == false }, "capture never committed")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.finished.count == 1 }, "capture never finalized")
+
+        // "Relaunch": a brand-new model over the same root.
+        let relaunch = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder())
+        await relaunch.bootstrap()
+
+        XCTAssertTrue(relaunch.visibleRecovered.isEmpty, "spurious recovery banner")
+        XCTAssertEqual(relaunch.finished.map(\.captureID), model.finished.map(\.captureID))
+    }
+
     /// Launch-recovery fills the queue while the phase is idle — the onChange relay
     /// must NOT respawn the coordinator then (bootstrap drains that queue itself).
     func testLaunchRecoveryQueueDoesNotRespawnCoordinator() async throws {

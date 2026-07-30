@@ -59,6 +59,17 @@ private final class FakeRecorder: EngineRecording, @unchecked Sendable {
     }
 }
 
+/// Settable test clock for the coordinator's injected `now`.
+private final class MutableClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _now: Date
+    init(_ start: Date) { _now = start }
+    var now: Date { lock.withLock { _now } }
+    func advance(by seconds: TimeInterval) {
+        lock.withLock { _now = _now.addingTimeInterval(seconds) }
+    }
+}
+
 @MainActor
 final class CaptureCoordinatorTests: XCTestCase {
     private var root: URL!
@@ -77,7 +88,8 @@ final class CaptureCoordinatorTests: XCTestCase {
 
     private func makeCoordinator(session: FakeSession, recorder: FakeRecorder,
                                  byteCap: Int = .max,
-                                 flush: Duration = .zero) -> CaptureCoordinator {
+                                 flush: Duration = .zero,
+                                 now: @escaping @Sendable () -> Date = Date.init) -> CaptureCoordinator {
         let root = root!
         return CaptureCoordinator(
             capturesRoot: root,
@@ -88,6 +100,7 @@ final class CaptureCoordinatorTests: XCTestCase {
                              config: .init(rotationDurationSeconds: .infinity, rotationByteCap: byteCap))
             },
             mintCaptureID: { kCaptureID },
+            now: now,
             flushInterval: flush)
     }
 
@@ -265,6 +278,34 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(manifest.state, .captured)
         XCTAssertEqual(manifest.segmentCount, 1)
         XCTAssertEqual(manifest.lastKnownFrameOffset, frames)
+    }
+
+    // MARK: doc test 20 — capture spanning midnight stays one continuous entry
+
+    func testMidnightCrossingStaysOneContinuousCapture() async throws {
+        // 23:59:00 UTC on an arbitrary day; nothing in the pipeline is calendar-keyed,
+        // this pins that property (no date-based splitting, sane duration math).
+        let clock = MutableClock(Date(timeIntervalSince1970: 20_000 * 86_400 - 60))
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          now: { clock.now })
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        clock.advance(by: 120)          // cross midnight
+        recorder.feed(frames: 250)
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertEqual(coordinator.elapsed, 120, accuracy: 0.01)
+
+        // One capture directory, one continuous segment chain — no split at the day
+        // boundary.
+        let dirs = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        XCTAssertEqual(dirs.count, 1)
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .captured)
+        XCTAssertEqual(manifest.lastKnownFrameOffset, 1000)
     }
 
     // MARK: 5 — effect order: manifest before the state-dependent side effect

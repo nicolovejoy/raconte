@@ -1,21 +1,31 @@
 # CLAUDE.md
 
-## Status 2026-07-29 (late): iPad smoke runs 1–6 done, all PASS (with accepted caveats)
+## Status 2026-07-30 (overnight autonomous session)
 
-Run log: `docs/m1-smoke-log.md` (sequential run numbers, continues across sessions;
-next: 7). Landed today from smoke findings: playback audio-session fix
-(`CapturePlayback.ensurePlaybackSession` — cold-launch `.soloAmbient` silenced recovered
-playback), debug-sheet contrast fix, playback position UI (`PlaybackProgressLine`).
-Owner-accepted caveat: small audible hiccup at backgrounding transition edges (issue #2,
-down the road). Open issues: #1 background-recording awareness (M2 design input),
-#2 gap-honest capture (low priority), #4 flaky CI interruption test (chase if it recurs).
+Landed overnight (all pushed to main):
+- Issue #4 CLOSED: flaky interruption test root-caused (test read the manifest between
+  sidecar close and manifest write — `send()` publishes phase before disk effects land);
+  test now polls the on-disk manifest, stress-verified ×200.
+- Issue #5 FIXED, pending 30s device verification: route loss now auto-resumes onto the
+  current default input (fresh engine, pinned to the capture's canonical format; tap
+  resamples if the new device's rate differs). `mediaServicesReset` now surfaces Resume.
+- Smoke automation: doc tests 7/20/21/22 at the model/encoder layer; NEW `RaconteUITests`
+  (scheme `RaconteUI`, iOS simulator) drives real UI flows — record→finalize,
+  kill→recover-banner, idle relaunch, repeated cycles — via a DEBUG synthetic sine
+  recorder (`Capture/Debug/UITestSupport.swift`, env `RACONTE_UITEST_ID`). No mic, no
+  TCC. CI runs them in a new sim step. macOS UI testing needs interactive
+  automation-mode permission → deliberately simulator-only.
+
+Run log: `docs/m1-smoke-log.md` (next manual run: 10). Owner-accepted caveat: small
+audible hiccup at backgrounding edges (issue #2). Open issues: #1 background-recording
+awareness (M2 design input), #2 gap-honest capture (low), #5 (verify), #6 scrubbing.
 
 **Next (owner + next session):**
-1. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
+1. Verify issue #5 on the mini (doc test 31): record on one mic → switch input in
+   System Settings → Sound mid-recording → both halves present. Then close #5.
+2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
-   eventual iPhone pass. See `docs/m1-smoke-log.md` (next run: 10).
-2. Issue #5: macOS input-device switch mid-recording loses post-switch audio (the one
-   FAIL). Owner-priority TBD; iPhone pass deferred until iPad+Mac solid.
+   eventual iPhone pass.
 3. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
    subagent pipeline; fold issue #1 (background awareness) into that design.
 4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
@@ -66,6 +76,8 @@ delta passes, 31 tests total).
 - Build (macOS): `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' build`
 - Test (macOS): `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' test`
 - iOS simulator: same with `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names)
+- UI tests (simulator only — macOS needs interactive automation permission):
+  `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' test`
 
 ## Working style
 

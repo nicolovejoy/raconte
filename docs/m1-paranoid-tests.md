@@ -16,6 +16,17 @@ help triggering an alarm from another room.
 Before starting: fully charge the phone or keep it plugged in — several tests take 60+
 minutes real time. Have Settings open in the background switcher for the permission tests.
 
+**Automated coverage (2026-07-30)** — these no longer need routine manual passes; run
+them by hand only after changes to the areas they touch. Unit/model layer (CI, every
+push): 7, 20, 22 (`CaptureScreenModelTests`/`CaptureCoordinatorTests`), 21 scaled to a
+150-segment encode (`AudioEncoderRoundTripTests`), 31's resume/resample logic
+(`CaptureCoordinatorTests.testRouteLostAutoResumesOntoNewDevice`, resample tests in
+`AudioEngineRecorderTests`). UI flows on iOS simulator (CI step, scheme `RaconteUI`):
+the app-level halves of 1/28 (record→stop→playable entry), 6/30 (kill mid-recording →
+recovery banner), 7 (idle relaunch), 22 (repeated cycles). Still human-only: anything
+needing real hardware or OS surfaces — locks, calls, Siri, Bluetooth, real device
+switches, storage pressure, 60-min wall-clock runs.
+
 ## 1. Baseline
 
 1. **Cold start, first recording.**

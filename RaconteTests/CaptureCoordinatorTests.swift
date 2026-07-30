@@ -150,6 +150,10 @@ final class CaptureCoordinatorTests: XCTestCase {
         recorder.feed(frames: 750)
         session.emit(.interrupted)
         await waitUntil({ coordinator.phase == .interrupted }, "did not reach interrupted")
+        // `send` publishes the phase before realizing disk effects, so the manifest
+        // write can still be in flight when the phase flips — wait for the disk too.
+        await waitUntil({ [self] in (try? decodeManifest())?.state == .interrupted },
+                        "manifest not interrupted on disk")
 
         let s0 = try decodeSidecar(0)
         XCTAssertEqual(s0.frameCount, 750)

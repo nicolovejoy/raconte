@@ -1,14 +1,13 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var model = CaptureScreenModel.live()
+
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Raconte")
-                .font(.largeTitle.weight(.semibold))
-            Text("Milestone 1: capture — under construction")
-                .foregroundStyle(.secondary)
-        }
-        .padding()
+        CaptureView(model: model)
+            #if os(macOS)
+            .frame(minWidth: 420, minHeight: 560)
+            #endif
     }
 }
 

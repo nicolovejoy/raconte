@@ -104,6 +104,46 @@ minutes real time. Have Settings open in the background switcher for the permiss
    FAIL = recording is missing, playback is truncated, or the app has to be told to retry
    with no automatic recovery.
 
+### Kill-at-every-transition (test harness)
+
+Tests 6–9 above hit specific moments by racing the clock. `DebugMenuView`
+(`Capture/Debug/DebugMenuView.swift`, backed by `TransitionBreakpointController` in
+`Capture/Debug/TransitionBreakpoints.swift`) makes this deterministic instead: it
+lists every `CaptureState`; arming one pauses the *next* transition into that state
+(`gate(at:)`, called right as the machine decides on the new phase, before that
+transition's disk effects run) so you can kill exactly there rather than guessing a
+timing window. Not wired into the app shell yet — needs a debug-only menu entry
+pushing `DebugMenuView()` plus one line in `CaptureCoordinator.send(_:)`:
+`await TransitionBreakpointController.shared.gate(at: next.phase)` right after
+`phase = next.phase` is set.
+
+Procedure per state: open the debug menu → arm the state → drive the app toward it
+(Record, and Done/Resume as needed) → the row shows "waiting — gate hit" → kill via
+the menu's "Kill now" button (`fatalError()`, immediate) or a real force-quit/app-
+switcher kill → relaunch → check against the expected recovery below (design §3
+decision table; disk at kill time still reflects whatever state was durable *before*
+the armed transition, since its own writes haven't landed).
+
+- **`preparing`**: nothing durable yet (dir/manifest creation is deferred to
+  `recording`, design §3 row "preparing, none → delete dir") → clean idle relaunch,
+  no banner.
+- **`recording`** (first entry, before segment 0 exists): same as above — nothing on
+  disk → clean idle relaunch, no banner.
+- **`recording`** (rotation tick, i.e. armed again after the first): prior segment(s)
+  non-empty, live `.pcm.part` not yet closed → §3 "recording/…, ≥1 non-empty →
+  normalize: close `.pcm.part`, regenerate sidecar, set `captured`" → "Recovered
+  recording: MM:SS".
+- **`interrupted`**: same normalize-to-`captured` row as above → recovered banner;
+  manifest may still say `recording` (lags reality — filesystem is authoritative).
+- **`resuming`**: same row again (still `recording/interrupted/resuming/stopping` in
+  §3) → normalize → `captured` → recovered banner.
+- **`stopping`**: same row — this is test 8's scenario made deterministic → recovered
+  banner, plays back everything spoken before Done.
+- **`captured`**: §3 "captured, ≥1, final absent → leave `captured`; enqueue
+  finalize" → recovered banner, then finalizes on its own.
+- **`finalizing`**: §3 "finalizing, ≥1, `.part` only → discard `.part`; set
+  `captured`; requeue" → recovered banner, re-finalizes automatically.
+
 ## 4. Audio route changes
 
 10. **Headphone pull mid-recording.**

@@ -113,6 +113,44 @@ final class AudioEngineRecorderTests: XCTestCase {
         XCTAssertEqual(first, 0.5, accuracy: 1e-3)
     }
 
+    /// A callback larger than the preallocated scratch buffer must still be delivered in
+    /// full via the one-off-allocation fallback (finding #1) — never dropped.
+    func testConverterBufferExceedingScratchCapacityStillDelivered() {
+        let inFmt = stereoFormat()
+        let sink = FakeSink()
+        // Tiny scratch: 64-frame capacity, then feed 512 frames on the converter path.
+        let proc = TapProcessor(inputFormat: inFmt, sink: sink, maxFrameCapacity: 64)
+        proc.process(buffer(inFmt, frames: 512) { _, _ in 0.5 })
+        let chunk = sink.chunks.first
+        XCTAssertNotNil(chunk)
+        XCTAssertEqual(chunk?.frameCount, 512)
+        XCTAssertEqual(chunk?.data.count, 512 * MemoryLayout<Float>.size)
+        let first = chunk!.data.withUnsafeBytes { $0.load(as: Float.self) }
+        XCTAssertEqual(first, 0.5, accuracy: 1e-3)
+    }
+
+    /// The reused scratch buffer must not corrupt or bleed frames across successive
+    /// converter-path callbacks (finding #1: same buffer, back-to-back).
+    func testReusedScratchBufferAcrossCallbacksIsClean() {
+        let inFmt = stereoFormat()
+        let sink = FakeSink()
+        let proc = TapProcessor(inputFormat: inFmt, sink: sink)
+        let sizes: [AVAudioFrameCount] = [256, 128, 300, 64]
+        let marks: [Float] = [0.1, -0.2, 0.3, 0.9]
+        for (i, frames) in sizes.enumerated() {
+            proc.process(buffer(inFmt, frames: frames) { _, _ in marks[i] })
+        }
+        let chunks = sink.chunks
+        XCTAssertEqual(chunks.map(\.frameCount), sizes)
+        for (i, chunk) in chunks.enumerated() {
+            XCTAssertEqual(chunk.data.count, Int(sizes[i]) * MemoryLayout<Float>.size)
+            let first = chunk.data.withUnsafeBytes { $0.load(as: Float.self) }
+            XCTAssertEqual(first, marks[i], accuracy: 1e-3)
+            let last = chunk.data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: (Int(sizes[i]) - 1) * MemoryLayout<Float>.size, as: Float.self) }
+            XCTAssertEqual(last, marks[i], accuracy: 1e-3)
+        }
+    }
+
     // MARK: no-disk / non-blocking by construction
 
     func testManyBuffersAllDeliveredNoBlocking() {

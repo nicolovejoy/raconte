@@ -29,6 +29,11 @@ enum AtomicFile {
 
         do {
             try writeAll(fd: fd, data: data)
+            // Threat model (finding #3): fsync flushes the file's data through the
+            // kernel/FS layer, so the bytes survive an app force-kill. It does NOT
+            // guarantee power-loss durability — that needs fcntl(fd, F_FULLFSYNC) to push
+            // past the drive's write cache, deliberately not paid here (M1 only defends
+            // against force-kill, not sudden power loss).
             guard fsync(fd) == 0 else { throw AtomicFileError.posix(operation: "fsync", code: errno) }
         } catch {
             close(fd)
@@ -42,7 +47,12 @@ enum AtomicFile {
             throw AtomicFileError.posix(operation: "rename", code: errno)
         }
 
-        try fsyncDirectory(path: dirPath)
+        // Finding #6: the rename already succeeded, so the new file is fully visible; this
+        // dir-fsync only hardens the *rename entry's* power-loss durability, which we don't
+        // pay for anyway (see fsync threat model above). A failure here does NOT mean the
+        // write was lost — it landed — so don't surface it as a `replace` failure. All
+        // pre-rename errors above still throw.
+        try? fsyncDirectory(path: dirPath)
     }
 
     private static func writeAll(fd: Int32, data: Data) throws {

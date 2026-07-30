@@ -106,6 +106,7 @@ final class CapturePlayback {
 
     func play() {
         guard hasAudio, !isPlaying else { return }
+        ensurePlaybackSession()
         switch source {
         case .finalizedM4A:
             m4aPlayer?.play()
@@ -133,6 +134,19 @@ final class CapturePlayback {
         isPlaying = false
         currentTime = 0
         ticker?.cancel()
+    }
+
+    /// iOS: playback inherits whatever session category is current. Right after a
+    /// capture that's `.playAndRecord` (fine — leave it), but on a cold launch it's
+    /// the `.soloAmbient` default, which is silenced by system mute — recovered
+    /// recordings played before any capture were inaudible on device.
+    private func ensurePlaybackSession() {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        guard session.category != .playAndRecord else { return }
+        try? session.setCategory(.playback, mode: .spokenAudio)
+        try? session.setActive(true)
+        #endif
     }
 
     // MARK: - loading

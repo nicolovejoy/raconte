@@ -6,9 +6,8 @@ import SwiftUI
 /// row to show "waiting — gate hit", then either force-quit/app-switcher-kill for a
 /// real recovery test, or tap "Kill now" to `fatalError()` immediately.
 ///
-/// Not mounted anywhere yet — the app shell (owned by a concurrent agent) presents
-/// it, e.g. from a `// DEBUG-HARNESS-MOUNT` marker: a debug-only toolbar
-/// item/gesture that pushes `DebugMenuView()` (`#if DEBUG`-guarded).
+/// Presented from the `DEBUG-HARNESS-MOUNT` marker in `CaptureView` ("Debug" button,
+/// DEBUG builds only).
 struct DebugMenuView: View {
     private let controller = TransitionBreakpointController.shared
 

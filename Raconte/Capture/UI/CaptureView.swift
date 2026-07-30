@@ -274,6 +274,9 @@ struct FinishedRow: View {
                 Text(recording.captureID.prefix(10))
                     .font(.caption2.monospaced())
                     .foregroundStyle(Color(white: 0.45))
+                if let playback {
+                    PlaybackProgressLine(playback: playback)
+                }
             }
             Spacer()
         }

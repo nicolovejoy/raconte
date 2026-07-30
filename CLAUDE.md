@@ -1,26 +1,23 @@
 # CLAUDE.md
 
-## Status 2026-07-29 (eve): M1 on-device smoke underway (iPad)
+## Status 2026-07-29 (late): iPad smoke runs 1–6 done, all PASS (with accepted caveats)
 
-M1 code-complete (all 11 tasks, 136 unit tests green, CI green). Device smoke started
-on the owner's iPad: tests 1, 2, 5 PASS; test 6 recovery PASS but recovered playback was
-silent — root cause: playback inherited the cold-launch `.soloAmbient` session category
-(muted by system mute); fixed in `CapturePlayback.ensurePlaybackSession()` (`.playback`/
-`.spokenAudio` unless a capture is live). Also fixed: debug sheet was unreadable (capture
-screen's `.foregroundStyle(.white)` bled into the sheet). Issue #1 cut: background
-recording continues silently — needs indicator/timeout (M2+ design, not M1 blocker).
+Run log: `docs/m1-smoke-log.md` (sequential run numbers, continues across sessions;
+next: 7). Landed today from smoke findings: playback audio-session fix
+(`CapturePlayback.ensurePlaybackSession` — cold-launch `.soloAmbient` silenced recovered
+playback), debug-sheet contrast fix, playback position UI (`PlaybackProgressLine`).
+Owner-accepted caveat: small audible hiccup at backgrounding transition edges (issue #2,
+down the road). Open issues: #1 background-recording awareness (M2 design input),
+#2 gap-honest capture (low priority), #4 flaky CI interruption test (chase if it recurs).
 
 **Next (owner + next session):**
-1. **Re-test iPad test 6 playback** (rebuild from Xcode first), then finish the iPad
-   delta pass: kill-at-every-transition sweep via the Debug button + tests 25–27, per
-   `docs/m1-paranoid-tests.md` (31 tests across iPhone/iPad/Mac).
+1. **iPad run 7**: kill-at-every-transition sweep via the Debug button, then iPad
+   tests 25–27, per `docs/m1-paranoid-tests.md` (31 tests across iPhone/iPad/Mac).
 2. Full iPhone pass (cellular-call interruptions etc.) + macOS pass — M1's acceptance gate.
-3. Flaky CI test: `CaptureCoordinatorTests.testInterruptionClosesSegmentAndEntersInterrupted`
-   failed once on the runner (missing `000000.json` — timing race); investigate if it recurs.
-4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
+3. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
    not device dev builds (personal team 8UK463WB83 already signs).
-5. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
-   subagent pipeline.
+4. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
+   subagent pipeline; fold issue #1 (background awareness) into that design.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI
 mints a fresh CaptureCoordinator per capture (single-capture coordinators by design). If

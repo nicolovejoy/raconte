@@ -5,16 +5,10 @@ import Foundation
 /// `CaptureState` to halt the next caller that reaches it, then force-kill the
 /// process exactly there via `abort()`.
 ///
-/// This file is intentionally self-contained and NOT wired into the app —
-/// `CaptureCoordinator` does not call `gate(at:)` yet. One line makes it live:
-///
-///     #if DEBUG
-///     await TransitionBreakpointController.shared.gate(at: next.phase)
-///     #endif
-///
-/// inserted in `CaptureCoordinator.send(_:)` right after `phase = next.phase` is
-/// set (before `await realize(...)`), so every transition passes through the gate
-/// keyed by the state it just entered.
+/// Wired live in DEBUG builds: `CaptureCoordinator.send(_:)` calls
+/// `gate(at: next.phase)` right after `phase = next.phase` is set (before the
+/// transition's effects run), so every transition passes through the gate keyed
+/// by the state it just entered. `DebugMenuView` is the UI.
 @MainActor
 @Observable
 final class TransitionBreakpointController {
@@ -67,11 +61,12 @@ final class TransitionBreakpointController {
 
     /// Simulate a force-kill exactly at whatever state(s) a caller is currently
     /// gated at (or unconditionally, if nothing is waiting). Never returns.
+    /// SIGKILL, not fatalError: fatalError traps into an attached debugger (Xcode
+    /// pauses instead of killing — the button looks dead), and SIGKILL is the
+    /// truer simulation anyway: no runtime teardown, exactly like a swipe-kill.
     func abort() -> Never {
-        let where_ = waitingStates.isEmpty
-            ? "no gate currently waiting"
-            : waitingStates.map(\.rawValue).sorted().joined(separator: ", ")
-        fatalError("TransitionBreakpointController: simulated force-kill at [\(where_)]")
+        kill(getpid(), SIGKILL)
+        fatalError("unreachable: SIGKILL did not terminate the process")
     }
 
     private func release(_ state: CaptureState) {

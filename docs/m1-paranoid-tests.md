@@ -6,8 +6,9 @@ interrupted→resuming→stopping→captured→finalizing→complete), launch-ti
 background AAC finalize, playback. **No transcription, no sync, no folders in this
 milestone** — don't test for them.
 
-Run on a **physical iPhone** (simulator can't fake calls/Bluetooth/lock-screen realistically).
-A shorter macOS pass is at the bottom. Each test is self-contained — no state carried from
+Run the full pass on a **physical iPhone** (simulator can't fake calls/Bluetooth/lock-screen
+realistically). Shorter iPad and macOS passes are at the bottom — same binary/code path,
+different lifecycle surfaces. Each test is self-contained — no state carried from
 the previous test unless its setup line says so. Tests marked **(2 devices)** need a second
 phone to place a call; tests marked **(2 people)** need someone else's Bluetooth device or
 help triggering an alarm from another room.
@@ -112,10 +113,8 @@ Tests 6–9 above hit specific moments by racing the clock. `DebugMenuView`
 lists every `CaptureState`; arming one pauses the *next* transition into that state
 (`gate(at:)`, called right as the machine decides on the new phase, before that
 transition's disk effects run) so you can kill exactly there rather than guessing a
-timing window. Not wired into the app shell yet — needs a debug-only menu entry
-pushing `DebugMenuView()` plus one line in `CaptureCoordinator.send(_:)`:
-`await TransitionBreakpointController.shared.gate(at: next.phase)` right after
-`phase = next.phase` is set.
+timing window. Wired in DEBUG builds: the "Debug" button at the top of the capture
+screen opens the menu; the gate call sits in `CaptureCoordinator.send(_:)`.
 
 Procedure per state: open the debug menu → arm the state → drive the app toward it
 (Record, and Done/Resume as needed) → the row shows "waiting — gate hit" → kill via
@@ -297,26 +296,58 @@ the armed transition, since its own writes haven't landed).
     FAIL = no recovery banner, recording is lost, or app crashes on the post-restart
     launch.
 
+## iPad (delta pass)
+
+Same iOS binary. Don't repeat the full sweep — run tests 1, 2, 5, 6 and the
+kill-at-every-transition harness as written, then the iPad-specific tests below.
+Notes on the shared tests: no Dynamic Island (test 3's lock-screen check is just the
+elapsed timer on unlock); tests 13–14 need cellular — on a Wi-Fi-only iPad, substitute
+an incoming FaceTime audio call, same PASS/FAIL criteria.
+
+25. **Split View / Slide Over mid-recording.**
+    Setup: none.
+    Steps: tap record → speak → swipe up slightly and drag another app into Split View
+    (or open one in Slide Over) → interact with the other app ~30s while speaking →
+    close the split → stop.
+    PASS = recording continuous across entering/leaving multitasking, no gap, elapsed
+    timer correct.
+    FAIL = recording pauses when the app shrinks to a split pane, or state is wrong on
+    return to full screen.
+
+26. **Rotation mid-recording.**
+    Setup: orientation lock off.
+    Steps: tap record → speak → rotate the iPad portrait↔landscape a few times mid-
+    recording → stop.
+    PASS = UI re-lays out without losing state, recording continuous, no crash.
+    FAIL = crash, restart of the recording, or controls become unreachable in either
+    orientation.
+
+27. **Hardware keyboard app switch (Cmd+Tab) mid-recording.**
+    Setup: iPad with an attached/paired keyboard (skip if none).
+    Steps: tap record → speak → Cmd+Tab to another app → wait 15s → Cmd+Tab back → stop.
+    PASS = same as test 5 — recording continued while backgrounded, no gap.
+    FAIL = recording paused/stopped on the switch.
+
 ## macOS (shorter pass)
 
 Universal app — same capture code path, verify it isn't silently broken on the desktop
 target. No lock-screen equivalent; focus is app lifecycle and route changes.
 
-25. **Basic record/stop/playback on Mac.**
+28. **Basic record/stop/playback on Mac.**
     Setup: none.
     Steps: open the Mac app → grant mic permission if prompted → record 15s of speech →
     stop → play back.
     PASS = same as iPhone test 1 — clean recording, correct duration, plays back.
     FAIL = permission prompt missing, recording fails, or playback broken.
 
-26. **App backgrounded (Mission Control / Cmd+Tab away) mid-recording.**
+29. **App backgrounded (Mission Control / Cmd+Tab away) mid-recording.**
     Setup: none.
     Steps: start recording → Cmd+Tab to another app, or click elsewhere on the desktop →
     leave it backgrounded 30s → switch back → stop.
     PASS = recording continuous, no gap, matches iPhone test 5 expectations.
     FAIL = recording pauses or drops when losing focus.
 
-27. **Quit and relaunch mid-recording (Mac equivalent of force-quit).**
+30. **Quit and relaunch mid-recording (Mac equivalent of force-quit).**
     Setup: none.
     Steps: start recording → speak ~20s → force-quit via Cmd+Option+Esc (Force Quit
     dialog) → relaunch the app.
@@ -324,7 +355,7 @@ target. No lock-screen equivalent; focus is app lifecycle and route changes.
     test 6.
     FAIL = no recovery, or corrupted/missing file.
 
-28. **Audio device change mid-recording (e.g. built-in mic → USB/Bluetooth mic).**
+31. **Audio device change mid-recording (e.g. built-in mic → USB/Bluetooth mic).**
     Setup: have an alternate input device available (USB mic, AirPods, etc.).
     Steps: start recording on the built-in mic → speak → switch input device in System
     Settings → Sound (or via the menu bar) mid-recording → keep speaking → stop.

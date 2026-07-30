@@ -7,6 +7,19 @@ struct InterruptionLogEntry: Codable, Sendable, Equatable {
     var beganAt: Date
     var endedAt: Date?
     var resumed: Bool?
+
+    enum CodingKeys: String, CodingKey { case kind, beganAt, endedAt, resumed }
+
+    // Custom encode so `endedAt`/`resumed` serialize as explicit `null` while the
+    // interruption is in progress (finding #5) — consistent with FinalRef, so in-progress
+    // and completed entries share one JSON shape instead of omitting the nil keys.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(beganAt, forKey: .beganAt)
+        try c.encode(endedAt, forKey: .endedAt)
+        try c.encode(resumed, forKey: .resumed)
+    }
 }
 
 /// Reference to the finalized AAC-LC file. Fields stay explicitly `null` until

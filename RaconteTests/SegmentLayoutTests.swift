@@ -176,6 +176,31 @@ final class SegmentLayoutTests: XCTestCase {
         XCTAssertTrue(json.contains("\"durationFrames\" : null"))
     }
 
+    /// In-progress interruption entries (endedAt/resumed nil) serialize as explicit
+    /// `null`, matching FinalRef's shape (finding #5); completed entries carry values.
+    func testInterruptionLogEntryEmitsExplicitNullWhileInProgress() throws {
+        let inProgress = InterruptionLogEntry(
+            kind: "call",
+            beganAt: fixedPointDate("2026-07-29T15:01:00.000Z"),
+            endedAt: nil, resumed: nil)
+
+        let data = try CaptureCoding.encoder().encode(inProgress)
+        let json = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(json.contains("\"endedAt\" : null"))
+        XCTAssertTrue(json.contains("\"resumed\" : null"))
+        // Round-trips back to the same value (nil stays nil).
+        XCTAssertEqual(try CaptureCoding.decoder().decode(InterruptionLogEntry.self, from: data), inProgress)
+
+        // Completed entry still carries concrete values, same key set.
+        let completed = InterruptionLogEntry(
+            kind: "call",
+            beganAt: fixedPointDate("2026-07-29T15:01:00.000Z"),
+            endedAt: fixedPointDate("2026-07-29T15:01:30.000Z"), resumed: true)
+        let completedJSON = String(decoding: try CaptureCoding.encoder().encode(completed), as: UTF8.self)
+        XCTAssertFalse(completedJSON.contains("\"endedAt\" : null"))
+        XCTAssertTrue(completedJSON.contains("\"resumed\" : true"))
+    }
+
     /// Operational fields (§2 rows 10/17/18/19) are optional: absent when nil,
     /// present + round-tripping when set.
     func testManifestOperationalFieldsRoundTripAndOmission() throws {

@@ -15,6 +15,16 @@ final class AudioEngineRecorder {
         case engineStartFailed(any Error)
     }
 
+    /// Tap buffer request, in frames. 4800 @ 48 kHz ≈ 100 ms — the low end of
+    /// `AVAudioNode.h`'s documented supported range [100 ms, 400 ms] (the old 4096 was
+    /// ~85 ms, below it). It's a hint; the delivered `frameLength` is treated as
+    /// authoritative regardless.
+    static let tapBufferSize: AVAudioFrameCount = 4800
+    /// Headroom multiplier for the preallocated converter-output buffer: the tap may
+    /// hand us more frames than requested, so size the reused scratch buffer above the
+    /// request. A callback exceeding even this falls back to a one-off allocation.
+    private static let scratchHeadroom: AVAudioFrameCount = 2
+
     private let engine = AVAudioEngine()
     private var processor: TapProcessor?
 
@@ -32,9 +42,12 @@ final class AudioEngineRecorder {
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw RecorderError.noInputFormat
         }
-        let proc = TapProcessor(inputFormat: inputFormat, sink: sink, onLevel: onLevel)
-        // bufferSize is a hint; delivered frameLength may differ — we size per buffer.
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+        let proc = TapProcessor(inputFormat: inputFormat, sink: sink, onLevel: onLevel,
+                                maxFrameCapacity: Self.tapBufferSize * Self.scratchHeadroom)
+        // bufferSize is a hint; delivered frameLength may differ — the scratch buffer is
+        // sized with headroom and the process() path falls back to a one-off alloc if a
+        // callback still exceeds it (never drops audio).
+        input.installTap(onBus: 0, bufferSize: Self.tapBufferSize, format: inputFormat) { buffer, _ in
             proc.process(buffer)
         }
         engine.prepare()
@@ -69,21 +82,32 @@ final class AudioEngineRecorder {
     }
 }
 
-/// Per-capture tap worker. Holds the preallocated converter and canonical format, converts
-/// each tap buffer to mono `Float32` at the hardware rate, measures RMS, and forwards a
-/// `PCMChunk`.
+/// Per-capture tap worker. Holds the reused converter + a preallocated converter-output
+/// buffer and the canonical format, converts each tap buffer to mono `Float32` at the
+/// hardware rate, measures RMS, and forwards a `PCMChunk`.
 ///
-/// `@unchecked Sendable`: `AVAudioEngine` guarantees the tap block is invoked serially on a
-/// single thread, so the mutable conversion scratch is never touched concurrently. The type
-/// touches no filesystem — persistence is entirely the sink's job (no-disk-on-tap-thread by
-/// construction).
+/// `@unchecked Sendable`: the shared mutable state this hides is the reused
+/// `AVAudioConverter` (its internal streaming buffers) and the preallocated output buffer
+/// (`scratch`), both mutated on every `process(_:)` call. Safety rests on `process(_:)`
+/// being invoked serially: `AVAudioEngine` calls a bus's tap block one buffer at a time on
+/// a single audio thread. This is a de-facto contract (observed, not documented by Apple),
+/// so no second caller of `process(_:)` may ever be added — a concurrent second caller
+/// would race the converter and scratch buffer. The type touches no filesystem —
+/// persistence is entirely the sink's job (no-disk-on-tap-thread by construction).
 final class TapProcessor: @unchecked Sendable {
     let outputFormat: AVAudioFormat
     private let sink: PCMSink
     private let onLevel: (@Sendable (Float) -> Void)?
     private let converter: AVAudioConverter?
+    /// Reused converter-output buffer, allocated once at init (finding #1: no heap
+    /// allocation per realtime tap callback → no priority-inversion / dropped-buffer risk).
+    /// `nil` on the passthrough path (input already canonical, no conversion). A callback
+    /// whose `frameLength` exceeds this capacity falls back to a one-off allocation in
+    /// `process(_:)` rather than dropping audio (the rare path).
+    private let scratch: AVAudioPCMBuffer?
 
-    init(inputFormat: AVAudioFormat, sink: PCMSink, onLevel: (@Sendable (Float) -> Void)? = nil) {
+    init(inputFormat: AVAudioFormat, sink: PCMSink, onLevel: (@Sendable (Float) -> Void)? = nil,
+         maxFrameCapacity: AVAudioFrameCount = AudioEngineRecorder.tapBufferSize * 2) {
         // VERIFY #2: store at the HARDWARE sample rate (no resample on the tap thread);
         // only downmix to mono, non-interleaved Float32. Resampling, if ever wanted, is
         // deferred to finalize (the sidecar records the rate).
@@ -94,15 +118,30 @@ final class TapProcessor: @unchecked Sendable {
         self.outputFormat = output
         self.sink = sink
         self.onLevel = onLevel
-        self.converter = inputFormat == output ? nil : AVAudioConverter(from: inputFormat, to: output)
+        if inputFormat == output {
+            self.converter = nil
+            self.scratch = nil
+        } else {
+            self.converter = AVAudioConverter(from: inputFormat, to: output)
+            // Preallocated once; reused across every tap callback.
+            self.scratch = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: max(maxFrameCapacity, 1))
+        }
     }
 
     func process(_ inputBuffer: AVAudioPCMBuffer) {
         let mono: AVAudioPCMBuffer
         if let converter {
-            guard let out = AVAudioPCMBuffer(pcmFormat: outputFormat,
-                                             frameCapacity: max(inputBuffer.frameLength, 1)),
-                  (try? converter.convert(to: out, from: inputBuffer)) != nil else { return }
+            let out: AVAudioPCMBuffer
+            if let scratch, scratch.frameCapacity >= inputBuffer.frameLength {
+                out = scratch                      // common path: no allocation
+            } else {
+                // Rare: callback exceeds the preallocated capacity — allocate a one-off
+                // buffer rather than drop audio.
+                guard let fresh = AVAudioPCMBuffer(pcmFormat: outputFormat,
+                                                   frameCapacity: max(inputBuffer.frameLength, 1)) else { return }
+                out = fresh
+            }
+            guard (try? converter.convert(to: out, from: inputBuffer)) != nil else { return }
             mono = out
         } else {
             mono = inputBuffer
@@ -111,7 +150,10 @@ final class TapProcessor: @unchecked Sendable {
         let n = Int(mono.frameLength)
         let samples = UnsafeBufferPointer(start: channel[0], count: n)
         onLevel?(AudioEngineRecorder.rms(samples))
-        sink.receive(PCMChunk(data: Data(buffer: samples),
+        // Single allocating copy straight from the converter output (finding #1): no
+        // intermediate Array/buffer. Byte-identical to the prior `Data(buffer:)`.
+        let data = Data(bytes: channel[0], count: n * MemoryLayout<Float>.stride)
+        sink.receive(PCMChunk(data: data,
                               frameCount: AVAudioFrameCount(n),
                               sampleRate: outputFormat.sampleRate))
     }

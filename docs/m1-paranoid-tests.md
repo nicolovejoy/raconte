@@ -128,10 +128,13 @@ the armed transition, since its own writes haven't landed).
   no banner.
 - **`recording`** (first entry, before segment 0 exists): same as above — nothing on
   disk → clean idle relaunch, no banner.
-- **`recording`** (rotation tick, i.e. armed again after the first): prior segment(s)
-  non-empty, live `.pcm.part` not yet closed → §3 "recording/…, ≥1 non-empty →
-  normalize: close `.pcm.part`, regenerate sidecar, set `captured`" → "Recovered
-  recording: MM:SS".
+- **`recording`** (with rotated segments): segment rotation is NOT a machine
+  transition — it happens inside `SegmentStore.append()` with the phase staying
+  `recording`, so the gate cannot catch it. Cover this disk shape without the
+  harness: record past one rotation (>20 s), then force-quit (swipe-kill) →
+  prior segment(s) non-empty, live `.pcm.part` not yet closed → §3 "recording/…,
+  ≥1 non-empty → normalize: close `.pcm.part`, regenerate sidecar, set
+  `captured`" → "Recovered recording: MM:SS".
 - **`interrupted`**: same normalize-to-`captured` row as above → recovered banner;
   manifest may still say `recording` (lags reality — filesystem is authoritative).
 - **`resuming`**: same row again (still `recording/interrupted/resuming/stopping` in

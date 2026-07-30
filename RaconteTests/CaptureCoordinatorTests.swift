@@ -38,11 +38,15 @@ private final class FakeRecorder: EngineRecording, @unchecked Sendable {
     private let lock = NSLock()
     private var sink: PCMSink?
     private var _startCount = 0
+    private var _lastMatching: AudioFormatDescriptor??
     var startCount: Int { lock.withLock { _startCount } }
+    /// The `matching` argument of the most recent `start` (outer nil = never started).
+    var lastMatching: AudioFormatDescriptor?? { lock.withLock { _lastMatching } }
 
-    func start(sink: PCMSink, onLevel: (@Sendable (Float) -> Void)?) throws {
+    func start(sink: PCMSink, matching canonical: AudioFormatDescriptor?,
+               onLevel: (@Sendable (Float) -> Void)?) throws {
         if let startError { throw startError }
-        lock.withLock { self.sink = sink; _startCount += 1 }
+        lock.withLock { self.sink = sink; _startCount += 1; _lastMatching = canonical }
         isRunning = true
         onLevel?(0.5)
     }
@@ -196,6 +200,39 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(manifest.state, .captured)
         XCTAssertEqual(manifest.segmentCount, 2)
         XCTAssertEqual(manifest.lastKnownFrameOffset, 1000)
+    }
+
+    // MARK: 3b — route loss auto-resumes onto the new device (issue #5)
+
+    func testRouteLostAutoResumesOntoNewDevice() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        // macOS device switch / iOS unplug: .routeLost with no resumeAvailable ever
+        // following. The coordinator must resume on its own.
+        session.emit(.routeLost)
+        await waitUntil({ coordinator.phase == .recording && recorder.startCount >= 2 },
+                        "did not auto-resume after route loss")
+        // Resume pins the engine to the capture's canonical format (new device's
+        // rate may differ; segments must stay at one rate).
+        XCTAssertEqual(recorder.lastMatching, recorder.captureFormatDescriptor)
+
+        recorder.feed(frames: 250)
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+
+        let s0 = try decodeSidecar(0)
+        let s1 = try decodeSidecar(1)
+        XCTAssertEqual(s0.frameCount, 750)
+        XCTAssertEqual(s0.closedReason, .interruption)
+        XCTAssertEqual(s1.frameCount, 250)
+        XCTAssertEqual(s1.startFrameOffset, 750)   // gap-free across the switch
+
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .captured)
+        XCTAssertEqual(manifest.interruptions.first?.kind, "routeChange")
     }
 
     // MARK: 4 — launch recovery of a pre-seeded crashed capture

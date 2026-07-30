@@ -151,6 +151,59 @@ final class AudioEngineRecorderTests: XCTestCase {
         }
     }
 
+    // MARK: resampling (resume onto a different-rate device, issue #5)
+
+    /// Pinned output format with a different rate → the streaming converter resamples;
+    /// total delivered frames ≈ input × ratio (minus a small SRC latency tail).
+    func testResampleUpconvertsToPinnedCanonicalRate() {
+        let inFmt = monoFormat(24000)
+        let sink = FakeSink()
+        let proc = TapProcessor(inputFormat: inFmt, outputFormat: monoFormat(48000), sink: sink)
+        XCTAssertEqual(proc.outputFormat.sampleRate, 48000)
+        for _ in 0..<10 { proc.process(buffer(inFmt, frames: 480) { _, _ in 0.5 }) }
+
+        let chunks = sink.chunks
+        XCTAssertFalse(chunks.isEmpty)
+        XCTAssertTrue(chunks.allSatisfy { $0.sampleRate == 48000 })
+        // 4800 in @ 24k → 9600 out @ 48k; allow the converter's held-back tail.
+        let total = chunks.reduce(0) { $0 + Int($1.frameCount) }
+        XCTAssertGreaterThan(total, 9000)
+        XCTAssertLessThanOrEqual(total, 9600)
+        // Steady state passes the DC value through (edges may ring).
+        let mid = chunks[chunks.count / 2]
+        let offset = (mid.data.count / 2 / MemoryLayout<Float>.size) * MemoryLayout<Float>.size
+        let sample = mid.data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: Float.self) }
+        XCTAssertEqual(sample, 0.5, accuracy: 0.05)
+    }
+
+    func testResampleDownconvertsToPinnedCanonicalRate() {
+        let inFmt = monoFormat(48000)
+        let sink = FakeSink()
+        let proc = TapProcessor(inputFormat: inFmt, outputFormat: monoFormat(24000), sink: sink)
+        for _ in 0..<10 { proc.process(buffer(inFmt, frames: 480) { _, _ in 0.5 }) }
+
+        let chunks = sink.chunks
+        XCTAssertTrue(chunks.allSatisfy { $0.sampleRate == 24000 })
+        // 4800 in @ 48k → 2400 out @ 24k, minus the held-back tail.
+        let total = chunks.reduce(0) { $0 + Int($1.frameCount) }
+        XCTAssertGreaterThan(total, 2100)
+        XCTAssertLessThanOrEqual(total, 2400)
+    }
+
+    /// Resampled stereo input still downmixes to mono and survives the scratch-overflow
+    /// fallback (needed output frames exceed a tiny scratch's capacity).
+    func testResampleStereoWithTinyScratchStillDelivered() {
+        let inFmt = stereoFormat(24000)
+        let sink = FakeSink()
+        let proc = TapProcessor(inputFormat: inFmt, outputFormat: monoFormat(48000),
+                                sink: sink, maxFrameCapacity: 64)
+        proc.process(buffer(inFmt, frames: 512) { _, _ in 0.5 })
+        proc.process(buffer(inFmt, frames: 512) { _, _ in 0.5 })
+        let total = sink.chunks.reduce(0) { $0 + Int($1.frameCount) }
+        XCTAssertGreaterThan(total, 1600)   // 1024 in @ 24k → 2048 out minus tail
+        XCTAssertLessThanOrEqual(total, 2048)
+    }
+
     // MARK: no-disk / non-blocking by construction
 
     func testManyBuffersAllDeliveredNoBlocking() {

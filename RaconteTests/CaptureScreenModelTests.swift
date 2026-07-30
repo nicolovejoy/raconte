@@ -19,7 +19,8 @@ private final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
     private let lock = NSLock()
     private var sink: PCMSink?
 
-    func start(sink: PCMSink, onLevel: (@Sendable (Float) -> Void)?) throws {
+    func start(sink: PCMSink, matching canonical: AudioFormatDescriptor?,
+               onLevel: (@Sendable (Float) -> Void)?) throws {
         lock.withLock { self.sink = sink }
         isRunning = true
     }

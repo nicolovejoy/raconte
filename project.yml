@@ -18,6 +18,17 @@ schemes:
         Raconte: all
     test:
       targets: [RaconteTests]
+  # UI tests live in their own scheme, NOT the default test action: on macOS they
+  # need the interactive automation-mode permission, so they run against a
+  # simulator (CI runs this; locally:
+  #   xcodebuild -project Raconte.xcodeproj -scheme RaconteUI \
+  #     -destination 'platform=iOS Simulator,name=iPhone 17' test).
+  RaconteUI:
+    build:
+      targets:
+        Raconte: all
+    test:
+      targets: [RaconteUITests]
     run:
       config: Debug
 targets:
@@ -42,6 +53,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: org.recountly.raconte
         ENABLE_HARDENED_RUNTIME: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  RaconteUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS, macOS]
+    sources: [RaconteUITests]
+    dependencies:
+      - target: Raconte
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
   RaconteTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]

@@ -20,6 +20,7 @@ struct RecoveryBanner: View {
                 Text("Recovered recording: \(recording.formattedDuration)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color(white: 0.95))
+                    .accessibilityIdentifier("recovery.title")
                 Spacer()
             }
             HStack(spacing: 10) {

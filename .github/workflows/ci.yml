@@ -22,3 +22,9 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
             test
+      - name: UI tests (iOS simulator)
+        run: |
+          xcodebuild -project Raconte.xcodeproj -scheme RaconteUI \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
+            test

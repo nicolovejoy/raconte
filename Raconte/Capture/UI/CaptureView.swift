@@ -57,7 +57,10 @@ final class CaptureScreenModel {
     /// Live composition root: platform session controller, real engine recorder, and the
     /// AVAssetWriter encoder, over Application Support.
     static func live() -> CaptureScreenModel {
-        CaptureScreenModel(
+        #if DEBUG
+        if let harness = uiTestHarness() { return harness }
+        #endif
+        return CaptureScreenModel(
             capturesRoot: Self.defaultCapturesRoot(),
             makeSession: {
                 #if os(iOS)
@@ -202,11 +205,13 @@ struct CaptureView: View {
                              isLive: model.coordinator.phase == .recording)
 
                     RecordButton(model: control, action: primaryAction)
+                        .accessibilityIdentifier("capture.record")
 
                     if control.showsDoneButton {
                         Button("Done") { Task { await model.done() } }
                             .buttonStyle(.bordered)
                             .tint(.red)
+                            .accessibilityIdentifier("capture.done")
                     }
 
                     if let error = model.coordinator.lastError {
@@ -279,6 +284,7 @@ struct FinishedRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(recording.formattedDuration)
                     .font(.body.monospacedDigit())
+                    .accessibilityIdentifier("finished.duration")
                 Text(recording.captureID.prefix(10))
                     .font(.caption2.monospaced())
                     .foregroundStyle(Color(white: 0.45))

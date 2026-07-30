@@ -41,6 +41,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.recountly.raconte
         ENABLE_HARDENED_RUNTIME: false
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   RaconteTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]

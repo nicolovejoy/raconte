@@ -1,0 +1,30 @@
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:89:5: warning: 'nonisolated(unsafe)' has no effect on property 'pumpTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:90:5: warning: 'nonisolated(unsafe)' has no effect on property 'timerTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var timerTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:91:5: warning: 'nonisolated(unsafe)' has no effect on property 'sessionTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var sessionTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:89:5: warning: 'nonisolated(unsafe)' has no effect on property 'pumpTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:90:5: warning: 'nonisolated(unsafe)' has no effect on property 'timerTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var timerTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:91:5: warning: 'nonisolated(unsafe)' has no effect on property 'sessionTask', consider using 'nonisolated'
+    nonisolated(unsafe) private var sessionTask: Task<Void, Never>?
+    ^~~~~~~~~~~
+    nonisolated
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:360:29: warning: no 'async' operations occur within 'await' expression
+            guard let self, await self.machineState.phase == .interrupted else { return }
+                            ^
+/Users/nico/src/raconte/Raconte/Capture/CaptureCoordinator.swift:456:17: warning: no 'async' operations occur within 'await' expression
+                await self?.tick()
+                ^

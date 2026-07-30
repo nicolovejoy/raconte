@@ -1,0 +1,321 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination platform=macOS,arch=arm64 -derivedDataPath .build/T9 test
+
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (2 targets)
+    Target 'RaconteTests' in project 'Raconte'
+        ➜ Explicit dependency on target 'Raconte' in project 'Raconte'
+    Target 'Raconte' in project 'Raconte' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ClangStatCache /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk /Users/nico/src/raconte/.build/T9/SDKStatCaches.noindex/macosx26.5-25F70-e082c4a02f00227109f4ed75e425c832.sdkstatcache
+    cd /Users/nico/src/raconte/Raconte.xcodeproj
+    /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-stat-cache /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -o /Users/nico/src/raconte/.build/T9/SDKStatCaches.noindex/macosx26.5-25F70-e082c4a02f00227109f4ed75e425c832.sdkstatcache
+
+2026-07-29 17:27:03.129073-0700 Raconte[29700:17371229] ApplePersistenceIgnoreState: Existing state will not be touched. New state will be written to /Users/nico/Library/Containers/org.recountly.raconte/Data/tmp/org.recountly.raconte.savedState
+Test Suite 'All tests' started at 2026-07-29 17:27:03.262.
+Test Suite 'RaconteTests.xctest' started at 2026-07-29 17:27:03.262.
+Test Suite 'AtomicFileTests' started at 2026-07-29 17:27:03.263.
+Test Case '-[RaconteTests.AtomicFileTests testInterruptedWriteLeavesOriginalIntact]' started.
+Test Case '-[RaconteTests.AtomicFileTests testInterruptedWriteLeavesOriginalIntact]' passed (0.002 seconds).
+Test Case '-[RaconteTests.AtomicFileTests testReplaceEmptyData]' started.
+Test Case '-[RaconteTests.AtomicFileTests testReplaceEmptyData]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AtomicFileTests testReplaceNeverPartialUnderLargePayload]' started.
+Test Case '-[RaconteTests.AtomicFileTests testReplaceNeverPartialUnderLargePayload]' passed (0.083 seconds).
+Test Case '-[RaconteTests.AtomicFileTests testReplaceOverStrayPartSucceeds]' started.
+Test Case '-[RaconteTests.AtomicFileTests testReplaceOverStrayPartSucceeds]' passed (0.002 seconds).
+Test Case '-[RaconteTests.AtomicFileTests testReplaceWritesFullContentAndCleansPart]' started.
+Test Case '-[RaconteTests.AtomicFileTests testReplaceWritesFullContentAndCleansPart]' passed (0.001 seconds).
+Test Suite 'AtomicFileTests' passed at 2026-07-29 17:27:03.351.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.088 (0.089) seconds
+Test Suite 'AudioEncoderRoundTripTests' started at 2026-07-29 17:27:03.351.
+Test Case '-[RaconteTests.AudioEncoderRoundTripTests testSinePCMEncodesToVerifiableM4A]' started.
+2026-07-29 17:27:03.389529-0700 Raconte[29700:17371309] [logging-persist] cannot open file at line 51044 of [f0ca7bba1c]
+2026-07-29 17:27:03.389566-0700 Raconte[29700:17371309] [logging-persist] os_unix.c:51044: (2) open(/private/var/db/DetachedSignatures) - No such file or directory
+2026-07-29 17:27:03.393239-0700 Raconte[29700:17371309] [carc] PRECONDITION FAILURE: Process is sandboxed but 'com.apple.security.exception.mach-lookup.global-name' doesn't contain 'com.apple.audioanalyticsd'.
+2026-07-29 17:27:03.393629-0700 Raconte[29700:17371309] [carc] Reporter disconnected or already stopped. { func=stop, reporterID=127560528691201 }
+Test Case '-[RaconteTests.AudioEncoderRoundTripTests testSinePCMEncodesToVerifiableM4A]' passed (0.056 seconds).
+Test Case '-[RaconteTests.AudioEncoderRoundTripTests testWorkerFinalizesRealEncodeEndToEnd]' started.
+Test Case '-[RaconteTests.AudioEncoderRoundTripTests testWorkerFinalizesRealEncodeEndToEnd]' passed (0.015 seconds).
+Test Suite 'AudioEncoderRoundTripTests' passed at 2026-07-29 17:27:03.423.
+	 Executed 2 tests, with 0 failures (0 unexpected) in 0.071 (0.071) seconds
+Test Suite 'AudioEngineRecorderTests' started at 2026-07-29 17:27:03.423.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testConverterBufferExceedingScratchCapacityStillDelivered]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testConverterBufferExceedingScratchCapacityStillDelivered]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testLevelCallbackReportsRMS]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testLevelCallbackReportsRMS]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testManyBuffersAllDeliveredNoBlocking]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testManyBuffersAllDeliveredNoBlocking]' passed (0.006 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testReusedScratchBufferAcrossCallbacksIsClean]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testReusedScratchBufferAcrossCallbacksIsClean]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSConstantEqualsMagnitude]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSConstantEqualsMagnitude]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSEmptyIsZero]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSEmptyIsZero]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSFullScaleSineIsRoot2Over2]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSFullScaleSineIsRoot2Over2]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSSilenceIsZero]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testRMSSilenceIsZero]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testSinkReceivesFramesInOrderPassthrough]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testSinkReceivesFramesInOrderPassthrough]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioEngineRecorderTests testStereoDownmixToMonoPreservesRateAndFrames]' started.
+Test Case '-[RaconteTests.AudioEngineRecorderTests testStereoDownmixToMonoPreservesRateAndFrames]' passed (0.000 seconds).
+Test Suite 'AudioEngineRecorderTests' passed at 2026-07-29 17:27:03.435.
+	 Executed 10 tests, with 0 failures (0 unexpected) in 0.010 (0.012) seconds
+Test Suite 'AudioSessionControllerTests' started at 2026-07-29 17:27:03.435.
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionBeganMapsToInterrupted]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionBeganMapsToInterrupted]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionEndedWithoutShouldResume]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionEndedWithoutShouldResume]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionEndedWithShouldResume]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionEndedWithShouldResume]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionUnknownTypeIsIgnored]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testInterruptionUnknownTypeIsIgnored]' passed (0.000 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testMacConfigChangeEmitsRouteLost]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testMacConfigChangeEmitsRouteLost]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testRouteOldDeviceUnavailableMapsToRouteLost]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testRouteOldDeviceUnavailableMapsToRouteLost]' passed (0.001 seconds).
+Test Case '-[RaconteTests.AudioSessionControllerTests testRouteOtherReasonsIgnored]' started.
+Test Case '-[RaconteTests.AudioSessionControllerTests testRouteOtherReasonsIgnored]' passed (0.000 seconds).
+Test Suite 'AudioSessionControllerTests' passed at 2026-07-29 17:27:03.440.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.004 (0.005) seconds
+Test Suite 'CaptureCoordinatorTests' started at 2026-07-29 17:27:03.440.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testEffectOrderManifestBeforeSideEffect]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testEffectOrderManifestBeforeSideEffect]' passed (0.002 seconds).
+Test Case '-[RaconteTests.CaptureCoordinatorTests testFullLifecycleProducesCapturedManifestAndSegments]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testFullLifecycleProducesCapturedManifestAndSegments]' passed (0.006 seconds).
+Test Case '-[RaconteTests.CaptureCoordinatorTests testInterruptionClosesSegmentAndEntersInterrupted]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testInterruptionClosesSegmentAndEntersInterrupted]' passed (0.008 seconds).
+Test Case '-[RaconteTests.CaptureCoordinatorTests testLaunchRecoveryRebuildsCrashedCapture]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testLaunchRecoveryRebuildsCrashedCapture]' passed (0.003 seconds).
+Test Case '-[RaconteTests.CaptureCoordinatorTests testPermissionDeniedReturnsToIdle]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testPermissionDeniedReturnsToIdle]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CaptureCoordinatorTests testResumeContinuesSameCaptureGapFree]' started.
+Test Case '-[RaconteTests.CaptureCoordinatorTests testResumeContinuesSameCaptureGapFree]' passed (0.016 seconds).
+Test Suite 'CaptureCoordinatorTests' passed at 2026-07-29 17:27:03.477.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.036 (0.037) seconds
+Test Suite 'CaptureMachineTests' started at 2026-07-29 17:27:03.477.
+Test Case '-[RaconteTests.CaptureMachineTests testIllegalEvent_rotationWhileIdle_isNoop]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testIllegalEvent_rotationWhileIdle_isNoop]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testIllegalEvents_assortedNoops]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testIllegalEvents_assortedNoops]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow12_done]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow12_done]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow13_tailDrained]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow13_tailDrained]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow14_doneWhileInterrupted_noNewSegment]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow14_doneWhileInterrupted_noNewSegment]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow15_finalizerPickup]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow15_finalizerPickup]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow16_finalizeSucceeded_manifestBeforeDelete]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow16_finalizeSucceeded_manifestBeforeDelete]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow19_diskFullRecording_noDataClaiming]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow19_diskFullRecording_noDataClaiming]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow19_diskFullStopping]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow19_diskFullStopping]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow1_record]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow1_record]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingCaptured_noLiveSegmentFsync]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingCaptured_noLiveSegmentFsync]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingRecording_fsyncsLiveSegment]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingRecording_fsyncsLiveSegment]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingWhileIdle_isNoop]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow20_appTerminatingWhileIdle_isNoop]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow2_engineReady]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow2_engineReady]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow3_prepareFailed]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow3_prepareFailed]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow4_rotation]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow4_rotation]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow5_interruptionBegan_closesSegmentBeforeStateFlips]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow5_interruptionBegan_closesSegmentBeforeStateFlips]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow6_routeLost]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow6_routeLost]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow7_mediaServicesReset_discardsEngine]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow7_mediaServicesReset_discardsEngine]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow8_resume]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow8_resume]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRow9_engineReady_opensNextSegmentAndResetsRetry]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRow9_engineReady_opensNextSegmentAndResetsRetry]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRows10and11_retryBudget]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRows10and11_retryBudget]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testRows17and18_finalizeBudget]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testRows17and18_finalizeBudget]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testStateSeqMonotonicWithRetriesAndInterruptions]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testStateSeqMonotonicWithRetriesAndInterruptions]' passed (0.000 seconds).
+Test Case '-[RaconteTests.CaptureMachineTests testStateSeqStrictlyIncreasesAcrossEveryTransition]' started.
+Test Case '-[RaconteTests.CaptureMachineTests testStateSeqStrictlyIncreasesAcrossEveryTransition]' passed (0.000 seconds).
+Test Suite 'CaptureMachineTests' passed at 2026-07-29 17:27:03.494.
+	 Executed 25 tests, with 0 failures (0 unexpected) in 0.009 (0.017) seconds
+Test Suite 'CapturePlaybackTests' started at 2026-07-29 17:27:03.494.
+Test Case '-[RaconteTests.CapturePlaybackTests testCapturePlaybackNoneWhenNothingOnDisk]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testCapturePlaybackNoneWhenNothingOnDisk]' passed (0.002 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testCapturePlaybackReportsDecodedM4ADuration]' started.
+2026-07-29 17:27:03.530092-0700 Raconte[29700:17371229] [plugin] AddInstanceForFactory: No factory registered for id <CFUUID 0xa9b980e80> F8BB1C28-BAE8-11D6-9C31-00039315CD46
+Test Case '-[RaconteTests.CapturePlaybackTests testCapturePlaybackReportsDecodedM4ADuration]' passed (0.058 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testDurationFromFileSizeWhenSidecarMissing]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testDurationFromFileSizeWhenSidecarMissing]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testDurationFromSidecars]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testDurationFromSidecars]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testM4APartOnlyIsNotPlayable_FallsBackToRaw]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testM4APartOnlyIsNotPlayable_FallsBackToRaw]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsFinalizedM4AWhenPresentAndVerified]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsFinalizedM4AWhenPresentAndVerified]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsNoneWhenEmpty]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsNoneWhenEmpty]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsNoneWhenSegmentsHaveZeroFrames]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsNoneWhenSegmentsHaveZeroFrames]' passed (0.001 seconds).
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsRawSegmentsWhenNoM4A]' started.
+Test Case '-[RaconteTests.CapturePlaybackTests testSelectsRawSegmentsWhenNoM4A]' passed (0.001 seconds).
+Test Suite 'CapturePlaybackTests' passed at 2026-07-29 17:27:03.561.
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.065 (0.067) seconds
+Test Suite 'FinalizerTests' started at 2026-07-29 17:27:03.561.
+Test Case '-[RaconteTests.FinalizerTests testDrainProcessesQueueFIFOWithDedup]' started.
+Test Case '-[RaconteTests.FinalizerTests testDrainProcessesQueueFIFOWithDedup]' passed (0.009 seconds).
+Test Case '-[RaconteTests.FinalizerTests testGapFlagsNeedsAttentionAndEncodesContiguousPrefix]' started.
+Test Case '-[RaconteTests.FinalizerTests testGapFlagsNeedsAttentionAndEncodesContiguousPrefix]' passed (0.007 seconds).
+Test Case '-[RaconteTests.FinalizerTests testOrderedContiguousFeedCompletesAndDeletesRaw]' started.
+Test Case '-[RaconteTests.FinalizerTests testOrderedContiguousFeedCompletesAndDeletesRaw]' passed (0.011 seconds).
+Test Case '-[RaconteTests.FinalizerTests testUndecodableOutputRequeues]' started.
+Test Case '-[RaconteTests.FinalizerTests testUndecodableOutputRequeues]' passed (0.012 seconds).
+Test Case '-[RaconteTests.FinalizerTests testVerifyFailBudgetExhaustedFlagsNeedsAttention]' started.
+Test Case '-[RaconteTests.FinalizerTests testVerifyFailBudgetExhaustedFlagsNeedsAttention]' passed (0.004 seconds).
+Test Case '-[RaconteTests.FinalizerTests testVerifyFailRequeuesAndKeepsRaw]' started.
+Test Case '-[RaconteTests.FinalizerTests testVerifyFailRequeuesAndKeepsRaw]' passed (0.004 seconds).
+Test Suite 'FinalizerTests' passed at 2026-07-29 17:27:03.609.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.047 (0.048) seconds
+Test Suite 'RecoveryExecutorTests' started at 2026-07-29 17:27:03.609.
+Test Case '-[RaconteTests.RecoveryExecutorTests testDeleteCaptureDirectoryIdempotent]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testDeleteCaptureDirectoryIdempotent]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testDiscardFinalPartRequeueIdempotent]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testDiscardFinalPartRequeueIdempotent]' passed (0.003 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testEnqueueAndVerifyAreFilesystemNoOps]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testEnqueueAndVerifyAreFilesystemNoOps]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testFinishRawDeleteRemovesSegmentsIdempotent]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testFinishRawDeleteRemovesSegmentsIdempotent]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testMixedBatchIdempotent]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testMixedBatchIdempotent]' passed (0.009 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testNormalizeIsConvergent]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testNormalizeIsConvergent]' passed (0.004 seconds).
+Test Case '-[RaconteTests.RecoveryExecutorTests testNormalizeToCapturedRenamesPartWritesSidecarAndManifest]' started.
+Test Case '-[RaconteTests.RecoveryExecutorTests testNormalizeToCapturedRenamesPartWritesSidecarAndManifest]' passed (0.005 seconds).
+Test Suite 'RecoveryExecutorTests' passed at 2026-07-29 17:27:03.636.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 0.025 (0.026) seconds
+Test Suite 'RecoveryPlannerTests' started at 2026-07-29 17:27:03.636.
+Test Case '-[RaconteTests.RecoveryPlannerTests testAbsentManifestNoSegmentsDeletes]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testAbsentManifestNoSegmentsDeletes]' passed (0.000 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testBytesPerFrameDerivedWhenAbsent]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testBytesPerFrameDerivedWhenAbsent]' passed (0.000 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCapturedNoFinalEnqueuesFinalize]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCapturedNoFinalEnqueuesFinalize]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCapturedWithStrayPartNormalizesFirst]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCapturedWithStrayPartNormalizesFirst]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteUnverifiedM4AVerifies]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteUnverifiedM4AVerifies]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteVerifiedFinishesRawDelete]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteVerifiedFinishesRawDelete]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteVerifiedNoSegmentsFinishesRawDelete]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCompleteVerifiedNoSegmentsFinishesRawDelete]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCorruptManifestOnlyEmptyPartDeletes]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCorruptManifestOnlyEmptyPartDeletes]' passed (0.000 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testCorruptManifestWithRealSegmentsRebuildsToCaptured]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testCorruptManifestWithRealSegmentsRebuildsToCaptured]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testEmptySnapshotYieldsNoActions]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testEmptySnapshotYieldsNoActions]' passed (0.000 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testExactlyFloorDurationSurvives]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testExactlyFloorDurationSurvives]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingNoFinalAtAllEnqueuesFinalize]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingNoFinalAtAllEnqueuesFinalize]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingPartOnlyDiscardsAndRequeues]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingPartOnlyDiscardsAndRequeues]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingWithM4APresentVerifies]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testFinalizingWithM4APresentVerifies]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testMultipleCapturesYieldIndependentActions]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testMultipleCapturesYieldIndependentActions]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testPcmPartAfterFinalizedSegmentChainsOffset]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testPcmPartAfterFinalizedSegmentChainsOffset]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testPcmPartNormalizesWithTruncatedFrameCount]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testPcmPartNormalizesWithTruncatedFrameCount]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testPreparingNoSegmentsDeletes]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testPreparingNoSegmentsDeletes]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testRecordingCrashNormalizesToCaptured]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testRecordingCrashNormalizesToCaptured]' passed (0.002 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testRecordingWithEmptySegmentsDeletes]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testRecordingWithEmptySegmentsDeletes]' passed (0.001 seconds).
+Test Case '-[RaconteTests.RecoveryPlannerTests testSubFloorDurationDiscards]' started.
+Test Case '-[RaconteTests.RecoveryPlannerTests testSubFloorDurationDiscards]' passed (0.001 seconds).
+Test Suite 'RecoveryPlannerTests' passed at 2026-07-29 17:27:03.652.
+	 Executed 21 tests, with 0 failures (0 unexpected) in 0.014 (0.016) seconds
+Test Suite 'SegmentLayoutTests' started at 2026-07-29 17:27:03.652.
+Test Case '-[RaconteTests.SegmentLayoutTests testCumulativeStartFrameOffsets]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testCumulativeStartFrameOffsets]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testGapFreeDetection]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testGapFreeDetection]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testIndexParsing]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testIndexParsing]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testInterruptionLogEntryEmitsExplicitNullWhileInProgress]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testInterruptionLogEntryEmitsExplicitNullWhileInProgress]' passed (0.001 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testLexicographicSortMatchesChronologicalOrder]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testLexicographicSortMatchesChronologicalOrder]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestCodableRoundTripAndSchemaVersion]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestCodableRoundTripAndSchemaVersion]' passed (0.002 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestDefaultFinalRef]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestDefaultFinalRef]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestOperationalFieldsRoundTripAndOmission]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testManifestOperationalFieldsRoundTripAndOmission]' passed (0.002 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testSidecarCodableRoundTrip]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testSidecarCodableRoundTrip]' passed (0.001 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testSixDigitPadding]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testSixDigitPadding]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testTruncationMath]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testTruncationMath]' passed (0.000 seconds).
+Test Case '-[RaconteTests.SegmentLayoutTests testURLConstruction]' started.
+Test Case '-[RaconteTests.SegmentLayoutTests testURLConstruction]' passed (0.000 seconds).
+Test Suite 'SegmentLayoutTests' passed at 2026-07-29 17:27:03.662.
+	 Executed 12 tests, with 0 failures (0 unexpected) in 0.008 (0.010) seconds
+Test Suite 'SegmentStoreTests' started at 2026-07-29 17:27:03.662.
+Test Case '-[RaconteTests.SegmentStoreTests testAppendRotateProducesSegmentsAndSidecars]' started.
+Test Case '-[RaconteTests.SegmentStoreTests testAppendRotateProducesSegmentsAndSidecars]' passed (0.005 seconds).
+Test Case '-[RaconteTests.SegmentStoreTests testInterruptClosesLiveSegmentAndLogsInterruption]' started.
+Test Case '-[RaconteTests.SegmentStoreTests testInterruptClosesLiveSegmentAndLogsInterruption]' passed (0.006 seconds).
+Test Case '-[RaconteTests.SegmentStoreTests testKillMidPartLeavesRecoverableFiles]' started.
+Test Case '-[RaconteTests.SegmentStoreTests testKillMidPartLeavesRecoverableFiles]' passed (0.003 seconds).
+Test Case '-[RaconteTests.SegmentStoreTests testManifestAtomicWriteLeavesNoPart]' started.
+Test Case '-[RaconteTests.SegmentStoreTests testManifestAtomicWriteLeavesNoPart]' passed (0.003 seconds).
+Test Case '-[RaconteTests.SegmentStoreTests testSetStatePersistsOperationalFields]' started.
+Test Case '-[RaconteTests.SegmentStoreTests testSetStatePersistsOperationalFields]' passed (0.003 seconds).
+Test Suite 'SegmentStoreTests' passed at 2026-07-29 17:27:03.682.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.020 (0.021) seconds
+Test Suite 'SmokeTests' started at 2026-07-29 17:27:03.683.
+Test Case '-[RaconteTests.SmokeTests testTargetLinks]' started.
+Test Case '-[RaconteTests.SmokeTests testTargetLinks]' passed (0.000 seconds).
+Test Suite 'SmokeTests' passed at 2026-07-29 17:27:03.683.
+	 Executed 1 test, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+Test Suite 'RaconteTests.xctest' passed at 2026-07-29 17:27:03.683.
+	 Executed 116 tests, with 0 failures (0 unexpected) in 0.398 (0.421) seconds
+Test Suite 'All tests' passed at 2026-07-29 17:27:03.683.
+	 Executed 116 tests, with 0 failures (0 unexpected) in 0.398 (0.421) seconds
+2026-07-29 17:27:03.955 xcodebuild[29661:17371019] [MT] IDETestOperationsObserverDebug: 1.300 elapsed -- Testing started completed.
+2026-07-29 17:27:03.955 xcodebuild[29661:17371019] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-07-29 17:27:03.955 xcodebuild[29661:17371019] [MT] IDETestOperationsObserverDebug: 1.300 sec, +1.300 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/nico/src/raconte/.build/T9/Logs/Test/Test-Raconte-2026.07.29_17-27-01--0700.xcresult
+
+** TEST SUCCEEDED **
+
+Testing started

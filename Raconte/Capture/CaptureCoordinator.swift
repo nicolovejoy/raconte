@@ -176,6 +176,9 @@ final class CaptureCoordinator {
         guard next != before || !effects.isEmpty else { return }
         machineState = next
         phase = next.phase
+        #if DEBUG
+        await TransitionBreakpointController.shared.gate(at: next.phase)
+        #endif
         executedEffectLog.append(contentsOf: effects)
         await realize(event: event, previousPhase: before.phase, next: next, effects: effects)
     }

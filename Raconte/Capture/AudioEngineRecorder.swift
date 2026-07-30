@@ -35,14 +35,22 @@ final class AudioEngineRecorder {
 
     /// Installs the tap at the hardware input format and starts the engine.
     /// Call from a single context (the coordinator); safe to call once per capture.
-    func start(sink: PCMSink, onLevel: (@Sendable (Float) -> Void)? = nil) throws {
+    ///
+    /// `matching`: when non-nil, output is pinned to this canonical format instead of
+    /// the hardware rate — the resume-after-device-switch path, where the new device's
+    /// rate may differ but the capture's segments must stay at one rate (§1). The tap
+    /// then resamples (the only path that does; initial starts always adopt hardware).
+    func start(sink: PCMSink, matching canonical: AudioFormatDescriptor? = nil,
+               onLevel: (@Sendable (Float) -> Void)? = nil) throws {
         guard !isRunning else { return }
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw RecorderError.noInputFormat
         }
-        let proc = TapProcessor(inputFormat: inputFormat, sink: sink, onLevel: onLevel,
+        let proc = TapProcessor(inputFormat: inputFormat,
+                                outputFormat: canonical?.avAudioFormat,
+                                sink: sink, onLevel: onLevel,
                                 maxFrameCapacity: Self.tapBufferSize * Self.scratchHeadroom)
         // bufferSize is a hint; delivered frameLength may differ — the scratch buffer is
         // sized with headroom and the process() path falls back to a one-off alloc if a
@@ -82,6 +90,24 @@ final class AudioEngineRecorder {
     }
 }
 
+extension AudioFormatDescriptor {
+    /// AVAudioFormat equivalent, for pinning a resumed engine to the capture's
+    /// canonical format. `otherFormat` maps to Float32 (the canonical sample type).
+    var avAudioFormat: AVAudioFormat? {
+        let common: AVAudioCommonFormat
+        switch commonFormat {
+        case .pcmFormatFloat32, .otherFormat: common = .pcmFormatFloat32
+        case .pcmFormatFloat64: common = .pcmFormatFloat64
+        case .pcmFormatInt16: common = .pcmFormatInt16
+        case .pcmFormatInt32: common = .pcmFormatInt32
+        }
+        return AVAudioFormat(commonFormat: common,
+                             sampleRate: Double(sampleRate),
+                             channels: AVAudioChannelCount(max(1, channels)),
+                             interleaved: interleaved)
+    }
+}
+
 /// Per-capture tap worker. Holds the reused converter + a preallocated converter-output
 /// buffer and the canonical format, converts each tap buffer to mono `Float32` at the
 /// hardware rate, measures RMS, and forwards a `PCMChunk`.
@@ -99,6 +125,10 @@ final class TapProcessor: @unchecked Sendable {
     private let sink: PCMSink
     private let onLevel: (@Sendable (Float) -> Void)?
     private let converter: AVAudioConverter?
+    /// Output frames produced per input frame (1 unless resuming onto a device whose
+    /// rate differs from the capture's canonical rate).
+    private let rateRatio: Double
+    private let ratesDiffer: Bool
     /// Reused converter-output buffer, allocated once at init (finding #1: no heap
     /// allocation per realtime tap callback → no priority-inversion / dropped-buffer risk).
     /// `nil` on the passthrough path (input already canonical, no conversion). A callback
@@ -106,42 +136,72 @@ final class TapProcessor: @unchecked Sendable {
     /// `process(_:)` rather than dropping audio (the rare path).
     private let scratch: AVAudioPCMBuffer?
 
-    init(inputFormat: AVAudioFormat, sink: PCMSink, onLevel: (@Sendable (Float) -> Void)? = nil,
+    init(inputFormat: AVAudioFormat, outputFormat: AVAudioFormat? = nil,
+         sink: PCMSink, onLevel: (@Sendable (Float) -> Void)? = nil,
          maxFrameCapacity: AVAudioFrameCount = AudioEngineRecorder.tapBufferSize * 2) {
         // VERIFY #2: store at the HARDWARE sample rate (no resample on the tap thread);
-        // only downmix to mono, non-interleaved Float32. Resampling, if ever wanted, is
-        // deferred to finalize (the sidecar records the rate).
-        let output = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                   sampleRate: inputFormat.sampleRate,
-                                   channels: 1,
-                                   interleaved: false)!
+        // only downmix to mono, non-interleaved Float32. One deliberate exception: a
+        // resume onto a different-rate device pins `outputFormat` to the capture's
+        // canonical format, and the converter resamples so the segment chain keeps a
+        // single rate (§1 — manifest/sidecars/playback/finalize all assume one).
+        let output = outputFormat
+            ?? AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                             sampleRate: inputFormat.sampleRate,
+                             channels: 1,
+                             interleaved: false)!
         self.outputFormat = output
         self.sink = sink
         self.onLevel = onLevel
+        self.rateRatio = output.sampleRate / inputFormat.sampleRate
+        self.ratesDiffer = output.sampleRate != inputFormat.sampleRate
         if inputFormat == output {
             self.converter = nil
             self.scratch = nil
         } else {
             self.converter = AVAudioConverter(from: inputFormat, to: output)
-            // Preallocated once; reused across every tap callback.
-            self.scratch = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: max(maxFrameCapacity, 1))
+            // Preallocated once; reused across every tap callback. Scaled up when
+            // resampling produces more output frames than input frames.
+            let capacity = AVAudioFrameCount((Double(maxFrameCapacity) * max(1, rateRatio)).rounded(.up))
+            self.scratch = AVAudioPCMBuffer(pcmFormat: output, frameCapacity: max(capacity, 1))
         }
+    }
+
+    /// Output frames needed for `frames` input frames (identity unless resampling).
+    private func requiredOutputFrames(for frames: AVAudioFrameCount) -> AVAudioFrameCount {
+        ratesDiffer ? AVAudioFrameCount((Double(frames) * rateRatio).rounded(.up)) : frames
     }
 
     func process(_ inputBuffer: AVAudioPCMBuffer) {
         let mono: AVAudioPCMBuffer
         if let converter {
+            let needed = requiredOutputFrames(for: inputBuffer.frameLength)
             let out: AVAudioPCMBuffer
-            if let scratch, scratch.frameCapacity >= inputBuffer.frameLength {
+            if let scratch, scratch.frameCapacity >= needed {
                 out = scratch                      // common path: no allocation
             } else {
                 // Rare: callback exceeds the preallocated capacity — allocate a one-off
                 // buffer rather than drop audio.
                 guard let fresh = AVAudioPCMBuffer(pcmFormat: outputFormat,
-                                                   frameCapacity: max(inputBuffer.frameLength, 1)) else { return }
+                                                   frameCapacity: max(needed, 1)) else { return }
                 out = fresh
             }
-            guard (try? converter.convert(to: out, from: inputBuffer)) != nil else { return }
+            if ratesDiffer {
+                // Rate conversion requires the streaming API. `.noDataNow` (not
+                // `.endOfStream`) keeps the converter alive across callbacks; the few
+                // frames it holds back internally are delivered on the next call.
+                out.frameLength = 0
+                var fed = false
+                var convertError: NSError?
+                let status = converter.convert(to: out, error: &convertError) { _, outStatus in
+                    if fed { outStatus.pointee = .noDataNow; return nil }
+                    fed = true
+                    outStatus.pointee = .haveData
+                    return inputBuffer
+                }
+                guard status == .haveData || status == .inputRanDry else { return }
+            } else {
+                guard (try? converter.convert(to: out, from: inputBuffer)) != nil else { return }
+            }
             mono = out
         } else {
             mono = inputBuffer

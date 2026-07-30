@@ -31,7 +31,10 @@ protocol EngineRecording: AnyObject {
     var isRunning: Bool { get }
     /// Canonical capture format, available once `start` succeeds.
     var captureFormatDescriptor: AudioFormatDescriptor? { get }
-    func start(sink: PCMSink, onLevel: (@Sendable (Float) -> Void)?) throws
+    /// `matching` non-nil pins output to that format (resume path — the new input
+    /// device's rate may differ from the capture's); nil adopts the hardware format.
+    func start(sink: PCMSink, matching canonical: AudioFormatDescriptor?,
+               onLevel: (@Sendable (Float) -> Void)?) throws
     func stop()
 }
 
@@ -197,9 +200,19 @@ final class CaptureCoordinator {
         case .interrupted:
             await send(.interruptionBegan)
         case .routeLost:
+            // No "interruption ended" ever follows a route loss — the old device is
+            // simply gone (macOS device switch, iOS unplug). Auto-resume onto the
+            // current default input; reacquire failures fall into the existing
+            // backoff/budget path. Guarded on the phase actually having transitioned
+            // so a stray config-change can't resume e.g. a diskFull interruption.
+            let wasRecording = machineState.phase == .recording
             await send(.routeLost)
+            if wasRecording, machineState.phase == .interrupted { await send(.resume) }
         case .mediaServicesReset:
             await send(.mediaServicesReset)
+            // The audio daemon restarted; the engine is rebuilt fresh on resume, so a
+            // manual Resume is viable — surface the button rather than a dead end.
+            if machineState.phase == .interrupted { canResume = true }
         case .resumeAvailable(let shouldResume):
             guard machineState.phase == .interrupted else { return }
             if shouldResume { await send(.resume) } else { canResume = true }
@@ -279,7 +292,7 @@ final class CaptureCoordinator {
         let forwarder = PCMForwarder()
         let level = levelBox
         do {
-            try recorder.start(sink: forwarder, onLevel: { level.set($0) })
+            try recorder.start(sink: forwarder, matching: nil, onLevel: { level.set($0) })
         } catch {
             session.deactivate()
             await send(.prepareFailed(.configurationFailed)); return
@@ -337,12 +350,19 @@ final class CaptureCoordinator {
         await store(setState: .resuming)   // write-ahead (§2 row 8) before reacquiring
         do { try await session.activate() }
         catch { await send(.reacquireFailed); return }
-        guard let recorder = currentRecorder, let forwarder = currentForwarder else {
+        guard let forwarder = currentForwarder, let format = currentFormat else {
             await send(.reacquireFailed); return
         }
+        // Fresh recorder: a new AVAudioEngine binds the CURRENT default input (the old
+        // engine can be stale after a device switch / media services reset). Pinned to
+        // the capture's canonical format — the new device's rate may differ, and the
+        // segment chain must keep one rate (the tap resamples if needed).
+        currentRecorder?.stop()
+        let recorder = makeRecorder()
         let level = levelBox
-        do { try recorder.start(sink: forwarder, onLevel: { level.set($0) }) }
+        do { try recorder.start(sink: forwarder, matching: format, onLevel: { level.set($0) }) }
         catch { await send(.reacquireFailed); return }
+        currentRecorder = recorder
         await send(.engineReady)
     }
 

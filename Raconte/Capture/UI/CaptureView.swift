@@ -171,7 +171,12 @@ struct CaptureView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .sheet(isPresented: $showDebugMenu) { DebugMenuView() }
+                    .sheet(isPresented: $showDebugMenu) {
+                        // Reset the capture screen's inherited .white foreground —
+                        // it renders invisible on the system sheet background.
+                        NavigationStack { DebugMenuView() }
+                            .foregroundStyle(Color.primary)
+                    }
                     #endif
 
                     ForEach(model.visibleRecovered) { rec in

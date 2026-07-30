@@ -141,10 +141,13 @@ the armed transition, since its own writes haven't landed).
   §3) → normalize → `captured` → recovered banner.
 - **`stopping`**: same row — this is test 8's scenario made deterministic → recovered
   banner, plays back everything spoken before Done.
-- **`captured`**: §3 "captured, ≥1, final absent → leave `captured`; enqueue
-  finalize" → recovered banner, then finalizes on its own.
-- **`finalizing`**: §3 "finalizing, ≥1, `.part` only → discard `.part`; set
-  `captured`; requeue" → recovered banner, re-finalizes automatically.
+- **`captured`**: the gate fires BEFORE the captured commit's effects run, so
+  disk still says recording/stopping → normalize row → recovered banner, then
+  finalizes on its own.
+- **`finalizing`**: by this gate the capture IS committed (manifest `captured`,
+  segments closed) → §3 "leave `captured`; enqueue finalize" → NO banner (the
+  banner is only for pre-commit rescues); the entry quietly appears in the
+  list, finalized and playable. Verified iPad run 9.
 
 ## 4. Audio route changes
 

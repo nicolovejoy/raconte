@@ -1,0 +1,630 @@
+import Foundation
+import Observation
+import AVFoundation
+
+/// Wires the pure `CaptureMachine` (T2) to the imperative host: the `SegmentStore`
+/// actor (T3), an `AudioSessionController` (T5), an engine recorder (T6), and the
+/// launch recovery scan (T4). Owns the authoritative `MachineState`, translates UI
+/// intents + `SessionEvent`s into machine `Event`s, and realizes each emitted
+/// `Effect` in order against the store/recorder/session (design §2/§3/§4).
+///
+/// Observable (@Observable) and @MainActor so a SwiftUI screen (T10) binds directly
+/// to `phase`, `elapsed`, `micLevel`, `lastError`, `recoveredRecordings`, and
+/// `finalizeQueue`. All hardware sits behind injected protocols/closures so the whole
+/// type is exercised with fakes + a real store on a temp dir (design §6).
+///
+/// Wiring decisions (see the T7 report for rationale):
+/// - The `preparing` phase writes nothing to disk. `SegmentStore.begin()` bundles
+///   dir-create + `recording` manifest + open-seg-0 and needs the hardware format,
+///   which is unknown until the engine starts. So `createCaptureDirectory` /
+///   `writeManifest(.preparing)` are in-memory only; all disk creation happens at
+///   `recording` (row 2) via `begin()`. Safe: recovery discards any `preparing`/empty
+///   dir, and nothing durable is claimed before it exists (§2 write-ahead exception).
+/// - Segment rotation is driven inside `SegmentStore.append` (byte/duration caps), not
+///   by feeding `rotationTick`; the coordinator never emits row-4 events.
+/// - Finalization (rows 15–18) is out of scope: reached-`captured` captures are pushed
+///   onto `finalizeQueue` (the T8 hand-off surface) and not encoded here.
+/// Engine driver seam (design §6). `AudioEngineRecorder` (T6) conforms retroactively
+/// below; tests inject a synthetic-PCM fake. Top-level (not nested in the @MainActor
+/// coordinator) so the retroactive conformance carries no actor isolation.
+protocol EngineRecording: AnyObject {
+    var isRunning: Bool { get }
+    /// Canonical capture format, available once `start` succeeds.
+    var captureFormatDescriptor: AudioFormatDescriptor? { get }
+    func start(sink: PCMSink, onLevel: (@Sendable (Float) -> Void)?) throws
+    func stop()
+}
+
+/// Builds a fresh `SegmentStore` for a capture once its format is known. A closure,
+/// not a protocol: tests inject a temp-dir factory and assert the real on-disk
+/// manifest/segments the store writes.
+typealias StoreFactory = @Sendable (_ captureID: String, _ format: AudioFormatDescriptor) -> SegmentStore
+
+@MainActor
+@Observable
+final class CaptureCoordinator {
+
+    // MARK: Observable state (bound by the T10 UI)
+
+    private(set) var phase: CaptureState = .idle
+    private(set) var elapsed: TimeInterval = 0
+    private(set) var micLevel: Float = 0
+    private(set) var lastError: String?
+    /// True after an interruption ended WITHOUT `.shouldResume`: UI shows a Resume button.
+    private(set) var canResume = false
+    /// Captures rescued at launch → "Recovered recording: MM:SS" banner (design §3).
+    private(set) var recoveredRecordings: [RecoveredRecording] = []
+    /// Minimal finalize hand-off surface (T8 consumes): capture IDs whose raw audio is
+    /// complete on disk and awaits AAC-LC encoding/verification. `capturesRoot` locates them.
+    private(set) var finalizeQueue: [String] = []
+    /// Ordered record of effects the coordinator has dispatched — test introspection only.
+    private(set) var executedEffectLog: [Effect] = []
+
+    /// Root of the on-disk capture tree; T8/T9 use it to locate queued captures.
+    let capturesRoot: URL
+
+    // MARK: Config + dependencies
+
+    private let machine: CaptureMachine
+    private let session: AudioSessionController
+    private let makeRecorder: () -> EngineRecording
+    private let makeStore: StoreFactory
+    private let mintCaptureID: @Sendable () -> String
+    private let now: @Sendable () -> Date
+    /// Flush window kept open after Done so the last spoken tail lands (§2 row 12/13).
+    /// `.zero` finishes synchronously — used by tests for determinism.
+    private let flushInterval: Duration
+    private let resumeBackoff: Duration
+
+    // MARK: Per-capture mutable wiring
+
+    private var machineState: MachineState = .idle
+    private var pendingCaptureID: String?
+    private var currentFormat: AudioFormatDescriptor?
+    private var currentRecorder: EngineRecording?
+    private var currentStore: SegmentStore?
+    private var currentForwarder: PCMForwarder?
+    // nonisolated(unsafe): mutated only on the main actor; `deinit` (nonisolated in
+    // Swift 6) cancels them, and it runs only when no other reference survives.
+    nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
+    nonisolated(unsafe) private var timerTask: Task<Void, Never>?
+    nonisolated(unsafe) private var sessionTask: Task<Void, Never>?
+    private let levelBox = LevelBox()
+    private var recordingSegmentStart: Date?
+    private var accumulatedElapsed: TimeInterval = 0
+
+    // MARK: Init
+
+    init(capturesRoot: URL,
+         session: AudioSessionController,
+         makeRecorder: @escaping () -> EngineRecording,
+         makeStore: @escaping StoreFactory,
+         mintCaptureID: @escaping @Sendable () -> String = { CaptureCoordinator.makeULID() },
+         now: @escaping @Sendable () -> Date = Date.init,
+         machine: CaptureMachine = CaptureMachine(),
+         flushInterval: Duration = .milliseconds(300),
+         resumeBackoff: Duration = .milliseconds(500)) {
+        self.capturesRoot = capturesRoot
+        self.session = session
+        self.makeRecorder = makeRecorder
+        self.makeStore = makeStore
+        self.mintCaptureID = mintCaptureID
+        self.now = now
+        self.machine = machine
+        self.flushInterval = flushInterval
+        self.resumeBackoff = resumeBackoff
+        subscribeToSession()
+    }
+
+    deinit {
+        pumpTask?.cancel()
+        timerTask?.cancel()
+        sessionTask?.cancel()
+    }
+
+    // MARK: Launch recovery (design §3)
+
+    /// Scan `capturesRoot`, plan + apply recovery, and publish the banner + finalize
+    /// queue. Reads only JSON + file sizes (no PCM decode), so it's cheap.
+    func recoverAtLaunch() async {
+        let root = capturesRoot
+        let clock = now
+        let (outcome, durations) = await Task.detached { () -> (RecoveryOutcome, [String: Double]) in
+            let snapshot = DirectorySnapshot.gather(capturesRoot: root)
+            let actions = RecoveryPlanner.plan(snapshot)
+            var durations: [String: Double] = [:]
+            for case let .normalizeToCaptured(rec) in actions { durations[rec.captureID] = rec.durationSeconds }
+            let executor = RecoveryExecutor(capturesRoot: root, now: clock)
+            return (executor.apply(actions), durations)
+        }.value
+
+        recoveredRecordings = outcome.recoveredCaptureIDs.map {
+            RecoveredRecording(captureID: $0, durationSeconds: durations[$0] ?? 0)
+        }
+        for id in outcome.finalizeQueue + outcome.verifyQueue { enqueueFinalize(id) }
+    }
+
+    // MARK: UI intents
+
+    /// User tapped Record. Mints the capture ULID and drives the whole prepare→record
+    /// chain to completion (returns once recording, or after a prepare failure).
+    func record() async {
+        guard machineState.phase == .idle else { return }
+        lastError = nil
+        canResume = false
+        await send(.record(captureID: mintCaptureID()))
+    }
+
+    /// User tapped Done. From `recording` this opens the flush window; from `interrupted`
+    /// it commits `captured` immediately (design §2 rows 12/14).
+    func done() async { await send(.done) }
+
+    /// User tapped Resume after an interruption that didn't auto-resume.
+    func resume() async {
+        guard machineState.phase == .interrupted else { return }
+        canResume = false
+        await send(.resume)
+    }
+
+    // MARK: Event pipeline
+
+    /// Reduce an event, publish the new phase, log the effects in machine order, then
+    /// realize them. Illegal (state, event) pairs are no-ops.
+    private func send(_ event: Event) async {
+        let before = machineState
+        let (next, effects) = machine.reduce(before, event)
+        guard next != before || !effects.isEmpty else { return }
+        machineState = next
+        phase = next.phase
+        executedEffectLog.append(contentsOf: effects)
+        await realize(event: event, previousPhase: before.phase, next: next, effects: effects)
+    }
+
+    private func subscribeToSession() {
+        let stream = session.events
+        sessionTask = Task { [weak self] in
+            for await ev in stream {
+                await self?.handleSessionEvent(ev)
+            }
+        }
+    }
+
+    private func handleSessionEvent(_ event: SessionEvent) async {
+        switch event {
+        case .interrupted:
+            await send(.interruptionBegan)
+        case .routeLost:
+            await send(.routeLost)
+        case .mediaServicesReset:
+            await send(.mediaServicesReset)
+        case .resumeAvailable(let shouldResume):
+            guard machineState.phase == .interrupted else { return }
+            if shouldResume { await send(.resume) } else { canResume = true }
+        }
+    }
+
+    // MARK: Effect realization
+    //
+    // The store's coarse methods (`begin`/`finish`/`markInterrupted`/`resumeRecording`/
+    // `setState`) each bundle a segment close and/or manifest write with the correct
+    // internal write-ahead order (§2). So the coordinator realizes a transition's disk
+    // effects via ONE store call keyed off the destination phase, while realizing
+    // recorder/session effects from the list. For segment-closing transitions the tap
+    // is stopped and the PCM pump drained BEFORE the store call, so the closed segment
+    // contains every buffered frame (a necessary, documented deviation from strict
+    // per-effect ordering; `executedEffectLog` still reflects machine order).
+
+    private func realize(event: Event, previousPhase: CaptureState,
+                         next: MachineState, effects: [Effect]) async {
+        switch event {
+        case .record(let id):
+            pendingCaptureID = id
+            await configureAndStart(captureID: id)
+
+        case .engineReady where previousPhase == .preparing:
+            await beginRecording()
+
+        case .engineReady where previousPhase == .resuming:
+            await resumeRecordingDisk()
+
+        case .prepareFailed(let error):
+            handlePrepareFailed(error)
+
+        case .interruptionBegan, .routeLost, .mediaServicesReset:
+            await enterInterrupted(kind: interruptionKind(event))
+
+        case .resume:
+            await rebuildAndReacquire()
+
+        case .reacquireFailed:
+            await handleReacquireResult(next: next)
+
+        case .done where previousPhase == .recording:
+            await store(setState: .stopping)
+            await beginFlushWindow()
+
+        case .done where previousPhase == .interrupted:
+            await store(setState: .captured)
+            await completeCapture()
+
+        case .tailDrained:
+            await drainAndFinish()
+
+        case .diskFull:
+            currentRecorder?.stop()
+            await store(setState: .interrupted, lastError: "diskFull")
+            lastError = message(for: .diskFull)
+            stopRecordingClock()
+
+        default:
+            // finalize rows (15–18) + last-gasp (20) are out of T7's scope; illegal
+            // pairs never reach here (filtered as no-ops in `send`).
+            break
+        }
+    }
+
+    // MARK: prepare → record
+
+    private func configureAndStart(captureID: String) async {
+        guard await session.requestPermission() else {
+            await send(.prepareFailed(.permissionDenied)); return
+        }
+        do { try await session.activate() }
+        catch { await send(.prepareFailed(.configurationFailed)); return }
+
+        let recorder = makeRecorder()
+        let forwarder = PCMForwarder()
+        let level = levelBox
+        do {
+            try recorder.start(sink: forwarder, onLevel: { level.set($0) })
+        } catch {
+            session.deactivate()
+            await send(.prepareFailed(.configurationFailed)); return
+        }
+        guard let format = recorder.captureFormatDescriptor else {
+            recorder.stop(); session.deactivate()
+            await send(.prepareFailed(.configurationFailed)); return
+        }
+        currentRecorder = recorder
+        currentForwarder = forwarder
+        currentFormat = format
+        await send(.engineReady)
+    }
+
+    private func beginRecording() async {
+        guard let id = pendingCaptureID, let format = currentFormat,
+              let forwarder = currentForwarder else { return }
+        let store = makeStore(id, format)
+        currentStore = store
+        do { try await store.begin() }
+        catch {
+            lastError = message(for: .diskFull)
+            await teardownFailedCapture()
+            return
+        }
+        startPump(store: store, forwarder: forwarder)
+        startRecordingClock(reset: true)
+    }
+
+    private func resumeRecordingDisk() async {
+        guard let store = currentStore else { return }
+        try? await store.resumeRecording()
+        startRecordingClock(reset: false)
+    }
+
+    private func handlePrepareFailed(_ error: CaptureError) {
+        currentRecorder?.stop()
+        session.deactivate()
+        lastError = message(for: error)
+        resetCaptureWiring()
+    }
+
+    // MARK: interruption / resume
+
+    private func enterInterrupted(kind: String) async {
+        currentRecorder?.stop()
+        await flushPump()
+        if let store = currentStore {
+            try? await store.markInterrupted(kind: kind, beganAt: now())
+        }
+        stopRecordingClock()
+    }
+
+    private func rebuildAndReacquire() async {
+        await store(setState: .resuming)   // write-ahead (§2 row 8) before reacquiring
+        do { try await session.activate() }
+        catch { await send(.reacquireFailed); return }
+        guard let recorder = currentRecorder, let forwarder = currentForwarder else {
+            await send(.reacquireFailed); return
+        }
+        let level = levelBox
+        do { try recorder.start(sink: forwarder, onLevel: { level.set($0) }) }
+        catch { await send(.reacquireFailed); return }
+        await send(.engineReady)
+    }
+
+    private func handleReacquireResult(next: MachineState) async {
+        if next.phase == .interrupted {
+            await store(setState: .interrupted, retryCount: next.retryCount)
+            scheduleResumeBackoff()
+        } else if next.phase == .captured {
+            await store(setState: .captured)
+            await completeCapture()
+        }
+    }
+
+    private func scheduleResumeBackoff() {
+        let backoff = resumeBackoff
+        Task { [weak self] in
+            try? await Task.sleep(for: backoff)
+            guard let self, await self.machineState.phase == .interrupted else { return }
+            await self.send(.resume)
+        }
+    }
+
+    // MARK: Done / stopping
+
+    private func beginFlushWindow() async {
+        if flushInterval == .zero {
+            await send(.tailDrained)
+        } else {
+            let interval = flushInterval
+            Task { [weak self] in
+                try? await Task.sleep(for: interval)
+                await self?.send(.tailDrained)
+            }
+        }
+    }
+
+    private func drainAndFinish() async {
+        currentRecorder?.stop()
+        await flushPump()
+        if let store = currentStore {
+            do { try await store.finish(reason: .stop) }
+            catch { lastError = message(for: .diskFull) }
+        }
+        session.deactivate()
+        await completeCapture()
+    }
+
+    /// A capture reached `captured` (durability commit point). Hand it to the finalizer
+    /// queue and tear down the live wiring.
+    private func completeCapture() async {
+        if let id = pendingCaptureID { enqueueFinalize(id) }
+        stopRecordingClock()
+        finishPump()
+        resetCaptureWiring()
+    }
+
+    // MARK: Disk helpers
+
+    /// Realize a `writeManifest` effect for a plain state transition via the store's
+    /// generic `setState` (no segment close involved).
+    private func store(setState state: CaptureState,
+                       needsAttention: Bool? = nil, lastError: String? = nil,
+                       retryCount: Int? = nil, finalizeAttempts: Int? = nil) async {
+        guard let store = currentStore else { return }
+        try? await store.setState(state, needsAttention: needsAttention, lastError: lastError,
+                                  retryCount: retryCount, finalizeAttempts: finalizeAttempts)
+    }
+
+    private func enqueueFinalize(_ id: String) {
+        guard !finalizeQueue.contains(id) else { return }
+        finalizeQueue.append(id)
+    }
+
+    // MARK: PCM pump (tap → store)
+
+    /// A detached loop draining the tap-fed forwarder into the store, serially and off
+    /// the main actor. `flushPump()` inserts an ordered barrier so control transitions
+    /// observe every buffered frame; `finishPump()` ends the loop after `captured`.
+    private func startPump(store: SegmentStore, forwarder: PCMForwarder) {
+        pumpTask?.cancel()
+        pumpTask = Task.detached { [weak self] in
+            for await item in forwarder.stream {
+                switch item {
+                case .chunk(let chunk):
+                    do { try await store.append(chunk) }
+                    catch SegmentStore.SegmentStoreError.notRecording { continue }
+                    catch { await self?.send(.diskFull); return }
+                case .barrier(let id):
+                    forwarder.resumeBarrier(id)
+                }
+            }
+        }
+    }
+
+    private func flushPump() async {
+        guard let forwarder = currentForwarder, pumpTask != nil else { return }
+        await forwarder.flush()
+    }
+
+    private func finishPump() {
+        currentForwarder?.finish()
+        pumpTask = nil
+    }
+
+    // MARK: Elapsed clock + meter
+
+    private func startRecordingClock(reset: Bool) {
+        if reset { accumulatedElapsed = 0 }
+        recordingSegmentStart = now()
+        elapsed = accumulatedElapsed
+        timerTask?.cancel()
+        timerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.tick()
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+    }
+
+    private func tick() {
+        micLevel = levelBox.get()
+        if let start = recordingSegmentStart {
+            elapsed = accumulatedElapsed + now().timeIntervalSince(start)
+        }
+    }
+
+    private func stopRecordingClock() {
+        if let start = recordingSegmentStart {
+            accumulatedElapsed += now().timeIntervalSince(start)
+            recordingSegmentStart = nil
+            elapsed = accumulatedElapsed
+        }
+        timerTask?.cancel()
+        timerTask = nil
+        micLevel = 0
+    }
+
+    // MARK: Teardown
+
+    private func teardownFailedCapture() async {
+        currentRecorder?.stop()
+        session.deactivate()
+        finishPump()
+        resetCaptureWiring()
+    }
+
+    private func resetCaptureWiring() {
+        currentRecorder = nil
+        currentStore = nil
+        currentForwarder = nil
+        currentFormat = nil
+        pendingCaptureID = nil
+        recordingSegmentStart = nil
+    }
+
+    // MARK: Small helpers
+
+    private func interruptionKind(_ event: Event) -> String {
+        switch event {
+        case .routeLost: return "routeChange"
+        case .mediaServicesReset: return "mediaServicesReset"
+        default: return "interruption"
+        }
+    }
+
+    private func message(for error: CaptureError) -> String {
+        switch error {
+        case .permissionDenied: return "Microphone access denied"
+        case .configurationFailed: return "Couldn't start recording"
+        case .diskFull: return "Storage full"
+        }
+    }
+}
+
+// MARK: - Recovered banner item
+
+/// One capture rescued at launch, for the "Recovered recording: MM:SS" banner (§3).
+struct RecoveredRecording: Identifiable, Equatable, Sendable {
+    let captureID: String
+    let durationSeconds: Double
+    var id: String { captureID }
+
+    /// "MM:SS" for the banner (design §3 `formatDuration`).
+    var formattedDuration: String { CaptureCoordinator.formatDuration(durationSeconds) }
+}
+
+// MARK: - ULID + duration formatting
+
+extension CaptureCoordinator {
+    /// Lexicographically-sortable, time-prefixed ID (design §1 `captureID`). 48-bit
+    /// millisecond timestamp + 80 bits of randomness, Crockford base32, 26 chars.
+    nonisolated static func makeULID(now: Date = Date()) -> String {
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        var value = UInt64(max(0, now.timeIntervalSince1970) * 1000)
+        var time = [Character](repeating: "0", count: 10)
+        for i in (0..<10).reversed() { time[i] = alphabet[Int(value & 0x1F)]; value >>= 5 }
+        var random = [Character](repeating: "0", count: 16)
+        for i in 0..<16 { random[i] = alphabet[Int.random(in: 0..<32)] }
+        return String(time) + String(random)
+    }
+
+    nonisolated static func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+// MARK: - Retroactive engine conformance (T6)
+
+extension AudioEngineRecorder: EngineRecording {
+    var captureFormatDescriptor: AudioFormatDescriptor? {
+        guard let f = captureFormat else { return nil }
+        return AudioFormatDescriptor(from: f)
+    }
+}
+
+extension AudioFormatDescriptor {
+    /// Map an `AVAudioFormat` to the on-disk descriptor. `bytesPerFrame` is left nil —
+    /// the store derives it (design §1: sidecar carries it, manifest omits it).
+    init(from format: AVAudioFormat) {
+        let common: PCMCommonFormat
+        switch format.commonFormat {
+        case .pcmFormatFloat32: common = .pcmFormatFloat32
+        case .pcmFormatFloat64: common = .pcmFormatFloat64
+        case .pcmFormatInt16: common = .pcmFormatInt16
+        case .pcmFormatInt32: common = .pcmFormatInt32
+        case .otherFormat: common = .otherFormat
+        @unknown default: common = .otherFormat
+        }
+        self.init(sampleRate: Int(format.sampleRate),
+                  channels: Int(format.channelCount),
+                  commonFormat: common,
+                  interleaved: format.isInterleaved)
+    }
+}
+
+// MARK: - PCM forwarder (tap-thread → pump)
+
+/// Bridges the non-blocking tap thread to the serial PCM pump. `receive` yields onto
+/// an `AsyncStream` (lock-free); `flush` inserts an ordered barrier the pump resumes
+/// once every prior chunk has been appended, giving control transitions a deterministic
+/// "all buffered frames are on the store" point.
+final class PCMForwarder: PCMSink, @unchecked Sendable {
+    enum Item: Sendable { case chunk(PCMChunk); case barrier(UUID) }
+
+    let stream: AsyncStream<Item>
+    private let continuation: AsyncStream<Item>.Continuation
+    private let lock = NSLock()
+    private var barriers: [UUID: CheckedContinuation<Void, Never>] = [:]
+
+    init() {
+        (stream, continuation) = AsyncStream<Item>.makeStream()
+    }
+
+    nonisolated func receive(_ chunk: PCMChunk) {
+        continuation.yield(.chunk(chunk))
+    }
+
+    func flush() async {
+        let id = UUID()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock(); barriers[id] = cont; lock.unlock()
+            if case .terminated = continuation.yield(.barrier(id)) {
+                resumeBarrier(id)
+            }
+        }
+    }
+
+    func resumeBarrier(_ id: UUID) {
+        lock.lock()
+        let cont = barriers.removeValue(forKey: id)
+        lock.unlock()
+        cont?.resume()
+    }
+
+    func finish() { continuation.finish() }
+}
+
+// MARK: - Mic-level box
+
+/// Thread-safe latest-value box so the @Sendable tap-level callback never touches the
+/// main actor per buffer; the elapsed timer publishes `micLevel` from it.
+final class LevelBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var level: Float = 0
+    func set(_ value: Float) { lock.lock(); level = value; lock.unlock() }
+    func get() -> Float { lock.lock(); defer { lock.unlock() }; return level }
+}

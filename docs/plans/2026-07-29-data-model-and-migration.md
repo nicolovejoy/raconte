@@ -358,7 +358,7 @@ Steps:
 2. For each entry: download the private audio blob at `audio/<id>.<ext>` and each photo at
    `photos/<photoId>.<ext>` via `@vercel/blob` `get()`/`download`. Write files, compute sha256.
 3. Emit `entry.json` / `transcript.md` / `journals.json` / `manifest.json` per §3.
-4. **Verify** (below), print a summary (`~50 entries, 23 imp_, N with audio, M photos`).
+4. **Verify** (below), print a summary (`N entries, M imp_, …`). (Live counts 2026-07-29: 36 entries, 22 imp_ — the earlier ~50/23 estimate was stale; several rows purged.)
 
 ### Column → field mapping
 
@@ -415,7 +415,7 @@ Web `photos` → 1:1; `entryId` kept, `journalId` always null (journal covers we
 ### Verification
 
 - Export side: after writing, re-read every file, recompute sha256, assert it matches
-  `manifest.files`; assert counts (entries incl. exactly 23 `imp_`, photo count, "N entries
+  `manifest.files`; assert counts (entries incl. all `imp_` rows — 22 as of 2026-07-29, don't hardcode, photo count, "N entries
   with audio" vs the DB's non-null `audio_url` count). Fail loudly on any mismatch.
 - Import side: the native importer recomputes every sha256 against `manifest.files` before
   inserting (rejects a tampered/truncated package), inserts inside one transaction, rebuilds

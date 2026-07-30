@@ -25,5 +25,25 @@ Device: Nico's Big iPad unless noted.
    (swipe-out and return). Owner: acceptable for M1, not perfect. Issue #2
    reopened as the down-the-road fix (gap-honest capture).
 
-Next run: 7 — kill-at-every-transition sweep via the Debug button (expected
-recoveries per state in m1-paranoid-tests.md), then iPad tests 25-27.
+7. 2026-07-29 — iPad tests 25-27 — PASS per owner (kill sweep not yet run —
+   harness needed explaining first). New observation: ~quarter-second "shkshks"
+   artifact right at backgrounding (noted on issue #2; still accepted).
+
+8. 2026-07-29 — macOS pass, semi-automated (Claude killed/relaunched/verified
+   disk; owner clicked + spoke; eMeet Nova mic, 48k via HAL).
+   - Doc test 28 (record/stop/playback): PASS.
+   - Doc tests 29+30 (background + SIGKILL mid-recording, ~52s in the .part):
+     PASS — recovery normalized, re-finalized, `complete` on disk.
+   - Doc test 31 (input switch eMeet → iPhone Continuity mic): FAIL — no crash,
+     but all post-switch audio lost, recording cut short at cut-over → issue #5.
+   - **Major find**: live finalize never ran in-session — the UI drained
+     `finalizeQueue` on the phase flipping to `captured`, which happens before
+     the commit effects fill the queue; every m4a to date came from next-launch
+     recovery, masked by the raw-segment playback fallback. Fixed
+     (`handleFinalizeQueue` keyed off the queue) + 2 model-level regression
+     tests (suite now 138).
+   - Also landed: delete button on recording rows (owner request). Scrubbing →
+     issue #6.
+
+Next run: 9 — iPad kill-at-every-transition sweep via the Debug button.
+iPhone full pass deferred by owner until iPad + Mac are solid.

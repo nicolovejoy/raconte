@@ -94,10 +94,16 @@ final class CaptureScreenModel {
     func done() async { await coordinator.done() }
     func resume() async { await coordinator.resume() }
 
-    /// Called on every phase change; when a capture commits (`captured`/`complete`) it
-    /// finalizes, refreshes the list, and resets to a fresh idle coordinator.
-    func handle(phase: CaptureState) {
-        guard phase == .captured || phase == .complete else { return }
+    /// Called when the coordinator's finalize queue changes. Keyed off the queue, NOT
+    /// the phase: `phase` flips to `.captured` before that transition's effects run
+    /// (the debug-harness gate sits between), so a phase-triggered drain reads an
+    /// empty queue, no-ops, and the capture never finalizes until the next launch's
+    /// recovery scan. `enqueueFinalize` runs after `store.finish` — the durability
+    /// commit — so this signal means the capture is fully on disk.
+    /// The phase guard skips launch-recovery fills (`bootstrap` drains those itself).
+    func handleFinalizeQueue() {
+        guard !coordinator.finalizeQueue.isEmpty,
+              coordinator.phase == .captured || coordinator.phase == .complete else { return }
         Task { await finishCurrentCapture() }
     }
 
@@ -221,8 +227,8 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
-        .onChange(of: model.coordinator.phase) { _, phase in
-            model.handle(phase: phase)
+        .onChange(of: model.coordinator.finalizeQueue) { _, _ in
+            model.handleFinalizeQueue()
         }
     }
 
@@ -234,7 +240,8 @@ struct CaptureView: View {
                     .font(.headline)
                     .foregroundStyle(Color(white: 0.7))
                 ForEach(model.finished) { item in
-                    FinishedRow(recording: item, capturesRoot: model.capturesRoot)
+                    FinishedRow(recording: item, capturesRoot: model.capturesRoot,
+                                onDelete: { model.delete(item.captureID) })
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -256,6 +263,7 @@ struct CaptureView: View {
 struct FinishedRow: View {
     let recording: FinishedRecording
     let capturesRoot: URL
+    let onDelete: () -> Void
 
     @State private var playback: CapturePlayback?
 
@@ -279,6 +287,15 @@ struct FinishedRow: View {
                 }
             }
             Spacer()
+
+            Button(role: .destructive) {
+                playback?.stop()
+                onDelete()
+            } label: {
+                Image(systemName: "trash")
+                    .foregroundStyle(Color(white: 0.5))
+            }
+            .buttonStyle(.plain)
         }
         .padding(12)
         .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 12))

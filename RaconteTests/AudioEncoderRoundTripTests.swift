@@ -71,6 +71,30 @@ final class AudioEncoderRoundTripTests: XCTestCase {
                           "delta \(deltaFrames) frames (\(deltaFrames / Double(Self.sampleRate))s)")
     }
 
+    /// Scaled stand-in for doc test 21 (60+ min recording): rotation must be invisible
+    /// across a LONG segment chain — 150 segments encode to one m4a whose decoded
+    /// duration matches the chain, gap-free.
+    func testManySegmentChainEncodesGapFree() async throws {
+        var segments: [EncodableSegment] = []
+        var running = 0
+        for i in 0..<150 {
+            let frames = 2400   // 50 ms each → 7.5 s total across 150 boundaries
+            segments.append(try writeSineSegment(index: i, frames: frames, startFrame: running))
+            running += frames
+        }
+
+        let encoder = AVAssetWriterAudioEncoder()
+        let partURL = root.appendingPathComponent("long.m4a.part")
+        let result = try await encoder.encode(segments: segments, format: format(), to: partURL)
+        XCTAssertEqual(result.encodedFrameCount, running)
+
+        let verified = try await encoder.verify(m4aURL: partURL)
+        XCTAssertTrue(verified.decodable)
+        XCTAssertTrue(verified.nonSilent)
+        XCTAssertLessThan(abs(Double(verified.decodedFrameCount) - Double(running)),
+                          0.5 * Double(Self.sampleRate))
+    }
+
     // MARK: end-to-end via FinalizerWorker with the real encoder
 
     func testWorkerFinalizesRealEncodeEndToEnd() async throws {

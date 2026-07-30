@@ -20,8 +20,10 @@ Device: Nico's Big iPad unless noted.
    Spawned issue #2 (gap-honest capture via AVAudioTime) and issue #3 (no
    playback position UI).
 
-Next run: 6 — discriminating test for the run-5 artifact: record ~20s, swipe to
-the app switcher at ~5s, keep talking from outside the app for ~10s, return,
-stop normally (no kill), play back. Clean mid-background audio with jitter only
-at the transition = confirms transition-only artifact. Silent background span =
-background capture itself is degraded and run 3's pass needs a re-listen.
+6. 2026-07-29 — swipe away + return mid-recording (run-5 discriminator) — PASS.
+   Background audio captured; small audible hiccup at both transition edges
+   (swipe-out and return). Owner: acceptable for M1, not perfect. Issue #2
+   reopened as the down-the-road fix (gap-honest capture).
+
+Next run: 7 — kill-at-every-transition sweep via the Debug button (expected
+recoveries per state in m1-paranoid-tests.md), then iPad tests 25-27.

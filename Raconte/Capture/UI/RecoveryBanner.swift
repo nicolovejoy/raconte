@@ -39,6 +39,10 @@ struct RecoveryBanner: View {
                 Spacer()
             }
             .font(.subheadline)
+
+            if let playback {
+                PlaybackProgressLine(playback: playback, tint: .orange)
+            }
         }
         .padding(14)
         .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 14))

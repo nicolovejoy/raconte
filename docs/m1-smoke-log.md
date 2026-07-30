@@ -45,5 +45,21 @@ Device: Nico's Big iPad unless noted.
    - Also landed: delete button on recording rows (owner request). Scrubbing →
      issue #6.
 
-Next run: 9 — iPad kill-at-every-transition sweep via the Debug button.
-iPhone full pass deferred by owner until iPad + Mac are solid.
+9. 2026-07-29 — iPad kill-at-every-transition sweep (home-screen launch):
+   - preparing PASS, recording (first entry) PASS — clean idle, no banner.
+   - recording w/ rotated segments (swipe-kill at ~25s; rotation isn't
+     gateable — doc corrected): PASS, recovered ~0:25.
+   - stopping PASS, captured PASS — recovered banner + auto-finalize.
+   - finalizing PASS with corrected expectation: gate lands post-commit → no
+     banner, silent re-finalize into the list (doc corrected).
+   - interrupted / resuming gates NOT RUN: Siri won't engage while the app
+     holds the mic (voice or top-button), so no solo interruption source on
+     iPad. Needs a FaceTime call from a second device, or fold into the
+     iPhone pass.
+   Harness fixes this run: "Kill now" is SIGKILL (fatalError paused under
+   Xcode's debugger and looked dead); run the sweep from a home-screen launch,
+   not an Xcode run session.
+
+Next run: 10 — interrupted/resuming gates via FaceTime call from a second
+device (or defer to the iPhone pass). macOS issue #5 (input-switch loss) still
+open. iPhone full pass deferred by owner until iPad + Mac are solid.

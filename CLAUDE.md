@@ -11,13 +11,15 @@ down the road). Open issues: #1 background-recording awareness (M2 design input)
 #2 gap-honest capture (low priority), #4 flaky CI interruption test (chase if it recurs).
 
 **Next (owner + next session):**
-1. **iPad run 7**: kill-at-every-transition sweep via the Debug button, then iPad
-   tests 25–27, per `docs/m1-paranoid-tests.md` (31 tests across iPhone/iPad/Mac).
-2. Full iPhone pass (cellular-call interruptions etc.) + macOS pass — M1's acceptance gate.
-3. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
-   not device dev builds (personal team 8UK463WB83 already signs).
-4. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
+1. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
+   second device (Siri won't engage while the app holds the mic) — or fold into the
+   eventual iPhone pass. See `docs/m1-smoke-log.md` (next run: 10).
+2. Issue #5: macOS input-device switch mid-recording loses post-switch audio (the one
+   FAIL). Owner-priority TBD; iPhone pass deferred until iPad+Mac solid.
+3. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
    subagent pipeline; fold issue #1 (background awareness) into that design.
+4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
+   not device dev builds (personal team 8UK463WB83 already signs).
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI
 mints a fresh CaptureCoordinator per capture (single-capture coordinators by design). If

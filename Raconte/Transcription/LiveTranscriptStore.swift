@@ -7,6 +7,24 @@ enum LiveTranscriptError: Error, Equatable {
     /// represent. Thrown rather than trapped: this is the derived path, and §0's rule
     /// is that transcription may fail at any moment *without* touching capture.
     case multilineRecord
+    /// A log exists but could not be read, so its tail is unknown. Refusing to open is
+    /// the whole point — see `LiveTranscriptWriter.open()`.
+    case unreadableExistingLog(String)
+}
+
+/// Whether the log is missing, unreadable, or readable — three answers, deliberately.
+///
+/// Collapsing them is issue #11, and it is the same mistake as #8: a failed read
+/// interpreted as "nothing there" and then acted on. `DirectorySnapshot` already
+/// learned this and carries an explicit `manifestCorrupt` rather than guessing.
+enum LiveTranscriptSource: Equatable {
+    /// No file. The honest "no transcript yet".
+    case absent
+    /// The file exists and we could not read it. **Not** the same as empty: any UI that
+    /// offers "no transcript, re-derive?" would be wrong here, and a writer that resumed
+    /// numbering from zero would append colliding `seq` values into it.
+    case unreadable(String)
+    case present(Data)
 }
 
 /// Append-only writer for `transcript/live.jsonl` (design §3).
@@ -51,7 +69,27 @@ final class LiveTranscriptWriter {
         // is a leak and a corruption source.
         fd.closeIfOpen()
 
-        let existing = (try? Data(contentsOf: url)) ?? Data()
+        // Refuse to open a log we cannot read.
+        //
+        // This was the sharpest edge of issue #11, and it was a *writer* bug rather than
+        // the reader nicety it was filed as: `(try? Data(contentsOf:)) ?? Data()` treated
+        // an unreadable existing log as an empty one, so `nextSeq` restarted at 0 and
+        // every subsequent append wrote a `seq` that collided with a record already in
+        // the file. Unreachable while nothing constructs a writer; reachable the moment a
+        // capture reopens after an interruption or a relaunch.
+        //
+        // Failing here costs the live transcript for this capture, which is derived and
+        // re-derivable. Continuing costs the integrity of the one already on disk.
+        let existing: Data
+        switch LiveTranscriptReader.loadBytes(at: url) {
+        case .absent:
+            existing = Data()
+        case .unreadable(let reason):
+            throw LiveTranscriptError.unreadableExistingLog(reason)
+        case .present(let data):
+            existing = data
+        }
+
         // Resume numbering past whatever survived the last run.
         //
         // `max(lastDecodableSeq + 1, completeLineCount)` rather than just the former:
@@ -164,8 +202,94 @@ enum LiveTranscriptReader {
     /// makes the *offset* atomic, but `writeAll` loops over short writes, so two
     /// concurrent writers could interleave mid-record and fuse two lines. The session
     /// actor owns exactly one writer per capture, which is what makes that unreachable.
-    static func read(url: URL) -> [TranscriptRecord] {
-        parse((try? Data(contentsOf: url)) ?? Data()).records
+    /// Everything a caller needs to decide what it is looking at.
+    ///
+    /// There is deliberately **no** convenience that returns a bare `[TranscriptRecord]`.
+    /// One existed, it swallowed every failure into `[]`, and that is issue #11 — a
+    /// reachable API that makes the wrong thing effortless gets used.
+    struct LoadResult: Equatable {
+        var source: LiveTranscriptSource = .absent
+        var records: [TranscriptRecord] = []
+        /// Complete lines in the file, decodable or not. Differs from `records.count`
+        /// when a line is intact but undecodable, which is what `nextSeq` must respect
+        /// and what tail-loss detection compares against.
+        var completeLines: Int = 0
+
+        var isUnreadable: Bool {
+            if case .unreadable = source { return true }
+            return false
+        }
+    }
+
+    static func load(url: URL) -> LoadResult {
+        switch loadBytes(at: url) {
+        case .absent:
+            return LoadResult(source: .absent)
+        case .unreadable(let reason):
+            return LoadResult(source: .unreadable(reason))
+        case .present(let data):
+            let parsed = parse(data)
+            return LoadResult(source: .present(data),
+                              records: parsed.records,
+                              completeLines: parsed.completeLines)
+        }
+    }
+
+    static func load(captureDirectory: URL) -> LoadResult {
+        load(url: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory))
+    }
+
+    /// Absent and unreadable are different answers and must stay different all the way
+    /// down. `fileReadNoSuchFile` is the only one that means "nothing here"; a
+    /// permissions failure, an I/O error, or a truncated read do not.
+    static func loadBytes(at url: URL) -> LiveTranscriptSource {
+        do {
+            return .present(try Data(contentsOf: url))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile
+                                           || error.code == .fileNoSuchFile {
+            return .absent
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+    }
+
+    /// Whether the file lost its trailing line to a kill.
+    ///
+    /// `seq` cannot answer this — a torn tail is dropped on read, leaving a gapless
+    /// `0..<n` with no gap to notice. The manifest can: `TranscriptRef.committedRecords`
+    /// records how many lines were written and is only ever written on a clean close, so
+    /// its absence *is* the signal that the app was killed and a short tail is expected.
+    /// No footer line and no format change: the field already exists.
+    enum Completeness: Equatable {
+        /// No `TranscriptRef` — the capture never closed cleanly. Tail loss is expected
+        /// here and is not a defect.
+        case unknown
+        case complete
+        case truncated(missing: Int)
+    }
+
+    static func completeness(lines: Int, expected: Int?) -> Completeness {
+        guard let expected else { return .unknown }
+        return lines >= expected ? .complete : .truncated(missing: expected - lines)
+    }
+
+    /// Replay: fold the log back through the consolidator (issue #10).
+    ///
+    /// Reading records raw does **not** reproduce the live view. The log is append-only
+    /// and cannot express either thing the consolidator does — a later result *revising*
+    /// an overlapping earlier one, and an empty-text result *deleting* a span. Read raw,
+    /// a revised phrase appears twice and a revoked one appears at all.
+    ///
+    /// The fix is to keep exactly one implementation of those rules and let the file
+    /// stay dumb: `TranscriptConsolidator.apply` already knows them, is unit-tested, and
+    /// is what produced the log in the first place. Records replay in file order as
+    /// non-volatile results, which is precisely what was written.
+    static func consolidate(_ records: [TranscriptRecord]) -> TranscriptConsolidator {
+        var consolidator = TranscriptConsolidator()
+        for record in records {
+            consolidator.apply(TranscriptResult(record))
+        }
+        return consolidator
     }
 
     /// Decoded records plus how many complete lines the file held — the two differ
@@ -199,9 +323,6 @@ enum LiveTranscriptReader {
             completeLines: lines.count)
     }
 
-    static func read(captureDirectory: URL) -> [TranscriptRecord] {
-        read(url: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory))
-    }
 }
 
 /// Boxes the log's fd so a dropped writer (the "kill" case) closes it, leaving the

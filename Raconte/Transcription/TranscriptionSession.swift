@@ -79,6 +79,11 @@ actor TranscriptionSession {
     private var inputAV: AVAudioFormat?
     private var analysisAV: AVAudioFormat?
 
+    /// What `prepare` settled on. Nil until it has. The T3 writer needs `generator` and
+    /// `locale` on every record and `TranscriptRef` needs both too; neither is knowable
+    /// outside the engine, which is why `prepare` reports them.
+    private var setup: TranscriptionSetup?
+
     private(set) var state: State = .idle
 
     private var consolidator = TranscriptConsolidator()
@@ -123,6 +128,25 @@ actor TranscriptionSession {
     var committed: [TranscriptResult] { consolidator.committed }
     var provisional: [TranscriptResult] { consolidator.provisional }
 
+    /// The module and resolved locale `prepare` settled on — §3 requires both on every
+    /// record and on `TranscriptRef`. Nil before `prepare` succeeds.
+    var generator: String? { setup?.generator }
+    var locale: String? { setup?.locale }
+
+    /// Results whose promotion or finalization must reach `live.jsonl`, in order.
+    ///
+    /// Accumulated rather than written here: the writer is T3 wiring and lands with the
+    /// real engine (T4). Holding the ordered list means that wiring is a drain, not a
+    /// re-derivation — and re-deriving it later from `committed` would be wrong, since
+    /// `committed` has already dropped the empty-text deletions the log needs.
+    private(set) var pendingLog: [TranscriptResult] = []
+
+    /// Hand off everything accumulated so far and clear it.
+    func drainPendingLog() -> [TranscriptResult] {
+        defer { pendingLog.removeAll() }
+        return pendingLog
+    }
+
     /// Capture-frame ranges that never reached the analyzer — `BoundedPCMSink` drops
     /// and suspensions. T3 persists these as `TranscriptRef.skippedRanges`; they are
     /// what tells a later re-derive which spans the live pass never saw.
@@ -142,9 +166,9 @@ actor TranscriptionSession {
         }
         self.inputAV = inputAV
 
-        let analysis: AudioFormatDescriptor
+        let setup: TranscriptionSetup
         do {
-            analysis = try await engine.prepare(inputFormat: inputFormat)
+            setup = try await engine.prepare(inputFormat: inputFormat)
         } catch let unavailable as TranscriptionUnavailable {
             state = .unavailable(unavailable)
             return
@@ -154,11 +178,12 @@ actor TranscriptionSession {
         }
         if await bailIfStopRequested() { return }
 
-        guard let analysisAV = analysis.avAudioFormat else {
+        guard let analysisAV = setup.analysisFormat.avAudioFormat else {
             state = .unavailable(.noAnalysisFormat)
             return
         }
         self.analysisAV = analysisAV
+        self.setup = setup
 
         do {
             try await engine.start()
@@ -394,7 +419,7 @@ actor TranscriptionSession {
     }
 
     private func apply(_ result: TranscriptResult) {
-        consolidator.apply(result)
+        pendingLog.append(contentsOf: consolidator.apply(result))
     }
 
     private func fail(_ error: Error) {

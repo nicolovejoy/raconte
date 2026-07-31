@@ -44,7 +44,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try writer.append(record("two", 4_800, 9_600))
         try writer.close()
 
-        let read = LiveTranscriptReader.read(captureDirectory: captureDir)
+        let read = LiveTranscriptReader.load(captureDirectory: captureDir).records
         XCTAssertEqual(read.map(\.text), ["one", "two"])
         XCTAssertEqual(read.map(\.seq), [0, 1])
         XCTAssertEqual(read.first?.frameRange, FrameRange(start: 0, end: 4_800))
@@ -57,7 +57,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         let stamped = try writer.append(original)
         try writer.close()
 
-        let read = try XCTUnwrap(LiveTranscriptReader.read(captureDirectory: captureDir).first)
+        let read = try XCTUnwrap(LiveTranscriptReader.load(captureDirectory: captureDir).records.first)
         XCTAssertEqual(read, stamped)
         XCTAssertEqual(read.runs.first?.confidence, 0.9)
         XCTAssertEqual(read.analyzerStart?.timescale, 16_000)
@@ -66,7 +66,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
     }
 
     func testAbsentLogReadsAsEmpty() {
-        XCTAssertTrue(LiveTranscriptReader.read(captureDirectory: captureDir).isEmpty)
+        XCTAssertTrue(LiveTranscriptReader.load(captureDirectory: captureDir).records.isEmpty)
     }
 
     // MARK: Torn trailing line — the force-kill case
@@ -86,7 +86,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try handle.write(contentsOf: Data(#"{"seq":2,"text":"thr"#.utf8))
         try handle.close()
 
-        let read = LiveTranscriptReader.read(captureDirectory: captureDir)
+        let read = LiveTranscriptReader.load(captureDirectory: captureDir).records
         XCTAssertEqual(read.map(\.text), ["one", "two"],
                        "the torn tail is dropped, the committed prefix is kept")
     }
@@ -95,7 +95,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try Data(#"{"seq":0,"text":"tor"#.utf8).write(to: logURL)
-        XCTAssertTrue(LiveTranscriptReader.read(captureDirectory: captureDir).isEmpty)
+        XCTAssertTrue(LiveTranscriptReader.load(captureDirectory: captureDir).records.isEmpty)
     }
 
     /// One unreadable interior line must not discard every valid line after it.
@@ -115,7 +115,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try writer2.append(record("three", 9_600, 14_400))
         try writer2.close()
 
-        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir).map(\.text),
+        XCTAssertEqual(LiveTranscriptReader.load(captureDirectory: captureDir).records.map(\.text),
                        ["one", "three"])
     }
 
@@ -136,7 +136,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try second.append(record("three", 9_600, 14_400))
         try second.close()
 
-        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir).map(\.seq), [0, 1, 2])
+        XCTAssertEqual(LiveTranscriptReader.load(captureDirectory: captureDir).records.map(\.seq), [0, 1, 2])
     }
 
     /// `O_APPEND` means a reopen writes past the torn tail rather than over it, so the
@@ -158,7 +158,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try second.append(record("two", 4_800, 9_600))
         try second.close()
 
-        let read = LiveTranscriptReader.read(captureDirectory: captureDir)
+        let read = LiveTranscriptReader.load(captureDirectory: captureDir).records
         XCTAssertEqual(read.map(\.text), ["one", "two"])
     }
 
@@ -199,7 +199,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try second.append(record("three", 9_600, 14_400))
         try second.close()
 
-        let seqs = LiveTranscriptReader.read(captureDirectory: captureDir).map(\.seq)
+        let seqs = LiveTranscriptReader.load(captureDirectory: captureDir).records.map(\.seq)
         XCTAssertEqual(seqs, [0, 2])
         XCTAssertEqual(Set(seqs).count, seqs.count, "no duplicate sequence numbers")
     }
@@ -212,7 +212,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         // public API today; assert the guard is a throw, not a trap, regardless.
         XCTAssertNoThrow(try writer.append(record("has\nnewline", 0, 4_800)))
         try writer.close()
-        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir).count, 1,
+        XCTAssertEqual(LiveTranscriptReader.load(captureDirectory: captureDir).records.count, 1,
                        "the newline is JSON-escaped, so the record stays one line")
     }
 
@@ -224,7 +224,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         try writer.append(record("two", 4_800, 9_600))
         try writer.close()
 
-        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir).map(\.text),
+        XCTAssertEqual(LiveTranscriptReader.load(captureDirectory: captureDir).records.map(\.text),
                        ["one", "two"])
     }
 

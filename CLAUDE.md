@@ -97,22 +97,45 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
   converter's delay line was dropped unrecorded at every discontinuity. 262 unit + 5 UI
   tests green.
 
+## Rev 3 decisions landed 2026-07-31 (#10, #11 settled)
+
+Four owner decisions, all implemented and mutation-verified; 285 unit tests green. Written
+up in full as **§11 of the M2 design doc** — read that, not this summary.
+
+- **A real defect in shipped T2 code**: Apple documents that a module need not reissue a
+  final result over a range it finalizes *through*, so committing only on
+  `isVolatile == false` loses every phrase recognized correctly on the first try. The live
+  screen looks right the whole time, which is what hid it. Fix: `finalizedThroughFrame`
+  carried through the seam, `TranscriptConsolidator.promote(through:)`.
+- **#10**: replay = fold the log back through `TranscriptConsolidator`
+  (`LiveTranscriptReader.consolidate`). `apply` now *returns* what must be logged — final
+  results including empty ones (the deletions) plus promotions. Rejected encoding
+  tombstones in the format: two implementations of the same rules stop agreeing.
+- **#11**: `.absent` / `.unreadable` / `.present` are three answers, and the bare
+  `[TranscriptRecord]` convenience is gone. It was also a *writer* bug — `open()` resumed
+  `nextSeq` from the same swallowed read, so an unreadable log got colliding seq numbers;
+  it now throws. Tail loss is detected against `TranscriptRef.committedRecords`, since
+  `seq` structurally cannot (the old doc comment claimed it could).
+- **Decoder hazard**: verified that Swift's synthesized decoder *ignores property
+  defaults* — so adding a field would have silently erased every log rather than erroring.
+  Hand-written `init(from:)`: additive fields lenient, identity fields strict. No version
+  field (nothing to migrate yet). Free only because no `live.jsonl` exists on any device.
+- **Build order changed: T4 before the T3 wire-up.** T3 can't be finished without an
+  engine (the factory could only return `nil`), and deferring also sidesteps the
+  quarantine hazard — `open()` creates a zero-byte log, which flips
+  `holdsIrreplaceableArtifacts`, so opening at factory time would make every mis-tap leave
+  a permanently undeletable directory. Fix when wiring lands: open lazily at first append.
+
 **Next (owner + next session):**
-1. **Discuss #10 and #11 before writing more transcript code** (owner asked for this
-   explicitly). #10: the consolidator revises and revokes, an append-only log can't
-   express either, so replay ≠ live view — likely fix is replay-through-consolidator plus
-   logging empty finals. #11: an unreadable log looks identical to an absent one, which
-   is structurally the same mistake as #8.
-2. Then wire T3 up: nothing constructs a `LiveTranscriptWriter` outside tests and nothing
-   writes `TranscriptRef`, so T3 is a library with no callers. Related: `TranscriptResult`
-   carries no `runs` and no analyzer `CMTime`, so three of §3's nine record fields can
-   never be filled — that needs a **T2 protocol change**, not a T3 one.
-3. M2 T4 — real `SpeechAnalyzer`/`SpeechTranscriber` behind the seam. First task needing
-   the mini or the iPhone; settles the §10 VERIFY list.
-4. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
+1. M2 T4 — real `SpeechAnalyzer`/`SpeechTranscriber` behind the seam. First task needing
+   the mini or the iPhone; settles the §10 VERIFY list. Carry-ins are enumerated in
+   design §11.7 (analysis-format round-trip assertion, the two unmerged drop ledgers, the
+   secondary-sink abandon hook, the three unserialized manifest writers).
+2. Then the T3 wire-up, with the lazy-open fix.
+3. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-5. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
+4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI

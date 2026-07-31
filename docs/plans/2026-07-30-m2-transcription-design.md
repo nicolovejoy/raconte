@@ -1,9 +1,13 @@
 # Milestone 2 — Live transcript + reconciliation (design)
 
-Status: design, not implemented. Written 2026-07-30 against Xcode 26.6 (17F113),
+Status: T1–T3 implemented; T4 next. Written 2026-07-30 against Xcode 26.6 (17F113),
 iPhoneOS26.5 / MacOSX26.5 SDKs. Rev 2 — rev 1 was reviewed against the SDK and against the
 M1 sources; two of its decisions broke and are replaced here (§2 timestamps, §3 durability),
 and three live M1 bugs it surfaced are filed as issues #7/#8/#9.
+
+**Rev 3 (2026-07-31)** — see §11. Four owner decisions settling issues #10 and #11, one
+correctness fix forced by the SDK's own documentation, and three factual corrections to
+this document. Where rev 3 contradicts the text below, rev 3 wins.
 
 **Line numbers in this document predate commit `8103e5f` (startCue) and are stale by ~3–9
 lines in `CaptureCoordinator.swift` and ~25 in `CaptureView.swift`.** Type and function
@@ -654,3 +658,192 @@ T1–T3 are pure-core and testable on CI. T4 is the first that needs the mini or
     and 23 are paper-archive imports whose audio may not exist. Decide whether they get an
     explicit "unlinked provenance" class rather than being forced into the segment/timing
     model. Flagged now because the transcript schema is being set now; the migration is M3.
+
+---
+
+## 11. Rev 3 — decisions of 2026-07-31
+
+Four owner decisions, taken after two adversarial review passes and a fresh SDK recon
+against the installed `Speech.swiftinterface`/`.swiftdoc`. Each is implemented and
+mutation-verified; 285 unit tests green.
+
+### 11.1 Promotion is driven by `resultsFinalizationTime`, not by a final result arriving
+
+**A real defect in shipped T2 code, not a design gap.** Apple documents:
+
+> A module is not required to provide new, final results for audio ranges that it finalizes
+> through if the previously-volatile result was unchanged by finalization.
+
+`TranscriptConsolidator` committed only results arriving with `isVolatile == false`. So
+every phrase the transcriber got right the *first* time is finalized by the marker
+advancing, never reissued, then swept out of `provisional` by the next overlapping result
+— reaching the saved transcript nowhere. The live screen looks correct throughout, which
+is what makes it invisible: the smoke test "speak → words appear live" passes while the
+persisted transcript drops phrases.
+
+§1 anticipated the "no guarantee of reissue" fact and drew the right conclusion
+("finalization must be driven by `resultsFinalizationTime`"); the implementation did not
+carry it. The seam discarded the marker entirely — `TranscriptResult` had only
+`isVolatile: Bool`.
+
+Decision: **carry it through the seam.** `TranscriptResult.finalizedThroughFrame: Int64?`,
+mapped by the engine onto the capture-frame axis for the same reason `range` is.
+`TranscriptConsolidator.promote(through:)` moves settled hypotheses into `committed`.
+
+Rejected: Apple's documented alternative of a second, final-only `SpeechTranscriber` module
+on the same analyzer. It works, but iOS caps active instances at roughly two *across all
+clients*, and "configured similarly in certain respects" — the condition under which two
+transcribers share a backing engine — is undefined. More moving parts for a worse
+failure mode.
+
+Promotion is deliberately conservative: a promoted hypothesis never displaces a result
+that actually arrived final. A final result is the transcriber's considered answer over
+that span; a hypothesis is not, and out-of-order arrival must not let the weaker one win.
+
+### 11.2 Issue #10 — replay means folding the log through the consolidator
+
+`live.jsonl` is append-only and cannot express either thing the consolidator does: a later
+result *revising* an overlapping earlier one, and an empty-text result *deleting* a span.
+Read raw, a revised phrase appears twice and a revoked one appears at all. §8's "replay is
+deterministic" was satisfied literally while missing the point.
+
+Decision: **replay = `LiveTranscriptReader.consolidate(records)`**, which pushes records
+back through `TranscriptConsolidator` in file order. The overlap and deletion rules stay in
+exactly one tested place and the file format stays dumb.
+
+Two consequences, both implemented:
+
+- **The log records every mutation of `committed`**, which is two kinds of event, not one:
+  a result that arrived final (**including empty-text ones** — those are the deletions),
+  and a hypothesis promoted per §11.1 (which the SDK may never reissue, so it would
+  otherwise exist only in memory). `TranscriptConsolidator.apply` now *returns* that list;
+  the writer drains it rather than re-deriving it. Re-deriving from `committed` would be
+  wrong — `committed` has already dropped the deletions.
+- §3's "one record per committed (finalized) result" is amended accordingly.
+
+Rejected: encoding supersede/tombstone semantics in the record format (`kind: revoke`, an
+explicit `supersedes:` range). It puts a second implementation of the rules in the file
+format, and two implementations that must agree forever is how they stop agreeing.
+Rejected: not replaying at all and always re-deriving from the m4a — that discards the
+partial-transcript-after-a-kill story this design sells.
+
+### 11.3 Issue #11 — absent, unreadable, and truncated are three different answers
+
+`(try? Data(contentsOf: url)) ?? Data()` collapsed a missing file, an I/O error, and a
+permissions failure into "nothing here". Same shape as issue #8; `DirectorySnapshot` already
+learned this and carries an explicit `manifestCorrupt` rather than guessing.
+
+Filed as a reader gap; it was **also a writer bug, and that half was the sharp one.**
+`LiveTranscriptWriter.open()` computed the resume `nextSeq` from the same swallowed read, so
+an existing-but-unreadable log yielded `nextSeq = 0` and appended records with `seq` values
+colliding with those already in the file. Unreachable while nothing constructs a writer;
+reachable the moment a capture reopens after an interruption or a relaunch.
+
+Decisions:
+
+- `LiveTranscriptSource` = `.absent` | `.unreadable(String)` | `.present(Data)`, surfaced
+  through `LiveTranscriptReader.load` → `LoadResult`. **There is no convenience returning a
+  bare `[TranscriptRecord]`** — one existed, it swallowed every failure, and a reachable API
+  that makes the wrong thing effortless gets used.
+- `open()` **throws `unreadableExistingLog`** rather than renumbering. Failing costs this
+  capture's live transcript, which is derived and re-derivable; continuing costs the
+  integrity of the one already on disk.
+- **Tail loss is detected against the manifest**, not the log. `seq` cannot do it: a torn
+  tail is dropped on read, leaving a gapless `0..<n` with no gap to notice — the old doc
+  comment on `TranscriptRecord.seq` claimed otherwise and is corrected.
+  `TranscriptRef.committedRecords` already records the count and is written only on a clean
+  close, so *its absence is itself the signal* that the app was killed and a short tail is
+  expected. No footer line, no format change, no new field.
+
+### 11.4 The decoder hazard — a shape change would have erased every log
+
+`TranscriptRecord.runs` was non-optional with no custom decoding, and
+`LiveTranscriptReader.parse` deliberately skips lines it cannot decode — correct for one
+torn line, catastrophic when *every* line fails. Adding a field to the record would not have
+produced a version error; it would have silently reported an empty transcript.
+
+The obvious fix does not work, and this was verified rather than assumed: **Swift's
+synthesized decoder ignores property defaults.** `var runs: [TranscriptRun] = []` still
+throws `keyNotFound`. Only `Optional` properties get `decodeIfPresent` from synthesis.
+
+Decision: a hand-written `init(from:)` — additive fields decode leniently, identity fields
+(`seq`, `text`, frame bounds, `generator`, `locale`) stay strict, so an older record reads
+fine and garbage still fails. **No per-record version field**: this codebase has no
+migration machinery, and the standing rule is to version when there is something to migrate.
+
+Free to do now only because no `live.jsonl` exists on any device yet.
+
+### 11.5 Corrections to this document
+
+1. **§3's example record shows `"timescale": 16000`.** T2 stamps `bufferStartTime` at the
+   *input* rate, and the analyzer echoes back the axis it was given, so it is 48000. The
+   SDK explicitly permits this — *"The `CMTime` can have a different timescale than the
+   sample rate of the audio data."* The whole capture-frame-axis design rests on that
+   sentence, and it holds.
+2. **§3's `runs` frame bounds must be optional**, not merely tolerant of coarse
+   granularity. The SDK documents that a string *"can include runs without a time range
+   attribute"* and that timed runs are *"not necessarily contiguous"*. So §10.7's open
+   question is half-answered already: word-level granularity is still a device question,
+   but "every run is timed" is contradicted by Apple's own documentation. Same for
+   `confidence`. Implemented as `Int64?`.
+3. **Do not copy Apple's own code sample.** The `SpeechAnalyzer` class doc in the shipped
+   `.swiftdoc` uses `SpeechTranscriber(locale:preset:.offlineTranscription)` — `Preset` has
+   exactly five members and that is not one of them — and writes `try
+   analyzer.cancelAndFinishNow()` for an `async` non-throwing method.
+
+### 11.6 Build order changed: T4 before the T3 wire-up
+
+T3 is a library with no callers, and the wiring cannot be finished without an engine:
+`TranscriptionEngine` has exactly one implementation and it is the test fake, so the
+secondary-sink factory could only ever return `nil`. Building the plumbing first means
+testing it against a fake while the real thing is unknown — and this session already found
+two places where the real thing differs (§11.1, and the analysis-format round-trip below).
+
+Deferring also sidesteps a confirmed hazard in the interim. `LiveTranscriptWriter.open()`
+creates `transcript/` and `O_CREAT`s a zero-byte `live.jsonl`; `transcriptPresent` is
+deliberately *"any file at all"*, so a zero-byte log flips `holdsIrreplaceableArtifacts` and
+rewrites `.deleteCaptureDirectory` into the quarantine no-op. Opening at factory time would
+make every denied-mic-permission tap and every sub-0.5 s accidental tap leave a permanently
+undeletable empty directory. **Fix when wiring lands: open lazily, at the first `append`.**
+Not by narrowing `transcriptPresent` — that predicate is right on purpose, since a
+`canonical-3.json.part` is exactly the file you must not delete.
+
+### 11.7 Carried into T4, from the wire-up survey and the SDK recon
+
+Not yet implemented; each has a verified anchor.
+
+- **The analysis format round-trips through a lossy value type.** `AudioFormatDescriptor`
+  rebuilds an `AVAudioFormat` via `AVAudioFormat(commonFormat:sampleRate:channels:interleaved:)`,
+  which yields a *standard* format with a default channel layout. If `bestAvailableAudioFormat`
+  ever returns `.otherFormat` or a non-default layout, the session converts to something the
+  analyzer did not ask for and the SDK rejects it (`unexpectedAudioFormat` /
+  `incompatibleAudioFormats`), absorbed into `failed` with a confusing message. The seam's
+  shape is right — `AVAudioFormat` is non-`Sendable` — so the **engine** must assert its own
+  descriptor round-trips to a format `isEqual:` the one the analyzer gave, and report
+  `noAnalysisFormat` if not. Probe the actual value on the mini and the iPhone.
+- **Two drop ledgers, never merged.** `BoundedPCMSink.dropped` records overflow drops;
+  `TranscriptionSession.skippedRanges` records converter-level skips. `TranscriptRef`
+  needs the *union*, and `coverageFrames` needs ingested-minus-dropped. Nothing merges them,
+  so a naive ref overstates coverage and `needsRetranscription` returns false on an
+  incomplete transcript — the one signal the whole design hangs on.
+- **The secondary sink is dropped with no notification on four coordinator paths**
+  (permission denied, activate failure, `recorder.start` throw, nil format). The existing
+  NOTE at that site says an abandon hook is needed once the sink owns an analyzer. That is
+  now: without it, a denied-permission tap leaks a live `SpeechAnalyzer` against a ~2-instance
+  iOS budget.
+- **Three unserialized manifest writers.** `SegmentStore` holds the manifest in memory for
+  the whole capture and clobbers on its next write; `FinalizerWorker` reads and writes
+  *across* the encode+verify awaits, so a `TranscriptRef` written into that window is
+  silently reverted. The only safe write point today is `finishCurrentCapture()` after
+  `runFinalizer` returns. No `Mirror` tripwire change is needed — `transcript` is already
+  carried.
+- **`TranscriptRef` is never written on the killed-capture path.** Recovery normalizes to
+  `captured` with `transcript: nil` while a partial `live.jsonl` sits on disk, so that
+  transcript is invisible to every consumer that reads the manifest. Decide in T4 whether
+  recovery synthesizes a `completedAt: nil` ref.
+- **`start(inputSequence:)` may be called once.** *"The analyzer can only analyze one input
+  sequence at a time"*, and starting again renders the previous sequence inoperable — so the
+  resume path must not re-`start`.
+- **`finalizeAndFinishThroughEndOfInput()` waits indefinitely if there is no input sequence
+  at all**, not merely until the current one ends. T2's mandatory `finishInput()`-first
+  ordering and the bounded wait are both load-bearing, and the SDK is stricter than §4 said.

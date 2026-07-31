@@ -1,6 +1,6 @@
 name: Raconte
 options:
-  bundleIdPrefix: org.recountly
+  bundleIdPrefix: org.pianohouseproject
   deploymentTarget:
     iOS: "26.0"
     macOS: "26.0"
@@ -50,7 +50,7 @@ targets:
         com.apple.security.device.audio-input: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.recountly.raconte
+        PRODUCT_BUNDLE_IDENTIFIER: org.pianohouseproject.raconte
         ENABLE_HARDENED_RUNTIME: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   RaconteUITests:

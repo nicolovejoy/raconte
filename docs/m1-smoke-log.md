@@ -72,6 +72,15 @@ Device: Nico's Big iPad unless noted.
    consumes it, and `contiguousPrefix` reads the run as gapless because
    `startFrameOffset` is cumulative-by-construction.
 
-Next run: 11 — interrupted/resuming gates via FaceTime call from a second
+11. 2026-07-31 — Mac mini, doc test 25 (scrub a recovered, un-finalized
+   recording) — PASS. Recorded ~30s counting aloud, `killall -9` mid-recording,
+   relaunched to the recovery banner, played, dragged to mid-track, then back
+   toward the start. Audio resumed from the handle both times, elapsed label
+   tracked the handle, and playback crossed segment boundaries without a gap.
+   This was the last thing gating issue #6 — the finalized-m4a path is already
+   covered by `CaptureUITests.testScrubbingAFinishedEntryMovesThePosition` — so
+   **#6 CLOSED**. Test recording deleted afterward by the owner.
+
+Next run: 12 — interrupted/resuming gates via FaceTime call from a second
 device (or defer to the iPhone pass). iPhone full pass deferred by owner until
 iPad + Mac are solid.

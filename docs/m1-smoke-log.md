@@ -60,6 +60,18 @@ Device: Nico's Big iPad unless noted.
    Xcode's debugger and looked dead); run the sweep from a home-screen launch,
    not an Xcode run session.
 
-Next run: 10 — interrupted/resuming gates via FaceTime call from a second
-device (or defer to the iPhone pass). macOS issue #5 (input-switch loss) still
-open. iPhone full pass deferred by owner until iPad + Mac are solid.
+10. 2026-07-30 — Mac mini, doc test 31 (input-device switch mid-recording) —
+   PASS on the issue this test tracks. Counted 1→12 over ~12s, switched input
+   device in System Settings → Sound partway through. Both halves present;
+   #5 (total post-switch loss) confirmed fixed by db1ac02 and CLOSED.
+   Residual, tracked in #9: ~4s of audio lost across the switch (playback runs
+   "six" → "eleven") and the splice is *smooth*, not silent — the timeline
+   compresses rather than preserving the gap. Same failure family as #2 but at
+   the segment boundary rather than within a segment. The gap length is already
+   derivable from existing sidecar `startHostTime` + `frameCount`; nothing
+   consumes it, and `contiguousPrefix` reads the run as gapless because
+   `startFrameOffset` is cumulative-by-construction.
+
+Next run: 11 — interrupted/resuming gates via FaceTime call from a second
+device (or defer to the iPhone pass). iPhone full pass deferred by owner until
+iPad + Mac are solid.

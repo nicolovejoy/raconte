@@ -113,11 +113,21 @@ actor TranscriptionSession {
     /// suspension points instead of resuming into `.running` after the capture ended.
     private var stopRequested = false
 
+    /// Where `transcript/live.jsonl` goes. `nil` means "do not persist" — the shape most
+    /// unit tests want, and the honest representation of a session with nowhere to write.
+    private let captureDirectory: URL?
+    private var writer: LiveTranscriptWriter?
+    /// One complaint per capture. A failing log must not spam, and must not escalate:
+    /// §0's rule is that transcription may fail at any moment without touching capture.
+    private var loggingBroken = false
+
     init(engine: any TranscriptionEngine,
          inputFormat: AudioFormatDescriptor,
+         captureDirectory: URL? = nil,
          finalizeBound: Duration = .seconds(5)) {
         self.engine = engine
         self.inputFormat = inputFormat
+        self.captureDirectory = captureDirectory
         self.finalizeBound = finalizeBound
     }
 
@@ -133,19 +143,13 @@ actor TranscriptionSession {
     var generator: String? { setup?.generator }
     var locale: String? { setup?.locale }
 
-    /// Results whose promotion or finalization must reach `live.jsonl`, in order.
-    ///
-    /// Accumulated rather than written here: the writer is T3 wiring and lands with the
-    /// real engine (T4). Holding the ordered list means that wiring is a drain, not a
-    /// re-derivation — and re-deriving it later from `committed` would be wrong, since
-    /// `committed` has already dropped the empty-text deletions the log needs.
-    private(set) var pendingLog: [TranscriptResult] = []
+    /// Records actually written to `live.jsonl`. Feeds `TranscriptRef.committedRecords`,
+    /// which is the only thing that can detect a torn tail (§11.3).
+    var committedRecords: Int { writer?.recordsWritten ?? 0 }
 
-    /// Hand off everything accumulated so far and clear it.
-    func drainPendingLog() -> [TranscriptResult] {
-        defer { pendingLog.removeAll() }
-        return pendingLog
-    }
+    /// True once a log file exists on disk. Distinct from `committedRecords > 0` only in
+    /// the window where `open()` failed.
+    var hasLog: Bool { writer != nil }
 
     /// Capture-frame ranges that never reached the analyzer — `BoundedPCMSink` drops
     /// and suspensions. T3 persists these as `TranscriptRef.skippedRanges`; they are
@@ -209,6 +213,7 @@ actor TranscriptionSession {
         await engine.abandon()
         resultsTask?.cancel()
         resultsTask = nil
+        closeWriter()
         state = .done
         return true
     }
@@ -283,6 +288,7 @@ actor TranscriptionSession {
             // Mid-`start()`, never started, or already dead. `bailIfStopRequested`
             // handles the first; the rest are terminal by definition.
             if case .preparing = state { return }
+            closeWriter()
             if !state.isTerminal { state = .done }
             return
         }
@@ -305,6 +311,7 @@ actor TranscriptionSession {
         await drainedWithinBound()
         resultsTask?.cancel()
         resultsTask = nil
+        closeWriter()
         if !state.isTerminal { state = .done }
     }
 
@@ -314,6 +321,7 @@ actor TranscriptionSession {
         await engine.abandon()
         resultsTask?.cancel()
         resultsTask = nil
+        closeWriter()
         if !state.isTerminal { state = .done }
     }
 
@@ -419,7 +427,49 @@ actor TranscriptionSession {
     }
 
     private func apply(_ result: TranscriptResult) {
-        pendingLog.append(contentsOf: consolidator.apply(result))
+        for logged in consolidator.apply(result) {
+            persist(logged)
+        }
+    }
+
+    /// Append one committed mutation to `live.jsonl`.
+    ///
+    /// **Every failure is swallowed.** A full disk, a revoked container, a torn write —
+    /// none of them may reach the capture path, which is §0's governing rule. The audio
+    /// is already on disk and the transcript is re-derivable from it; taking the
+    /// recording down to report a logging fault would invert the whole milestone.
+    private func persist(_ result: TranscriptResult) {
+        guard !loggingBroken, let setup else { return }
+        do {
+            let writer = try openWriterIfNeeded()
+            try writer?.append(TranscriptRecord(result,
+                                                generator: setup.generator,
+                                                locale: setup.locale))
+        } catch {
+            loggingBroken = true
+        }
+    }
+
+    /// Open on first write, never at construction.
+    ///
+    /// `open()` creates `transcript/` and `O_CREAT`s the file, and `transcriptPresent` is
+    /// deliberately "any file at all" — so a zero-byte log flips
+    /// `holdsIrreplaceableArtifacts` and turns `.deleteCaptureDirectory` into the
+    /// quarantine no-op. Opening eagerly would therefore make every denied-permission tap
+    /// and every sub-0.5 s accidental tap leave a permanently undeletable empty directory
+    /// (design §11.6). Deferring to the first record means a capture that never produced a
+    /// word never creates the directory at all.
+    private func openWriterIfNeeded() throws -> LiveTranscriptWriter? {
+        if let writer { return writer }
+        guard let captureDirectory else { return nil }
+        let writer = LiveTranscriptWriter(captureDirectory: captureDirectory)
+        try writer.open()
+        self.writer = writer
+        return writer
+    }
+
+    private func closeWriter() {
+        try? writer?.close()
     }
 
     private func fail(_ error: Error) {

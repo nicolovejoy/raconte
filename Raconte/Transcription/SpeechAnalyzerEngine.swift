@@ -66,13 +66,26 @@ actor SpeechAnalyzerEngine: TranscriptionEngine {
             reportingOptions: [.volatileResults],
             attributeOptions: [.audioTimeRange, .transcriptionConfidence])
 
-        try await ensureAssets(for: transcriber)
-
-        // §6: `nil` here is the assets-not-ready signal, not a failure.
-        guard let analysisAV = await SpeechAnalyzer.bestAvailableAudioFormat(
+        // §6: `nil` here is the assets-not-ready signal, and it is the *authoritative*
+        // one. Measured on the mini 2026-07-31: nine `en_*` locales installed and a real
+        // format returned, while `AssetInventory.status` reported `.supported` rather
+        // than `.installed` and `reservedLocales` was empty — status evidently reflects
+        // this app's reservation, not whether the model bytes exist. Gating installation
+        // on status would fire an `assetInstallationRequest` on a machine that already
+        // has everything. So: ask for the format first, and only chase assets when there
+        // genuinely is no format to be had.
+        var analysisFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
             compatibleWith: [transcriber],
             considering: inputFormat.avAudioFormat)
-        else {
+
+        if analysisFormat == nil {
+            try await installAssets(for: transcriber)
+            analysisFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+                compatibleWith: [transcriber],
+                considering: inputFormat.avAudioFormat)
+        }
+
+        guard let analysisAV = analysisFormat else {
             throw TranscriptionUnavailable.noAnalysisFormat
         }
 
@@ -109,15 +122,18 @@ actor SpeechAnalyzerEngine: TranscriptionEngine {
                                   analysisFormat: descriptor)
     }
 
-    /// Install models if they are not already present.
+    /// Install models. Called **only** when there is no analysis format to be had —
+    /// see the gate in `prepare`.
     ///
     /// Nothing about installation state is cached: assets are shared system-wide and the
     /// system *"may unsubscribe your app from assets that haven't been used in a while"*,
-    /// so this re-checks at every capture start (§6.4).
-    private func ensureAssets(for transcriber: SpeechTranscriber) async throws {
-        // `Status` is `Comparable`, ordered unsupported < supported < downloading <
-        // installed, and reports the *lowest* status across modules.
-        guard await AssetInventory.status(forModules: [transcriber]) < .installed else { return }
+    /// so this is re-decided at every capture start (§6.4).
+    private func installAssets(for transcriber: SpeechTranscriber) async throws {
+        // Advisory only. `.unsupported` means no asset can ever support this locale, so
+        // requesting one is pointless; anything above it is worth trying.
+        guard await AssetInventory.status(forModules: [transcriber]) > .unsupported else {
+            throw TranscriptionUnavailable.noModel
+        }
         do {
             // Returns nil when nothing further is needed. Auto-reserves the locale, and
             // throws if that would exceed `maximumReservedLocales` — which varies by

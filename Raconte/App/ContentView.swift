@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @State private var model = CaptureScreenModel.live()
+    @State private var model = CaptureScreenModel.liveWithTranscription()
 
     var body: some View {
         CaptureView(model: model)

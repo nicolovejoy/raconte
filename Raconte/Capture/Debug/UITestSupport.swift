@@ -17,8 +17,18 @@ extension CaptureScreenModel {
             capturesRoot: root,
             makeSession: { UITestSessionController() },
             makeRecorder: { SyntheticRecorder() },
-            encoder: AVAssetWriterAudioEncoder())
+            encoder: AVAssetWriterAudioEncoder(),
+            // A second branch on every capture, so the simulator suite drives
+            // record→finalize→relaunch over a two-branch tee rather than the
+            // one-branch shape no shipping build will use.
+            makeSecondarySink: { _ in NoOpPCMSink() })
     }
+}
+
+/// A tee branch that does nothing. Exists so the tested path has the same shape
+/// as the shipping path.
+final class NoOpPCMSink: PCMSink {
+    nonisolated func receive(_ chunk: PCMChunk) {}
 }
 
 /// Grants permission and activates unconditionally; never emits a session event.

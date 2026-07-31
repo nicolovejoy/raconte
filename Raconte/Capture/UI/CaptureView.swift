@@ -55,6 +55,9 @@ final class CaptureScreenModel {
     private let spawn: @MainActor () -> CaptureCoordinator
     private let finalizer: FinalizerWorker
 
+    /// Live transcription, or nil when the build has none wired (the UI-test harness).
+    let transcription: LiveTranscriptionCoordinator?
+
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
         recovered.filter { !dismissed.contains($0.captureID) }
@@ -65,8 +68,10 @@ final class CaptureScreenModel {
          makeRecorder: @escaping () -> EngineRecording,
          encoder: AudioEncoder,
          startCue: (@MainActor () async -> Void)? = nil,
-         makeSecondarySink: SecondarySinkFactory? = nil) {
+         makeSecondarySink: SecondarySinkFactory? = nil,
+         transcription: LiveTranscriptionCoordinator? = nil) {
         self.capturesRoot = capturesRoot
+        self.transcription = transcription
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
         let spawn: @MainActor () -> CaptureCoordinator = {
             CaptureCoordinator(
@@ -101,6 +106,35 @@ final class CaptureScreenModel {
             makeRecorder: { AudioEngineRecorder() },
             encoder: AVAssetWriterAudioEncoder(),
             startCue: { await StartCue().play() })
+    }
+
+    /// Composition root with live transcription attached.
+    ///
+    /// The transcription coordinator is built *before* the model because the model's init
+    /// constructs the capture coordinator, which needs the sink factory — so the factory
+    /// closure captures the transcription coordinator, never the model.
+    static func liveWithTranscription() -> CaptureScreenModel {
+        #if DEBUG
+        if let harness = uiTestHarness() { return harness }
+        #endif
+        let root = Self.defaultCapturesRoot()
+        let transcription = LiveTranscriptionCoordinator(
+            capturesRoot: root,
+            makeEngine: { SpeechAnalyzerEngine() })
+        return CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: {
+                #if os(iOS)
+                IOSAudioSessionController()
+                #else
+                MacAudioSessionController()
+                #endif
+            },
+            makeRecorder: { AudioEngineRecorder() },
+            encoder: AVAssetWriterAudioEncoder(),
+            startCue: { await StartCue().play() },
+            makeSecondarySink: { [weak transcription] id in transcription?.begin(captureID: id) },
+            transcription: transcription)
     }
 
     static func defaultCapturesRoot() -> URL {
@@ -140,6 +174,19 @@ final class CaptureScreenModel {
         Task { await finishCurrentCapture() }
     }
 
+    /// Stand the transcription session up once the format is readable.
+    ///
+    /// Keyed off `.recording` rather than the factory call: the factory runs inside
+    /// `configureAndStart`, before `recorder.start` returns, so `activeFormat` is still
+    /// nil there. Idempotent — SwiftUI may deliver the same phase more than once.
+    func handlePhase() {
+        guard let transcription,
+              coordinator.phase == .recording,
+              let id = coordinator.activeCaptureID,
+              let format = coordinator.activeFormat else { return }
+        transcription.activate(captureID: id, inputFormat: format)
+    }
+
     func keep(_ id: String) { dismissed.insert(id) }
 
     func delete(_ id: String) {
@@ -154,10 +201,35 @@ final class CaptureScreenModel {
     private func finishCurrentCapture() async {
         guard !finishing else { return }
         finishing = true
+        let transcribed = coordinator.activeCaptureID
         await runFinalizer(coordinator.finalizeQueue)
+        // Strictly AFTER the finalizer. Three things read-modify-write `manifest.json`
+        // and none are serialized against each other: `SegmentStore` holds it in memory
+        // for the whole capture and clobbers on its next write, and `FinalizerWorker`
+        // reads and writes across the encode+verify awaits, so a ref written into that
+        // window is silently reverted. Here the store is dead and the finalizer is done —
+        // the only point today where neither is true.
+        if let transcribed { await recordTranscriptRef(for: transcribed) }
         refreshFinished()
         coordinator = spawn()
         finishing = false
+    }
+
+    private func recordTranscriptRef(for captureID: String) async {
+        guard let transcription, let ref = await transcription.finish(captureID: captureID) else {
+            return
+        }
+        let url = SegmentLayout.manifestURL(
+            captureDirectory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                             captureID: captureID))
+        guard let data = try? Data(contentsOf: url),
+              var manifest = try? CaptureCoding.decoder().decode(Manifest.self, from: data)
+        else { return }
+        manifest.transcript = ref
+        guard let encoded = try? CaptureCoding.encoder().encode(manifest) else { return }
+        // Best-effort by design: a manifest we cannot update costs the re-derive hint,
+        // not the recording or the transcript, both of which are already on disk.
+        try? AtomicFile.replace(at: url, writing: encoded)
     }
 
     private func runFinalizer(_ ids: [String]) async {
@@ -232,6 +304,17 @@ struct CaptureView: View {
 
                     Spacer(minLength: 12)
 
+                    if let transcription = model.transcription, !transcription.displayText.isEmpty {
+                        ScrollView {
+                            Text(transcription.displayText)
+                                .font(.callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxHeight: 160)
+                        .accessibilityIdentifier("capture.transcript")
+                    }
+
                     RecStatusLine(phase: model.coordinator.phase,
                                   canResume: model.coordinator.canResume,
                                   elapsed: model.coordinator.elapsed)
@@ -267,6 +350,9 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
+        .onChange(of: model.coordinator.phase) { _, _ in
+            model.handlePhase()
+        }
         .onChange(of: model.coordinator.finalizeQueue) { _, _ in
             model.handleFinalizeQueue()
         }

@@ -201,7 +201,10 @@ final class CaptureScreenModel {
     private func finishCurrentCapture() async {
         guard !finishing else { return }
         finishing = true
-        let transcribed = coordinator.activeCaptureID
+        // The queue, NOT `activeCaptureID`: teardown runs `resetCaptureWiring()` before
+        // this point and nils the id out, so reading it here silently skipped the ref
+        // write on every capture. The queue holds exactly the ids that just committed.
+        let transcribed = coordinator.finalizeQueue
         await runFinalizer(coordinator.finalizeQueue)
         // Strictly AFTER the finalizer. Three things read-modify-write `manifest.json`
         // and none are serialized against each other: `SegmentStore` holds it in memory
@@ -209,7 +212,7 @@ final class CaptureScreenModel {
         // reads and writes across the encode+verify awaits, so a ref written into that
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
-        if let transcribed { await recordTranscriptRef(for: transcribed) }
+        for id in transcribed { await recordTranscriptRef(for: id) }
         refreshFinished()
         coordinator = spawn()
         finishing = false

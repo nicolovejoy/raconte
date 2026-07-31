@@ -107,6 +107,12 @@ actor TranscriptionSession {
     /// from `primeInfo` rather than assumed zero (design §10.6).
     private(set) var primingOffset: CMTime = .zero
 
+    /// Whether the next buffer of the current run must carry an explicit timestamp.
+    ///
+    /// Only the *first* buffer of a run does. See `ingest` for why stamping every buffer
+    /// is not merely redundant but actively wrong.
+    private var runNeedsStamp = false
+
     private(set) var runCount = 0
     private var skipped: [FrameRange] = []
     /// Set the moment a stop is asked for, so `start()` can bail at either of its
@@ -243,7 +249,15 @@ actor TranscriptionSession {
     /// error, it is the audio path continuing to work correctly while the derived
     /// consumer is dead. That asymmetry is the milestone's governing rule.
     func ingest(_ stamped: StampedChunk) async {
-        guard case .running = state, let inputAV, let analysisAV else { return }
+        guard case .running = state, let inputAV, let analysisAV else {
+            // A chunk arriving while this session is not running is a *gap*, not a
+            // no-op. Returning silently made `coverageFrames` claim full coverage of a
+            // capture the analyzer stopped seeing after 0.7 s — measured on the mini —
+            // and that number is the whole basis for offering a re-derive. If the
+            // session is dead, the honest answer is that none of this audio was read.
+            recordSkip(stamped.frameRange)
+            return
+        }
 
         if expectedNextFrame != stamped.startFrame {
             await flushCurrentRun()
@@ -251,6 +265,7 @@ actor TranscriptionSession {
                 recordSkip(FrameRange(start: expected, end: stamped.startFrame))
             }
             openRun(from: inputAV, to: analysisAV)
+            runNeedsStamp = true
         }
         // `max` because a *backwards* startFrame must not rewind the cursor: doing so
         // made every subsequent contiguous chunk look like a discontinuity, re-priming
@@ -288,8 +303,26 @@ actor TranscriptionSession {
         // past this call, so `output` MUST be freshly allocated. The disk path's
         // house style of reusing a scratch buffer would be a silent data race here
         // with no diagnostic (design §2, "Trap").
-        await engine.ingest(AnalyzerInput(buffer: output,
-                                          bufferStartTime: bufferStartTime(at: stamped.startFrame)))
+        // **Only the first buffer of a run is stamped.** Everything after passes `nil`,
+        // which the SDK defines as "immediately after the previous buffer".
+        //
+        // Stamping every buffer was wrong, and measurably so. The converter emits
+        // lumpily — it holds ~235 frames back for several calls and then flushes a burst
+        // of about 1.7x the ratio's worth — so an output buffer routinely contains audio
+        // belonging to *earlier* input chunks. Labelling it with the current chunk's
+        // start frame then declares a span that overlaps the buffer before it, and the
+        // SDK is explicit: "The audio buffer must not overlap or precede other audio
+        // input, as determined by the `bufferStartTime` value." The analyzer answers with
+        // `audioDisordered` on the results stream, which kills the session — measured as
+        // every 6th buffer overlapping by 73 ms, first violation at 0.6 s, and a live
+        // capture that transcribed 0.685 s of a 6.2 s recording and then went quiet.
+        //
+        // Contiguity is exactly what `nil` expresses, and within a run the converted
+        // stream *is* contiguous. Gaps stay expressible because a discontinuity opens a
+        // new run, and that run's first buffer carries a real capture-frame stamp.
+        let stamp = runNeedsStamp ? bufferStartTime(at: stamped.startFrame) : nil
+        runNeedsStamp = false
+        await engine.ingest(AnalyzerInput(buffer: output, bufferStartTime: stamp))
     }
 
     /// Ordered shutdown (§4). `finishInput()` first is mandatory, not stylistic:
@@ -366,11 +399,11 @@ actor TranscriptionSession {
         }
         guard status != .error, tail.frameLength > 0 else { return }
 
-        // Stamp the tail just behind the run's end: it *is* the audio immediately
-        // preceding `lastFrame`, held back by the filter.
-        let tailFrames = Int64(Double(tail.frameLength) * inputAV.sampleRate / analysisAV.sampleRate)
-        await engine.ingest(AnalyzerInput(buffer: tail,
-                                          bufferStartTime: bufferStartTime(at: max(0, lastFrame - tailFrames))))
+        // `nil`, not a computed stamp. The delay line holds the audio that *follows*
+        // everything already emitted in this run, so it is contiguous by construction —
+        // and the old backdated stamp was itself an overlap, declaring a span that
+        // reached back into buffers the analyzer had already accepted.
+        await engine.ingest(AnalyzerInput(buffer: tail, bufferStartTime: nil))
     }
 
     private func openRun(from input: AVAudioFormat, to analysis: AVAudioFormat) {

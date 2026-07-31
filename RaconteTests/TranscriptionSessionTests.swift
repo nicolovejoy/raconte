@@ -125,83 +125,35 @@ final class TranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(runs, 3)
     }
 
-    /// Timestamps are on the capture-frame axis, so a chunk at capture frame N always
-    /// stamps N / sampleRate regardless of how much audio the analyzer actually saw.
-    func testBufferStartTimesFollowTheCaptureFrameAxis() async {
+    /// Only a run's **first** buffer carries a timestamp; the rest are `nil`, meaning
+    /// "immediately after the previous buffer".
+    ///
+    /// Stamping every buffer looks more precise and is wrong: the converter emits
+    /// lumpily, so an output buffer routinely carries audio from earlier input chunks,
+    /// and labelling it with the current chunk's start frame declares a span overlapping
+    /// the buffer before it. The SDK rejects that with `audioDisordered`, on the results
+    /// stream, which kills the session — a live capture transcribed 0.685 s of 6.2 s
+    /// before this changed.
+    func testOnlyRunStartsAreStampedAndTheyUseTheCaptureAxis() async {
         let engine = ScriptedTranscriptionEngine()
         let session = makeSession(engine)
         await session.start()
 
         await session.ingest(stamped(at: 0))
-        await session.ingest(stamped(at: 4_800))
-        await session.ingest(stamped(at: 96_000))     // after a gap
+        await session.ingest(stamped(at: 4_800))      // contiguous — no stamp
+        await session.ingest(stamped(at: 96_000))     // after a gap — new run, stamped
 
         let times = engine.bufferStartTimes.map { CMTimeGetSeconds($0) }
-        // Four buffers, not three: closing a run flushes the converter's delay line,
-        // which carries real audio the old code dropped on the floor at every
-        // discontinuity. The flush lands between the last in-run chunk and the gap.
-        XCTAssertEqual(times.count, 4)
-
+        XCTAssertEqual(times.count, 2, "one stamp per run, not one per buffer")
         XCTAssertEqual(times[0], 0.0, accuracy: 0.0001)
-        XCTAssertEqual(times[1], 0.1, accuracy: 0.0001,
-                       "exact, because the stamp comes off the capture axis rather than "
-                       + "off an accumulator over emitted frames")
-        XCTAssertGreaterThan(times[2], times[1])
-        XCTAssertLessThan(times[2], 0.2, "the flushed tail belongs to the run it closed")
-        XCTAssertEqual(times[3], 2.0, accuracy: 0.0001,
-                       "the post-gap stamp must jump to the true capture offset, not resume at 0.2s")
-        XCTAssertEqual(times, times.sorted(), "SpeechAnalyzer rejects disordered input")
-    }
+        XCTAssertEqual(times[1], 2.0, accuracy: 0.0001,
+                       "the post-gap stamp jumps to the true capture offset, which is "
+                       + "what keeps the gap expressible")
 
-    /// The delay line holds real audio. Dropping the converter without draining it lost
-    /// those frames at every drop, suspension and resume — unrecorded, so the timeline
-    /// compressed silently. That is exactly the failure class §2 exists to prevent.
-    func testClosingARunFlushesTheConvertersDelayLine() async {
-        let engine = ScriptedTranscriptionEngine()
-        let session = makeSession(engine)
-        await session.start()
-
-        await session.ingest(stamped(at: 0))
-        let beforeGap = engine.inputs.map { Int($0.buffer.frameLength) }.reduce(0, +)
-        await session.ingest(stamped(at: 96_000))          // discontinuity closes run 1
-        let afterFlush = engine.inputs.map { Int($0.buffer.frameLength) }.reduce(0, +)
-
-        let ideal = Int(Self.chunkFrames) / 3              // 48 kHz -> 16 kHz
-        XCTAssertLessThan(beforeGap, ideal, "the converter withholds part of the first chunk")
-        XCTAssertGreaterThan(afterFlush - beforeGap, ideal,
-                             "closing the run must emit the withheld frames plus the new chunk")
-    }
-
-    /// Design §10.6, measured — and the reason `bufferStartTime(at:)` departs from
-    /// design §2 step 3.
-    ///
-    /// The converter does not deliver output in step with input. It holds ~235 frames
-    /// back for several calls and then flushes a burst measured at ~1.7× the ratio's
-    /// worth. No audio is lost — totals reconcile — but per-call output wanders
-    /// against the input by up to ~90 ms before catching up. An `emittedInRun`
-    /// accumulator inherits that wander directly, and re-primes at every
-    /// discontinuity, so it would step the timeline at exactly the boundaries §2
-    /// exists to keep honest. Stamping off `StampedChunk.startFrame` is immune.
-    ///
-    /// With `primeMethod = .none` the totals are exact; under the default `.normal`
-    /// this same run loses six frames to priming.
-    func testConverterConvertsExactlyWithPrimingDisabled() async {
-        let engine = ScriptedTranscriptionEngine()
-        let session = makeSession(engine)
-        await session.start()
-
-        let chunks = 6
-        for i in 0..<chunks {
-            await session.ingest(stamped(at: Int64(i) * Int64(Self.chunkFrames)))
-        }
-
-        let emitted = engine.inputs.map { Int($0.buffer.frameLength) }
-        let expected = chunks * Int(Self.chunkFrames) / 3          // 48 kHz -> 16 kHz
-        XCTAssertEqual(emitted.reduce(0, +), expected,
-                       "priming disabled means every input frame is accounted for")
-        XCTAssertGreaterThan(Set(emitted).count, 1,
-                             "delivery is lumpy — this is what an emitted-frame "
-                             + "accumulator would have inherited")
+        // The delay-line flush still happens at the discontinuity — it just rides the
+        // contiguous path rather than being backdated into audio already accepted.
+        XCTAssertEqual(engine.inputs.count, 4)
+        XCTAssertEqual(engine.inputs.compactMap(\.bufferStartTime).count, 2)
     }
 
     func testMonotonicTimestampsAcrossGaps() async {

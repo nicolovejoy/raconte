@@ -29,9 +29,19 @@ final class ScriptedTranscriptionEngine: TranscriptionEngine, @unchecked Sendabl
     /// unavailable path, anything else for the failed path.
     var prepareError: Error?
     var startError: Error?
-    /// What `prepare` reports as the analyzer's preferred format.
-    var analysisFormat = AudioFormatDescriptor(
-        sampleRate: 16_000, channels: 1, commonFormat: .pcmFormatFloat32, interleaved: false)
+    /// What `prepare` reports — the analyzer's preferred format plus the module and
+    /// locale it settled on.
+    var setup = TranscriptionSetup(
+        generator: "SpeechTranscriber",
+        locale: "en_US",
+        analysisFormat: AudioFormatDescriptor(
+            sampleRate: 16_000, channels: 1, commonFormat: .pcmFormatFloat32, interleaved: false))
+
+    /// Kept so the many tests that only care about the format stay readable.
+    var analysisFormat: AudioFormatDescriptor {
+        get { setup.analysisFormat }
+        set { setup.analysisFormat = newValue }
+    }
     /// Makes `finalizeAndFinish` outlast the session's bound, *without* observing
     /// cancellation — a blocking sleep on a detached thread, not `Task.sleep`.
     ///
@@ -65,10 +75,10 @@ final class ScriptedTranscriptionEngine: TranscriptionEngine, @unchecked Sendabl
 
     // MARK: TranscriptionEngine
 
-    func prepare(inputFormat: AudioFormatDescriptor) async throws -> AudioFormatDescriptor {
+    func prepare(inputFormat: AudioFormatDescriptor) async throws -> TranscriptionSetup {
         lock.withLock { _calls.append(.prepare) }
         if let prepareError { throw prepareError }
-        return analysisFormat
+        return setup
     }
 
     func start() async throws {

@@ -22,12 +22,63 @@ struct TranscriptConsolidator: Sendable, Equatable {
 
     init() {}
 
-    mutating func apply(_ result: TranscriptResult) {
+    /// Apply one result and report what must reach `live.jsonl`.
+    ///
+    /// The return value is the whole answer to issue #10. An append-only log can only
+    /// reproduce the live view if it records *every mutation of `committed`*, in order —
+    /// which is two kinds of event, not one:
+    ///
+    /// - a result that arrived final, **including empty-text ones**, because those are
+    ///   deletions and dropping them makes a revoked span reappear on replay;
+    /// - a hypothesis promoted by `finalizedThroughFrame` advancing, because the SDK may
+    ///   never reissue it and it would otherwise exist only in memory.
+    ///
+    /// Both are emitted as non-volatile results, so replay is exactly this same method
+    /// fed the log in file order — the overlap and deletion rules stay in one tested
+    /// place and the file format stays dumb. See `LiveTranscriptReader.consolidate`.
+    @discardableResult
+    mutating func apply(_ result: TranscriptResult) -> [TranscriptResult] {
+        var log: [TranscriptResult] = []
         if result.isVolatile {
             applyVolatile(result)
         } else {
             applyFinal(result)
+            log.append(result)
         }
+        // After, not before: the sweep above has already evicted anything this result
+        // supersedes, so promotion only ever considers hypotheses that survived it.
+        if let through = result.finalizedThroughFrame {
+            log.append(contentsOf: promote(through: through))
+        }
+        return log
+    }
+
+    /// Move hypotheses the transcriber has settled past into `committed`.
+    ///
+    /// Apple: *"all previously-provided results with a `range` predating
+    /// `resultsFinalizationTime` are also final"* — and, critically, a module need not
+    /// reissue them. Without this, every phrase recognized correctly on the first try is
+    /// finalized by the marker, never resent, then swept out of `provisional` by the next
+    /// overlapping result, reaching the saved transcript nowhere.
+    ///
+    /// Deliberately conservative in one respect: a promoted hypothesis never displaces a
+    /// committed result. A result that actually arrived final is the transcriber's
+    /// considered answer over that span; a hypothesis is not, and out-of-order arrival
+    /// must not let the weaker one win.
+    private mutating func promote(through frame: Int64) -> [TranscriptResult] {
+        guard !provisional.isEmpty else { return [] }
+        let settled = provisional.filter { $0.range.end <= frame }
+        guard !settled.isEmpty else { return [] }
+        provisional.removeAll { $0.range.end <= frame }
+
+        var promoted: [TranscriptResult] = []
+        for var result in settled where !result.text.isEmpty {
+            guard !committed.contains(where: { $0.range.supersededBy(result.range) }) else { continue }
+            result.isVolatile = false
+            committed.insert(result, at: insertionIndex(in: committed, for: result.range))
+            promoted.append(result)
+        }
+        return promoted
     }
 
     /// A final result supersedes any volatile hypothesis it overlaps — that overlap

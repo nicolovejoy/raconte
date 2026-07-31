@@ -148,7 +148,7 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
         XCTAssertNil(ref.completedAt)
         XCTAssertTrue(ref.needsRetranscription(against: recovered.lastKnownFrameOffset),
                       "coverage 12000 of 48000 frames must offer a re-derive")
-        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir("cap")).count, 1,
+        XCTAssertEqual(LiveTranscriptReader.load(captureDirectory: captureDir("cap")).records.count, 1,
                        "the live log itself is untouched by recovery")
     }
 

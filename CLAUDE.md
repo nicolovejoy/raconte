@@ -34,19 +34,37 @@ guarantee. Transcript time = capture-frame time = position in the m4a, so live a
 re-derived results are directly comparable.
 
 Open issues: #1 background awareness (folded into M2 T8), #2 gap-honest capture (low, now
-explicitly *not* an M2 blocker), #5 (verify on device), #6 scrubbing, **#7** recovery drops
-manifest fields, **#8** corrupt manifest deletes a finalized m4a (blocks M2 T3), **#9**
-interruption `endedAt` never written.
+explicitly *not* an M2 blocker), **#7** recovery drops manifest fields, **#8** corrupt
+manifest deletes a finalized m4a (blocks M2 T3), **#9** interruption `endedAt` never
+written. #5 verified fixed on the mini (smoke run 10). #6 scrubbing implemented — see below.
+
+## Landed 2026-07-30 (execution session)
+
+Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
+
+- **Issue #6 — playback scrubbing.** `PlaybackSeek` (pure frame math, walks cumulative
+  `frameCount` not sidecar `startFrameOffset`), `SegmentPlayer.seek(toFrame:)` with
+  range-limited mapped segment loads + a generation guard on the completion callback,
+  `CapturePlayback.seek/beginScrubbing/endScrubbing` over both paths, and
+  `PlaybackProgressLine` as a `Slider` that seeks on drag end only. m4a path has a UI test;
+  raw-segment path is new manual smoke test 25. Not yet closed on GitHub — needs that
+  manual pass.
+- **M2 T1.** `TeeSink` (stateless, checked-`Sendable`) + `BoundedPCMSink` with a coalescing
+  drop ledger over `FrameRange`; both `recorder.start` sites install the same tee (the
+  resume site is covered by a mutation-verified regression test); `activeCaptureID` /
+  `activeFormat` published; `SecondarySinkFactory` threaded through the composition root
+  and supplied as a no-op by the UI-test harness. `TranscriptionEngine` /
+  `TranscriptResult` declared, no implementations.
 
 **Next (owner + next session):**
-1. Verify issue #5 on the mini (doc test 31): record on one mic → switch input in
-   System Settings → Sound mid-recording → both halves present. Then close #5.
+1. Manual: new smoke test 25 — scrub a *recovered* (un-finalized) recording on device, then
+   close issue #6. The finalized-m4a scrub is already covered by
+   `CaptureUITests.testScrubbingAFinishedEntryMovesThePosition`.
 2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. Start M2 implementation at T1 (§9 of the design doc). T1–T3 are pure-core and CI-testable;
-   T2.5 fixes #8 and #7 before anything writes into the capture tree. T4 is the first task
-   needing the mini or the iPhone.
+3. M2 T2 (§9 of the design doc), then T2.5 — which fixes #8 and #7 before anything writes
+   into the capture tree. T4 is the first task needing the mini or the iPhone.
 4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
    not device dev builds (personal team 8UK463WB83 already signs).
 

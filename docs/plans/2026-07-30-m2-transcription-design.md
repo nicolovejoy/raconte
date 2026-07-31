@@ -185,16 +185,34 @@ The scheme instead:
 2. Rebuild an `AVAudioPCMBuffer` in the canonical format from `chunk.data`, then convert to
    `bestAvailableAudioFormat` with an `AVAudioConverter`. Conversion is near-certain —
    capture is Float32 mono at the *hardware* rate, typically 48 kHz.
-3. Stamp `bufferStartTime = CMTime(value: runStartCaptureFrame + emittedInRun, timescale:
-   canonicalSampleRate) - primingOffset`, where `emittedInRun` is scaled to canonical frames.
+3. ~~Stamp `bufferStartTime = CMTime(value: runStartCaptureFrame + emittedInRun, timescale:
+   canonicalSampleRate) - primingOffset`, where `emittedInRun` is scaled to canonical
+   frames.~~ **AMENDED in T2 (2026-07-31).** Stamp `bufferStartTime =
+   CMTime(value: chunk.startFrame, timescale: canonicalSampleRate)` — the chunk's own
+   position on the axis, with no accumulator and no priming correction.
+
+   Why: `AVAudioConverter` does not emit output in step with input. Measured, it withholds
+   ~235 output frames for several calls and then flushes a burst of ~1.7× the ratio's
+   worth. Totals reconcile, so no audio is lost, but per-call output wanders against input
+   by up to ~90 ms before catching up. `emittedInRun` inherits that wander directly, and
+   because each run opens a fresh converter it re-primes — putting a step in the timeline
+   at exactly the discontinuities step 4 exists to make honest. The same measurement
+   killed the `- primingOffset` term (see §10.6).
+
+   `StampedChunk.startFrame` is already the authoritative capture-frame position and
+   `BoundedPCMSink` advances it across drops, so this is exact at every run start,
+   monotonic by construction, and needs no state at all. The residual error is the
+   converter's group delay — bounded, constant, and identical on a re-derive through the
+   same path.
 4. **On any discontinuity — an overflow drop, a background suspension, a resume — finish the
    current converter, start a fresh one, and open a new run at the true capture-frame
    offset.** The jump is then honest and the analyzer accounts for the skipped audio, per the
    SDK rule quoted in §1.
 
 Monotonicity within a run is by construction, so `.audioDisordered` cannot occur; across
-runs it holds because capture-frame offsets only increase. `primingOffset` is the converter's
-constant latency; measure it once and assert it in a test rather than assuming zero (§10.6).
+runs it holds because capture-frame offsets only increase — and after the step-3 amendment
+both hold for the simpler reason that every stamp is read straight off a strictly
+increasing axis.
 
 **Unifying consequence, worth stating plainly:** the transcript timeline *is* the capture-frame
 timeline *is* the position in the finalized m4a. Live results and retranscription results are
@@ -617,8 +635,13 @@ T1–T3 are pure-core and testable on CI. T4 is the first that needs the mini or
    `SpeechDetector` VAD gating is needed and whether `.lingering` retention is worth it.
 5. Does subtracting `.fastResults` produce latency the owner notices? A/B on device, varying
    one option at a time (the chosen config differs from every preset in two dimensions).
-6. The converter `primingOffset` for the 48 kHz → analyzer-format path — measure once and
-   assert it, rather than assuming zero.
+6. ~~The converter `primingOffset` for the 48 kHz → analyzer-format path — measure once and
+   assert it, rather than assuming zero.~~ **RESOLVED in T2, and it invalidated step 3 of
+   §2's clock — see the amendment there.** Measured on the mini, 48 kHz → 16 kHz Float32
+   mono: with the default `.normal` priming, 6 × 4800 input frames yield 9594 output frames
+   instead of 9600 (`primeInfo.leadingFrames` reports 0 while six frames are nonetheless
+   swallowed). `primeMethod = .none` converts exactly. Set, and pinned by
+   `TranscriptionSessionTests.testConverterConvertsExactlyWithPrimingDisabled`.
 7. **Is `TimeRangeAttribute` run granularity actually per-word?** The docs say only "the
    associated transcription text." §3's `runs` schema and issue #6 scrubbing both assume
    word-level. Check in T4 before the schema is depended on.

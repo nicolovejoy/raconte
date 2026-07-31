@@ -30,7 +30,17 @@ struct TranscriptResult: Sendable, Equatable {
 /// session — calling finalize first hangs until the bounded wait expires, on every
 /// capture. `abandon()` is the only correct call after that bound.
 protocol TranscriptionEngine: Sendable {
-    func prepare(format: AVAudioFormat) async throws
+    /// Resolve the analyzer's preferred format and stand up the modules.
+    ///
+    /// Deviates from design §4's `prepare(format: AVAudioFormat)` in two ways, both
+    /// forced. `AVAudioFormat` is a non-`Sendable` class, so it cannot cross into a
+    /// `Sendable` protocol under strict concurrency — `AudioFormatDescriptor` is the
+    /// codebase's existing value-type stand-in (`SegmentSidecar.swift:6`), with
+    /// conversions both ways already written. And the *return* is new: the converter
+    /// lives in `TranscriptionSession`, so the session must learn the analysis format
+    /// from somewhere, and `bestAvailableAudioFormat` is behind this seam by
+    /// construction. Throwing `TranscriptionUnavailable` covers its `nil` case.
+    func prepare(inputFormat: AudioFormatDescriptor) async throws -> AudioFormatDescriptor
     func start() async throws
     func ingest(_ input: AnalyzerInput) async
     /// Terminate the input sequence. Mandatory before `finalizeAndFinish()`.

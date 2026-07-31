@@ -55,6 +55,18 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
   `activeFormat` published; `SecondarySinkFactory` threaded through the composition root
   and supplied as a no-op by the UI-test harness. `TranscriptionEngine` /
   `TranscriptResult` declared, no implementations.
+- **M2 T2** (2026-07-31). `TranscriptConsolidator` (pure: volatile never promoted to
+  committed, empty-volatile revokes its range, out-of-order arrivals ordered by frame)
+  and `TranscriptionSession` (actor: converter runs, discontinuity → fresh run +
+  recorded `skippedRanges`, ordered shutdown with a bounded finalize falling through to
+  `abandon()`), driven by a scripted fake engine. 224 unit tests green.
+  Two design amendments, both forced by measurement and written back into the design
+  doc: `prepare` returns the analysis format as an `AudioFormatDescriptor`
+  (`AVAudioFormat` is not `Sendable`, and the converter lives in the session), and §2's
+  `emittedInRun` clock is replaced by stamping straight off `StampedChunk.startFrame`
+  — the converter's output wanders ~90 ms against its input before catching up, so an
+  emitted-frame accumulator would re-prime at every discontinuity. `primeMethod = .none`,
+  without which the converter silently swallows frames.
 
 **Next (owner + next session):**
 1. Manual: new smoke test 25 — scrub a *recovered* (un-finalized) recording on device, then
@@ -63,8 +75,8 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
 2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. M2 T2 (§9 of the design doc), then T2.5 — which fixes #8 and #7 before anything writes
-   into the capture tree. T4 is the first task needing the mini or the iPhone.
+3. M2 T2.5 — fixes #8 and #7 before anything writes into the capture tree. Then T3.
+   T4 is the first task needing the mini or the iPhone. (T2 landed 2026-07-31.)
 4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 

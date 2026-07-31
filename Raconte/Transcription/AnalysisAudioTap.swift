@@ -19,6 +19,16 @@ final class AnalysisAudioTap {
         guard !failed else { return }
         do {
             let file = try openIfNeeded(format: buffer.format)
+            // `AVAudioFile.write(from:)` raises an **ObjC exception** — not a Swift error
+            // — when the buffer's format differs from `processingFormat`, and Swift
+            // cannot catch it, so it takes the whole app down. That is exactly what this
+            // tap did on its first run: a diagnostic on the derived branch killing the
+            // recording, which is the coupling §0 forbids. Check first, and disable
+            // rather than trap.
+            guard buffer.format.isEqual(file.processingFormat) else {
+                failed = true
+                return
+            }
             try file.write(from: buffer)
         } catch {
             failed = true
@@ -32,9 +42,14 @@ final class AnalysisAudioTap {
             withIntermediateDirectories: true)
         let url = SegmentLayout.transcriptDirectory(captureDirectory: directory)
             .appendingPathComponent("analysis-input.wav")
-        // Settings taken from the analyzer's own format, so the file is literally what
-        // it received — not a re-interpretation.
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        // `commonFormat`/`interleaved` must be passed explicitly. The two-argument
+        // initializer gives the file a *standard* Float32 non-interleaved processing
+        // format whatever the settings say, so an Int16 analyzer buffer — which is what
+        // the mini's `bestAvailableAudioFormat` returns — cannot be written to it.
+        let file = try AVAudioFile(forWriting: url,
+                                   settings: format.settings,
+                                   commonFormat: format.commonFormat,
+                                   interleaved: format.isInterleaved)
         self.file = file
         return file
     }

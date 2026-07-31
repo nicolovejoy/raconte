@@ -313,6 +313,7 @@ struct FinishedRow: View {
                     .foregroundStyle(Color(white: 0.9))
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("finished.play")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(recording.formattedDuration)

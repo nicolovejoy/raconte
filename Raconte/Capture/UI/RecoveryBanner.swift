@@ -42,7 +42,7 @@ struct RecoveryBanner: View {
             .font(.subheadline)
 
             if let playback {
-                PlaybackProgressLine(playback: playback, tint: .orange)
+                PlaybackProgressLine(playback: playback, tint: .orange, idPrefix: "recovery")
             }
         }
         .padding(14)

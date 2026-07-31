@@ -70,7 +70,7 @@ web teardown). Detailed designs in `docs/plans/`:
 - `2026-07-29-apple-sdk-recon.md` — SDK availability verified against installed Xcode
 
 Milestone 1 smoke doc: `docs/m1-paranoid-tests.md` (full iPhone pass + iPad and macOS
-delta passes, 31 tests total).
+delta passes, 32 tests total).
 
 ## Identity
 

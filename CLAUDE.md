@@ -65,8 +65,8 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
    eventual iPhone pass.
 3. M2 T2 (§9 of the design doc), then T2.5 — which fixes #8 and #7 before anything writes
    into the capture tree. T4 is the first task needing the mini or the iPhone.
-4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
-   not device dev builds (personal team 8UK463WB83 already signs).
+4. Reserve the CloudKit container `iCloud.org.recountly.raconte` on the developer portal.
+   Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI
 mints a fresh CaptureCoordinator per capture (single-capture coordinators by design). If
@@ -122,8 +122,11 @@ delta passes, 32 tests total).
   lives in the M1 design doc). Test-first for the pure core (state machine, recovery
   planner, segment math) — hardware behind protocols.
 - Docs: plain and terse. No grandiose prose.
-- Signing: personal team `8UK463WB83` (already in project.yml) signs local + device dev
-  builds. Paid Apple Developer Program pending (owner: "soon") — gates TestFlight/CloudKit.
+- Signing: team `8UK463WB83` ("Nicholas Lovejoy", in project.yml) is a **paid** Apple
+  Developer Program membership — the same team MusicForge ships under. Nothing is gated on
+  enrollment: TestFlight, CloudKit containers, push and Live Activities are all available
+  now. (Verified 2026-07-31 from the on-disk profiles: App Store distribution profiles and
+  year-long expiries, neither of which a free personal team can produce.)
 
 <!-- SHARED-CONVENTIONS:BEGIN v=d5e16e653242 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions

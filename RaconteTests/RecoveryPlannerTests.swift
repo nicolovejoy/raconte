@@ -43,6 +43,7 @@ final class RecoveryPlannerTests: XCTestCase {
                           segments: [SegmentFileStat],
                           m4a: Bool = false,
                           m4aPart: Bool = false,
+                          transcript: Bool = false,
                           strayManifestPart: Bool = false) -> CaptureSnapshot {
         CaptureSnapshot(
             captureID: id,
@@ -50,6 +51,7 @@ final class RecoveryPlannerTests: XCTestCase {
             manifest: manifest, manifestCorrupt: manifestCorrupt,
             strayManifestPart: strayManifestPart,
             segments: segments, finalM4APresent: m4a, finalM4APartPresent: m4aPart,
+            transcriptPresent: transcript,
             format: fmt)
     }
 
@@ -265,6 +267,56 @@ final class RecoveryPlannerTests: XCTestCase {
         }
         XCTAssertEqual(actions[1], .deleteCaptureDirectory(captureID: "b"))
         XCTAssertEqual(actions[2], .enqueueFinalize(captureID: "c"))
+    }
+
+    // MARK: Issue #8 — a delete must never take a finalized recording with it
+
+    /// The exact reported failure: one flipped byte in a finished capture's manifest.
+    /// `segments/` is gone (the finalizer removed it), so `hasData` is false forever
+    /// and the old planner routed this straight to `.deleteCaptureDirectory`.
+    func testCorruptManifestWithAFinalizedM4AIsQuarantinedNotDeleted() {
+        let action = plan(snapshot(manifest: nil, manifestCorrupt: true, segments: [], m4a: true))
+        XCTAssertEqual(action, .quarantineCaptureDirectory(captureID: "cap"),
+                       "a corrupt manifest must never cost the one file M1 promises to keep")
+    }
+
+    func testMissingManifestWithAFinalizedM4AIsQuarantined() {
+        XCTAssertEqual(plan(snapshot(manifest: nil, segments: [], m4a: true)),
+                       .quarantineCaptureDirectory(captureID: "cap"))
+    }
+
+    /// An interrupted finalize left only the `.part`. Still the only copy of the
+    /// encode, and still not something to delete on a hunch.
+    func testCorruptManifestWithOnlyAnM4APartIsQuarantined() {
+        XCTAssertEqual(plan(snapshot(manifest: nil, manifestCorrupt: true, segments: [], m4aPart: true)),
+                       .quarantineCaptureDirectory(captureID: "cap"))
+    }
+
+    /// M2 T3 writes `transcript/` into this same tree, which is what made #8 a
+    /// blocker rather than a nuisance.
+    func testCorruptManifestWithATranscriptIsQuarantined() {
+        XCTAssertEqual(plan(snapshot(manifest: nil, manifestCorrupt: true, segments: [], transcript: true)),
+                       .quarantineCaptureDirectory(captureID: "cap"))
+    }
+
+    /// `complete` with no `.m4a` and no segments used to delete too. Same guard.
+    func testCompleteWithoutM4AButWithATranscriptIsQuarantined() {
+        XCTAssertEqual(plan(snapshot(manifest: manifest(.complete), segments: [], transcript: true)),
+                       .quarantineCaptureDirectory(captureID: "cap"))
+    }
+
+    /// The guard must not neuter the real delete path: an accidental tap that left
+    /// nothing behind is still swept.
+    func testEmptyCaptureWithNoArtifactsStillDeletes() {
+        XCTAssertEqual(plan(snapshot(manifest: nil, manifestCorrupt: true, segments: [])),
+                       .deleteCaptureDirectory(captureID: "cap"))
+    }
+
+    /// Quarantine is a decision, not a mutation: re-planning the same directory next
+    /// launch reaches the same answer because nothing moved.
+    func testQuarantineIsStableAcrossLaunches() {
+        let capture = snapshot(manifest: nil, manifestCorrupt: true, segments: [], m4a: true)
+        XCTAssertEqual(plan(capture), plan(capture))
     }
 
     func testEmptySnapshotYieldsNoActions() {

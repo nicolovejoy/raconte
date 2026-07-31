@@ -12,6 +12,10 @@ struct RecoveryOutcome: Equatable {
     var verifyQueue: [String] = []
     /// Capture directories removed (silent).
     var deletedCaptureIDs: [String] = []
+    /// Captures we refused to delete because they hold a finalized `.m4a` or a
+    /// transcript but no coherent manifest (issue #8). Nothing was touched on disk;
+    /// the owner needs to be told they exist.
+    var quarantinedCaptureIDs: [String] = []
 }
 
 /// Applies `RecoveryPlanner` actions to the real filesystem, idempotently
@@ -60,6 +64,11 @@ struct RecoveryExecutor {
         case .finishRawDelete(let id):
             try? FileManager.default.removeItem(
                 at: SegmentLayout.segmentsDirectory(captureDirectory: captureDir(id)))
+
+        case .quarantineCaptureDirectory(let id):
+            // No filesystem op at all — that is the fix. Re-planning next launch
+            // reaches the same decision, so this is idempotent by doing nothing.
+            outcome.quarantinedCaptureIDs.append(id)
         }
     }
 
@@ -114,8 +123,16 @@ struct RecoveryExecutor {
         let manifestFormat = AudioFormatDescriptor(
             sampleRate: format.sampleRate, channels: format.channels,
             commonFormat: format.commonFormat, interleaved: format.interleaved)
+        // Issue #7: this reconstructs the manifest field-by-field, so any field not
+        // named here is silently dropped on every crash-recovery pass. That cost
+        // `needsAttention` — the flag saying finalize gave up and the raw PCM must be
+        // kept forever — plus its diagnostic companions. Anything added to `Manifest`
+        // from here on must be carried over explicitly, and
+        // `RecoveryExecutorTests.testRecoveryPreservesEveryManifestField` fails if it
+        // isn't.
         let manifest = Manifest(
             captureID: recovered.captureID,
+            schemaVersion: existing?.schemaVersion ?? Manifest.currentSchemaVersion,
             createdAt: existing?.createdAt ?? now(),
             state: .captured,
             stateSeq: (existing?.stateSeq ?? -1) + 1,
@@ -124,7 +141,11 @@ struct RecoveryExecutor {
             segmentCount: recovered.segments.count,
             lastKnownFrameOffset: recovered.totalFrames,
             interruptions: existing?.interruptions ?? [],
-            final: existing?.final ?? FinalRef())
+            final: existing?.final ?? FinalRef(),
+            needsAttention: existing?.needsAttention,
+            lastError: existing?.lastError,
+            retryCount: existing?.retryCount,
+            finalizeAttempts: existing?.finalizeAttempts)
         if let data = try? CaptureCoding.encoder().encode(manifest) {
             try? AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir), writing: data)
         }

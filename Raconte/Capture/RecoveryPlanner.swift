@@ -28,6 +28,13 @@ enum RecoveryAction: Equatable {
     /// `complete` with a verified `.m4a` — finish any half-done raw-segment delete
     /// (silent; already an entry).
     case finishRawDelete(captureID: String)
+
+    /// The tree would otherwise have been deleted, but it holds a finalized `.m4a`
+    /// or a transcript (issue #8). Leave every byte in place and surface it to the
+    /// owner instead. Deliberately a *no-op on disk*: moving the directory would
+    /// hide the recording from the UI, and the whole point is that the audio
+    /// outlives our confusion about it.
+    case quarantineCaptureDirectory(captureID: String)
 }
 
 /// The normalization plan for one capture that is being rescued to `captured`.
@@ -67,7 +74,20 @@ enum RecoveryPlanner {
         snapshot.captures.map(plan(for:))
     }
 
+    /// Issue #8. Every delete decision below reasons from `hasData`, which is about
+    /// *raw segments* — and a finalized capture has none by design. Rather than
+    /// re-deriving that guard at each of the three delete sites (and forgetting it at
+    /// the fourth one someone adds later), the decision is made once and then
+    /// filtered here.
     static func plan(for capture: CaptureSnapshot) -> RecoveryAction {
+        let action = decide(for: capture)
+        if case .deleteCaptureDirectory(let id) = action, capture.holdsIrreplaceableArtifacts {
+            return .quarantineCaptureDirectory(captureID: id)
+        }
+        return action
+    }
+
+    private static func decide(for capture: CaptureSnapshot) -> RecoveryAction {
         let bpf = DirectorySnapshot.bytesPerFrame(capture.format)
         let recovered = recoveredCapture(from: capture, bytesPerFrame: bpf)
         let hasData = recovered.durationSeconds >= minCaptureDurationSeconds

@@ -67,6 +67,17 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
   — the converter's output wanders ~90 ms against its input before catching up, so an
   emitted-frame accumulator would re-prime at every discontinuity. `primeMethod = .none`,
   without which the converter silently swallows frames.
+- **M2 T2.5** (2026-07-31). Both data-loss bugs fixed and mutation-verified.
+  **#8**: `CaptureSnapshot.holdsIrreplaceableArtifacts` (m4a, m4a.part, or a non-empty
+  `transcript/`) filters every `.deleteCaptureDirectory` decision into a new
+  `.quarantineCaptureDirectory` — a *no-op on disk*, so it is idempotent by doing
+  nothing and the recording never moves out from under the UI. Filtering once after
+  the decision rather than guarding three delete sites is deliberate.
+  `SegmentLayout.transcriptDirectory` is declared here, ahead of T3, so the guard
+  exists before the writer does. **#7**: `writeCapturedManifest` now carries
+  `schemaVersion`/`needsAttention`/`lastError`/`retryCount`/`finalizeAttempts`, with a
+  `Mirror`-based field-count tripwire that fails when `Manifest` gains a field nobody
+  carried over. 238 unit tests + 5 UI tests green.
 
 **Next (owner + next session):**
 1. Manual: new smoke test 25 — scrub a *recovered* (un-finalized) recording on device, then
@@ -75,8 +86,9 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
 2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. M2 T2.5 — fixes #8 and #7 before anything writes into the capture tree. Then T3.
-   T4 is the first task needing the mini or the iPhone. (T2 landed 2026-07-31.)
+3. M2 T3 — `live.jsonl` writer/reader, `TranscriptRef` on the manifest, recovery-planner
+   cases. T4 is the first task needing the mini or the iPhone.
+   (T2 and T2.5 both landed 2026-07-31.)
 4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 

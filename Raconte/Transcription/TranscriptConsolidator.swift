@@ -35,8 +35,8 @@ struct TranscriptConsolidator: Sendable, Equatable {
     /// having moved past the range (design §4). It also revises any committed result
     /// covering the same span, which is how a late correction lands.
     private mutating func applyFinal(_ result: TranscriptResult) {
-        provisional.removeAll { $0.range.overlaps(result.range) }
-        committed.removeAll { $0.range.overlaps(result.range) }
+        provisional.removeAll { $0.range.supersededBy(result.range) }
+        committed.removeAll { $0.range.supersededBy(result.range) }
         // An empty final is a deletion, not a word: the overlap sweep above is the
         // whole effect. Inserting it would put an empty run in the transcript.
         guard !result.text.isEmpty else { return }
@@ -47,7 +47,7 @@ struct TranscriptConsolidator: Sendable, Equatable {
     /// withdrawing a hypothesis it no longer believes. Treating it as "a result whose
     /// text happens to be empty" would leave the retracted words on screen.
     private mutating func applyVolatile(_ result: TranscriptResult) {
-        provisional.removeAll { $0.range.overlaps(result.range) }
+        provisional.removeAll { $0.range.supersededBy(result.range) }
         guard !result.text.isEmpty else { return }
         provisional.insert(result, at: insertionIndex(in: provisional, for: result.range))
     }
@@ -63,7 +63,13 @@ struct TranscriptConsolidator: Sendable, Equatable {
 
     /// Committed text plus the live hypothesis — the capture screen's ghost text.
     /// Never persist this.
-    var displayText: String { Self.join(committed + provisional) }
+    ///
+    /// Merged by frame position, not concatenated. Appending provisional after
+    /// committed renders a hypothesis that *precedes* committed text in the wrong
+    /// place, which is visible on screen the moment results arrive out of order.
+    var displayText: String {
+        Self.join((committed + provisional).sorted { $0.range.start < $1.range.start })
+    }
 
     /// Joined with single spaces. Real spacing and punctuation are the canonical
     /// transcript's problem (T6/T7), not the live overlay's.
@@ -77,5 +83,21 @@ extension FrameRange {
     /// what makes adjacent results coexist instead of evicting each other.
     func overlaps(_ other: FrameRange) -> Bool {
         start < other.end && other.start < end
+    }
+
+    /// Whether a result over `self` is replaced by one over `other`.
+    ///
+    /// Overlap alone is not the test. A zero-length result (`start == end`) never
+    /// overlaps anything under the strict comparison, so a final result with an empty
+    /// range used to supersede nothing — leaving the stale hypothesis it was meant to
+    /// promote on screen indefinitely. Containment covers that case.
+    func supersededBy(_ other: FrameRange) -> Bool {
+        overlaps(other) || other.contains(self) || contains(other)
+    }
+
+    /// True when `other` sits entirely within this range, endpoints included — so a
+    /// zero-length range at a boundary still counts.
+    func contains(_ other: FrameRange) -> Bool {
+        other.start >= start && other.end <= end
     }
 }

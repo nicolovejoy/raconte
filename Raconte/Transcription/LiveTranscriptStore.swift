@@ -29,6 +29,8 @@ final class LiveTranscriptWriter {
     /// Next `seq` to assign. Continues from the file's existing tail so reopening an
     /// interrupted capture doesn't restart numbering.
     private(set) var nextSeq = 0
+    /// A write failed partway and left an unterminated line behind.
+    private var tornTail = false
 
     init(captureDirectory: URL) {
         self.url = SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory)
@@ -97,7 +99,22 @@ final class LiveTranscriptWriter {
         guard !data.contains(UInt8(ascii: "\n")) else { throw LiveTranscriptError.multilineRecord }
         data.append(UInt8(ascii: "\n"))
 
-        try Self.writeAll(fd: fd.value, data: data)
+        // A previous append that died mid-write (ENOSPC is the live case — the capture
+        // path has its own disk-full handling) left an unterminated fragment. Without
+        // this, the next record lands directly onto it and one undecodable line
+        // swallows both. `open()` handles the same hazard across a process boundary;
+        // ignoring it *within* one process was the gap.
+        if tornTail {
+            try Self.writeAll(fd: fd.value, data: Data([UInt8(ascii: "\n")]))
+            tornTail = false
+        }
+
+        do {
+            try Self.writeAll(fd: fd.value, data: data)
+        } catch {
+            tornTail = true
+            throw error
+        }
         nextSeq += 1
         recordsWritten += 1
         return stamped

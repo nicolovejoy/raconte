@@ -126,16 +126,46 @@ up in full as **§11 of the M2 design doc** — read that, not this summary.
   `holdsIrreplaceableArtifacts`, so opening at factory time would make every mis-tap leave
   a permanently undeletable directory. Fix when wiring lands: open lazily at first append.
 
+## M2 T4 + T3 wire-up landed 2026-07-31 — live transcription works on the mini
+
+`SpeechAnalyzerEngine` (real `SpeechAnalyzer`/`SpeechTranscriber`) →
+`LiveTranscriptionCoordinator` → `LiveTranscriptionRun` → `TranscriptionSession`, which
+owns the log writer. Verified on the mini: a 9.1 s recording transcribed accurately,
+full coverage, `committedRecords` matching the file, no orphan `transcript/` dirs.
+
+Facts measured, not assumed (probe: `RaconteTests/SpeechAvailabilityProbe`):
+`bestAvailableAudioFormat` is **1 ch 16 kHz Int16 interleaved** — the capture path is
+Float32 48 kHz, so the converter does a sample-*format* change too. The descriptor
+round-trip survives it. `AssetInventory.status` reports `.supported` with nine `en_*`
+locales installed and a real format returned, so **status tracks this app's reservation,
+not whether the bytes exist** — the asset gate keys off `bestAvailableAudioFormat != nil`
+and treats status as advisory.
+
+Three defects the device pass found, all fixed, none reachable from CI:
+- **Overlapping `AnalyzerInput` killed the session 0.7 s into a 6.2 s recording.** The
+  converter emits lumpily, so stamping every output buffer with its input chunk's start
+  frame declares spans that overlap what the analyzer already accepted → `audioDisordered`
+  on the *results* stream → session dead, every later chunk silently ignored. Fix: stamp
+  a run's **first** buffer only, `nil` after (the SDK's "immediately after the previous
+  buffer"). Gaps stay expressible because a discontinuity opens a new run. Pinned by
+  `AnalyzerInputOrderingTests`, which measures the overlap directly.
+- **`coverageFrames` lied.** `ingest` returned silently when not running, so a dead
+  session's audio counted as covered — the ref claimed a complete transcript for 11 % of a
+  recording. Now recorded as skipped.
+- **`TranscriptRef` was never written**: read from `activeCaptureID`, which
+  `resetCaptureWiring()` nils first. Now keyed off the finalize queue.
+
 **Next (owner + next session):**
-1. M2 T4 — real `SpeechAnalyzer`/`SpeechTranscriber` behind the seam. First task needing
-   the mini or the iPhone; settles the §10 VERIFY list. Carry-ins are enumerated in
-   design §11.7 (analysis-format round-trip assertion, the two unmerged drop ledgers, the
-   secondary-sink abandon hook, the three unserialized manifest writers).
-2. Then the T3 wire-up, with the lazy-open fix.
-3. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
-   second device (Siri won't engage while the app holds the mic) — or fold into the
-   eventual iPhone pass.
-4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
+1. Transcript ends at 7.80 s of a 9.1 s recording — trailing silence, or a tail that never
+   finalized? First thing to check; it is the one unexplained observation from the pass.
+2. iPhone pass. Everything iOS-only is still unverified: TCC behaviour, the ~2-instance
+   limit (macOS has none), background suspension (§7), asset download on a device without
+   models, battery/thermal. iPhone 15 needs a cable.
+3. `DictationTranscriber` fallback (§6.1) is not wired — unavailable reports `noModel`.
+4. Carry-ins still open from design §11.7: the secondary-sink abandon hook (four
+   coordinator paths drop the sink with no notification, leaking a live analyzer), and
+   recovery synthesizing a `completedAt: nil` ref for a killed capture.
+5. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI

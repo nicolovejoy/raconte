@@ -4,8 +4,33 @@ import SwiftUI
 struct FinishedRecording: Identifiable, Equatable, Sendable {
     let captureID: String
     let durationSeconds: Double
+    let createdAt: Date
     var id: String { captureID }
     var formattedDuration: String { CaptureCoordinator.formatDuration(durationSeconds) }
+
+    /// "Today 3:42 PM" / "Jul 28, 3:42 PM" — the date is only worth the width once the
+    /// recording isn't from today.
+    var formattedCreatedAt: String {
+        let cal = Calendar.current
+        let time = createdAt.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(createdAt) { return "Today \(time)" }
+        if cal.isDateInYesterday(createdAt) { return "Yesterday \(time)" }
+        return "\(createdAt.formatted(.dateTime.month(.abbreviated).day())), \(time)"
+    }
+
+    /// A ULID's first 10 Crockford-base32 chars are a 48-bit millisecond timestamp, so a
+    /// capture whose manifest is missing or corrupt still shows the right date.
+    static func timestamp(fromULID id: String) -> Date? {
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        let head = id.uppercased().prefix(10)
+        guard head.count == 10 else { return nil }
+        var ms: UInt64 = 0
+        for ch in head {
+            guard let v = alphabet.firstIndex(of: ch) else { return nil }
+            ms = (ms << 5) | UInt64(v)
+        }
+        return Date(timeIntervalSince1970: Double(ms) / 1000)
+    }
 }
 
 /// Composition + orchestration for the capture screen. Owns the (per-capture, ephemeral)
@@ -38,7 +63,8 @@ final class CaptureScreenModel {
     init(capturesRoot: URL,
          makeSession: @escaping () -> AudioSessionController,
          makeRecorder: @escaping () -> EngineRecording,
-         encoder: AudioEncoder) {
+         encoder: AudioEncoder,
+         startCue: (@MainActor () async -> Void)? = nil) {
         self.capturesRoot = capturesRoot
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
         let spawn: @MainActor () -> CaptureCoordinator = {
@@ -48,7 +74,8 @@ final class CaptureScreenModel {
                 makeRecorder: makeRecorder,
                 makeStore: { id, fmt in
                     SegmentStore(capturesRoot: capturesRoot, captureID: id, format: fmt)
-                })
+                },
+                startCue: startCue)
         }
         self.spawn = spawn
         self.coordinator = spawn()
@@ -70,7 +97,8 @@ final class CaptureScreenModel {
                 #endif
             },
             makeRecorder: { AudioEngineRecorder() },
-            encoder: AVAssetWriterAudioEncoder())
+            encoder: AVAssetWriterAudioEncoder(),
+            startCue: { await StartCue().play() })
     }
 
     static func defaultCapturesRoot() -> URL {
@@ -146,7 +174,12 @@ final class CaptureScreenModel {
             } else {
                 seconds = PlayableSourceSelector.rawDurationSeconds(cap)
             }
-            return FinishedRecording(captureID: cap.captureID, durationSeconds: seconds)
+            let created = cap.manifest?.createdAt
+                ?? FinishedRecording.timestamp(fromULID: cap.captureID)
+                ?? Date(timeIntervalSince1970: 0)
+            return FinishedRecording(captureID: cap.captureID,
+                                     durationSeconds: seconds,
+                                     createdAt: created)
         }
         .sorted { $0.captureID > $1.captureID }   // ULID descending == newest first
     }
@@ -285,9 +318,10 @@ struct FinishedRow: View {
                 Text(recording.formattedDuration)
                     .font(.body.monospacedDigit())
                     .accessibilityIdentifier("finished.duration")
-                Text(recording.captureID.prefix(10))
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(Color(white: 0.45))
+                Text(recording.formattedCreatedAt)
+                    .font(.caption2)
+                    .foregroundStyle(Color(white: 0.55))
+                    .accessibilityIdentifier("finished.createdAt")
                 if let playback {
                     PlaybackProgressLine(playback: playback)
                 }

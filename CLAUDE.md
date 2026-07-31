@@ -65,7 +65,7 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
    eventual iPhone pass.
 3. M2 T2 (§9 of the design doc), then T2.5 — which fixes #8 and #7 before anything writes
    into the capture tree. T4 is the first task needing the mini or the iPhone.
-4. Reserve the CloudKit container `iCloud.org.recountly.raconte` on the developer portal.
+4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI
@@ -93,7 +93,10 @@ delta passes, 32 tests total).
 ## Identity
 
 - App name: **Raconte** (French, "tell!" — English *recount* comes from *raconter*)
-- Bundle id: `org.recountly.raconte` (CloudKit container later: `iCloud.org.recountly.raconte`)
+- Bundle id: `org.pianohouseproject.raconte` (CloudKit container later:
+  `iCloud.org.pianohouseproject.raconte`). `pianohouseproject.org` is the owner's
+  public-facing namespace for all his work — publisher, not product. Changed 2026-07-31
+  from `org.recountly.raconte`, which was product-under-product; nothing had shipped.
 - Repo: github.com/nicolovejoy/raconte
 - Single user (the owner). No accounts, no server. iCloud identity only (Milestone 4).
 

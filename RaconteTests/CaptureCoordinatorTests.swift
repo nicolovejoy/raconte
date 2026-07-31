@@ -39,6 +39,7 @@ private final class FakeRecorder: EngineRecording, @unchecked Sendable {
     private var sink: PCMSink?
     private var _startCount = 0
     private var _lastMatching: AudioFormatDescriptor??
+    private var _fedFrames = 0
     var startCount: Int { lock.withLock { _startCount } }
     /// The `matching` argument of the most recent `start` (outer nil = never started).
     var lastMatching: AudioFormatDescriptor?? { lock.withLock { _lastMatching } }
@@ -52,9 +53,15 @@ private final class FakeRecorder: EngineRecording, @unchecked Sendable {
     }
     func stop() { isRunning = false }
 
+    /// A nonzero, position-dependent byte pattern. All-zero data would make
+    /// every sidecar `sha256Prefix` identical, so byte-identity assertions would
+    /// pass vacuously.
     func feed(frames: Int) {
         let s = lock.withLock { sink }
-        s?.receive(PCMChunk(data: Data(count: frames * kBytesPerFrame),
+        let start = lock.withLock { () -> Int in let f = _fedFrames; _fedFrames += frames; return f }
+        var bytes = [UInt8](repeating: 0, count: frames * kBytesPerFrame)
+        for i in 0..<bytes.count { bytes[i] = UInt8(truncatingIfNeeded: start &* kBytesPerFrame &+ i) }
+        s?.receive(PCMChunk(data: Data(bytes),
                             frameCount: AVAudioFrameCount(frames), sampleRate: 48000))
     }
 }
@@ -89,8 +96,10 @@ final class CaptureCoordinatorTests: XCTestCase {
     private func makeCoordinator(session: FakeSession, recorder: FakeRecorder,
                                  byteCap: Int = .max,
                                  flush: Duration = .zero,
+                                 capturesRoot: URL? = nil,
+                                 makeSecondarySink: SecondarySinkFactory? = nil,
                                  now: @escaping @Sendable () -> Date = Date.init) -> CaptureCoordinator {
-        let root = root!
+        let root = capturesRoot ?? root!
         return CaptureCoordinator(
             capturesRoot: root,
             session: session,
@@ -101,7 +110,8 @@ final class CaptureCoordinatorTests: XCTestCase {
             },
             mintCaptureID: { kCaptureID },
             now: now,
-            flushInterval: flush)
+            flushInterval: flush,
+            makeSecondarySink: makeSecondarySink)
     }
 
     private func waitUntil(_ predicate: @escaping () -> Bool,
@@ -115,14 +125,15 @@ final class CaptureCoordinatorTests: XCTestCase {
         }
     }
 
-    private func decodeManifest(_ captureID: String = kCaptureID) throws -> Manifest {
-        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: captureID)
+    private func decodeManifest(_ captureID: String = kCaptureID,
+                                root: URL? = nil) throws -> Manifest {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root ?? self.root, captureID: captureID)
         let data = try Data(contentsOf: SegmentLayout.manifestURL(captureDirectory: dir))
         return try CaptureCoding.decoder().decode(Manifest.self, from: data)
     }
 
-    private func decodeSidecar(_ index: Int) throws -> SegmentSidecar {
-        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: kCaptureID)
+    private func decodeSidecar(_ index: Int, root: URL? = nil) throws -> SegmentSidecar {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root ?? self.root, captureID: kCaptureID)
         let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
         let data = try Data(contentsOf: SegmentLayout.sidecarURL(segmentsDirectory: segs, index: index))
         return try CaptureCoding.decoder().decode(SegmentSidecar.self, from: data)
@@ -341,5 +352,215 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.finalizeQueue.isEmpty)
         let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: kCaptureID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+    }
+
+    // MARK: M2 T1 — the tee is invisible to the disk path
+
+    /// Counts chunks and frames, optionally doing slow or self-failing work.
+    private final class CountingSink: PCMSink, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _chunks = 0
+        private var _frames = 0
+        private let body: (@Sendable () -> Void)?
+
+        init(body: (@Sendable () -> Void)? = nil) { self.body = body }
+
+        var chunks: Int { lock.withLock { _chunks } }
+        var frames: Int { lock.withLock { _frames } }
+
+        nonisolated func receive(_ chunk: PCMChunk) {
+            lock.withLock { _chunks += 1; _frames += Int(chunk.frameCount) }
+            body?()
+        }
+    }
+
+    /// Drive an identical capture script over `root`, with whatever second branch
+    /// the caller supplies. `FakeRecorder.feed` is synchronous, so this is
+    /// deterministic rather than timing-dependent.
+    private func runIdenticalScript(root: URL, secondary: SecondarySinkFactory?) async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          byteCap: 4000, capturesRoot: root,
+                                          makeSecondarySink: secondary)
+        await coordinator.record()
+        recorder.feed(frames: 500)
+        recorder.feed(frames: 500)
+        recorder.feed(frames: 500)
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+    }
+
+    private func makeRoot(_ name: String) throws -> URL {
+        let url = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// The bytes on disk must not depend on what else is hanging off the tee —
+    /// including a branch that sleeps or fails internally.
+    func testSecondBranchDoesNotChangeTheBytesOnDisk() async throws {
+        let baselineRoot = try makeRoot("baseline")
+        try await runIdenticalScript(root: baselineRoot, secondary: nil)
+
+        let variants: [(String, SecondarySinkFactory)] = [
+            ("noop", { _ in CountingSink() }),
+            ("slow", { _ in CountingSink(body: { Thread.sleep(forTimeInterval: 0.05) }) }),
+            ("failing", { _ in CountingSink(body: {
+                do { throw CocoaError(.fileWriteNoPermission) } catch { /* absorbed */ }
+            }) }),
+        ]
+
+        for (name, factory) in variants {
+            let variantRoot = try makeRoot(name)
+            try await runIdenticalScript(root: variantRoot, secondary: factory)
+
+            let baseManifest = try decodeManifest(root: baselineRoot)
+            let manifest = try decodeManifest(root: variantRoot)
+            XCTAssertEqual(manifest.state, baseManifest.state, name)
+            XCTAssertEqual(manifest.segmentCount, baseManifest.segmentCount, name)
+            XCTAssertEqual(manifest.lastKnownFrameOffset, baseManifest.lastKnownFrameOffset, name)
+            XCTAssertGreaterThan(manifest.segmentCount, 1, "\(name): script should rotate")
+
+            for index in 0..<manifest.segmentCount {
+                let baseSidecar = try decodeSidecar(index, root: baselineRoot)
+                let sidecar = try decodeSidecar(index, root: variantRoot)
+                XCTAssertEqual(sidecar.frameCount, baseSidecar.frameCount, "\(name) seg \(index)")
+                XCTAssertEqual(sidecar.startFrameOffset, baseSidecar.startFrameOffset, "\(name) seg \(index)")
+                XCTAssertEqual(sidecar.byteCount, baseSidecar.byteCount, "\(name) seg \(index)")
+                XCTAssertEqual(sidecar.closedReason, baseSidecar.closedReason, "\(name) seg \(index)")
+                XCTAssertEqual(sidecar.format, baseSidecar.format, "\(name) seg \(index)")
+                // The nonzero feed pattern makes this a real check, not a
+                // constant-hash comparison.
+                XCTAssertEqual(sidecar.sha256Prefix, baseSidecar.sha256Prefix, "\(name) seg \(index)")
+                XCTAssertNotEqual(sidecar.sha256Prefix, "", "\(name) seg \(index)")
+
+                XCTAssertEqual(try pcmBytes(root: variantRoot, index: index),
+                               try pcmBytes(root: baselineRoot, index: index),
+                               "\(name): segment \(index) bytes differ")
+            }
+        }
+    }
+
+    private func pcmBytes(root: URL, index: Int) throws -> Data {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: kCaptureID)
+        let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
+        return try Data(contentsOf: SegmentLayout.pcmURL(segmentsDirectory: segs, index: index))
+    }
+
+    /// The regression that matters: the resume `recorder.start` must install the
+    /// SAME tee. Wire the second branch only at `configureAndStart` and this fails
+    /// at 750 frames while every on-disk assertion stays green.
+    func testSecondBranchSurvivesInterruptionResume() async throws {
+        let counter = CountingSink()
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          makeSecondarySink: { _ in counter })
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .recording }, "did not resume")
+
+        recorder.feed(frames: 250)
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+
+        XCTAssertEqual(counter.frames, 1000,
+                       "second branch missed the post-resume audio — the resume start "
+                       + "is not passing the tee")
+        XCTAssertEqual(counter.chunks, 2)
+    }
+
+    func testSecondBranchSurvivesRouteLossResume() async throws {
+        let counter = CountingSink()
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          makeSecondarySink: { _ in counter })
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.routeLost)
+        await waitUntil({ coordinator.phase == .recording && recorder.startCount >= 2 },
+                        "did not auto-resume after route loss")
+
+        recorder.feed(frames: 250)
+        await coordinator.done()
+        XCTAssertEqual(counter.frames, 1000, "second branch died at the route switch")
+    }
+
+    // MARK: M2 T1 — factory + published active IDs
+
+    func testSecondarySinkFactoryIsCalledOncePerCaptureWithTheCaptureID() async throws {
+        let box = FactoryLog()
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          makeSecondarySink: { id in
+                                              box.note(id); return CountingSink()
+                                          })
+        await coordinator.record()
+        recorder.feed(frames: 100)
+        await coordinator.done()
+
+        XCTAssertEqual(box.ids, [kCaptureID], "factory must run once per capture, not per start")
+    }
+
+    func testSecondarySinkFactoryIsNotCalledWhenPermissionIsDenied() async throws {
+        let box = FactoryLog()
+        let session = FakeSession(); session.permissionGranted = false
+        let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          makeSecondarySink: { id in
+                                              box.note(id); return CountingSink()
+                                          })
+        await coordinator.record()
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertTrue(box.ids.isEmpty, "no sink should be built for a capture that never starts")
+    }
+
+    private final class FactoryLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _ids: [String] = []
+        func note(_ id: String) { lock.withLock { _ids.append(id) } }
+        var ids: [String] { lock.withLock { _ids } }
+    }
+
+    func testActiveCaptureIDAndFormatLifecycle() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        XCTAssertNil(coordinator.activeCaptureID)
+        XCTAssertNil(coordinator.activeFormat)
+
+        await coordinator.record()
+        XCTAssertEqual(coordinator.activeCaptureID, kCaptureID)
+        XCTAssertEqual(coordinator.activeFormat, recorder.captureFormatDescriptor)
+
+        recorder.feed(frames: 100)
+        await coordinator.done()
+
+        // Cleared with the rest of the wiring at `captured` — an owner that needs
+        // the ID has to latch it at the preparing->recording edge.
+        XCTAssertNil(coordinator.activeCaptureID)
+        XCTAssertNil(coordinator.activeFormat)
+        XCTAssertEqual(coordinator.finalizeQueue, [kCaptureID])
+    }
+
+    /// `activeFormat` is pinned for the life of the capture: resume passes
+    /// `matching:` and the tap resamples, so a derived consumer keeps one axis.
+    func testActiveFormatIsNotResetOnResume() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        let initial = coordinator.activeFormat
+        recorder.feed(frames: 100)
+        session.emit(.routeLost)
+        await waitUntil({ coordinator.phase == .recording && recorder.startCount >= 2 },
+                        "did not auto-resume")
+        XCTAssertEqual(coordinator.activeFormat, initial)
+        XCTAssertEqual(recorder.lastMatching, initial)
     }
 }

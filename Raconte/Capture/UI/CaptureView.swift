@@ -64,7 +64,8 @@ final class CaptureScreenModel {
          makeSession: @escaping () -> AudioSessionController,
          makeRecorder: @escaping () -> EngineRecording,
          encoder: AudioEncoder,
-         startCue: (@MainActor () async -> Void)? = nil) {
+         startCue: (@MainActor () async -> Void)? = nil,
+         makeSecondarySink: SecondarySinkFactory? = nil) {
         self.capturesRoot = capturesRoot
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
         let spawn: @MainActor () -> CaptureCoordinator = {
@@ -75,7 +76,8 @@ final class CaptureScreenModel {
                 makeStore: { id, fmt in
                     SegmentStore(capturesRoot: capturesRoot, captureID: id, format: fmt)
                 },
-                startCue: startCue)
+                startCue: startCue,
+                makeSecondarySink: makeSecondarySink)
         }
         self.spawn = spawn
         self.coordinator = spawn()

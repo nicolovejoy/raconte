@@ -43,6 +43,14 @@ protocol EngineRecording: AnyObject {
 /// manifest/segments the store writes.
 typealias StoreFactory = @Sendable (_ captureID: String, _ format: AudioFormatDescriptor) -> SegmentStore
 
+/// Builds an optional second `PCMSink` branch, fanned alongside the disk branch by
+/// `TeeSink` (M2 design §4). `@MainActor` rather than `@Sendable` so the owner can
+/// retain the product — a transcription session outlives the coordinator.
+///
+/// The format is deliberately NOT a parameter: it is unknown until
+/// `recorder.start` returns. Read `CaptureCoordinator.activeFormat` instead.
+typealias SecondarySinkFactory = @MainActor (_ captureID: String) -> (any PCMSink)?
+
 @MainActor
 @Observable
 final class CaptureCoordinator {
@@ -63,6 +71,22 @@ final class CaptureCoordinator {
     /// Ordered record of effects the coordinator has dispatched — test introspection only.
     private(set) var executedEffectLog: [Effect] = []
 
+    /// The capture currently being prepared or recorded. Set as soon as `.record`
+    /// is realized — before any disk exists — and cleared by `resetCaptureWiring()`.
+    ///
+    /// It is already nil by the time a `finalizeQueue` observer runs:
+    /// `completeCapture()` enqueues and resets in one synchronous body, while the
+    /// UI's `.onChange` relay schedules a `Task`. An owner that needs the ID must
+    /// latch it at the preparing→recording edge.
+    private(set) var activeCaptureID: String?
+
+    /// Canonical PCM format of the active capture, readable once the engine has
+    /// started. Deliberately **not** re-set on resume: the resume start pins
+    /// `matching: format` and the tap resamples, so the emitted
+    /// `PCMChunk.sampleRate` is invariant for the life of the capture — which is
+    /// what lets a derived consumer keep one frame axis across an interruption.
+    private(set) var activeFormat: AudioFormatDescriptor?
+
     /// Root of the on-disk capture tree; T8/T9 use it to locate queued captures.
     let capturesRoot: URL
 
@@ -81,15 +105,22 @@ final class CaptureCoordinator {
     /// Played just before the tap opens. `nil` in tests and the UI-test harness — the
     /// settle wait would add real time to every capture for no coverage.
     private let startCue: (@MainActor () async -> Void)?
+    /// Second tee branch, built once per capture. `nil` in M1 and in tests that
+    /// only care about the disk path.
+    private let makeSecondarySink: SecondarySinkFactory?
 
     // MARK: Per-capture mutable wiring
 
     private var machineState: MachineState = .idle
-    private var pendingCaptureID: String?
-    private var currentFormat: AudioFormatDescriptor?
     private var currentRecorder: EngineRecording?
     private var currentStore: SegmentStore?
     private var currentForwarder: PCMForwarder?
+    /// Fan-out installed on the tap: disk branch first, then any injected
+    /// secondary. Always present during a capture, even with one branch, so both
+    /// `recorder.start` sites (initial + resume) hand the recorder the same
+    /// object — a conditional tee would give the resume path a different sink and
+    /// silently kill the second branch at the first interruption.
+    private var currentTee: TeeSink?
     // nonisolated(unsafe): mutated only on the main actor; `deinit` (nonisolated in
     // Swift 6) cancels them, and it runs only when no other reference survives.
     nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
@@ -110,7 +141,8 @@ final class CaptureCoordinator {
          machine: CaptureMachine = CaptureMachine(),
          flushInterval: Duration = .milliseconds(300),
          resumeBackoff: Duration = .milliseconds(500),
-         startCue: (@MainActor () async -> Void)? = nil) {
+         startCue: (@MainActor () async -> Void)? = nil,
+         makeSecondarySink: SecondarySinkFactory? = nil) {
         self.capturesRoot = capturesRoot
         self.session = session
         self.makeRecorder = makeRecorder
@@ -121,6 +153,7 @@ final class CaptureCoordinator {
         self.flushInterval = flushInterval
         self.resumeBackoff = resumeBackoff
         self.startCue = startCue
+        self.makeSecondarySink = makeSecondarySink
         subscribeToSession()
     }
 
@@ -239,7 +272,7 @@ final class CaptureCoordinator {
                          next: MachineState, effects: [Effect]) async {
         switch event {
         case .record(let id):
-            pendingCaptureID = id
+            activeCaptureID = id
             await configureAndStart(captureID: id)
 
         case .engineReady where previousPhase == .preparing:
@@ -299,10 +332,18 @@ final class CaptureCoordinator {
 
         let recorder = makeRecorder()
         let forwarder = PCMForwarder()
+        // The format isn't known yet — `captureFormatDescriptor` only reads back
+        // after `start` returns — so the factory gets the ID only and reads
+        // `activeFormat` afterwards.
+        let secondary = makeSecondarySink?(captureID)
+        let tee = TeeSink(branches: [forwarder] + (secondary.map { [$0] } ?? []))
         let level = levelBox
         do {
-            try recorder.start(sink: forwarder, matching: nil, onLevel: { level.set($0) })
+            try recorder.start(sink: tee, matching: nil, onLevel: { level.set($0) })
         } catch {
+            // NOTE: a produced secondary sink is simply dropped here and on the
+            // format-guard path below. Harmless while it's inert; once it owns an
+            // analyzer (T2) it will need an explicit abandon hook.
             session.deactivate()
             await send(.prepareFailed(.configurationFailed)); return
         }
@@ -312,12 +353,13 @@ final class CaptureCoordinator {
         }
         currentRecorder = recorder
         currentForwarder = forwarder
-        currentFormat = format
+        currentTee = tee
+        activeFormat = format
         await send(.engineReady)
     }
 
     private func beginRecording() async {
-        guard let id = pendingCaptureID, let format = currentFormat,
+        guard let id = activeCaptureID, let format = activeFormat,
               let forwarder = currentForwarder else { return }
         let store = makeStore(id, format)
         currentStore = store
@@ -359,7 +401,10 @@ final class CaptureCoordinator {
         await store(setState: .resuming)   // write-ahead (§2 row 8) before reacquiring
         do { try await session.activate() }
         catch { await send(.reacquireFailed); return }
-        guard let forwarder = currentForwarder, let format = currentFormat else {
+        // The tee, not the forwarder: the resume start must install the SAME
+        // fan-out, or every branch past the disk one dies at the first
+        // interruption while the on-disk result stays perfect.
+        guard let tee = currentTee, let format = activeFormat else {
             await send(.reacquireFailed); return
         }
         // Fresh recorder: a new AVAudioEngine binds the CURRENT default input (the old
@@ -369,7 +414,7 @@ final class CaptureCoordinator {
         currentRecorder?.stop()
         let recorder = makeRecorder()
         let level = levelBox
-        do { try recorder.start(sink: forwarder, matching: format, onLevel: { level.set($0) }) }
+        do { try recorder.start(sink: tee, matching: format, onLevel: { level.set($0) }) }
         catch { await send(.reacquireFailed); return }
         currentRecorder = recorder
         await send(.engineReady)
@@ -422,7 +467,7 @@ final class CaptureCoordinator {
     /// A capture reached `captured` (durability commit point). Hand it to the finalizer
     /// queue and tear down the live wiring.
     private func completeCapture() async {
-        if let id = pendingCaptureID { enqueueFinalize(id) }
+        if let id = activeCaptureID { enqueueFinalize(id) }
         stopRecordingClock()
         finishPump()
         resetCaptureWiring()
@@ -522,8 +567,9 @@ final class CaptureCoordinator {
         currentRecorder = nil
         currentStore = nil
         currentForwarder = nil
-        currentFormat = nil
-        pendingCaptureID = nil
+        currentTee = nil
+        activeFormat = nil
+        activeCaptureID = nil
         recordingSegmentStart = nil
     }
 

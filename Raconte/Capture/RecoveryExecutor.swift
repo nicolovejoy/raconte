@@ -145,7 +145,8 @@ struct RecoveryExecutor {
             needsAttention: existing?.needsAttention,
             lastError: existing?.lastError,
             retryCount: existing?.retryCount,
-            finalizeAttempts: existing?.finalizeAttempts)
+            finalizeAttempts: existing?.finalizeAttempts,
+            transcript: existing?.transcript)
         if let data = try? CaptureCoding.encoder().encode(manifest) {
             try? AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir), writing: data)
         }

@@ -61,9 +61,12 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
     }
 
     private func writeTranscript(id: String) throws {
-        let dir = SegmentLayout.transcriptDirectory(captureDirectory: captureDir(id))
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(#"{"text":"hello"}"#.utf8).write(to: dir.appendingPathComponent("live.jsonl"))
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(id))
+        try writer.open()
+        try writer.append(TranscriptRecord(
+            seq: 0, text: "hello", captureFrameStart: 0, captureFrameEnd: 4_800,
+            generator: "SpeechTranscriber", locale: "en_US"))
+        try writer.close()
     }
 
     private func readManifest(_ id: String) -> Manifest? {
@@ -88,13 +91,17 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
         let interruption = InterruptionLogEntry(
             kind: "phoneCall", beganAt: created.addingTimeInterval(5),
             endedAt: created.addingTimeInterval(9), resumed: true)
+        let transcript = TranscriptRef(
+            generator: "SpeechTranscriber", locale: "en_US",
+            coverageFrames: 40_000, skippedRanges: [FrameRange(start: 100, end: 200)],
+            committedRecords: 4, completedAt: nil, latestRevision: nil)
         var original = Manifest(
             captureID: "cap", schemaVersion: 1, createdAt: created,
             state: .recording, stateSeq: 7, stateUpdatedAt: created,
             format: format, segmentCount: 1, lastKnownFrameOffset: 48_000,
             interruptions: [interruption], final: FinalRef(),
             needsAttention: true, lastError: "diskFull",
-            retryCount: 3, finalizeAttempts: 2)
+            retryCount: 3, finalizeAttempts: 2, transcript: transcript)
         original.final = FinalRef(verifiedAt: nil, durationFrames: nil)
 
         try write(original, id: "cap")
@@ -115,6 +122,50 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
         XCTAssertEqual(recovered.interruptions, [interruption])
         XCTAssertEqual(recovered.captureID, "cap")
         XCTAssertGreaterThan(recovered.stateSeq, original.stateSeq)
+        XCTAssertEqual(recovered.transcript, transcript,
+                       "the transcript ref is exactly the field §3 warned would be dropped")
+    }
+
+    /// A capture killed mid-transcription: the ref survives recovery with
+    /// `completedAt == nil`, which is what marks it for a re-derive.
+    func testACaptureKilledMidTranscriptionKeepsAnIncompleteTranscriptRef() throws {
+        let created = Date(timeIntervalSince1970: 1_700_000_000)
+        let manifest = Manifest(
+            captureID: "cap", createdAt: created, state: .recording,
+            stateSeq: 2, stateUpdatedAt: created, format: format,
+            segmentCount: 1, lastKnownFrameOffset: 48_000,
+            transcript: TranscriptRef(generator: "SpeechTranscriber", locale: "en_US",
+                                      coverageFrames: 12_000, committedRecords: 2))
+        try write(manifest, id: "cap")
+        try writeSegment("cap")
+        try writeTranscript(id: "cap")
+
+        runRecovery()
+
+        let recovered = try XCTUnwrap(readManifest("cap"))
+        XCTAssertEqual(recovered.state, .captured)
+        let ref = try XCTUnwrap(recovered.transcript)
+        XCTAssertNil(ref.completedAt)
+        XCTAssertTrue(ref.needsRetranscription(against: recovered.lastKnownFrameOffset),
+                      "coverage 12000 of 48000 frames must offer a re-derive")
+        XCTAssertEqual(LiveTranscriptReader.read(captureDirectory: captureDir("cap")).count, 1,
+                       "the live log itself is untouched by recovery")
+    }
+
+    func testACompleteTranscriptDoesNotAskForRetranscription() {
+        let ref = TranscriptRef(generator: "SpeechTranscriber", locale: "en_US",
+                                coverageFrames: 48_000, skippedRanges: [],
+                                committedRecords: 9, completedAt: Date())
+        XCTAssertFalse(ref.needsRetranscription(against: 48_000))
+    }
+
+    func testASkippedRangeAlwaysAsksForRetranscription() {
+        let ref = TranscriptRef(generator: "SpeechTranscriber", locale: "en_US",
+                                coverageFrames: 48_000,
+                                skippedRanges: [FrameRange(start: 100, end: 200)],
+                                committedRecords: 9, completedAt: Date())
+        XCTAssertTrue(ref.needsRetranscription(against: 48_000),
+                      "coverage can equal the total while a gap was still never seen")
     }
 
     /// A tripwire, not a style check. `writeCapturedManifest` enumerates fields by
@@ -124,7 +175,7 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
     func testManifestFieldCountIsPinnedSoNewFieldsGetCarriedOver() {
         let manifest = Manifest(captureID: "cap", createdAt: Date(), state: .captured,
                                 stateSeq: 0, stateUpdatedAt: Date(), format: format)
-        XCTAssertEqual(Mirror(reflecting: manifest).children.count, 15,
+        XCTAssertEqual(Mirror(reflecting: manifest).children.count, 16,
                        "Manifest gained or lost a field — see RecoveryExecutor.writeCapturedManifest")
     }
 

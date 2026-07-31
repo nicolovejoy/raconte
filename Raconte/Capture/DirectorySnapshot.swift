@@ -25,6 +25,12 @@ struct CaptureSnapshot: Equatable {
     /// guard: derived text is cheap to re-derive *only while the audio survives*, so
     /// its presence is one more reason never to remove the tree.
     var transcriptPresent: Bool
+    /// Byte size of `transcript/live.jsonl`, or nil if absent. A *stat*, deliberately
+    /// — the scan must stay cheap, so it never parses the log. Whether the records
+    /// inside are complete is the reader's problem, at the point of use.
+    var liveTranscriptByteSize: Int?
+    /// Revision numbers of the `canonical-<n>.json` files present, ascending.
+    var canonicalRevisions: [Int]
     /// Resolved capture format (manifest → any sidecar → default). Carries a
     /// filled-in `bytesPerFrame` so the planner needs no format defaults.
     var format: AudioFormatDescriptor
@@ -38,6 +44,8 @@ struct CaptureSnapshot: Equatable {
          finalM4APresent: Bool = false,
          finalM4APartPresent: Bool = false,
          transcriptPresent: Bool = false,
+         liveTranscriptByteSize: Int? = nil,
+         canonicalRevisions: [Int] = [],
          format: AudioFormatDescriptor) {
         self.captureID = captureID
         self.directory = directory
@@ -48,6 +56,8 @@ struct CaptureSnapshot: Equatable {
         self.finalM4APresent = finalM4APresent
         self.finalM4APartPresent = finalM4APartPresent
         self.transcriptPresent = transcriptPresent
+        self.liveTranscriptByteSize = liveTranscriptByteSize
+        self.canonicalRevisions = canonicalRevisions.sorted()
         self.format = format
     }
 
@@ -187,10 +197,23 @@ extension DirectorySnapshot {
         let finalM4APartPresent =
             fm.fileExists(atPath: SegmentLayout.finalRecordingPartURL(captureDirectory: directory).path)
 
-        // Transcript. Empty directory doesn't count — T3 creates it before writing,
-        // and an empty one holds nothing worth protecting.
+        // Transcript. Stats only — the log is never parsed here; the scan runs at
+        // every launch over every capture and must stay cheap.
         let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: directory)
-        let transcriptPresent = ((try? fm.contentsOfDirectory(atPath: transcriptDir.path))?.isEmpty == false)
+        let transcriptNames = (try? fm.contentsOfDirectory(atPath: transcriptDir.path)) ?? []
+        let liveURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
+        let liveSize: Int? = fm.fileExists(atPath: liveURL.path) ? fileSize(liveURL) : nil
+        let canonicalRevisions = transcriptNames.compactMap(SegmentLayout.canonicalRevision(fromFileName:))
+        // Deliberately "any file at all", not "a file we can name".
+        //
+        // Issue #8's guard reads this, and §3's rule is "never delete a capture
+        // directory containing final/ or transcript/". Narrowing it to a non-empty
+        // live.jsonl or a well-formed canonical-<n>.json would silently drop
+        // protection for a `canonical-3.json.part` — precisely what AtomicFile.replace
+        // leaves behind on a crash, and precisely what T6 will be writing. A tree we
+        // cannot interpret is the *most* dangerous one to delete, not the least.
+        // An empty directory holds nothing, so it must not keep junk alive forever.
+        let transcriptPresent = !transcriptNames.isEmpty
 
         // Format resolution: manifest → sidecar → default; always bytesPerFrame-filled.
         let resolved = manifest?.format ?? sidecarFormat ?? defaultFormat
@@ -203,6 +226,8 @@ extension DirectorySnapshot {
             segments: segments,
             finalM4APresent: finalM4APresent, finalM4APartPresent: finalM4APartPresent,
             transcriptPresent: transcriptPresent,
+            liveTranscriptByteSize: liveSize,
+            canonicalRevisions: canonicalRevisions,
             format: format)
     }
 

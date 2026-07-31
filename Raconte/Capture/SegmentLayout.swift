@@ -8,6 +8,8 @@ enum SegmentLayout {
     static let segmentsDirName = "segments"
     static let finalDirName = "final"
     static let transcriptDirName = "transcript"
+    static let liveTranscriptFileName = "live.jsonl"
+    static let canonicalTranscriptPrefix = "canonical-"
     static let finalRecordingName = "recording.m4a"
     static let partExtension = "part"
     static let pcmExtension = "pcm"
@@ -93,6 +95,35 @@ enum SegmentLayout {
         captureDirectory.appendingPathComponent(transcriptDirName, isDirectory: true)
     }
 
+    /// The live pass's append-only log. One JSON object per line, committed results
+    /// only. No `.part` sibling: there is no rewrite, so there is nothing to stage.
+    static func liveTranscriptURL(captureDirectory: URL) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent(liveTranscriptFileName)
+    }
+
+    /// `canonical-<n>.json`. Revisions are addressable and never rewritten — a
+    /// retranscription writes `n+1` rather than replacing `n`, so a user edit in an
+    /// earlier revision is always still on disk.
+    static func canonicalTranscriptURL(captureDirectory: URL, revision: Int) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent("\(canonicalTranscriptPrefix)\(revision).json")
+    }
+
+    /// Inverse of `canonicalTranscriptURL`'s file name, for the recovery scan.
+    static func canonicalRevision(fromFileName fileName: String) -> Int? {
+        guard fileName.hasPrefix(canonicalTranscriptPrefix), fileName.hasSuffix(".json") else {
+            return nil
+        }
+        let digits = fileName.dropFirst(canonicalTranscriptPrefix.count).dropLast(5)
+        guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return nil }
+        // Reject leading zeros: `canonical-007.json` and `canonical-7.json` are
+        // different files, and mapping both to revision 7 would alias two revisions
+        // into one in a scheme whose whole point is that revisions are addressable.
+        guard digits == "0" || !digits.hasPrefix("0") else { return nil }
+        return Int(digits)
+    }
+
     static func pcmURL(segmentsDirectory: URL, index: Int) -> URL {
         segmentsDirectory.appendingPathComponent(pcmFileName(index: index))
     }
@@ -157,6 +188,17 @@ enum CaptureCoding {
             var container = enc.singleValueContainer()
             try container.encode(iso8601Formatter().string(from: date))
         }
+        return encoder
+    }
+
+    /// Same dates and key ordering as `encoder()`, minus `.prettyPrinted`. JSONL
+    /// requires one record per line, and the manifest/sidecar encoder emits multi-line
+    /// JSON — a pretty-printed record would make the reader's line split tear every
+    /// record in half. `LiveTranscriptWriter` asserts single-line output, which is how
+    /// this was caught rather than shipped.
+    static func lineEncoder() -> JSONEncoder {
+        let encoder = encoder()
+        encoder.outputFormatting = [.sortedKeys]
         return encoder
     }
 

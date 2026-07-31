@@ -46,6 +46,52 @@ struct FinalRef: Codable, Sendable, Equatable {
     }
 }
 
+/// Pointer to a capture's transcript, written after the transcription branch drains
+/// (design §3).
+///
+/// `coverageFrames` + `skippedRanges` measured against `Manifest.lastKnownFrameOffset`
+/// is the honest completeness signal, and what triggers a retranscription offer. It
+/// cannot be written at `captured`: the pump's ordered barrier covers the disk branch
+/// only (§2), so at that moment the transcriber's ingest count is still moving.
+struct TranscriptRef: Codable, Sendable, Equatable {
+    /// "SpeechTranscriber" | "DictationTranscriber".
+    var generator: String
+    var locale: String
+    /// Capture frames actually ingested by the transcriber.
+    var coverageFrames: Int64
+    /// Drops and suspensions, in capture frames.
+    var skippedRanges: [FrameRange]
+    var committedRecords: Int
+    /// nil while live, and nil forever if the session was abandoned.
+    var completedAt: Date?
+    var latestRevision: Int?
+
+    init(generator: String,
+         locale: String,
+         coverageFrames: Int64 = 0,
+         skippedRanges: [FrameRange] = [],
+         committedRecords: Int = 0,
+         completedAt: Date? = nil,
+         latestRevision: Int? = nil) {
+        self.generator = generator
+        self.locale = locale
+        self.coverageFrames = coverageFrames
+        self.skippedRanges = skippedRanges
+        self.committedRecords = committedRecords
+        self.completedAt = completedAt
+        self.latestRevision = latestRevision
+    }
+
+    /// True when the live pass did not see the whole capture — dropped chunks, a
+    /// background suspension, or a session that died partway. The audio is unaffected;
+    /// this is the flag that offers a re-derive from `final/recording.m4a`.
+    func needsRetranscription(against totalFrames: Int) -> Bool {
+        if completedAt == nil { return true }
+        if !skippedRanges.isEmpty { return true }
+        return coverageFrames < Int64(totalFrames)
+    }
+}
+
 /// Capture-level journal and single source of truth for identity + state
 /// (design §1/§2). Written atomically on every state transition and on
 /// segment rotation. Advisory for segment *content* (the segments directory
@@ -76,6 +122,10 @@ struct Manifest: Codable, Sendable, Equatable {
     var retryCount: Int?
     /// Finalize encode/verify attempts so far (rows 17/18).
     var finalizeAttempts: Int?
+    /// The capture's transcript, once one exists (M2 §3). Optional, and deliberately
+    /// **without** a `schemaVersion` bump: v1 manifests decode under M2 code and vice
+    /// versa, so there is nothing to migrate. Bump when there is.
+    var transcript: TranscriptRef?
 
     static let currentSchemaVersion = 1
 
@@ -93,7 +143,8 @@ struct Manifest: Codable, Sendable, Equatable {
          needsAttention: Bool? = nil,
          lastError: String? = nil,
          retryCount: Int? = nil,
-         finalizeAttempts: Int? = nil) {
+         finalizeAttempts: Int? = nil,
+         transcript: TranscriptRef? = nil) {
         self.captureID = captureID
         self.schemaVersion = schemaVersion
         self.createdAt = createdAt
@@ -109,5 +160,6 @@ struct Manifest: Codable, Sendable, Equatable {
         self.lastError = lastError
         self.retryCount = retryCount
         self.finalizeAttempts = finalizeAttempts
+        self.transcript = transcript
     }
 }

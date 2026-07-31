@@ -17,8 +17,26 @@ Landed overnight (all pushed to main):
   automation-mode permission → deliberately simulator-only.
 
 Run log: `docs/m1-smoke-log.md` (next manual run: 10). Owner-accepted caveat: small
-audible hiccup at backgrounding edges (issue #2). Open issues: #1 background-recording
-awareness (M2 design input), #2 gap-honest capture (low), #5 (verify), #6 scrubbing.
+audible hiccup at backgrounding edges (issue #2).
+
+## M2 design landed 2026-07-30
+
+`docs/plans/2026-07-30-m2-transcription-design.md` — live transcript via
+SpeechAnalyzer/SpeechTranscriber. Written from SDK recon against Xcode 26.6, a map of the
+M1 sources, and issue #1; then reviewed by adversarial subagents against both the SDK and
+the code, which broke two rev-1 decisions (rewritten in rev 2) and surfaced three live M1
+bugs, now filed.
+
+Governing rule: transcription is derived and may fail at any moment. It never sends events
+into `CaptureMachine` (M2 doesn't touch it), it's a second consumer of the same PCM chunks,
+and retranscription from `final/recording.m4a` — not the live pass — is the correctness
+guarantee. Transcript time = capture-frame time = position in the m4a, so live and
+re-derived results are directly comparable.
+
+Open issues: #1 background awareness (folded into M2 T8), #2 gap-honest capture (low, now
+explicitly *not* an M2 blocker), #5 (verify on device), #6 scrubbing, **#7** recovery drops
+manifest fields, **#8** corrupt manifest deletes a finalized m4a (blocks M2 T3), **#9**
+interruption `endedAt` never written.
 
 **Next (owner + next session):**
 1. Verify issue #5 on the mini (doc test 31): record on one mic → switch input in
@@ -26,8 +44,9 @@ awareness (M2 design input), #2 gap-honest capture (low), #5 (verify), #6 scrubb
 2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. Then Milestone 2: live transcript (SpeechTranscriber) — design pass first, same
-   subagent pipeline; fold issue #1 (background awareness) into that design.
+3. Start M2 implementation at T1 (§9 of the design doc). T1–T3 are pure-core and CI-testable;
+   T2.5 fixes #8 and #7 before anything writes into the capture tree. T4 is the first task
+   needing the mini or the iPhone.
 4. Apple Developer Program enrollment ("soon" per owner) — gates TestFlight/CloudKit (M4),
    not device dev builds (personal team 8UK463WB83 already signs).
 

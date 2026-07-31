@@ -21,6 +21,10 @@ struct CaptureSnapshot: Equatable {
     var finalM4APresent: Bool
     /// `final/recording.m4a.part` present (interrupted finalize).
     var finalM4APartPresent: Bool
+    /// `transcript/` present and non-empty (M2 T3 onward). Part of the issue #8
+    /// guard: derived text is cheap to re-derive *only while the audio survives*, so
+    /// its presence is one more reason never to remove the tree.
+    var transcriptPresent: Bool
     /// Resolved capture format (manifest → any sidecar → default). Carries a
     /// filled-in `bytesPerFrame` so the planner needs no format defaults.
     var format: AudioFormatDescriptor
@@ -33,6 +37,7 @@ struct CaptureSnapshot: Equatable {
          segments: [SegmentFileStat],
          finalM4APresent: Bool = false,
          finalM4APartPresent: Bool = false,
+         transcriptPresent: Bool = false,
          format: AudioFormatDescriptor) {
         self.captureID = captureID
         self.directory = directory
@@ -42,7 +47,19 @@ struct CaptureSnapshot: Equatable {
         self.segments = segments.sorted { $0.index < $1.index }
         self.finalM4APresent = finalM4APresent
         self.finalM4APartPresent = finalM4APartPresent
+        self.transcriptPresent = transcriptPresent
         self.format = format
+    }
+
+    /// True when the tree holds something that cannot be rebuilt from what remains.
+    ///
+    /// Issue #8: `state == nil` covers a manifest that is *corrupt*, not just absent,
+    /// and a finalized capture has no `segments/` left (the finalizer removes them),
+    /// so `hasData` is false forever. Without this guard a single flipped byte in the
+    /// manifest of a finished recording routes it to `.deleteCaptureDirectory` and
+    /// destroys `final/recording.m4a` — the one file M1 promises is indestructible.
+    var holdsIrreplaceableArtifacts: Bool {
+        finalM4APresent || finalM4APartPresent || transcriptPresent
     }
 }
 
@@ -170,6 +187,11 @@ extension DirectorySnapshot {
         let finalM4APartPresent =
             fm.fileExists(atPath: SegmentLayout.finalRecordingPartURL(captureDirectory: directory).path)
 
+        // Transcript. Empty directory doesn't count — T3 creates it before writing,
+        // and an empty one holds nothing worth protecting.
+        let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: directory)
+        let transcriptPresent = ((try? fm.contentsOfDirectory(atPath: transcriptDir.path))?.isEmpty == false)
+
         // Format resolution: manifest → sidecar → default; always bytesPerFrame-filled.
         let resolved = manifest?.format ?? sidecarFormat ?? defaultFormat
         let format = normalizingBytesPerFrame(resolved)
@@ -180,6 +202,7 @@ extension DirectorySnapshot {
             strayManifestPart: strayManifestPart,
             segments: segments,
             finalM4APresent: finalM4APresent, finalM4APartPresent: finalM4APartPresent,
+            transcriptPresent: transcriptPresent,
             format: format)
     }
 

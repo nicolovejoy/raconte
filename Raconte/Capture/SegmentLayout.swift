@@ -7,6 +7,7 @@ enum SegmentLayout {
     static let manifestFileName = "manifest.json"
     static let segmentsDirName = "segments"
     static let finalDirName = "final"
+    static let transcriptDirName = "transcript"
     static let finalRecordingName = "recording.m4a"
     static let partExtension = "part"
     static let pcmExtension = "pcm"
@@ -82,6 +83,14 @@ enum SegmentLayout {
 
     static func finalRecordingPartURL(captureDirectory: URL) -> URL {
         partURL(for: finalRecordingURL(captureDirectory: captureDirectory))
+    }
+
+    /// Where M2 T3 writes `live.jsonl` and the canonical transcript. Declared here
+    /// ahead of T3 because issue #8's guard has to know the directory exists as a
+    /// concept before anything writes into it — a delete rule added *after* the
+    /// writer is a delete rule that shipped one release too late.
+    static func transcriptDirectory(captureDirectory: URL) -> URL {
+        captureDirectory.appendingPathComponent(transcriptDirName, isDirectory: true)
     }
 
     static func pcmURL(segmentsDirectory: URL, index: Int) -> URL {

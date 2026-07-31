@@ -65,6 +65,10 @@ final class CaptureCoordinator {
     private(set) var canResume = false
     /// Captures rescued at launch → "Recovered recording: MM:SS" banner (design §3).
     private(set) var recoveredRecordings: [RecoveredRecording] = []
+    /// Captures recovery refused to delete because they hold a finalized `.m4a` or a
+    /// transcript without a coherent manifest (issue #8). Published so the owner can
+    /// be told they exist; no UI consumes it yet, and nothing on disk was touched.
+    private(set) var quarantinedCaptureIDs: [String] = []
     /// Minimal finalize hand-off surface (T8 consumes): capture IDs whose raw audio is
     /// complete on disk and awaits AAC-LC encoding/verification. `capturesRoot` locates them.
     private(set) var finalizeQueue: [String] = []
@@ -182,6 +186,7 @@ final class CaptureCoordinator {
         recoveredRecordings = outcome.recoveredCaptureIDs.map {
             RecoveredRecording(captureID: $0, durationSeconds: durations[$0] ?? 0)
         }
+        quarantinedCaptureIDs = outcome.quarantinedCaptureIDs
         for id in outcome.finalizeQueue + outcome.verifyQueue { enqueueFinalize(id) }
     }
 

@@ -34,9 +34,9 @@ guarantee. Transcript time = capture-frame time = position in the m4a, so live a
 re-derived results are directly comparable.
 
 Open issues: #1 background awareness (folded into M2 T8), #2 gap-honest capture (low, now
-explicitly *not* an M2 blocker), **#7** recovery drops manifest fields, **#8** corrupt
-manifest deletes a finalized m4a (blocks M2 T3), **#9** interruption `endedAt` never
-written. #5 verified fixed on the mini (smoke run 10). #6 scrubbing implemented — see below.
+explicitly *not* an M2 blocker), **#9** interruption `endedAt` never written (folded into
+M2 T8). Closed: #5 route loss (smoke run 10), #6 scrubbing (smoke run 11), #7 and #8 both
+fixed in M2 T2.5 — so nothing blocks T3.
 
 ## Landed 2026-07-30 (execution session)
 
@@ -80,16 +80,13 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
   carried over. 238 unit tests + 5 UI tests green.
 
 **Next (owner + next session):**
-1. Manual: new smoke test 25 — scrub a *recovered* (un-finalized) recording on device, then
-   close issue #6. The finalized-m4a scrub is already covered by
-   `CaptureUITests.testScrubbingAFinishedEntryMovesThePosition`.
+1. M2 T3 — `live.jsonl` writer/reader, `TranscriptRef` on the manifest, recovery-planner
+   cases. Unblocked: T2.5 fixed #7 and #8. T4 is the first task needing the mini or the
+   iPhone. (T2 and T2.5 both landed 2026-07-31.)
 2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. M2 T3 — `live.jsonl` writer/reader, `TranscriptRef` on the manifest, recovery-planner
-   cases. T4 is the first task needing the mini or the iPhone.
-   (T2 and T2.5 both landed 2026-07-31.)
-4. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
+3. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI

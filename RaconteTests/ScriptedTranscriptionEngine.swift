@@ -32,8 +32,16 @@ final class ScriptedTranscriptionEngine: TranscriptionEngine, @unchecked Sendabl
     /// What `prepare` reports as the analyzer's preferred format.
     var analysisFormat = AudioFormatDescriptor(
         sampleRate: 16_000, channels: 1, commonFormat: .pcmFormatFloat32, interleaved: false)
-    /// Makes `finalizeAndFinish` outlast the session's bound. Cancellable, so the
-    /// session's race can actually reclaim it.
+    /// Makes `finalizeAndFinish` outlast the session's bound, *without* observing
+    /// cancellation — a blocking sleep on a detached thread, not `Task.sleep`.
+    ///
+    /// This is the whole point. An earlier version used `Task.sleep`, which unwinds on
+    /// cancellation, so the test only ever proved the bound held for a stall that
+    /// voluntarily gave up — the case that never needed a bound. It made a real
+    /// defect invisible: the session raced inside a `withTaskGroup`, which awaits every
+    /// child before returning, so against a genuinely uncancellable finalize the bound
+    /// was ignored entirely (measured 5.2 s against a 100 ms bound). `SpeechAnalyzer`'s
+    /// ObjC-backed finalize is exactly that kind of call.
     var finalizeStall: Duration?
 
     init() {
@@ -88,7 +96,13 @@ final class ScriptedTranscriptionEngine: TranscriptionEngine, @unchecked Sendabl
             if !_sawFinishInput { _finalizeBeforeFinishInput = true }
         }
         if let finalizeStall {
-            try await Task.sleep(for: finalizeStall)
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().async {
+                    Thread.sleep(forTimeInterval: Double(finalizeStall.components.seconds)
+                                 + Double(finalizeStall.components.attoseconds) / 1e18)
+                    c.resume()
+                }
+            }
         }
         continuation.finish()
     }

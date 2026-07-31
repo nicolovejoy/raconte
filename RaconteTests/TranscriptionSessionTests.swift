@@ -136,16 +136,40 @@ final class TranscriptionSessionTests: XCTestCase {
         await session.ingest(stamped(at: 4_800))
         await session.ingest(stamped(at: 96_000))     // after a gap
 
-        let times = engine.bufferStartTimes
-        XCTAssertEqual(times.count, 3)
+        let times = engine.bufferStartTimes.map { CMTimeGetSeconds($0) }
+        // Four buffers, not three: closing a run flushes the converter's delay line,
+        // which carries real audio the old code dropped on the floor at every
+        // discontinuity. The flush lands between the last in-run chunk and the gap.
+        XCTAssertEqual(times.count, 4)
 
-        func seconds(_ t: CMTime) -> Double { CMTimeGetSeconds(t) }
-        XCTAssertEqual(seconds(times[0]), 0.0, accuracy: 0.0001)
-        XCTAssertEqual(seconds(times[1]), 0.1, accuracy: 0.0001,
+        XCTAssertEqual(times[0], 0.0, accuracy: 0.0001)
+        XCTAssertEqual(times[1], 0.1, accuracy: 0.0001,
                        "exact, because the stamp comes off the capture axis rather than "
                        + "off an accumulator over emitted frames")
-        XCTAssertEqual(seconds(times[2]), 2.0, accuracy: 0.0001,
+        XCTAssertGreaterThan(times[2], times[1])
+        XCTAssertLessThan(times[2], 0.2, "the flushed tail belongs to the run it closed")
+        XCTAssertEqual(times[3], 2.0, accuracy: 0.0001,
                        "the post-gap stamp must jump to the true capture offset, not resume at 0.2s")
+        XCTAssertEqual(times, times.sorted(), "SpeechAnalyzer rejects disordered input")
+    }
+
+    /// The delay line holds real audio. Dropping the converter without draining it lost
+    /// those frames at every drop, suspension and resume — unrecorded, so the timeline
+    /// compressed silently. That is exactly the failure class §2 exists to prevent.
+    func testClosingARunFlushesTheConvertersDelayLine() async {
+        let engine = ScriptedTranscriptionEngine()
+        let session = makeSession(engine)
+        await session.start()
+
+        await session.ingest(stamped(at: 0))
+        let beforeGap = engine.inputs.map { Int($0.buffer.frameLength) }.reduce(0, +)
+        await session.ingest(stamped(at: 96_000))          // discontinuity closes run 1
+        let afterFlush = engine.inputs.map { Int($0.buffer.frameLength) }.reduce(0, +)
+
+        let ideal = Int(Self.chunkFrames) / 3              // 48 kHz -> 16 kHz
+        XCTAssertLessThan(beforeGap, ideal, "the converter withholds part of the first chunk")
+        XCTAssertGreaterThan(afterFlush - beforeGap, ideal,
+                             "closing the run must emit the withheld frames plus the new chunk")
     }
 
     /// Design §10.6, measured — and the reason `bufferStartTime(at:)` departs from
@@ -216,7 +240,7 @@ final class TranscriptionSessionTests: XCTestCase {
 
     func testAStalledFinalizeFallsThroughToAbandonWithinTheBound() async {
         let engine = ScriptedTranscriptionEngine()
-        engine.finalizeStall = .seconds(30)
+        engine.finalizeStall = .seconds(30)   // uncancellable — see the fake's note
         let session = makeSession(engine, bound: .milliseconds(100))
         await session.start()
         await session.ingest(stamped(at: 0))
@@ -227,7 +251,9 @@ final class TranscriptionSessionTests: XCTestCase {
 
         XCTAssertTrue(engine.calls.contains(.abandon),
                       "past the bound the only correct call is cancelAndFinishNow()")
-        XCTAssertLessThan(elapsed, .seconds(5), "the bound must actually bound")
+        XCTAssertLessThan(elapsed, .seconds(2),
+                          "the bound must hold against a finalize that ignores "
+                          + "cancellation — a task group would have waited the full 30s")
         let state = await session.state
         XCTAssertEqual(state, .done)
     }

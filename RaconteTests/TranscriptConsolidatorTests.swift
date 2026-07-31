@@ -91,6 +91,35 @@ final class TranscriptConsolidatorTests: XCTestCase {
         XCTAssertEqual(c.displayText, "hello")
     }
 
+    // MARK: Regressions found in review
+
+    /// A zero-length final range overlaps nothing under a strict comparison, so it
+    /// used to supersede nothing — leaving the hypothesis it was meant to promote on
+    /// screen forever.
+    func testAZeroLengthFinalStillSupersedesTheVolatileItLandsIn() {
+        var c = TranscriptConsolidator()
+        c.apply(result("guess", 0, 200, volatile: true))
+        c.apply(result("actual", 100, 100))
+        XCTAssertTrue(c.provisional.isEmpty, "the stale hypothesis must not survive")
+        XCTAssertEqual(c.committedText, "actual")
+    }
+
+    func testAZeroLengthEmptyVolatileRevokesTheRangeItSitsIn() {
+        var c = TranscriptConsolidator()
+        c.apply(result("guess", 0, 200, volatile: true))
+        c.apply(result("", 50, 50, volatile: true))
+        XCTAssertEqual(c.displayText, "")
+    }
+
+    /// A provisional result whose range precedes committed text must render before it,
+    /// not after — concatenating the two lists put it in the wrong place.
+    func testDisplayTextIsOrderedByFrameNotByCommittedFirst() {
+        var c = TranscriptConsolidator()
+        c.apply(result("later", 1_000, 2_000))
+        c.apply(result("earlier", 0, 500, volatile: true))
+        XCTAssertEqual(c.displayText, "earlier later")
+    }
+
     func testFrameRangeOverlap() {
         XCTAssertTrue(FrameRange(start: 0, end: 100).overlaps(FrameRange(start: 50, end: 150)))
         XCTAssertFalse(FrameRange(start: 0, end: 100).overlaps(FrameRange(start: 100, end: 200)))

@@ -3,6 +3,27 @@ import AVFoundation
 import CoreMedia
 import Speech
 
+/// Resolves a two-way race exactly once, so the loser can be abandoned rather than
+/// awaited. `NSLock` rather than an actor: the whole point is that resolving must not
+/// suspend, since one caller is a timer that has to win against a task that may never
+/// return.
+private final class RaceResolver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resolve(_ value: Bool) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+    }
+}
+
 /// Why transcription could not run at all — distinct from a mid-run failure, and
 /// distinct from "no words yet". Surfaced to the UI as an explanation, never as an
 /// error the user must dismiss.
@@ -83,6 +104,9 @@ actor TranscriptionSession {
 
     private(set) var runCount = 0
     private var skipped: [FrameRange] = []
+    /// Set the moment a stop is asked for, so `start()` can bail at either of its
+    /// suspension points instead of resuming into `.running` after the capture ended.
+    private var stopRequested = false
 
     init(engine: any TranscriptionEngine,
          inputFormat: AudioFormatDescriptor,
@@ -128,6 +152,7 @@ actor TranscriptionSession {
             state = .failed(TranscriptionFailure(error))
             return
         }
+        if await bailIfStopRequested() { return }
 
         guard let analysisAV = analysis.avAudioFormat else {
             state = .unavailable(.noAnalysisFormat)
@@ -141,9 +166,26 @@ actor TranscriptionSession {
             state = .failed(TranscriptionFailure(error))
             return
         }
+        if await bailIfStopRequested() { return }
 
         drainResults()
         state = .running
+    }
+
+    /// `start()` suspends twice — `prepare` and `start` — and an actor releases its
+    /// isolation across every `await`. A `finish()` arriving in either window used to
+    /// set `.done` and return, after which `start()` resumed and set `.running`,
+    /// leaving the analyzer live and draining forever after the capture had ended.
+    ///
+    /// Model asset installation makes that window seconds long on first run, so
+    /// "user taps Record then Done quickly" reaches it.
+    private func bailIfStopRequested() async -> Bool {
+        guard stopRequested else { return false }
+        await engine.abandon()
+        resultsTask?.cancel()
+        resultsTask = nil
+        state = .done
+        return true
     }
 
     /// Consume a `BoundedPCMSink` stream to completion, then shut down. The stream
@@ -164,17 +206,39 @@ actor TranscriptionSession {
         guard case .running = state, let inputAV, let analysisAV else { return }
 
         if expectedNextFrame != stamped.startFrame {
+            await flushCurrentRun()
             if let expected = expectedNextFrame, stamped.startFrame > expected {
                 recordSkip(FrameRange(start: expected, end: stamped.startFrame))
             }
             openRun(from: inputAV, to: analysisAV)
         }
-        expectedNextFrame = stamped.startFrame + Int64(stamped.chunk.frameCount)
+        // `max` because a *backwards* startFrame must not rewind the cursor: doing so
+        // made every subsequent contiguous chunk look like a discontinuity, re-priming
+        // a converter per chunk for the rest of the capture.
+        expectedNextFrame = max(expectedNextFrame ?? 0,
+                                stamped.startFrame + Int64(stamped.chunk.frameCount))
 
+        // A chunk the transcriber could not use is a *gap*, not a no-op. Returning
+        // silently here made `skippedRanges` claim full coverage while the analyzer
+        // saw nothing — and T3 persists that claim as the re-derive hint, so the one
+        // signal telling the owner their transcript is incomplete would say the
+        // opposite. Worst case is total: `AVAudioConverter(from:to:)` returning nil
+        // sends every chunk down this path.
+        guard stamped.chunk.sampleRate == inputAV.sampleRate else {
+            // Resume pins the canonical format, so this is unreachable unless that
+            // pinning regresses. Recording it beats stamping every later timestamp
+            // wrong by a constant ratio with no trace.
+            recordSkip(stamped.frameRange)
+            return
+        }
         guard let converter,
               let input = Self.buffer(from: stamped.chunk, format: inputAV),
-              let output = Self.convert(input, using: converter, to: analysisAV)
-        else { return }
+              let output = Self.convert(input, using: converter, to: analysisAV),
+              output.frameLength > 0
+        else {
+            recordSkip(stamped.frameRange)
+            return
+        }
 
         // `AnalyzerInput` is `@unchecked Sendable` and the analyzer holds the buffer
         // past this call, so `output` MUST be freshly allocated. The disk path's
@@ -189,13 +253,17 @@ actor TranscriptionSession {
     /// terminate, so finalizing first hangs until the bound expires — on every single
     /// capture.
     func finish() async {
+        stopRequested = true
         guard case .running = state else {
-            // Nothing was ever started, or we already died. Still terminal.
+            // Mid-`start()`, never started, or already dead. `bailIfStopRequested`
+            // handles the first; the rest are terminal by definition.
+            if case .preparing = state { return }
             if !state.isTerminal { state = .done }
             return
         }
         state = .finishing
 
+        await flushCurrentRun()
         await engine.finishInput()
 
         if await finalizedWithinBound() == false {
@@ -204,6 +272,12 @@ actor TranscriptionSession {
             await engine.abandon()
         }
 
+        // Drain before cancelling. `finalizeAndFinish()` exists precisely to flush the
+        // analyzer's tail into the results stream; cancelling the drain task the
+        // instant it returns threw away the words it had just been asked to produce.
+        // Both paths finish the results continuation, so the task ends on its own —
+        // the bound is only here so a stuck engine can't hold the session open.
+        await drainedWithinBound()
         resultsTask?.cancel()
         resultsTask = nil
         if !state.isTerminal { state = .done }
@@ -211,6 +285,7 @@ actor TranscriptionSession {
 
     /// Abort without finalizing. Always safe, at any point.
     func abandon() async {
+        stopRequested = true
         await engine.abandon()
         resultsTask?.cancel()
         resultsTask = nil
@@ -226,6 +301,31 @@ actor TranscriptionSession {
     /// emitted frames, is contiguous by construction and therefore cannot express a
     /// gap: every timestamp after a drop would be early by exactly the omitted
     /// duration, compressing the transcript against the audio.
+    /// Flush the outgoing converter's delay line before dropping it.
+    ///
+    /// The resampler holds real audio back — measured at ~235 output frames — and the
+    /// old `openRun` simply replaced the converter, so those frames reached neither the
+    /// analyzer nor `skippedRanges`. That is silent timeline compression at every drop,
+    /// suspension and resume: precisely the class of loss §2 exists to prevent, and
+    /// invisible because the totals only reconcile within one uninterrupted run.
+    private func flushCurrentRun() async {
+        guard let converter, let analysisAV, let inputAV, let lastFrame = expectedNextFrame else { return }
+        var error: NSError?
+        let capacity = AVAudioFrameCount(analysisAV.sampleRate) // 1 s of slack, ample
+        guard let tail = AVAudioPCMBuffer(pcmFormat: analysisAV, frameCapacity: capacity) else { return }
+        let status = converter.convert(to: tail, error: &error) { _, outStatus in
+            outStatus.pointee = .endOfStream
+            return nil
+        }
+        guard status != .error, tail.frameLength > 0 else { return }
+
+        // Stamp the tail just behind the run's end: it *is* the audio immediately
+        // preceding `lastFrame`, held back by the filter.
+        let tailFrames = Int64(Double(tail.frameLength) * inputAV.sampleRate / analysisAV.sampleRate)
+        await engine.ingest(AnalyzerInput(buffer: tail,
+                                          bufferStartTime: bufferStartTime(at: max(0, lastFrame - tailFrames))))
+    }
+
     private func openRun(from input: AVAudioFormat, to analysis: AVAudioFormat) {
         let converter = AVAudioConverter(from: input, to: analysis)
         // Measured (design §10.6): with the default `.normal` priming, 6 × 4800 input
@@ -306,44 +406,73 @@ actor TranscriptionSession {
 
     /// True if finalize completed inside the bound.
     ///
-    /// The loser is cancelled rather than awaited — a task group would otherwise wait
-    /// for the hung child on scope exit and the bound would be decorative. Cancelling
-    /// only helps if finalize observes cancellation; when it does not, `abandon()` →
-    /// `cancelAndFinishNow()` is what actually unsticks the analyzer, which is why the
-    /// caller issues it unconditionally on the false branch.
+    /// **The loser is abandoned, not awaited.** An earlier version raced the two inside
+    /// a `withTaskGroup`, which is wrong in exactly the case the bound exists for: a
+    /// task group implicitly awaits *every* child before returning, and `await
+    /// task.value` is not interrupted by cancellation. So against a finalize that does
+    /// not observe cancellation — which `SpeechAnalyzer`'s ObjC-backed
+    /// `finalizeAndFinishThroughEndOfInput()` is exactly the kind of call to be — the
+    /// bound was decorative and the wait ran to completion anyway. Measured at 5.2 s
+    /// against a 100 ms bound before this rewrite.
+    ///
+    /// Here the finalize task is unstructured and simply left running when the timer
+    /// wins; `abandon()` → `cancelAndFinishNow()` is what actually unsticks it, which
+    /// is why the caller issues that unconditionally on the false branch.
     private func finalizedWithinBound() async -> Bool {
         let engine = self.engine
-        let work = Task { () -> Bool in
-            do { try await engine.finalizeAndFinish(); return true } catch { return false }
-        }
-        return await withTaskGroup(of: Bool?.self) { group in
-            group.addTask {
-                await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        return await withCheckedContinuation { continuation in
+            let race = RaceResolver(continuation)
+            Task {
+                do { try await engine.finalizeAndFinish(); race.resolve(true) }
+                catch { race.resolve(false) }
             }
-            group.addTask { [finalizeBound] in
+            Task { [finalizeBound] in
                 try? await Task.sleep(for: finalizeBound)
-                return nil
+                race.resolve(false)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? false
+        }
+    }
+
+    /// Wait for the results task to end naturally, bounded the same way.
+    private func drainedWithinBound() async {
+        guard let resultsTask else { return }
+        _ = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let race = RaceResolver(continuation)
+            Task {
+                await resultsTask.value
+                race.resolve(true)
+            }
+            Task { [finalizeBound] in
+                try? await Task.sleep(for: finalizeBound)
+                race.resolve(false)
+            }
         }
     }
 
     // MARK: Buffers
 
     /// A **fresh** buffer per chunk. See the `AnalyzerInput` trap above.
+    ///
+    /// `frameLength` is set from what was actually copied, not from the chunk's claim.
+    /// Setting it first and then under-copying handed `AVAudioPCMBuffer`'s uninitialized
+    /// tail to the analyzer as if it were audio.
     private static func buffer(from chunk: PCMChunk, format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        guard chunk.frameCount > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk.frameCount),
+        let available = AVAudioFrameCount(chunk.data.count / MemoryLayout<Float>.size)
+        let frames = min(chunk.frameCount, available)
+        guard frames > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
               let channel = buffer.floatChannelData?[0]
         else { return nil }
-        buffer.frameLength = chunk.frameCount
-        let wanted = Int(chunk.frameCount)
-        chunk.data.withUnsafeBytes { raw in
-            let source = raw.bindMemory(to: Float.self)
-            channel.update(from: source.baseAddress!, count: min(wanted, source.count))
+
+        let copied: Bool = chunk.data.withUnsafeBytes { raw in
+            // No force-unwrap: a non-empty `Data` can still vend a nil base address,
+            // and trapping here would kill the app from the derived path.
+            guard let base = raw.bindMemory(to: Float.self).baseAddress else { return false }
+            channel.update(from: base, count: Int(frames))
+            return true
         }
+        guard copied else { return nil }
+        buffer.frameLength = frames
         return buffer
     }
 

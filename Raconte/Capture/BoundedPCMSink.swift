@@ -6,6 +6,12 @@ import Foundation
 struct StampedChunk: Sendable, Equatable {
     let chunk: PCMChunk
     let startFrame: Int64
+
+    /// The span this chunk occupies on the capture-frame axis — what a consumer
+    /// records when it cannot use the chunk, so a gap stays expressible.
+    var frameRange: FrameRange {
+        FrameRange(start: startFrame, end: startFrame + Int64(chunk.frameCount))
+    }
 }
 
 /// A bounded second branch off `TeeSink` for a derived consumer (M2: the live

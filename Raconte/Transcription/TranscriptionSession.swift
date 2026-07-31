@@ -121,6 +121,16 @@ actor TranscriptionSession {
     /// §0's rule is that transcription may fail at any moment without touching capture.
     private var loggingBroken = false
 
+    #if DEBUG
+    /// Writes exactly what the analyzer is fed, for diagnosing "it transcribes gibberish".
+    /// Enabled with `RACONTE_DUMP_ANALYSIS_AUDIO=1`; off in every normal run.
+    private lazy var analysisTap: AnalysisAudioTap? = {
+        guard ProcessInfo.processInfo.environment["RACONTE_DUMP_ANALYSIS_AUDIO"] == "1",
+              let captureDirectory else { return nil }
+        return AnalysisAudioTap(directory: captureDirectory)
+    }()
+    #endif
+
     init(engine: any TranscriptionEngine,
          inputFormat: AudioFormatDescriptor,
          captureDirectory: URL? = nil,
@@ -269,6 +279,10 @@ actor TranscriptionSession {
             recordSkip(stamped.frameRange)
             return
         }
+
+        #if DEBUG
+        analysisTap?.write(output)
+        #endif
 
         // `AnalyzerInput` is `@unchecked Sendable` and the analyzer holds the buffer
         // past this call, so `output` MUST be freshly allocated. The disk path's
@@ -470,6 +484,9 @@ actor TranscriptionSession {
 
     private func closeWriter() {
         try? writer?.close()
+        #if DEBUG
+        analysisTap?.close()
+        #endif
     }
 
     private func fail(_ error: Error) {

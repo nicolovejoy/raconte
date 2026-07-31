@@ -5,6 +5,11 @@ iPhoneOS26.5 / MacOSX26.5 SDKs. Rev 2 — rev 1 was reviewed against the SDK and
 M1 sources; two of its decisions broke and are replaced here (§2 timestamps, §3 durability),
 and three live M1 bugs it surfaced are filed as issues #7/#8/#9.
 
+**Line numbers in this document predate commit `8103e5f` (startCue) and are stale by ~3–9
+lines in `CaptureCoordinator.swift` and ~25 in `CaptureView.swift`.** Type and function
+names are correct; grep for those rather than trusting a line. `docs/plans/2026-07-30-next-tasks.md`
+carries a verified mapping.
+
 Prior art being deliberately *not* repeated: the frozen web app (`~/src/recountly`) stored
 one flat `transcript text` column per entry, treated the transcript as authoritative and
 audio as best-effort, had no timings, no revisions, and no way to re-transcribe — its
@@ -137,9 +142,13 @@ which §0 forbids). Note the tee is *not* an extra copy: `PCMChunk.data` is `Dat
 
 Wiring, concretely — this is more surgery than "pass a different sink":
 
-- There is only **one** sink construction site. The resume path reuses the same object
-  (`CaptureCoordinator.swift:353` `guard let forwarder = currentForwarder`, then `:363`), so
-  a tee installed at `:292` carries across resume for free.
+- There is only **one** sink construction site, but **two** `recorder.start` sites. The
+  resume path reuses the same forwarder object but passes it explicitly
+  (`rebuildAndReacquire`: `guard let forwarder = currentForwarder`, then
+  `recorder.start(sink: forwarder, …)`). A tee installed at the construction site does
+  **not** carry across resume for free — the resume start site must pass the tee too, or
+  the second branch silently dies at the first interruption with every disk test still
+  green. This is the highest-risk line in T1 and it needs its own regression test.
 - `currentForwarder` is typed `PCMForwarder?` (`:89`) and the coordinator uses
   `PCMForwarder`-specific API — `.stream` (`:447`), `.flush()` (`:462`), `.finish()` (`:466`),
   `.resumeBarrier` (`:454`). So the tee is a **new** stored property holding

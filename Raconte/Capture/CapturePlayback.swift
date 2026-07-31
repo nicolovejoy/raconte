@@ -71,10 +71,14 @@ final class CapturePlayback {
     private(set) var isPlaying = false
     private(set) var currentTime: TimeInterval = 0
     private(set) var duration: TimeInterval = 0
+    /// True between `beginScrubbing()` and `endScrubbing(at:)` — the drag owns the
+    /// playhead while it lasts, so the ticker must not write over it.
+    private(set) var isScrubbing = false
 
     private var m4aPlayer: AVAudioPlayer?
     private var segmentPlayer: SegmentPlayer?
     private var ticker: Task<Void, Never>?
+    private var resumeAfterScrub = false
 
     init(source: PlayableSource) {
         self.source = source
@@ -136,6 +140,44 @@ final class CapturePlayback {
         ticker?.cancel()
     }
 
+    // MARK: - seeking (issue #6)
+
+    /// Move the playhead to `time`, whichever source is playing. `currentTime` is
+    /// updated synchronously so a slider bound to it doesn't snap back to the
+    /// stale value when the drag ends.
+    func seek(to time: TimeInterval) {
+        let target = min(max(0, time), max(0, duration))
+        switch source {
+        case .finalizedM4A:
+            m4aPlayer?.currentTime = target
+        case .rawSegments:
+            guard let player = segmentPlayer else { break }
+            player.seek(toFrame: PlaybackSeek.frame(forSeconds: target,
+                                                    sampleRate: player.sampleRate))
+        case .none:
+            return
+        }
+        currentTime = target
+    }
+
+    /// Drag started: suspend playback (through `pause()`, so the ticker stops and
+    /// `isPlaying` stays honest) and remember whether to resume on release.
+    func beginScrubbing() {
+        guard !isScrubbing else { return }
+        resumeAfterScrub = isPlaying
+        pause()
+        isScrubbing = true
+    }
+
+    /// Drag ended: seek, then resume via `play()` — not the raw player — so
+    /// `ensurePlaybackSession()` still runs on iOS.
+    func endScrubbing(at time: TimeInterval) {
+        isScrubbing = false
+        seek(to: time)
+        if resumeAfterScrub, currentTime < duration { play() }
+        resumeAfterScrub = false
+    }
+
     /// iOS: playback inherits whatever session category is current. Right after a
     /// capture that's `.playAndRecord` (fine — leave it), but on a cold launch it's
     /// the `.soloAmbient` default, which is silenced by system mute — recovered
@@ -181,6 +223,7 @@ final class CapturePlayback {
     }
 
     private func tick() {
+        guard !isScrubbing else { return }
         switch source {
         case .finalizedM4A:
             guard let player = m4aPlayer else { return }

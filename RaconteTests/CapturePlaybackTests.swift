@@ -156,7 +156,91 @@ final class CapturePlaybackTests: XCTestCase {
         XCTAssertEqual(playback.duration, 0)
     }
 
+    // MARK: - seeking / scrubbing (issue #6)
+
+    func testSeekOnM4AMovesBothTheModelAndThePlayer() async throws {
+        let id = "01J0000000000000000000GG"
+        let playback = try await encodedPlayback(id: id)
+
+        playback.seek(to: 1.0)
+        XCTAssertEqual(playback.currentTime, 1.0, accuracy: 1e-9)
+        // Never played, so the position must come from the seek, not the ticker.
+        XCTAssertFalse(playback.isPlaying)
+    }
+
+    func testSeekClampsToDecodedDuration() async throws {
+        let id = "01J0000000000000000000HH"
+        let playback = try await encodedPlayback(id: id)
+
+        playback.seek(to: -5)
+        XCTAssertEqual(playback.currentTime, 0, accuracy: 1e-9)
+        playback.seek(to: 999)
+        XCTAssertEqual(playback.currentTime, playback.duration, accuracy: 1e-9)
+    }
+
+    /// The drag must suspend the ticker (via `pause()`), and releasing at the end
+    /// must not restart playback.
+    func testScrubbingSuspendsAndSeeks() async throws {
+        let id = "01J0000000000000000000II"
+        let playback = try await encodedPlayback(id: id)
+
+        playback.beginScrubbing()
+        XCTAssertTrue(playback.isScrubbing)
+        XCTAssertFalse(playback.isPlaying)
+
+        playback.endScrubbing(at: 0.5)
+        XCTAssertFalse(playback.isScrubbing)
+        XCTAssertEqual(playback.currentTime, 0.5, accuracy: 1e-9)
+        // Wasn't playing when the drag began, so it must not start now.
+        XCTAssertFalse(playback.isPlaying)
+    }
+
+    func testScrubbingToTheEndDoesNotResume() async throws {
+        let id = "01J0000000000000000000JJ"
+        let playback = try await encodedPlayback(id: id)
+
+        playback.beginScrubbing()
+        playback.endScrubbing(at: playback.duration)
+        XCTAssertEqual(playback.currentTime, playback.duration, accuracy: 1e-9)
+        XCTAssertFalse(playback.isPlaying)
+    }
+
+    func testSeekOnRawSegments() {
+        let segs = (0..<3).map { makeSineSegment(index: $0, frames: 24000, startFrame: $0 * 24000) }
+        let playback = CapturePlayback(source: .rawSegments(segs, format: format()))
+        XCTAssertEqual(playback.duration, 1.5, accuracy: 1e-9)
+
+        playback.seek(to: 1.0)
+        XCTAssertEqual(playback.currentTime, 1.0, accuracy: 1e-9)
+
+        playback.seek(to: 99)
+        XCTAssertEqual(playback.currentTime, playback.duration, accuracy: 1e-9)
+    }
+
+    func testSeekOnNoneSourceIsHarmless() {
+        let playback = CapturePlayback(source: .none)
+        playback.seek(to: 5)
+        XCTAssertEqual(playback.currentTime, 0)
+    }
+
     // MARK: - helpers
+
+    /// Encode three 0.5s sine segments into `final/recording.m4a` and open a
+    /// `CapturePlayback` over the resulting capture directory.
+    private func encodedPlayback(id: String) async throws -> CapturePlayback {
+        let dir = captureDir(id)
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: dir), withIntermediateDirectories: true)
+        let segs = (0..<3).map { i in makeSineSegment(index: i, frames: 24000, startFrame: i * 24000) }
+        _ = try await AVAssetWriterAudioEncoder()
+            .encode(segments: segs, format: format(),
+                    to: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let playback = CapturePlayback(capturesRoot: root, captureID: id)
+        guard case .finalizedM4A = playback.source else {
+            throw XCTSkip("expected a finalized m4a source")
+        }
+        return playback
+    }
 
     /// A 440 Hz sine at amplitude 0.5, flat little-endian Float32, under the
     /// capture's `segments/` dir so the disk gatherer finds it if needed.

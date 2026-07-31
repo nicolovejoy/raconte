@@ -313,6 +313,21 @@ the armed transition, since its own writes haven't landed).
     FAIL = no recovery banner, recording is lost, or app crashes on the post-restart
     launch.
 
+25. **Scrub a recovered (un-finalized) recording.** [issue #6 — raw-segment path]
+    Setup: a recovery banner is on screen (produce one with test 6: record ~30s, then
+    force-quit mid-recording and relaunch).
+    Steps: tap play on the banner → drag the position handle to roughly the middle →
+    release → let it play a few seconds → drag back to near the start → release.
+    PASS = audio resumes from where the handle was dropped both times, the elapsed label
+    matches the handle, and playback continues gap-free across the segment boundaries
+    after the seek.
+    FAIL = silence after a seek, playback restarts from zero, the elapsed label snaps
+    back, or the entry jumps straight to the end on the first drag.
+    Note: the *finalized* (`.m4a`) scrub path is covered automatically by
+    `CaptureUITests.testScrubbingAFinishedEntryMovesThePosition`. Only this raw-segment
+    path needs a human — UI tests can't reach it (bootstrap drains the finalize queue at
+    launch).
+
 ## iPad (delta pass)
 
 Same iOS binary. Don't repeat the full sweep — run tests 1, 2, 5, 6 and the

@@ -33,10 +33,11 @@ and retranscription from `final/recording.m4a` — not the live pass — is the 
 guarantee. Transcript time = capture-frame time = position in the m4a, so live and
 re-derived results are directly comparable.
 
-Open issues: #1 background awareness (folded into M2 T8), #2 gap-honest capture (low, now
-explicitly *not* an M2 blocker), **#9** interruption `endedAt` never written (folded into
-M2 T8). Closed: #5 route loss (smoke run 10), #6 scrubbing (smoke run 11), #7 and #8 both
-fixed in M2 T2.5 — so nothing blocks T3.
+Open issues: #1 background awareness and **#9** interruption `endedAt` (both folded into
+M2 T8), #2 gap-honest capture (low, explicitly *not* an M2 blocker), **#10** replaying
+`live.jsonl` doesn't reproduce the live view, **#11** the reader can't tell an absent log
+from an unreadable one. #10 and #11 are design questions, not slips — settle both before
+T6. Closed: #5 route loss (smoke run 10), #6 scrubbing (smoke run 11), #7 and #8 in T2.5.
 
 ## Landed 2026-07-30 (execution session)
 
@@ -78,15 +79,40 @@ Plan of record for both: `docs/plans/2026-07-30-next-tasks.md`.
   `schemaVersion`/`needsAttention`/`lastError`/`retryCount`/`finalizeAttempts`, with a
   `Mirror`-based field-count tripwire that fails when `Manifest` gains a field nobody
   carried over. 238 unit tests + 5 UI tests green.
+- **M2 T3** (2026-07-31). `TranscriptRecord`/`TranscriptRun`/`TranscriptTimeStamp` (§3's
+  on-disk shape), `LiveTranscriptWriter`/`Reader` (append-only JSONL, torn tail dropped,
+  `O_APPEND`), `TranscriptRef` on the manifest with no `schemaVersion` bump,
+  `SegmentLayout` transcript paths, `DirectorySnapshot` transcript stats. Two bugs caught
+  by its own tests: the shared encoder is `.prettyPrinted` (would have torn every record
+  in half — added `lineEncoder()`), and `O_APPEND` fused the first record after a torn
+  tail onto it, losing both.
+- **Two adversarial review passes** (2026-07-31), which found real defects in *already
+  committed* T2 code. Worst: `finalizedWithinBound` raced inside a `withTaskGroup`, which
+  awaits every child before returning, so the bound was decorative against an
+  uncancellable finalize — 5.2 s measured against a 100 ms bound, and the fake's
+  `Task.sleep` stall made it invisible. Also: `finish()` cancelled the results drain
+  before finalize's tail arrived; `start()`'s two suspension points let a concurrent
+  `finish()` be overwritten back into `.running`; unusable chunks weren't recorded as
+  skips (so `skippedRanges` claimed full coverage while the analyzer saw nothing); and the
+  converter's delay line was dropped unrecorded at every discontinuity. 262 unit + 5 UI
+  tests green.
 
 **Next (owner + next session):**
-1. M2 T3 — `live.jsonl` writer/reader, `TranscriptRef` on the manifest, recovery-planner
-   cases. Unblocked: T2.5 fixed #7 and #8. T4 is the first task needing the mini or the
-   iPhone. (T2 and T2.5 both landed 2026-07-31.)
-2. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
+1. **Discuss #10 and #11 before writing more transcript code** (owner asked for this
+   explicitly). #10: the consolidator revises and revokes, an append-only log can't
+   express either, so replay ≠ live view — likely fix is replay-through-consolidator plus
+   logging empty finals. #11: an unreadable log looks identical to an absent one, which
+   is structurally the same mistake as #8.
+2. Then wire T3 up: nothing constructs a `LiveTranscriptWriter` outside tests and nothing
+   writes `TranscriptRef`, so T3 is a library with no callers. Related: `TranscriptResult`
+   carries no `runs` and no analyzer `CMTime`, so three of §3's nine record fields can
+   never be filled — that needs a **T2 protocol change**, not a T3 one.
+3. M2 T4 — real `SpeechAnalyzer`/`SpeechTranscriber` behind the seam. First task needing
+   the mini or the iPhone; settles the §10 VERIFY list.
+4. Sweep leftovers: `interrupted`/`resuming` kill-gates need a FaceTime call from a
    second device (Siri won't engage while the app holds the mic) — or fold into the
    eventual iPhone pass.
-3. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
+5. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
    Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI

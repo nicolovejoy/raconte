@@ -78,6 +78,9 @@ final class CaptureCoordinator {
     /// `.zero` finishes synchronously — used by tests for determinism.
     private let flushInterval: Duration
     private let resumeBackoff: Duration
+    /// Played just before the tap opens. `nil` in tests and the UI-test harness — the
+    /// settle wait would add real time to every capture for no coverage.
+    private let startCue: (@MainActor () async -> Void)?
 
     // MARK: Per-capture mutable wiring
 
@@ -106,7 +109,8 @@ final class CaptureCoordinator {
          now: @escaping @Sendable () -> Date = Date.init,
          machine: CaptureMachine = CaptureMachine(),
          flushInterval: Duration = .milliseconds(300),
-         resumeBackoff: Duration = .milliseconds(500)) {
+         resumeBackoff: Duration = .milliseconds(500),
+         startCue: (@MainActor () async -> Void)? = nil) {
         self.capturesRoot = capturesRoot
         self.session = session
         self.makeRecorder = makeRecorder
@@ -116,6 +120,7 @@ final class CaptureCoordinator {
         self.machine = machine
         self.flushInterval = flushInterval
         self.resumeBackoff = resumeBackoff
+        self.startCue = startCue
         subscribeToSession()
     }
 
@@ -287,6 +292,10 @@ final class CaptureCoordinator {
         }
         do { try await session.activate() }
         catch { await send(.prepareFailed(.configurationFailed)); return }
+
+        // Cue BEFORE the tap goes live: the blip is the "start talking" signal, and
+        // playing it here keeps it out of the recording (§ StartCue).
+        await startCue?()
 
         let recorder = makeRecorder()
         let forwarder = PCMForwarder()

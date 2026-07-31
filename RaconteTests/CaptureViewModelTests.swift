@@ -138,4 +138,34 @@ final class CaptureViewModelTests: XCTestCase {
             XCTAssertFalse(RecFormat.statusText(phase: phase, canResume: false).isEmpty, "\(phase)")
         }
     }
+
+    // MARK: Row timestamp
+
+    /// The ULID head is the fallback when a manifest is missing or corrupt, so it has to
+    /// round-trip against the minter that wrote it.
+    func testULIDTimestampRoundTripsAgainstTheMinter() {
+        for offset in [0.0, 1_000_000.0, 1_800_000_000.0] {
+            let original = Date(timeIntervalSince1970: offset)
+            let id = CaptureCoordinator.makeULID(now: original)
+            let decoded = FinishedRecording.timestamp(fromULID: id)
+            XCTAssertNotNil(decoded)
+            // ULID timestamps are whole milliseconds.
+            XCTAssertEqual(decoded!.timeIntervalSince1970, offset, accuracy: 0.001)
+        }
+    }
+
+    func testULIDTimestampRejectsMalformedIDs() {
+        XCTAssertNil(FinishedRecording.timestamp(fromULID: "short"))
+        XCTAssertNil(FinishedRecording.timestamp(fromULID: "UUUUUUUUUU0000000000000000"))  // U not in Crockford
+    }
+
+    func testCreatedAtLabelDistinguishesToday() {
+        let today = FinishedRecording(captureID: "A", durationSeconds: 1, createdAt: Date())
+        XCTAssertTrue(today.formattedCreatedAt.hasPrefix("Today"))
+
+        let old = FinishedRecording(captureID: "B", durationSeconds: 1,
+                                    createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertFalse(old.formattedCreatedAt.hasPrefix("Today"))
+        XCTAssertFalse(old.formattedCreatedAt.hasPrefix("Yesterday"))
+    }
 }

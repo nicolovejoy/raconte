@@ -847,3 +847,69 @@ Not yet implemented; each has a verified anchor.
 - **`finalizeAndFinishThroughEndOfInput()` waits indefinitely if there is no input sequence
   at all**, not merely until the current one ends. T2's mandatory `finishInput()`-first
   ordering and the bounded wait are both load-bearing, and the SDK is stricter than §4 said.
+
+---
+
+## 12. §6.1 `DictationTranscriber` fallback — wired 2026-07-31
+
+Written from the Xcode 26.6 `Speech.swiftinterface`, not from memory. What §6's one-line
+sketch left out, and one thing it got wrong.
+
+**The API.** `DictationTranscriber` exists and is real:
+`init(locale:contentHints:transcriptionOptions:reportingOptions:attributeOptions:)`
+alongside an `init(locale:preset:)`. It conforms to `SpeechModule` and
+`LocaleDependentSpeechModule` exactly as `SpeechTranscriber` does, its `Result` has the
+same shape (`range`, `resultsFinalizationTime`, `text`, `alternatives`), and `isFinal`
+comes from the shared `SpeechModuleResult` extension — so §2's frame mapping needed no new
+math, only a generic.
+
+Three real differences:
+
+1. **There is no `DictationTranscriber.isAvailable`.** `isAvailable` is declared on
+   `SpeechTranscriber` alone. §6's step 1 assumed a symmetric check; there is none. This
+   costs nothing, because the *only* proof of readiness was always
+   `bestAvailableAudioFormat != nil` (§11, measured on the mini) — so availability for
+   this module is answered by locale resolution and then by the format, which is where the
+   authority belongs anyway.
+2. **Punctuation is opt-in.** `SpeechTranscriber.TranscriptionOption` has one case
+   (`.etiquetteReplacements`) and punctuates by default;
+   `DictationTranscriber.TranscriptionOption` adds `.punctuation` and `.emoji`. A journal
+   wants sentences, so `.punctuation` is requested and `.emoji` is not.
+3. **Narrower platform availability** — `@available(tvOS, unavailable)` where
+   `SpeechTranscriber` is available. Irrelevant to an iOS+macOS target; no `#if` needed.
+
+**The gate, unchanged and per-module.** `bestAvailableAudioFormat(compatibleWith:)` is a
+question about a *specific* module set. `SpeechTranscriber`'s answer is not
+`DictationTranscriber`'s, so each candidate is asked separately and installs its own
+assets. Reusing the first module's format would hand the analyzer buffers it never asked
+for — the same class of failure as the overlapping-`AnalyzerInput` defect the mini found.
+
+**Shape.** `TranscriptionModuleCandidate` (one protocol, two real conformers,
+`SpeechTranscriberCandidate` first) plus `TranscriptionModuleSelector.select`, which owns
+the order and the failure taxonomy. The candidate — not the engine — holds its concrete
+module and drains its own results, because `SpeechModule` has associated types and no
+existential carries `results`. `TranscriptionEngine` itself is untouched: `prepare` still
+returns `TranscriptionSetup` with an `AudioFormatDescriptor`, since `AVAudioFormat` is
+still not `Sendable`.
+
+`ModuleFormatProbe` is three answers, not two, for the same reason §11.3 needed three:
+`.unavailable` (assets missing — the only thing that justifies an install request),
+`.unrepresentable` (a format the descriptor cannot round-trip, §11.7 — an install cannot
+fix it), `.ready`. Collapsing them would fire a multi-hundred-megabyte download at a
+machine that already has every asset.
+
+**Failure taxonomy** — deliberately finer than "throw `noModel`", and all of it still
+leaves capture untouched (§0):
+
+- no candidate available at all → `.noModel`
+- available, but no candidate resolves the locale → `.unsupportedLocale`
+- built and asked, no format anywhere → `.noAnalysisFormat` (the CI case, and the case on
+  a device whose assets were never installed — which is what that case already documents)
+- a genuine install failure → `.other`, and it does **not** stop the fallback: a failed
+  `SpeechTranscriber` install still falls through to `DictationTranscriber`.
+
+**Still unverified: everything about the fallback actually running.** CI has no assets, and
+the mini has `SpeechTranscriber` assets, so on both machines the preferred module wins and
+`DictationTranscriber` is never exercised end to end. The selection *rule* is unit-tested
+against fakes (18 tests, three mutations confirmed to fail them); the fallback's transcript
+quality, timing, and result shape are device work, and no run of it exists yet.

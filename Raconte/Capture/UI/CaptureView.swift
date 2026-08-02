@@ -22,18 +22,10 @@ struct FinishedRecording: Identifiable, Equatable, Sendable {
     }
 
     /// A ULID's first 10 Crockford-base32 chars are a 48-bit millisecond timestamp, so a
-    /// capture whose manifest is missing or corrupt still shows the right date.
-    static func timestamp(fromULID id: String) -> Date? {
-        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-        let head = id.uppercased().prefix(10)
-        guard head.count == 10 else { return nil }
-        var ms: UInt64 = 0
-        for ch in head {
-            guard let v = alphabet.firstIndex(of: ch) else { return nil }
-            ms = (ms << 5) | UInt64(v)
-        }
-        return Date(timeIntervalSince1970: Double(ms) / 1000)
-    }
+    /// capture whose manifest is missing or corrupt still shows the right date. The
+    /// decode itself lives on `ULID` beside the mint (M3 T2) — the library needs it too,
+    /// and a second copy of a base32 decoder is a second copy to get wrong.
+    static func timestamp(fromULID id: String) -> Date? { ULID.timestamp(from: id) }
 }
 
 /// Composition + orchestration for the capture screen. Owns the (per-capture, ephemeral)

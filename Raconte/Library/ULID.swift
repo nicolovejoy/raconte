@@ -21,6 +21,23 @@ enum ULID {
         return String(time) + String(random)
     }
 
+    /// The instant encoded in the first 10 Crockford-base32 characters (a 48-bit
+    /// millisecond timestamp), or nil if they aren't. Lets a capture whose manifest is
+    /// missing or corrupt still carry its own date — the library sorts by it.
+    ///
+    /// Only the prefix is examined, so a truncated-but-well-formed head still decodes;
+    /// use `isWellFormed` when the whole id matters.
+    static func timestamp(from id: String) -> Date? {
+        let head = id.uppercased().prefix(10)
+        guard head.count == 10 else { return nil }
+        var ms: UInt64 = 0
+        for character in head {
+            guard let value = alphabet.firstIndex(of: character) else { return nil }
+            ms = (ms << 5) | UInt64(value)
+        }
+        return Date(timeIntervalSince1970: Double(ms) / 1000)
+    }
+
     /// Shape check only — 26 Crockford-base32 characters. Used to reject obvious
     /// garbage in a decoded identity field, not to prove an ID was ever minted here.
     static func isWellFormed(_ id: String) -> Bool {

@@ -42,6 +42,10 @@ targets:
         CFBundleDisplayName: Raconte
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: Raconte records your spoken journal entries.
+        # Defensive (design §6). Measured on the iPhone 17 Pro 2026-08-02: iOS does NOT
+        # prompt for this with on-device SpeechAnalyzer — only the mic prompt appeared.
+        # Kept so a future cloud/dictation path can't turn into a launch crash.
+        NSSpeechRecognitionUsageDescription: Raconte transcribes your entries on this device.
         UIBackgroundModes: [audio]
     entitlements:
       path: Raconte/Raconte.entitlements

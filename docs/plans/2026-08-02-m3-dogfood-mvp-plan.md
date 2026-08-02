@@ -13,7 +13,12 @@ Mac editorial surface and CloudKit sync arriving before editorial gets heavy use
 
 - **Journals are first-class.** Every entry belongs to a journal ("1987 Journal",
   "Trip to France", "Testing Raconte"). Capture happens in the context of the current
-  journal.
+  journal. **Default journal (proposed, owner to veto):** first launch auto-creates one
+  journal (named "Journal", renameable), and capture always files into the currently
+  selected journal — so "no journal selected" never arises in the UI and there is no
+  separate "unfiled" state to explain. The model still tolerates a nil `journalID`
+  (pre-T1 captures, sync races) but no UI path creates one. First dogfood recording
+  works with zero setup.
 - **Backdating is optional.** `originalDate` defaults to `capturedAt`; the owner edits it
   only when reading old material. No required metadata, ever.
 - **Deletion = 30-day trash.** Soft delete anywhere (including phone), recoverable 30
@@ -34,24 +39,36 @@ Mac editorial surface and CloudKit sync arriving before editorial gets heavy use
 
 ## Architecture stance
 
-- Disk stays ground truth. User metadata lives in a new `entry.json` sidecar per capture
+- Disk stays ground truth. Meaning: the capture directories themselves — audio files,
+  manifest, transcript log, `entry.json` — are the single authoritative copy of
+  everything. Anything else (an in-memory library list, later a database) is derived by
+  reading those directories and can be thrown away and rebuilt at any time with zero
+  loss. Backup/sync/migration only ever have to care about one tree of files.
+  User metadata lives in a new `entry.json` sidecar per capture
   directory — NOT in the manifest. The manifest is capture-machine territory, hardened by
   the recovery suite; entry metadata is user-mutable and must be editable without
   touching those paths. Missing `entry.json` ⇒ all defaults (journal = unfiled,
   originalDate = capturedAt). Hand-written `init(from:)` per the §11 decoder rule.
-- No GRDB yet. At dogfood scale (tens to low hundreds of entries) the library reads the
-  directory scan directly, as recovery already does. GRDB + FTS5 arrive with search, as a
-  rebuildable index over disk — never as a second source of truth.
+- No GRDB yet. (GRDB is the SQLite library the original M3 planned as the storage
+  layer.) Deferred, not dropped: at dogfood scale — tens to low hundreds of entries — a
+  directory scan builds the whole library in milliseconds, the same way the recovery
+  scan already walks these directories; a database adds schema-migration churn while
+  the model is still settling (journals, revisions, trash all landed or changed this
+  week) and buys nothing until full-text search, which genuinely needs an index. So
+  GRDB + FTS5 arrive with the search task, as a rebuildable cache over the disk truth
+  above — never as a second source of truth.
 - Revision-chain on-disk format is a design task (T6) before its build, same discipline
   as the M2 design doc. Not sketched here to avoid a format decided in a planning doc.
 
 ## Tasks
 
 Phase 0 — dogfood enablers (parallel, small)
+
 - **T0** (#12): keep the display awake while recording (`isIdleTimerDisabled`,
   iOS only, on while capture is active, off on stop/interruption/background). Sonnet.
 
 Phase 1 — model on disk
+
 - **T1**: `Journal` (ULID id, name, createdAt) + journals registry in the app container;
   `EntryMetadata` + `entry.json` sidecar (journalID, originalDate?, trash state);
   `EntryMetadataStore` with atomic write; current-journal selection persisted
@@ -61,6 +78,7 @@ Phase 1 — model on disk
   sorted by originalDate; pure and scan-based. Opus or Sonnet.
 
 Phase 2 — dogfood UI (after T1/T2)
+
 - **T3**: capture screen journal context (header, journal picker/create, optional
   backdate field) per phone mockup. Sonnet.
 - **T4**: library + entry detail screens per phone mockup (journal chips, year groups,
@@ -70,6 +88,7 @@ Phase 2 — dogfood UI (after T1/T2)
   `holdsIrreplaceableArtifacts` (quarantine keeps protecting non-tombstoned dirs). Opus.
 
 Phase 3 — editorial v1 (Mac)
+
 - **T6**: revision-chain design doc (on-disk format, session/hour batching rule, promote
   rules vs. live transcript, retranscribe semantics, migration's human-first import shape
   and text-only entries). Adversarial review pass like M2's. Opus + review agents.
@@ -78,11 +97,13 @@ Phase 3 — editorial v1 (Mac)
   standing "retranscription is the correctness guarantee" gap from M2. Opus.
 
 Phase 4 — sync (pulled forward from M4)
+
 - **T9**: CKSyncEngine, private DB, custom zone; design task first, then build. Container
   `iCloud.org.pianohouseproject.raconte` already reserved. Gate: lands before editorial
   is used from more than one device.
 
 Phase 5 — migration
+
 - **T10**: one-off import script: Neon rows + blobs → capture dirs; retranscribe at
   import; old transcript = human revision v1; text-only entry kind for audio-less
   paper-archive entries. Then the recountly.org teardown checklist (notify prompt-lab

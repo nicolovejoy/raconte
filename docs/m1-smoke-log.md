@@ -134,8 +134,39 @@ Device: Nico's Big iPad unless noted.
    install plus the stamp — was written to the `musicforge-raconte` handoff
    channel, since MusicForge ships a SwiftUI app to the same devices.
 
-Next run: 13 — interrupted/resuming gates (doc tests 13 + 14) via a FaceTime
-call from a second device. Now best run on the iPhone rather than the iPad,
-since the phone is live and Siri/calls work there natively. Also still open on
-the phone: background suspension (§7), the ~2-instance limit, asset download on
-a device without models, battery/thermal, and the denied-permission path.
+13. 2026-08-02 — **iPhone 17 Pro, interruption attempts. The gates are still
+   NOT exercised.** Read this before designing run 14; two of the three attempts
+   were invalid setups, not results.
+   - Doc tests 13 + 14 (call accepted / declined), FaceTime from the Mac mini to
+     the owner's own Apple ID: **INVALID, not a failure.** The call never rang
+     the phone. FaceTime dedupes a call placed to your own Apple ID, so it
+     stayed live on the mini; the phone showed only the status-bar "switch"
+     affordance ("there is a call on another of your devices"), and tapping it
+     did nothing. Test 14 then "passed" vacuously — the recording continued
+     because nothing had interrupted it. **A second device on the same Apple ID
+     cannot generate an incoming call.** A real interruption needs a different
+     Apple ID, or a cellular call from someone else's phone.
+   - Doc test 16 (timer firing mid-recording): **PASS, but it does not reach the
+     gates either.** Recording and live transcription both continued. No
+     `interrupted` state was observed, so on iOS 26 a Clock timer appears to
+     play *over* an active capture rather than interrupting the audio session.
+     Robustness result, not an interruption result.
+
+   **Incidental and valuable: lock-screen recording works.** The phone
+   auto-locked partway through and capture *and live transcription* both kept
+   running — first confirmation of that on the phone. Owner: "would be nice not
+   to lock the phone" → filed as **#12** (hold the idle timer while recording;
+   comfort issue, not data integrity).
+
+   So `interrupted` and `resuming` remain the only M1 states never exercised on
+   any device, after three attempts across two devices. Remaining options, in
+   order of likely success: Siri via the side button on the phone (never tried
+   there — it failed on iPad, but iPad has no side-button Siri), or a genuine
+   cellular call from another person's phone.
+
+Next run: 14 — Siri via the side button on the iPhone, as the last cheap route
+to the `interrupted`/`resuming` gates. If that fails too, they need a second
+person's phone and should be batched with whatever else needs a helper. Also
+still open on the phone: background suspension (§7), the ~2-instance limit,
+asset download on a device without models, battery/thermal, and the
+denied-permission path.

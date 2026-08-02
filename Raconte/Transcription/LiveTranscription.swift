@@ -165,8 +165,21 @@ final class LiveTranscriptionCoordinator {
 
     private(set) var activeCaptureID: String?
 
+    /// Ids whose `finish()` is in flight. `runs` used to serve as this guard by removing
+    /// up front; it can't any more, because the run must stay in the map across the await
+    /// so the panel keeps rendering. See `finish(captureID:)`.
+    private var finishing: Set<String> = []
+
+    /// The finished capture's text, held until the next one begins.
+    ///
+    /// Without it the panel blanks the moment a capture completes, which is the same
+    /// "it stopped transcribing early" illusion the ordering fix below removes — just
+    /// moved a beat later.
+    private(set) var lastCompletedText: String = ""
+
     var displayText: String {
-        activeCaptureID.flatMap { runs[$0]?.displayText } ?? ""
+        if let id = activeCaptureID, let run = runs[id] { return run.displayText }
+        return lastCompletedText
     }
 
     var isRunning: Bool {
@@ -191,6 +204,7 @@ final class LiveTranscriptionCoordinator {
         let run = LiveTranscriptionRun(captureID: captureID, captureDirectory: directory)
         runs[captureID] = run
         activeCaptureID = captureID
+        lastCompletedText = ""
         return run.sink
     }
 
@@ -203,10 +217,25 @@ final class LiveTranscriptionCoordinator {
         run.activate(inputFormat: inputFormat, engine: engine)
     }
 
+    /// Unhook the view only *after* the run has finished, never before.
+    ///
+    /// `run.finish()` awaits the pump, and the pump's tail is what publishes the
+    /// analyzer's finalized text into `displayText` — the last phrase of a capture is
+    /// produced *during* shutdown, not before it. Removing the run and clearing
+    /// `activeCaptureID` up front blanked the panel the instant stop began, so those
+    /// words reached `live.jsonl` and were never rendered. Read on the 2026-08-02 iPhone
+    /// pass as "the transcript stopped a few words early"; nothing was ever lost.
     func finish(captureID: String) async -> TranscriptRef? {
-        guard let run = runs.removeValue(forKey: captureID) else { return nil }
+        guard let run = runs[captureID], !finishing.contains(captureID) else { return nil }
+        finishing.insert(captureID)
+        let ref = await run.finish()
+        finishing.remove(captureID)
+        lastCompletedText = run.displayText
+        runs.removeValue(forKey: captureID)
+        // Only if the next capture hasn't already claimed the slot during the await —
+        // `finishCurrentCapture()` spawns the successor immediately.
         if activeCaptureID == captureID { activeCaptureID = nil }
-        return await run.finish()
+        return ref
     }
 
     func abandon(captureID: String) async {

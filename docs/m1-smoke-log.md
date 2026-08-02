@@ -81,6 +81,45 @@ Device: Nico's Big iPad unless noted.
    covered by `CaptureUITests.testScrubbingAFinishedEntryMovesThePosition` — so
    **#6 CLOSED**. Test recording deleted afterward by the owner.
 
-Next run: 12 — interrupted/resuming gates via FaceTime call from a second
-device (or defer to the iPhone pass). iPhone full pass deferred by owner until
-iPad + Mac are solid.
+12. 2026-08-02 — **iPhone 17 Pro, first pass ever on a phone.** Device
+   registration cleared, built and installed from the mini. Three checks:
+   - First launch + permission: **PASS.** Only the microphone prompt appeared —
+     **no speech-recognition prompt.** So iOS does *not* require
+     `NSSpeechRecognitionUsageDescription` for on-device `SpeechAnalyzer`. The
+     key is still absent from `project.yml`; design §6 wants it defensively, but
+     it is not a first-launch crash and never was.
+   - ~15 s recording with live transcript: **PASS.** Text appeared on screen
+     while speaking, owner rated accuracy good, audio "perfect" on playback.
+     This is the first confirmation that M2's capture→convert→analyze→log chain
+     works on iOS at all, not just on macOS.
+   - Denied-permission path: NOT RUN (owner declined; the sink-abandon leak it
+     exercises stays unverified).
+
+   **Observed: the live transcript appeared to stop a few words early** when
+   stopping immediately after speaking. **Root-caused the same session as a
+   display bug — no words were ever lost**, and fixed.
+
+   `LiveTranscriptionCoordinator.finish(captureID:)` removed the run from `runs`
+   and cleared `activeCaptureID` *before* `await run.finish()`. But
+   `run.finish()` awaits the pump, and the pump's tail is exactly what publishes
+   the analyzer's finalized text into `displayText` — a capture's last phrase is
+   produced *during* shutdown, not before it. So the panel unhooked from its
+   data source the instant stop began, and the finalize tail was written to
+   `live.jsonl` while rendering nowhere. Fix: unhook after the await, plus hold
+   the completed text in `lastCompletedText` until the next capture begins, so
+   the panel no longer blanks the moment an entry lands.
+
+   Owner called this correctly from the symptom alone ("it just switched
+   interface before it was done"). Worth recording that the first two theories
+   from the code side — the 5 s `finalizeBound` against a previously measured
+   5.2 s finalize, and a volatile trailing phrase never finalizing — were both
+   wrong, and the expensive on-device container pull they implied was
+   unnecessary. **Verify on the next phone build**; the doc-test expectation is
+   that the final words appear on screen at stop and stay up until you record
+   again.
+
+Next run: 13 — interrupted/resuming gates (doc tests 13 + 14) via a FaceTime
+call from a second device. Now best run on the iPhone rather than the iPad,
+since the phone is live and Siri/calls work there natively. Also still open on
+the phone: background suspension (§7), the ~2-instance limit, asset download on
+a device without models, battery/thermal, and the denied-permission path.

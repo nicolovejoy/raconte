@@ -156,17 +156,60 @@ Three defects the device pass found, all fixed, none reachable from CI:
   `resetCaptureWiring()` nils first. Now keyed off the finalize queue.
 
 **Next (owner + next session):**
-1. Transcript ends at 7.80 s of a 9.1 s recording — trailing silence, or a tail that never
-   finalized? First thing to check; it is the one unexplained observation from the pass.
-2. iPhone pass. Everything iOS-only is still unverified: TCC behaviour, the ~2-instance
-   limit (macOS has none), background suspension (§7), asset download on a device without
-   models, battery/thermal. iPhone 15 needs a cable.
-3. `DictationTranscriber` fallback (§6.1) is not wired — unavailable reports `noModel`.
-4. Carry-ins still open from design §11.7: the secondary-sink abandon hook (four
+1. **iPhone pass — set up, never run.** Blocked mid-flight on device registration: the
+   phone is not in the developer account, so `xcodebuild` fails at signing
+   ("Device isn't registered… provisioning profile doesn't include"). Owner was
+   registering it via Xcode (select device → ⌘B → **Register Device**) when the session
+   ended. Once registered, rebuild from the CLI and install. Still unverified, all of it:
+   TCC behaviour, the ~2-instance limit (macOS has none), background suspension (§7),
+   asset download on a device without models, battery/thermal.
+   **The device is an iPhone 17 Pro** (`iPhone18,1`, iOS 26.5.2, CoreDevice
+   `0CE992E2-8065-5FAB-A2E2-064D9712A522`, hardware UDID `00008150-000D244C3663401C`) —
+   *not* an iPhone 15. Its name was inherited from a restore, and a stale `iPhone16,1`
+   record with a near-identical name still shows as `unavailable`. Identify by
+   productType or UDID, never by name. Note it needs Developer Mode confirmed **after**
+   the reboot, not just toggled before it.
+2. Carry-ins still open from design §11.7: the secondary-sink abandon hook (four
    coordinator paths drop the sink with no notification, leaking a live analyzer), and
-   recovery synthesizing a `completedAt: nil` ref for a killed capture.
-5. Reserve the CloudKit container `iCloud.org.pianohouseproject.raconte` on the portal.
-   Container ids are permanent and unreclaimable; costs nothing to hold, and M4 needs it.
+   recovery synthesizing a `completedAt: nil` ref for a killed capture. The
+   denied-permission path is one of the four leaks and is exercised by the iPhone pass.
+3. `NSSpeechRecognitionUsageDescription` is absent from `project.yml`; design §6 wants it
+   added defensively. Unconfirmed whether iOS actually requires it for on-device
+   `SpeechAnalyzer` — if it does, that is a first-launch crash on the phone.
+
+Closed this session: the 7.80 s transcript (see below), the `DictationTranscriber`
+fallback (landed), and the CloudKit container (already reserved on the portal —
+`iCloud.org.pianohouseproject.raconte` exists, description "Raconte"). The app's
+entitlements still carry no iCloud keys, which is correct until M4.
+
+## Landed 2026-08-02
+
+**The 7.80 s transcript is trailing silence — closed, not a bug.** The 9.1 s capture
+`01KYX77KK5QM15915EZBVXTQZ4` (436,800 frames) committed two records, the second ending at
+frame 374,400 (7.80 s), last word run at 371,520 (7.74 s). Measured off the analyzer's own
+`transcript/analysis-input.wav`: speech runs at −34 dBFS through ~6.6 s, decays across
+7.0–7.8 s, and the final 1.3 s sits at −50 to −59 dBFS — room noise. `coverageFrames`
+equals the full recording and `skippedRanges` is empty, so the analyzer received every
+frame and finalized through end of input. Nothing lost.
+
+**M2 §6.1 — `DictationTranscriber` fallback.** `TranscriptionModuleCandidate` (candidate
+protocol, two real conformers, `TranscriptionModuleSelector` owning order and the failure
+taxonomy); `SpeechAnalyzerEngine` delegates module choice. The candidate holds its own
+concrete module and drains its own results because `SpeechModule` has associated types and
+no existential carries `results`. The `TranscriptionEngine` seam is unchanged. Each
+candidate is gated on **its own** `bestAvailableAudioFormat != nil` —
+`AssetInventory.status` stays advisory. 302 → 320 unit tests.
+
+Two design-doc corrections, verified directly against `MacOSX26.5.sdk` (both the macabi
+and `arm64e-apple-macos` slices, identical here): there is **no**
+`DictationTranscriber.isAvailable` — `isAvailable` occurs once in the whole interface and
+belongs to `SpeechTranscriber`, so §6 step 1's symmetric check does not exist; and there
+is no `.noEngine` case in `TranscriptionUnavailable`. Written up as §12 of the design doc.
+
+**The fallback has never executed anywhere.** CI has no assets and the mini has
+`SpeechTranscriber` assets, so the preferred module always wins; only the selection *rule*
+is tested, against fakes. The 17 Pro will likely not exercise it either — the stale
+`iPhone16,1` is the better candidate, being likelier to lack assets.
 
 One architectural note from T10: `CaptureMachine` has no `captured→idle` edge, so the UI
 mints a fresh CaptureCoordinator per capture (single-capture coordinators by design). If

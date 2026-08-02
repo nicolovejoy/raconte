@@ -614,14 +614,10 @@ struct RecoveredRecording: Identifiable, Equatable, Sendable {
 extension CaptureCoordinator {
     /// Lexicographically-sortable, time-prefixed ID (design §1 `captureID`). 48-bit
     /// millisecond timestamp + 80 bits of randomness, Crockford base32, 26 chars.
+    /// The algorithm moved to `ULID` (M3 T1) because journals mint ids too; this stays
+    /// as the capture path's name for it, unchanged for every existing call site.
     nonisolated static func makeULID(now: Date = Date()) -> String {
-        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-        var value = UInt64(max(0, now.timeIntervalSince1970) * 1000)
-        var time = [Character](repeating: "0", count: 10)
-        for i in (0..<10).reversed() { time[i] = alphabet[Int(value & 0x1F)]; value >>= 5 }
-        var random = [Character](repeating: "0", count: 16)
-        for i in 0..<16 { random[i] = alphabet[Int.random(in: 0..<32)] }
-        return String(time) + String(random)
+        ULID.make(now: now)
     }
 
     nonisolated static func formatDuration(_ seconds: Double) -> String {

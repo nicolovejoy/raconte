@@ -140,13 +140,10 @@ final class CaptureScreenModel {
             transcription: transcription)
     }
 
+    /// Same path as before (`Application Support/Raconte/captures`), now owned by
+    /// `AppContainer` so the journals registry and the capture tree cannot drift apart.
     static func defaultCapturesRoot() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
-        let root = base.appendingPathComponent("Raconte/captures", isDirectory: true)
-        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
-        return root
+        AppContainer.capturesRoot()
     }
 
     // MARK: intents

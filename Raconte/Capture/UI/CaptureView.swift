@@ -345,6 +345,13 @@ struct CaptureView: View {
                     finishedSection
 
                     Spacer(minLength: 24)
+
+                    // Not DEBUG-gated: a wireless install is exactly when you can't tell
+                    // which build you're holding, and TestFlight has the same problem.
+                    Text(BuildInfo.stamp)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.35))
+                        .accessibilityIdentifier("capture.buildStamp")
                 }
                 .padding(24)
                 .frame(maxWidth: 560)

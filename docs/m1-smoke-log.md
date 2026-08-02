@@ -114,9 +114,25 @@ Device: Nico's Big iPad unless noted.
    from the code side — the 5 s `finalizeBound` against a previously measured
    5.2 s finalize, and a volatile trailing phrase never finalizing — were both
    wrong, and the expensive on-device container pull they implied was
-   unnecessary. **Verify on the next phone build**; the doc-test expectation is
-   that the final words appear on screen at stop and stay up until you record
-   again.
+   unnecessary.
+
+   **Re-verified same session on a rebuilt phone install: PASS.** The final
+   words appear and stay up. One observation worth more than the pass itself:
+   the on-screen text was *wrong* at the moment of stop and **auto-corrected
+   afterwards**. That is the consolidator promoting volatile text to committed
+   during shutdown, and it settles a question the code alone could not — the
+   analyzer's corrections arrive *during* finalize, not before it. Which is
+   also why the old ordering hid so much: it unhooked the view at exactly the
+   moment the transcript was still improving.
+
+   Also landed this run: **a build timestamp at the bottom of the capture
+   screen** (`BuildInfo`, executable mtime, rendered in `America/Los_Angeles`
+   regardless of the device's zone). A wireless `devicectl` install gives the
+   tester no visible evidence of which build they are holding; that question
+   came up mid-pass and could only be answered from build-tool output on the
+   mini. Verified in the field the same session. The technique — wireless
+   install plus the stamp — was written to the `musicforge-raconte` handoff
+   channel, since MusicForge ships a SwiftUI app to the same devices.
 
 Next run: 13 — interrupted/resuming gates (doc tests 13 + 14) via a FaceTime
 call from a second device. Now best run on the iPhone rather than the iPad,

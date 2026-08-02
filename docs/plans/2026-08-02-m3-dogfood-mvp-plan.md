@@ -13,7 +13,7 @@ Mac editorial surface and CloudKit sync arriving before editorial gets heavy use
 
 - **Journals are first-class.** Every entry belongs to a journal ("1987 Journal",
   "Trip to France", "Testing Raconte"). Capture happens in the context of the current
-  journal. **Default journal (proposed, owner to veto):** first launch auto-creates one
+  journal. **Default journal (decided 2026-08-02):** first launch auto-creates one
   journal (named "Journal", renameable), and capture always files into the currently
   selected journal — so "no journal selected" never arises in the UI and there is no
   separate "unfiled" state to explain. The model still tolerates a nil `journalID`

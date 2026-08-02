@@ -5,6 +5,7 @@ import Foundation
 /// No filesystem access — the FS actor (`SegmentStore`, T3) uses these.
 enum SegmentLayout {
     static let manifestFileName = "manifest.json"
+    static let entryMetadataFileName = "entry.json"
     static let segmentsDirName = "segments"
     static let finalDirName = "final"
     static let transcriptDirName = "transcript"
@@ -69,6 +70,13 @@ enum SegmentLayout {
 
     static func manifestPartURL(captureDirectory: URL) -> URL {
         partURL(for: manifestURL(captureDirectory: captureDirectory))
+    }
+
+    /// User-owned metadata for the capture (M3 T1). A sibling of the manifest rather
+    /// than part of it: the manifest belongs to the capture machine, this belongs to the
+    /// user, and the two must be writable independently.
+    static func entryMetadataURL(captureDirectory: URL) -> URL {
+        captureDirectory.appendingPathComponent(entryMetadataFileName)
     }
 
     static func segmentsDirectory(captureDirectory: URL) -> URL {

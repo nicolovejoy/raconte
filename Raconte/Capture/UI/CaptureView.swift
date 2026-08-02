@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 /// One playable capture on disk, for the "recent recordings" list (design §5 playback).
 struct FinishedRecording: Identifiable, Equatable, Sendable {
@@ -366,6 +369,18 @@ struct CaptureView: View {
         .onChange(of: model.coordinator.finalizeQueue) { _, _ in
             model.handleFinalizeQueue()
         }
+        #if os(iOS)
+        // Derived from phase, not paired start/stop calls: whatever ends recording
+        // (stop, finalize, interruption) flips this back through the same onChange, and
+        // `initial: true` covers a screen that mounts already mid-recording (e.g. a
+        // relaunch). `onDisappear` is the backstop against leaving it stuck true.
+        .onChange(of: model.coordinator.phase, initial: true) { _, phase in
+            UIApplication.shared.isIdleTimerDisabled = (phase == .recording)
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+        #endif
     }
 
     @ViewBuilder

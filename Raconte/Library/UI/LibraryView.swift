@@ -94,6 +94,7 @@ struct LibraryView: View {
                 ForEach(model.journals) { journal in
                     chip(title: journal.name,
                          subtitle: model.dateRange(forJournal: journal.id)?.formatted(),
+                         cover: model.journalCovers[journal.id],
                          isSelected: model.journalScope == .journal(journal.id)) {
                         Task { await model.selectJournalScope(.journal(journal.id)) }
                     }
@@ -107,17 +108,23 @@ struct LibraryView: View {
 
     /// `subtitle` is the journal's derived date range (issue #14 part 2) — `nil` for an
     /// empty journal, which shows just the name rather than a blank second line.
+    /// `cover` (issue #14 part 3) renders a small leading thumbnail; `nil` shows nothing,
+    /// not a placeholder — a chip without a cover looks exactly like it did before covers
+    /// existed.
     @ViewBuilder
-    private func chip(title: String, subtitle: String? = nil, isSelected: Bool,
+    private func chip(title: String, subtitle: String? = nil, cover: Data? = nil, isSelected: Bool,
                        action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.caption.weight(isSelected ? .semibold : .regular))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                JournalCoverThumbnail(data: cover, size: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.caption.weight(isSelected ? .semibold : .regular))
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(.horizontal, 12)

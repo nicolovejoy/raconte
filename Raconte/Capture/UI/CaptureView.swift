@@ -283,6 +283,23 @@ final class CaptureScreenModel {
         if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
     }
 
+    /// Cover image for the currently selected journal, sourced from `library` —
+    /// the same store/scan the Library screen reads (M3's one-data-path rule, applied
+    /// to covers too).
+    var selectedJournalCover: Data? {
+        selectedJournalID.flatMap { library.journalCovers[$0] }
+    }
+
+    func setCurrentJournalCover(imageData: Data) async throws {
+        guard let id = selectedJournalID else { return }
+        try await library.setJournalCover(id, imageData: imageData)
+    }
+
+    func removeCurrentJournalCover() async {
+        guard let id = selectedJournalID else { return }
+        await library.removeJournalCover(id)
+    }
+
     /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
     /// nil ("use the capture's own date"), not to whatever was last picked. Precision
     /// resets to `.day` alongside it, for the same reason: nothing should carry over
@@ -605,6 +622,7 @@ struct JournalHeaderView: View {
 
     @State private var showingNewJournalPrompt = false
     @State private var showingRenamePrompt = false
+    @State private var showingCoverPicker = false
     @State private var draftName = ""
 
     var body: some View {
@@ -634,8 +652,14 @@ struct JournalHeaderView: View {
                     draftName = ""
                     showingNewJournalPrompt = true
                 }
+                if model.selectedJournalID != nil {
+                    Button("Cover Photo…") { showingCoverPicker = true }
+                        .accessibilityIdentifier("capture.coverPhotoMenuItem")
+                }
             } label: {
                 HStack(spacing: 6) {
+                    JournalCoverThumbnail(data: model.selectedJournalCover, size: 22)
+                        .accessibilityIdentifier("capture.journalCoverThumbnail")
                     Text(model.selectedJournalName)
                         .font(.title3.weight(.semibold))
                     Image(systemName: "chevron.up.chevron.down")
@@ -669,6 +693,16 @@ struct JournalHeaderView: View {
                 .accessibilityIdentifier("capture.renameJournalNameField")
             Button("Rename") { Task { await model.renameCurrentJournal(to: draftName) } }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showingCoverPicker) {
+            JournalCoverPickerSheet(
+                journalName: model.selectedJournalName,
+                hasCover: model.selectedJournalCover != nil,
+                onPick: { data in
+                    do { try await model.setCurrentJournalCover(imageData: data); return true }
+                    catch { return false }
+                },
+                onRemove: { await model.removeCurrentJournalCover() })
         }
     }
 

@@ -667,14 +667,23 @@ struct BackdateField: View {
             }
             .accessibilityIdentifier("capture.backdateToggle")
 
-            if model.backdateEnabled {
+            // Always rendered, disabled until the toggle is on — a conditional picker
+            // with a hidden label left no visible "place to set the date" (smoke
+            // feedback, 2026-08-02). The row itself is the affordance.
+            HStack(spacing: 8) {
+                Text("Entry date")
+                    .font(.caption)
+                    .foregroundStyle(Color(white: 0.55))
                 DatePicker("Entry date", selection: Binding(
                     get: { model.backdateDate },
                     set: { date in Task { await model.setBackdateDate(date) } }
                 ), displayedComponents: .date)
                 .labelsHidden()
+                .datePickerStyle(.compact)
                 .accessibilityIdentifier("capture.backdateField")
             }
+            .disabled(!model.backdateEnabled)
+            .opacity(model.backdateEnabled ? 1 : 0.45)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

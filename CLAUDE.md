@@ -203,16 +203,56 @@ Both devices carry current main. Trash flow has no manual smoke number yet.
 - Backdates are sticky: editable with explicit overrides, never clearable by one tap.
   Owner wants metadata edits auditable eventually (fold into T6 revision design).
 
+## Session 2026-08-02 evening → 2026-08-03 (subagent-driven; 478 → 595 unit tests)
+
+**Closed: #14, #16, #9, #12.** All device-verified by owner except where noted. Two Opus
+adversarial passes; every finding fixed same-session or filed (#19 #20 #21).
+
+- **#14 in five commits.** Precision entry dates (day/yearMonth/year picker,
+  `PrecisionDatePicker`); derived journal date ranges (`JournalDateRange`, precision-aware
+  bounds, on chips + switcher); cover images (`JournalCoverStore` actor, ImageIO-only,
+  camera + PhotosPicker per owner decision, `journals/<id>/cover.jpg`). Then the big one:
+  **backdates are now `PartialDate` strings** ("1998"/"1998-03"/"1998-03-04") in
+  entry.json — a year-only backdate stored as a `Date` re-derived a different year after
+  a westward timezone change. Legacy ISO+precision sidecars dual-read, upgraded in place
+  on rewrite. `anchorDate` (noon, day-1 fill, `Calendar.gregorianCurrent`) is the one
+  Date-conversion rule. Landed while the corpus was tiny, as planned.
+- **#15 landed** (`SpokenDateParser` — no NSDataDetector, it can't express precision;
+  `SpokenDateDetection.apply` with `detectedDate` as the once-only latch on the sidecar;
+  hook at finalize + launch recovery, degrades to silence; "Detected from the recording"
+  label in detail view) **plus per-journal backdate carry-over** (in-memory this session,
+  pre-fill on toggle-enable, never auto-enables, re-anchors on journal switch).
+  Owner-verified on the phone except items in Next steps below.
+- **Worst review finds, all fixed:** interruption resume erased a detail-screen backdate
+  (write now guarded like `journalID`); Library-and-back navigation permanently dropped
+  the #12 display hold (`onAppear` restore); lenient `Calendar.date(from:)` rolled
+  Jan 31 + month=Feb into March; a `.year` bound fabricated "January" in ranges; filler
+  stripping promoted mid-sentence years to bare-year detections (now gated to raw
+  token 0); carry-over leaked across journals via live picker state.
+- CI caught one UTC-only test failure locally invisible in Pacific (near-epoch backdate
+  fixture) — keep backdate test fixtures away from year boundaries.
+- Owner decisions recorded: #15 auto-apply (no chip); covers camera+library; carry-over
+  within journal; phone is the primary dogfood device until M4 sync (mini = testing
+  scratch, no laptop install).
+
 **Next steps:**
-1. **#14 variable-precision `originalDate` (year / year-month / day) — land before the
-   dogfood corpus grows.** Additive field, lenient decode. Then cover images + derived
-   date ranges (same issue).
-2. #15 spoken leading date → backdate (composes with precision). #16 verify capture-page
-   recents on the new build before treating as a bug.
-3. Owner questions open: backdate carry-over between consecutive captures; auto-apply vs
-   suggestion chip for #15; cover image source (camera only?).
-4. T6 revision-chain design doc (editorial foundation; include metadata-edit
-   auditability), then T7/T8, then T9 CloudKit before multi-device editorial.
+1. **Disallow future backdates — owner asked for TDD.** Model-level clamp (picker,
+   `setBackdate`, detection) + tests first. From phone smoke: forward dating currently
+   allowed.
+2. **Library swipe actions:** slide-to-trash and slide-to-move-to-journal on library
+   rows, consistent with platform convention (owner request).
+3. **UX discussion before building (owner: "let's discuss"):** manual-backdate-first
+   currently blocks spoken-date detection entirely (his test 2 surprise), and carried
+   backdates count as manual so a sitting with carry-over never gets per-entry spoken
+   dates. Candidate: track how the backdate arose (explicit dial vs carried pre-fill);
+   spoken detection outranks carried but never explicit; plus a "use detected date"
+   affordance in detail view when detected ≠ original. Decide with owner first.
+4. Filed, unscheduled: #19 (`endedAt` stamps when we stopped waiting), #20 (swallowed
+   `resumeRecording` failure = dead recording under a running timer — data-loss
+   adjacent, schedule soon), #21 (detection latch fails open if `detectedDate` ever
+   unreadable), #17 (cover polish), #18 (journal switcher design pass — fold into T6).
+5. T6 revision-chain design doc (editorial foundation; metadata-edit auditability),
+   then T7/T8, then T9 CloudKit before multi-device editorial.
 
 ## Landed 2026-08-02
 

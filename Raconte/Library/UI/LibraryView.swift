@@ -22,6 +22,11 @@ struct LibraryView: View {
     @State private var pendingTrashCaptureID: String?
     @State private var pendingMoveCaptureID: String?
 
+    /// Sidecar writes that reported failure — same swallowed-`try?` family as
+    /// `EntryDetailView`/`TrashView`.
+    @State private var trashFailed = false
+    @State private var moveFailed = false
+
     var body: some View {
         VStack(spacing: 0) {
             if model.journalsUnreadable { registryBanner }
@@ -44,7 +49,9 @@ struct LibraryView: View {
                             titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) {
                 if let id = pendingTrashCaptureID {
-                    Task { await model.trashEntry(id) }
+                    Task {
+                        if !(await model.trashEntry(id)) { trashFailed = true }
+                    }
                 }
                 pendingTrashCaptureID = nil
             }
@@ -60,12 +67,24 @@ struct LibraryView: View {
             if let id = pendingMoveCaptureID {
                 ForEach(journalChoices(for: id)) { journal in
                     Button(journal.name) {
-                        Task { await model.moveEntry(id, toJournal: journal.id) }
+                        Task {
+                            if !(await model.moveEntry(id, toJournal: journal.id)) { moveFailed = true }
+                        }
                         pendingMoveCaptureID = nil
                     }
                 }
             }
             Button("Cancel", role: .cancel) { pendingMoveCaptureID = nil }
+        }
+        .alert("Couldn’t move this entry to the trash", isPresented: $trashFailed) {
+            Button("OK") { trashFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
+        }
+        .alert("Couldn’t move this entry", isPresented: $moveFailed) {
+            Button("OK") { moveFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
         }
     }
 

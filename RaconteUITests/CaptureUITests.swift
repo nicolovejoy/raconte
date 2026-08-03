@@ -323,6 +323,59 @@ final class CaptureUITests: XCTestCase {
         }
     }
 
+    // MARK: owner report 2026-08-03 — Move to Trash while playback is running (device forensics)
+
+    /// Targeted repro attempt for a device failure: the owner's "Move to Trash" from an
+    /// entry's detail screen silently no-opped for one entry, and that detail screen had
+    /// playback running on it beforehand. Record, open detail, START PLAYBACK, then while
+    /// it is still playing tap Move to Trash and confirm — assert the entry actually lands
+    /// in Trash. If this fails, it is the repro and root-causing continues from here; if
+    /// it passes on the simulator, the failure is environmental/device-specific (same
+    /// conclusion `testDeleteNowPermanentlyRemovesEntry` reached for its own bug).
+    func testMoveToTrashWhilePlaybackIsRunningStillTrashesTheEntry() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 3)
+        press(record)
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
+        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+        press(recentRows(app).firstMatch)
+
+        let play = app.buttons["detail.play"].firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 10), "play button never appeared")
+        press(play)
+        // Give playback a moment to actually start rather than trashing on the same
+        // frame it was requested — the device report was mid-playback, not mid-tap.
+        Thread.sleep(forTimeInterval: 1)
+
+        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        press(trashButton)
+        let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
+        XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
+        press(confirmTrash)
+
+        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+
+        press(app.buttons["capture.libraryButton"].firstMatch)
+        let trashLink = app.buttons["library.trashLink"].firstMatch
+        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
+        waitUntil(15, "trash count never showed the entry — the Move to Trash write likely "
+                      + "silently failed while playback was running") {
+            trashLink.label.contains("1")
+        }
+        press(trashLink)
+
+        let remaining = app.staticTexts["trash.row.remaining"].firstMatch
+        XCTAssertTrue(remaining.waitForExistence(timeout: 15),
+                      "entry not listed in Trash after Move to Trash during playback")
+    }
+
     /// `XCUIElement.value` is `Any?`; a SwiftUI slider reports its number as a
     /// string on some platforms and a `Double` on others.
     private static func number(_ value: Any?) -> Double? {

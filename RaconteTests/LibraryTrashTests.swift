@@ -117,6 +117,73 @@ final class LibraryTrashTests: XCTestCase {
         XCTAssertTrue(model.trashed.isEmpty)
     }
 
+    // MARK: - Silent-swallow family (owner report 2026-08-03, part 2)
+
+    /// The same `_ = try?` mistake `deleteEntryPermanently` had, one layer up: `trashEntry`
+    /// used to report success even when the sidecar update threw. An unreadable
+    /// `entry.json` is the read-side failure — `EntryMetadataStore.update` never gets to
+    /// the write.
+    func testTrashEntryReturnsFalseWhenSidecarUnreadable() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let url = SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA))
+        let corrupt = Data("{ broken".utf8)
+        try corrupt.write(to: url)
+
+        let trashed = await model().trashEntry(idA)
+
+        XCTAssertFalse(trashed)
+        XCTAssertEqual(try Data(contentsOf: url), corrupt, "an unreadable sidecar must not be overwritten")
+    }
+
+    /// Write-side failure: the sidecar reads fine but the directory is sealed against
+    /// writes, so `AtomicFile.replace`'s `.part` + rename can't land. Mirrors
+    /// `testDeleteNowReturnsFalseWhenRemovalFails`'s fixture.
+    func testRestoreEntryReturnsFalseWhenWriteFails() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let dir = captureDir(idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        }
+
+        let restored = await model.restoreEntry(idA)
+
+        XCTAssertFalse(restored)
+        XCTAssertNotNil(try metadata(idA).trashedAt,
+                        "a failed restore must leave the entry trashed, not half-undone")
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+    }
+
+    func testMoveEntryReturnsFalseWhenSidecarUnreadable() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let url = SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA))
+        let corrupt = Data("{ broken".utf8)
+        try corrupt.write(to: url)
+
+        let moved = await model().moveEntry(idA, toJournal: "J2")
+
+        XCTAssertFalse(moved)
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
+    }
+
+    func testSetBackdateReturnsFalseWhenWriteFails() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+
+        let dir = captureDir(idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        }
+
+        let succeeded = await model.setBackdate(idA, to: Date(timeIntervalSince1970: 500_000))
+
+        XCTAssertFalse(succeeded)
+    }
+
     // MARK: - Delete Now
 
     func testDeleteNowRemovesATrashedEntry() async throws {

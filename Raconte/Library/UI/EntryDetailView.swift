@@ -25,6 +25,13 @@ struct EntryDetailView: View {
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
 
+    /// Sidecar writes that reported failure. Each names what didn't save — the same
+    /// swallowed-`try?` family as `TrashView.permanentDeleteFailed`, which the owner hit
+    /// on device with a "Move to Trash" that silently didn't take.
+    @State private var trashFailed = false
+    @State private var moveFailed = false
+    @State private var backdateFailed = false
+
     @Environment(\.dismiss) private var dismiss
 
     init(model: LibraryScreenModel, item: EntryListItem) {
@@ -61,6 +68,21 @@ struct EntryDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("You can restore it from the Trash for \(TrashPolicy.retentionDays) days.")
+        }
+        .alert("Couldn’t move this entry to the trash", isPresented: $trashFailed) {
+            Button("OK") { trashFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
+        }
+        .alert("Couldn’t move this entry", isPresented: $moveFailed) {
+            Button("OK") { moveFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
+        }
+        .alert("Couldn’t save the backdate", isPresented: $backdateFailed) {
+            Button("OK") { backdateFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
         }
     }
 
@@ -124,7 +146,10 @@ struct EntryDetailView: View {
                         ToolbarItem(placement: .destructiveAction) {
                             Button("Remove backdate", role: .destructive) {
                                 showingBackdatePicker = false
-                                Task { await model.setBackdate(captureID, to: nil); await refresh() }
+                                Task {
+                                    if !(await model.setBackdate(captureID, to: nil)) { backdateFailed = true }
+                                    await refresh()
+                                }
                             }
                             .accessibilityIdentifier("detail.clearBackdateButton")
                         }
@@ -134,7 +159,12 @@ struct EntryDetailView: View {
                             let date = backdateDraft
                             let precision = backdatePrecisionDraft
                             showingBackdatePicker = false
-                            Task { await model.setBackdate(captureID, to: date, precision: precision); await refresh() }
+                            Task {
+                                if !(await model.setBackdate(captureID, to: date, precision: precision)) {
+                                    backdateFailed = true
+                                }
+                                await refresh()
+                            }
                         }
                         .accessibilityIdentifier("detail.backdateSave")
                     }
@@ -159,7 +189,10 @@ struct EntryDetailView: View {
             Menu {
                 ForEach(model.journals) { journal in
                     Button(journal.name) {
-                        Task { await model.moveEntry(captureID, toJournal: journal.id); await refresh() }
+                        Task {
+                            if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
+                            await refresh()
+                        }
                     }
                 }
             } label: {
@@ -245,15 +278,24 @@ struct EntryDetailView: View {
             .accessibilityIdentifier("detail.trashButton")
     }
 
-    /// Stop playback and pop **before** the write. `ContentView`'s destination renders
-    /// this screen only while `library.item(captureID)` resolves, and the rescan inside
-    /// `trashEntry` republishes the lists — leaving the pop until afterwards means the
-    /// screen the owner is looking at is briefly a view of an entry that is no longer in
-    /// the list it was pushed from.
+    /// Stop playback, then await the write and pop only on success. This used to pop
+    /// **before** the write, on the theory that `ContentView`'s destination renders this
+    /// screen only while `library.item(captureID)` resolves and the rescan inside
+    /// `trashEntry` republishes the lists — so waiting would briefly show a view of an
+    /// entry no longer in the list it was pushed from. That concern doesn't apply here:
+    /// with await-then-dismiss the entry is only delisted *after* `trashEntry` succeeds,
+    /// so the screen is never showing a stale, already-gone entry. Pop-first also made
+    /// the failure invisible on device — the screen was gone before the caller could
+    /// know the write never took, which is the bug this function now exists to not have.
     private func moveToTrash() {
         playback?.stop()
-        dismiss()
-        Task { await model.trashEntry(captureID) }
+        Task {
+            if await model.trashEntry(captureID) {
+                dismiss()
+            } else {
+                trashFailed = true
+            }
+        }
     }
 
     private func labeledRow(_ label: String, _ value: String) -> some View {

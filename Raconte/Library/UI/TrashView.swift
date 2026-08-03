@@ -18,6 +18,9 @@ struct TrashView: View {
     /// hit exactly this on device with no feedback (the entry quietly stayed).
     @State private var permanentDeleteFailed = false
 
+    /// A restore that reported failure — same swallowed-`try?` family.
+    @State private var restoreFailed = false
+
     var body: some View {
         Group {
             if model.trashed.isEmpty {
@@ -26,7 +29,13 @@ struct TrashView: View {
                 List {
                     ForEach(model.trashed) { item in
                         TrashEntryRow(item: item,
-                                      onRestore: { Task { await model.restoreEntry(item.captureID) } },
+                                      onRestore: {
+                                          Task {
+                                              if !(await model.restoreEntry(item.captureID)) {
+                                                  restoreFailed = true
+                                              }
+                                          }
+                                      },
                                       onDeleteNow: { pendingPermanentDelete = item })
                     }
                 }
@@ -59,6 +68,11 @@ struct TrashView: View {
             Button("OK") { permanentDeleteFailed = false }
         } message: {
             Text("The files couldn’t be removed. Try again, or restart the app.")
+        }
+        .alert("Couldn’t restore this entry", isPresented: $restoreFailed) {
+            Button("OK") { restoreFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
         }
     }
 

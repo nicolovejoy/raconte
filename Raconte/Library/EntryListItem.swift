@@ -111,6 +111,9 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
         get { metadata.originalDate }
         set { metadata.originalDate = newValue }
     }
+    /// Precision `originalDate` was set at, defaulted. Meaningless when `originalDate`
+    /// is nil — display code should gate on `isBackdated` before reading it.
+    var originalDatePrecision: DatePrecision { metadata.effectivePrecision }
 
     var durationSeconds: Double
     /// First stretch of committed transcript text, whitespace-collapsed and truncated.

@@ -220,7 +220,7 @@ struct LibraryEntryRow: View {
         .accessibilityIdentifier("library.row")
     }
 
-    private var dateText: String { item.effectiveDate.formatted(date: .abbreviated, time: .omitted) }
+    private var dateText: String { item.originalDatePrecision.formatted(item.effectiveDate) }
     private var recordedDateText: String { item.capturedAt.formatted(date: .abbreviated, time: .shortened) }
     private var durationText: String { CaptureCoordinator.formatDuration(item.durationSeconds) }
 }

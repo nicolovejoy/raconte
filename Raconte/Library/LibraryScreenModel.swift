@@ -166,9 +166,14 @@ final class LibraryScreenModel {
         await rescan()
     }
 
-    /// Set, change, or clear (`date == nil`) the backdate.
-    func setBackdate(_ captureID: String, to date: Date?) async {
-        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.originalDate = date }
+    /// Set, change, or clear (`date == nil`) the backdate. `precision` is ignored when
+    /// clearing — `EntryMetadata.effectivePrecision` is meaningless without a date, so
+    /// there is nothing to reset it to.
+    func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async {
+        _ = try? await entryMetadataStore.update(captureID: captureID) {
+            $0.originalDate = date
+            $0.precision = date == nil ? nil : precision
+        }
         await rescan()
     }
 

@@ -1,5 +1,36 @@
 import Foundation
 
+/// Precision `originalDate` was set at (M3 issue #14 part 1) — paper journals are often
+/// dated only to a year, or a year and month. Meaningless when `originalDate` is `nil`.
+enum DatePrecision: String, Codable, Sendable, CaseIterable {
+    case day
+    case yearMonth
+    case year
+
+    /// Collapses `date` to the first instant this precision can represent — year → Jan 1,
+    /// yearMonth → the 1st — in the current calendar. `.day` returns `date` unchanged.
+    /// The one place this happens: `EntryMetadata.effectiveDate(capturedAt:)` calls it,
+    /// and every sort/date-range/display call site goes through that, not `originalDate`
+    /// directly, so there is exactly one rule for what a reduced-precision date "is".
+    func normalized(_ date: Date, calendar: Calendar = .current) -> Date {
+        switch self {
+        case .day: return date
+        case .yearMonth: return calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        case .year: return calendar.date(from: calendar.dateComponents([.year], from: date)) ?? date
+        }
+    }
+
+    /// Format `date` at this precision — "1998", "March 1998", or a calendar date.
+    /// `dayStyle` only matters for `.day`; the other two have exactly one rendering each.
+    func formatted(_ date: Date, dayStyle: Date.FormatStyle.DateStyle = .abbreviated) -> String {
+        switch self {
+        case .day: return date.formatted(date: dayStyle, time: .omitted)
+        case .yearMonth: return date.formatted(.dateTime.year().month(.wide))
+        case .year: return date.formatted(.dateTime.year())
+        }
+    }
+}
+
 /// User-owned metadata for one capture, stored as `entry.json` **beside** the manifest.
 ///
 /// Not in the manifest, on purpose (M3 plan, "architecture stance"): the manifest is
@@ -21,13 +52,21 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// a 1987 paper journal aloud). `nil` ⇒ use the capture's own date.
     var originalDate: Date?
 
+    /// Precision `originalDate` was set at. `nil` ⇒ `.day` — the only precision this
+    /// field had before M3 issue #14, so an old sidecar with a backdate and no precision
+    /// key keeps meaning exactly what it always meant. Meaningless when `originalDate`
+    /// is `nil`; nothing reads it in that case.
+    var precision: DatePrecision?
+
     /// Soft-delete tombstone (M3 T5). The field lands now so the format does not churn
     /// once trash ships; nothing writes it yet.
     var trashedAt: Date?
 
-    init(journalID: String? = nil, originalDate: Date? = nil, trashedAt: Date? = nil) {
+    init(journalID: String? = nil, originalDate: Date? = nil, precision: DatePrecision? = nil,
+         trashedAt: Date? = nil) {
         self.journalID = journalID
         self.originalDate = originalDate
+        self.precision = precision
         self.trashedAt = trashedAt
     }
 
@@ -41,8 +80,16 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// it, which also keeps `holdsIrreplaceableArtifacts` honest.
     var isDefault: Bool { self == Self.defaults }
 
-    /// The entry's effective date: the backdate if set, otherwise the capture's own.
-    func effectiveDate(capturedAt: Date) -> Date { originalDate ?? capturedAt }
+    /// `precision`, defaulted for the "absent ⇒ `.day`" rule. Use this, not `precision`
+    /// directly, wherever the value must be a real precision rather than an optional.
+    var effectivePrecision: DatePrecision { precision ?? .day }
+
+    /// The entry's effective date: the backdate if set (normalized to its precision —
+    /// see `DatePrecision.normalized`), otherwise the capture's own.
+    func effectiveDate(capturedAt: Date) -> Date {
+        guard let originalDate else { return capturedAt }
+        return effectivePrecision.normalized(originalDate)
+    }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
     /// synthesized decoder ignores property defaults, so *every* key would be required —
@@ -58,6 +105,7 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         journalID = try container.decodeIfPresent(String.self, forKey: .journalID)
         originalDate = try container.decodeIfPresent(Date.self, forKey: .originalDate)
+        precision = try container.decodeIfPresent(DatePrecision.self, forKey: .precision)
         trashedAt = try container.decodeIfPresent(Date.self, forKey: .trashedAt)
     }
 

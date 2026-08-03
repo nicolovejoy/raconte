@@ -230,8 +230,43 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(manifest.lastKnownFrameOffset, 1000)
         // Issue #9: the interruption entry must close, not stay open forever.
         XCTAssertEqual(manifest.interruptions.count, 1)
-        XCTAssertNotNil(manifest.interruptions[0].endedAt)
+        XCTAssertNotNil(manifest.interruptions[0].closedAt)
         XCTAssertEqual(manifest.interruptions[0].resumed, true)
+        // Issue #19: `resumeAvailable` IS a system-reported end signal, so `endedAt`
+        // must be known here too, not just `closedAt`.
+        XCTAssertNotNil(manifest.interruptions[0].endedAt,
+                        "resumeAvailable is a known system end signal")
+    }
+
+    /// Issue #19: `endedAt` must be the moment `resumeAvailable` was received, not
+    /// the (potentially much later) moment reacquire actually finishes and closes
+    /// the entry. A mocked coordinator clock pins `endedAt` to an arbitrary fixed
+    /// instant unrelated to wall-clock "now"; the store's own `closedAt` stamp (real
+    /// `.live` clock, since this test's `makeStore` closure injects none) lands at
+    /// the real current time — so the two are provably different values, proving
+    /// `endedAt` was actually threaded through rather than re-derived from `closedAt`.
+    func testResumeAvailableEndedAtIsTheReceiptMomentNotTheReacquireMoment() async throws {
+        let mockedInstant = Date(timeIntervalSince1970: 20_000 * 86_400)
+        let clock = MutableClock(mockedInstant)
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          now: { clock.now })
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .recording }, "did not resume")
+
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertEqual(manifest.interruptions[0].endedAt, mockedInstant,
+                       "endedAt must be the mocked clock's value at resumeAvailable receipt")
+        let closedAt = try XCTUnwrap(manifest.interruptions[0].closedAt)
+        XCTAssertNotEqual(closedAt, mockedInstant,
+                          "closedAt is the store's own real-clock stamp, independent of endedAt")
     }
 
     // MARK: issue #9 — stopping from `interrupted` closes the entry as not resumed
@@ -250,9 +285,13 @@ final class CaptureCoordinatorTests: XCTestCase {
 
         let manifest = try decodeManifest()
         XCTAssertEqual(manifest.interruptions.count, 1)
-        XCTAssertNotNil(manifest.interruptions[0].endedAt,
+        XCTAssertNotNil(manifest.interruptions[0].closedAt,
                         "row 14 (interrupted -> done) must close the open entry")
         XCTAssertEqual(manifest.interruptions[0].resumed, false)
+        // Issue #19: the Done tap is not a system signal for when the interruption
+        // actually ended — that must stay honestly nil, not the tap's own moment.
+        XCTAssertNil(manifest.interruptions[0].endedAt,
+                    "the owner's Done tap must not be fabricated as the interruption's true end")
     }
 
     /// Reacquire keeps failing until the resume-retry budget is exhausted (rows
@@ -284,9 +323,13 @@ final class CaptureCoordinatorTests: XCTestCase {
 
         let manifest = try decodeManifest()
         XCTAssertEqual(manifest.interruptions.count, 1)
-        XCTAssertNotNil(manifest.interruptions[0].endedAt,
+        XCTAssertNotNil(manifest.interruptions[0].closedAt,
                         "rows 10/11 give-up must close the open entry")
         XCTAssertEqual(manifest.interruptions[0].resumed, false)
+        // Issue #19: giving up on the retry budget never learns when the
+        // interruption actually ended — must stay honestly nil.
+        XCTAssertNil(manifest.interruptions[0].endedAt,
+                    "giving up is not a system end signal")
     }
 
     // MARK: 3b — route loss auto-resumes onto the new device (issue #5)
@@ -320,6 +363,13 @@ final class CaptureCoordinatorTests: XCTestCase {
         let manifest = try decodeManifest()
         XCTAssertEqual(manifest.state, .captured)
         XCTAssertEqual(manifest.interruptions.first?.kind, "routeChange")
+        // Issue #19: route loss never gets a `resumeAvailable` signal — the device
+        // is simply gone — so `endedAt` must stay nil even though the entry closed
+        // as resumed.
+        XCTAssertNotNil(manifest.interruptions.first?.closedAt)
+        XCTAssertEqual(manifest.interruptions.first?.resumed, true)
+        XCTAssertNil(manifest.interruptions.first?.endedAt,
+                    "route loss has no 'interruption ended' signal to thread through")
     }
 
     // MARK: 4 — launch recovery of a pre-seeded crashed capture

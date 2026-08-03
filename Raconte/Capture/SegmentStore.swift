@@ -143,8 +143,7 @@ actor SegmentStore: PCMSink {
     func markInterrupted(kind: String, beganAt: Date) throws {
         try closeCurrentSegment(reason: .interruption)
         manifest.state = .interrupted
-        manifest.interruptions.append(
-            InterruptionLogEntry(kind: kind, beganAt: beganAt, endedAt: nil, resumed: nil))
+        manifest.interruptions.append(InterruptionLogEntry(kind: kind, beganAt: beganAt))
         manifest.segmentCount = segmentCount
         manifest.lastKnownFrameOffset = cumulativeFrameOffset
         try persistManifest()
@@ -153,9 +152,12 @@ actor SegmentStore: PCMSink {
     /// Reacquired the engine after an interruption (§2 row 9): persist `recording`
     /// (write-ahead) then open the next segment. Closes the open interruption entry
     /// (issue #9) in the SAME write as the state flip, so a kill right after resume
-    /// can't land `recording` on disk with the entry still open.
-    func resumeRecording() throws {
-        closeMostRecentOpenInterruption(resumed: true)
+    /// can't land `recording` on disk with the entry still open. `interruptionEndedAt`
+    /// is the moment the system told us the interruption ended (the `resumeAvailable`
+    /// notification) — nil when the resume was never preceded by that signal (route
+    /// loss auto-resume, or a manual resume after `mediaServicesReset`; issue #19).
+    func resumeRecording(interruptionEndedAt: Date? = nil) throws {
+        closeMostRecentOpenInterruption(resumed: true, endedAt: interruptionEndedAt)
         manifest.state = .recording
         try persistManifest()
         try openCurrentSegmentFile()
@@ -168,7 +170,8 @@ actor SegmentStore: PCMSink {
     /// `-> captured` paths that leave an interruption while it's still open: the user
     /// stopping from `interrupted` (row 14) and reacquire giving up its retry budget
     /// (row 11). Never pass it for `.interrupted`/`.resuming`, which must leave the
-    /// entry open.
+    /// entry open. Neither path ever received a system "ended" signal, so `endedAt`
+    /// stays nil (issue #19) — only `closedAt`/`resumed` are stamped.
     func setState(_ state: CaptureState,
                   needsAttention: Bool? = nil, lastError: String? = nil,
                   retryCount: Int? = nil, finalizeAttempts: Int? = nil,
@@ -274,14 +277,19 @@ actor SegmentStore: PCMSink {
         try persistManifest()
     }
 
-    /// Closes the most recent open interruption entry (`endedAt == nil`), stamping
-    /// `endedAt`/`resumed`. A well-formed log never has more than one open entry, but
-    /// if a crash between `markInterrupted` and its close somehow left an earlier one
+    /// Closes the most recent open interruption entry (`closedAt == nil`), stamping
+    /// `closedAt` (when we stopped waiting) and `resumed`. `endedAt`, when supplied,
+    /// is the moment the system told us the interruption itself ended — nil when
+    /// that's unknowable (issue #19). `closedAt`, not `endedAt`, is what marks an
+    /// entry as open/closed: `endedAt` can be legitimately, permanently nil on a
+    /// closed entry. A well-formed log never has more than one open entry, but if a
+    /// crash between `markInterrupted` and its close somehow left an earlier one
     /// open too, that entry is left alone — it's evidence, not clutter. No-op if none
     /// open. Caller persists the manifest.
-    private func closeMostRecentOpenInterruption(resumed: Bool) {
-        guard let index = manifest.interruptions.lastIndex(where: { $0.endedAt == nil }) else { return }
-        manifest.interruptions[index].endedAt = clock.now()
+    private func closeMostRecentOpenInterruption(resumed: Bool, endedAt: Date? = nil) {
+        guard let index = manifest.interruptions.lastIndex(where: { $0.closedAt == nil }) else { return }
+        manifest.interruptions[index].endedAt = endedAt
+        manifest.interruptions[index].closedAt = clock.now()
         manifest.interruptions[index].resumed = resumed
     }
 

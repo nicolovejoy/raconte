@@ -90,6 +90,35 @@ final class BackdateCarryOverTests: XCTestCase {
         XCTAssertEqual(model.backdatePrecision, .day)
     }
 
+    /// The dangerous case: the toggle stays ON across a journal switch. Journal A's
+    /// dialled 1987 date must not leak into journal B's next capture — B gets its own
+    /// carry (none yet, so today/.day), and switching back to A restores A's.
+    func testCarryOverDoesNotCrossJournalsWhileToggleStaysOn() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+
+        model.setBackdateEnabled(true)
+        model.setBackdateDate(date(1987, 6, 12))
+        XCTAssertEqual(model.carriedBackdate(), PartialDate(year: 1987, month: 6, day: 12))
+
+        let created = await model.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+        XCTAssertEqual(model.selectedJournalID, b.id)
+        XCTAssertTrue(model.backdateEnabled, "the toggle itself is untouched by the switch")
+        XCTAssertNil(model.carriedBackdate(), "journal B has no carry of its own yet")
+        XCTAssertEqual(Calendar.gregorianCurrent.component(.year, from: model.backdateDate),
+                       Calendar.gregorianCurrent.component(.year, from: Date()),
+                       "resolves to today, never journal A's 1987 date")
+        XCTAssertEqual(model.backdatePrecision, .day)
+
+        model.selectJournal(a)
+        XCTAssertEqual(PartialDate(from: model.backdateDate, precision: model.backdatePrecision,
+                                    calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 12),
+                       "switching back to A restores A's own carry")
+    }
+
     /// Pre-filled, not locked: the picker still writes through normally afterwards.
     func testPrefilledBackdateIsStillEditable() async throws {
         let model = makeModel()

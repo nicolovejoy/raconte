@@ -1175,9 +1175,10 @@ decisions with rationale, not as questions.
    §14: end-sentence / end-paragraph / **switch-voice** markers (the owner's journals are
    conversations between "little Nico" and "big Nico", distinguished on paper by print vs
    cursive).
-6. **Whole-revision for v1.** Open follow-on discussion (not a T6 blocker): whether entries
-   should be kept roughly one journal-page long. Current lean: one entry per read journal
-   page/date — it is also what gives per-entry spoken-date detection its chance to fire.
+6. **Whole-revision for v1.** And decided in the same exchange: **one entry per read journal
+   page** is the working practice for archival reading — it is also what gives per-entry
+   spoken-date detection its chance to fire. Long free-form entries remain fine for new
+   material.
 7. **Yes** — decline is a recorded merge.
 8. **Yes** — detached revisions visible, labeled.
 

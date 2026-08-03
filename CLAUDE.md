@@ -1,5 +1,51 @@
 # CLAUDE.md
 
+## Session 2026-08-03 afternoon (subagent-driven; 595 → 632 unit tests, 8 UI tests)
+
+**Closed: #19 #20 #21**, plus no-future-backdates (owner ask) and library swipe actions.
+Every build ran through a Sonnet/Opus subagent with parent diff review before commit;
+TDD prompts now require red-first evidence or a mutation check (see memory).
+
+- **No-future-backdates** (`718052f`): `PartialDate.isFuture` (precision-aware, injectable
+  clock), `EntryMetadata.setOriginalDate` the single write path (rejects, never clamps),
+  detection discards future dates *without* latching. Mutation-verified.
+- **#21** (`675c409`): `detectionRan` latch decodes from the `detectedDate` key's presence,
+  independent of value parse; explicit key written only in the ran-but-valueless state.
+- **#19** (`223b6d8`): `endedAt` = system's resumeAvailable receipt only (honestly nil
+  otherwise); new `closedAt` = when we stopped waiting, and is the open/closed marker.
+  Legacy records migrate on read.
+- **#20** (`916d47a`): resume's disk half moved into `rebuildAndReacquire` before
+  `.engineReady` — the only spot `.reacquireFailed` is still legal; store rolls back its
+  in-memory manifest on a failed segment open. Failure surfaces via rows 10/11 + lastError.
+- **Owner trash bug, root-caused via device forensics** (wireless container pull —
+  `devicectl device copy from --domain-type appDataContainer`): detail-view Move to Trash
+  was fire-and-forget *during view dismissal* (pop first, write later, `_ = try?`), so the
+  tombstone never reached disk and Delete Now correctly-but-silently refused. Swipe path
+  always worked (same model call, no teardown). Fix (`9c90ae8`, `a477999`):
+  `trashEntry`/`restoreEntry`/`moveEntry`/`setBackdate` return Bool, every call site
+  alerts, detail trash awaits-then-dismisses. deleteEntryPermanently no longer lies.
+- **T6 revision-chain design rev 2 committed** (`5fc0ad0`) after two Opus adversarial
+  passes killed rev 1's core (stored `detached` + highest-n current = data loss on second
+  machine pass and on sync). Rev 2: `(createdAt, ULID)` order, ancestry-derived
+  attachment, create-once writes, read-path-never-writes. **All 8 owner questions
+  decided** (§12), incl. queue-not-close for drafts, decline-as-merge, page-per-entry.
+  **§14 records voice markers**: LN/BN switch-voice + end-sentence/end-paragraph capture
+  buttons (his journals are two-voice conversations, print vs cursive) — needs its own
+  short design pass before T7.
+- Filed: #22 (flaky reacquire test, 2/12), #23 (try?-swallowed manifest writes), #24
+  (give-up leaves session active), #25 (non-atomic removeItem can un-trash an entry),
+  #26 (capture pause — owner ask, maps onto interruption machinery).
+
+**Next steps:**
+1. Owner smoke test on phone build 14:29 PT (`a477999`): detail-trash, Delete Now on the
+   fishing entry, restore round-trip, swipe actions. If detail-trash alerts, pull the
+   container again.
+2. Voice-markers design pass (§14 of T6 doc) — before T7.
+3. T7 editor UI (whole-revision accept v1) + audit log build; T8 retranscribe.
+4. #25 staged removal (data-safety adjacent); #22 flake root-cause when touching that area.
+5. Backdate-precedence build (docs/plans/2026-08-03-backdate-precedence-ux.md, option B +
+   affordance) — owner answered the T6 questions but B's backdateOrigin build is unstarted.
+
 ## Status 2026-07-30 (overnight autonomous session)
 
 Landed overnight (all pushed to main):

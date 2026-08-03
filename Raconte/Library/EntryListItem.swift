@@ -159,6 +159,9 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     }
 
     var isBackdated: Bool { originalDate != nil }
+    /// The backdate came from the recording's own opening words and has not been edited
+    /// (M3 issue #15) — the detail screen says so under the date.
+    var backdateWasDetected: Bool { metadata.backdateWasDetected }
     var isTrashed: Bool { metadata.isTrashed }
 
     /// A journal was named and could not be resolved. Distinct from unfiled.

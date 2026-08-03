@@ -60,10 +60,27 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// once trash ships; nothing writes it yet.
     var trashedAt: Date?
 
-    init(journalID: String? = nil, originalDate: PartialDate? = nil, trashedAt: Date? = nil) {
+    /// The date `SpokenDateParser` read off the transcript's opening (M3 issue #15), or
+    /// nil when detection has not run or found nothing.
+    ///
+    /// **This field is the once-only latch**, not a cache. Detection writes it the first
+    /// time it runs and never revises it, so re-running over the same entry is a no-op —
+    /// which is what lets the hook be "whenever the transcript first exists" rather than
+    /// fragile exactly-once plumbing. It also survives the owner clearing the backdate:
+    /// a cleared backdate must stay cleared, and re-deriving it from the same transcript
+    /// on the next pass is precisely the bug the latch prevents.
+    ///
+    /// It is *not* `originalDate`. `originalDate` is what the entry is dated; this is
+    /// only what the recording said, kept so the UI can tell the owner which of the two
+    /// he is looking at.
+    var detectedDate: PartialDate?
+
+    init(journalID: String? = nil, originalDate: PartialDate? = nil, trashedAt: Date? = nil,
+         detectedDate: PartialDate? = nil) {
         self.journalID = journalID
         self.originalDate = originalDate
         self.trashedAt = trashedAt
+        self.detectedDate = detectedDate
     }
 
     /// What an absent `entry.json` means. An unfiled, un-backdated, live entry.
@@ -75,6 +92,13 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// is optional. Callers may use this to avoid creating a file with no information in
     /// it, which also keeps `holdsIrreplaceableArtifacts` honest.
     var isDefault: Bool { self == Self.defaults }
+
+    /// The backdate in force is the one the recording named, unedited. False once the
+    /// owner touches it (that changes `originalDate` alone) and false when detection
+    /// found a date it was not allowed to apply because a manual backdate already existed.
+    var backdateWasDetected: Bool {
+        originalDate != nil && originalDate == detectedDate
+    }
 
     /// `originalDate.precision`, defaulted for the "absent ⇒ `.day`" rule. Use this, not
     /// `originalDate?.precision`, wherever the value must be a real precision rather than
@@ -92,7 +116,7 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// field a legacy `originalDate` (an ISO8601 instant) needs alongside it to convert
     /// into a `PartialDate`. New sidecars never write it.
     private enum CodingKeys: String, CodingKey {
-        case journalID, originalDate, trashedAt
+        case journalID, originalDate, trashedAt, detectedDate
         case legacyPrecision = "precision"
     }
 
@@ -115,6 +139,12 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         journalID = try container.decodeIfPresent(String.self, forKey: .journalID)
         trashedAt = try container.decodeIfPresent(Date.self, forKey: .trashedAt)
         originalDate = try Self.decodeOriginalDate(container)
+        // Additive and lenient, unlike `originalDate` above: this is derived from a
+        // transcript that is still on disk, so a value we cannot read costs a re-derive
+        // and nothing else. Throwing here would make one damaged derived field render
+        // the whole sidecar unreadable — losing the journal, the backdate and the trash
+        // state with it.
+        detectedDate = (try? container.decodeIfPresent(PartialDate.self, forKey: .detectedDate)) ?? nil
     }
 
     private static func decodeOriginalDate(
@@ -145,5 +175,6 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         try container.encodeIfPresent(journalID, forKey: .journalID)
         try container.encodeIfPresent(originalDate, forKey: .originalDate)
         try container.encodeIfPresent(trashedAt, forKey: .trashedAt)
+        try container.encodeIfPresent(detectedDate, forKey: .detectedDate)
     }
 }

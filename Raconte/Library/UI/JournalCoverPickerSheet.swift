@@ -11,7 +11,11 @@ import UIKit
 /// instead of the legacy `PHPhotoLibrary` API.
 struct JournalCoverPickerSheet: View {
     let journalName: String
-    let hasCover: Bool
+    /// The current cover's JPEG bytes, shown large at the top of the sheet — the tiny
+    /// header/chip thumbnails aren't enough to confirm which image is actually set
+    /// (owner feedback, smoke pass 2026-08-02).
+    let currentCover: Data?
+    var hasCover: Bool { currentCover != nil }
     /// Returns false when the bytes didn't take (`JournalCoverError.invalidImage`) —
     /// the sheet stays up and shows the alert instead of dismissing over a silent no-op.
     let onPick: (Data) async -> Bool
@@ -31,6 +35,16 @@ struct JournalCoverPickerSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                if let currentCover {
+                    Section {
+                        JournalCoverPreview(data: currentCover)
+                            .frame(maxWidth: .infinity)
+                            .listRowInsets(EdgeInsets())
+                            .accessibilityIdentifier("journalCover.preview")
+                    } header: {
+                        Text("Current cover")
+                    }
+                }
                 #if os(iOS)
                 // Guarded: `.camera` on a device without one (any simulator) is an
                 // exception at presentation time, not a graceful empty picker.

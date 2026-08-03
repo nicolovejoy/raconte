@@ -672,7 +672,7 @@ struct JournalHeaderView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    JournalCoverThumbnail(data: model.selectedJournalCover, size: 22)
+                    JournalCoverThumbnail(data: model.selectedJournalCover, size: 34)
                         .accessibilityIdentifier("capture.journalCoverThumbnail")
                     Text(model.selectedJournalName)
                         .font(.title3.weight(.semibold))
@@ -713,7 +713,7 @@ struct JournalHeaderView: View {
             // it renders invisible on the system sheet background.
             JournalCoverPickerSheet(
                 journalName: model.selectedJournalName,
-                hasCover: model.selectedJournalCover != nil,
+                currentCover: model.selectedJournalCover,
                 onPick: { data in
                     do { try await model.setCurrentJournalCover(imageData: data); return true }
                     catch { return false }

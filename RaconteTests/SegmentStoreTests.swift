@@ -394,6 +394,39 @@ final class SegmentStoreTests: XCTestCase {
         XCTAssertNotEqual(decoded.endedAt, decoded.closedAt)
     }
 
+    // MARK: issue #20 — a failed resume leaves the in-memory manifest untouched
+
+    /// `resumeRecording` mutates the manifest (closes the interruption entry, flips
+    /// to `recording`) before it can know the segment file will open. If the open
+    /// fails, those mutations must be rolled back — otherwise the coordinator's
+    /// next write stamps an interruption as `resumed` that never was, and the
+    /// store's own idea of its state disagrees with the disk.
+    func testResumeRecordingRollsBackManifestWhenTheSegmentCannotOpen() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+        try await store.begin()
+        try await store.append(PCMChunk(data: Data(repeating: 7, count: 400),
+                                        frameCount: 100, sampleRate: 48000))
+        try await store.markInterrupted(kind: "interruption", beganAt: Date())
+
+        let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: segs.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                       ofItemAtPath: segs.path) }
+
+        do {
+            try await store.resumeRecording(interruptionEndedAt: Date())
+            XCTFail("resumeRecording must throw when the next segment cannot be opened")
+        } catch {}
+
+        let m = await store.currentManifest()
+        XCTAssertEqual(m.state, .interrupted, "a failed resume must not claim `recording`")
+        XCTAssertEqual(m.interruptions.count, 1)
+        XCTAssertNil(m.interruptions[0].closedAt,
+                     "the interruption is still open — the resume never happened")
+        XCTAssertNil(m.interruptions[0].resumed)
+    }
+
     // MARK: setState persists operational fields
 
     func testSetStatePersistsOperationalFields() async throws {

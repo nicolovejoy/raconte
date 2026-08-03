@@ -332,6 +332,106 @@ final class CaptureCoordinatorTests: XCTestCase {
                     "giving up is not a system end signal")
     }
 
+    // MARK: issue #20 — a failed resume must never leave a running timer over a
+    // capture that writes nothing.
+
+    /// Make the capture's `segments/` directory unwritable, so
+    /// `SegmentStore.resumeRecording` persists the `recording` manifest and then
+    /// fails to `open()` the next segment — the exact split the issue describes.
+    /// The capture directory itself stays writable, so the coordinator's failure
+    /// handling can still persist its manifest write.
+    @discardableResult
+    private func sealSegmentsDirectory(_ sealed: Bool) throws -> URL {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: kCaptureID)
+        let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
+        try FileManager.default.setAttributes([.posixPermissions: sealed ? 0o555 : 0o755],
+                                              ofItemAtPath: segs.path)
+        return segs
+    }
+
+    /// Retry budget left: the machine must land back in `interrupted` (blinking,
+    /// Done offered, clock stopped), NOT `recording`, and the failure must be on
+    /// disk for launch recovery to see.
+    func testFailedResumeDiskWriteReturnsToInterruptedNotRecording() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        // A long backoff keeps the state observable: the automatic retry must not
+        // race the assertions.
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          resumeBackoff: .seconds(30))
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        await waitUntil({ [self] in (try? decodeManifest())?.state == .interrupted },
+                        "manifest not interrupted on disk")
+
+        try sealSegmentsDirectory(true)
+        defer { try? sealSegmentsDirectory(false) }
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ [self] in (try? decodeManifest())?.retryCount == 1 },
+                        "failed resume was never accounted for on disk")
+
+        XCTAssertEqual(coordinator.phase, .interrupted,
+                       "a resume whose disk write failed must not publish `recording`")
+        let elapsed = coordinator.elapsed
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(coordinator.elapsed, elapsed, accuracy: 0.001,
+                       "the elapsed clock must not run over a capture that writes nothing")
+
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .interrupted)
+        XCTAssertNotNil(manifest.lastError,
+                        "launch recovery must be able to see that the resume failed")
+        // The interruption never ended: the entry stays OPEN so a later resume (or
+        // give-up) closes it truthfully.
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertNil(manifest.interruptions[0].closedAt,
+                     "a failed resume must not stamp the interruption as resumed")
+        XCTAssertNotNil(coordinator.lastError, "the owner must be told the resume failed")
+
+        // The audio recorded before the interruption is untouched.
+        let s0 = try decodeSidecar(0)
+        XCTAssertEqual(s0.frameCount, 750)
+    }
+
+    /// Budget exhausted: the machine gives up to `captured`, the pre-interruption
+    /// audio is queued for finalize, and the interruption closes as NOT resumed.
+    func testFailedResumeDiskWriteGivesUpToCapturedWithAudioIntact() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          machine: CaptureMachine(resumeRetryBudget: 0),
+                                          resumeBackoff: .milliseconds(20))
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        await waitUntil({ [self] in (try? decodeManifest())?.state == .interrupted },
+                        "manifest not interrupted on disk")
+
+        try sealSegmentsDirectory(true)
+        defer { try? sealSegmentsDirectory(false) }
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .captured },
+                        "a failed resume with no budget left must give up to captured")
+
+        XCTAssertEqual(coordinator.finalizeQueue, [kCaptureID],
+                       "the audio that WAS recorded must still reach the finalizer")
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .captured)
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertEqual(manifest.interruptions[0].resumed, false,
+                       "the resume failed — the log must not claim it succeeded")
+        XCTAssertNotNil(manifest.interruptions[0].closedAt)
+
+        let s0 = try decodeSidecar(0)
+        XCTAssertEqual(s0.frameCount, 750)
+        XCTAssertEqual(s0.startFrameOffset, 0)
+    }
+
     // MARK: 3b — route loss auto-resumes onto the new device (issue #5)
 
     func testRouteLostAutoResumesOntoNewDevice() async throws {

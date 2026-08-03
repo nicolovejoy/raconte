@@ -140,6 +140,11 @@ final class CaptureCoordinator {
     /// path (route loss, mediaServicesReset, give-up) ever learns a true end
     /// time (issue #19).
     private var pendingInterruptionEndedAt: Date?
+    /// Set when the *disk* half of a resume failed (issue #20), so the resulting
+    /// `.reacquireFailed` write records why on the manifest — launch recovery
+    /// carries `lastError` forward, so the evidence survives a kill. Nil for the
+    /// session/engine reacquire failures, whose handling is unchanged.
+    private var pendingResumeFailure: String?
 
     // MARK: Init
 
@@ -295,7 +300,10 @@ final class CaptureCoordinator {
             await beginRecording()
 
         case .engineReady where previousPhase == .resuming:
-            await resumeRecordingDisk()
+            // The disk side of the resume already ran, inside `rebuildAndReacquire`
+            // (issue #20). Reaching `recording` therefore means the next segment is
+            // genuinely open, so the clock may run.
+            startRecordingClock(reset: false)
 
         case .prepareFailed(let error):
             handlePrepareFailed(error)
@@ -390,14 +398,6 @@ final class CaptureCoordinator {
         startRecordingClock(reset: true)
     }
 
-    private func resumeRecordingDisk() async {
-        guard let store = currentStore else { return }
-        let interruptionEndedAt = pendingInterruptionEndedAt
-        pendingInterruptionEndedAt = nil
-        try? await store.resumeRecording(interruptionEndedAt: interruptionEndedAt)
-        startRecordingClock(reset: false)
-    }
-
     private func handlePrepareFailed(_ error: CaptureError) {
         currentRecorder?.stop()
         session.deactivate()
@@ -439,16 +439,49 @@ final class CaptureCoordinator {
         do { try recorder.start(sink: tee, matching: format, onLevel: { level.set($0) }) }
         catch { await send(.reacquireFailed); return }
         currentRecorder = recorder
+
+        // Issue #20: the disk half of the resume (persist `recording`, open the next
+        // segment) runs HERE, before the machine is told the engine is ready, because
+        // `.reacquireFailed` is only legal from `resuming`. Once `.engineReady` lands
+        // the phase is `recording` and there is no honest way back — a swallowed
+        // failure would raise the elapsed clock and the red indicator over a capture
+        // whose every later chunk the pump discards as `notRecording`.
+        //
+        // This is the same deviation-from-effect-order the section header documents:
+        // one coarse store call, placed where its failure is still expressible.
+        if let store = currentStore {
+            do {
+                try await store.resumeRecording(interruptionEndedAt: pendingInterruptionEndedAt)
+                pendingInterruptionEndedAt = nil
+            } catch {
+                // Not recording: stop the tap we just opened (nothing consumes it —
+                // the store has no live segment) and let rows 10/11 decide between
+                // another backoff retry and giving up to `captured`. The audio
+                // already on disk is untouched by either.
+                recorder.stop()
+                pendingResumeFailure = "resumeFailed"
+                await send(.reacquireFailed)
+                return
+            }
+        }
         await send(.engineReady)
     }
 
     private func handleReacquireResult(next: MachineState) async {
+        let resumeFailure = pendingResumeFailure
+        pendingResumeFailure = nil
         if next.phase == .interrupted {
-            await store(setState: .interrupted, retryCount: next.retryCount)
+            await store(setState: .interrupted, lastError: resumeFailure,
+                        retryCount: next.retryCount)
+            if resumeFailure != nil { lastError = "Couldn't resume recording — retrying" }
             scheduleResumeBackoff()
         } else if next.phase == .captured {
             // Resume-retry budget exhausted: gave up without ever resuming (issue #9).
-            await store(setState: .captured, closingInterruption: false)
+            await store(setState: .captured, lastError: resumeFailure,
+                        closingInterruption: false)
+            if resumeFailure != nil {
+                lastError = "Couldn't resume recording. Saved what was recorded."
+            }
             await completeCapture()
         }
     }
@@ -597,6 +630,7 @@ final class CaptureCoordinator {
         activeCaptureID = nil
         recordingSegmentStart = nil
         pendingInterruptionEndedAt = nil
+        pendingResumeFailure = nil
     }
 
     // MARK: Small helpers

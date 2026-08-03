@@ -22,6 +22,7 @@ struct EntryDetailView: View {
     @State private var transcript = EntryTranscript(state: .absent, text: nil, degradations: [])
     @State private var showingBackdatePicker = false
     @State private var backdateDraft = Date()
+    @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
 
     @Environment(\.dismiss) private var dismiss
@@ -45,7 +46,7 @@ struct EntryDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(item.effectiveDate.formatted(date: .abbreviated, time: .omitted))
+        .navigationTitle(item.originalDatePrecision.formatted(item.effectiveDate))
         .task { await refresh() }
         // No `deinit` on `CapturePlayback` stops the audio, and a `@State` value outlives
         // the pop by however long SwiftUI holds it — without this, backing out of a
@@ -79,7 +80,7 @@ struct EntryDetailView: View {
 
     private var datesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            labeledRow("Entry date", item.effectiveDate.formatted(date: .long, time: .omitted))
+            labeledRow("Entry date", item.originalDatePrecision.formatted(item.effectiveDate, dayStyle: .long))
                 .accessibilityIdentifier("detail.originalDate")
             labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
                 .accessibilityIdentifier("detail.capturedAt")
@@ -89,6 +90,7 @@ struct EntryDetailView: View {
             // an explicit destructive action.
             Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
                 backdateDraft = item.effectiveDate
+                backdatePrecisionDraft = item.originalDatePrecision
                 showingBackdatePicker = true
             }
             .accessibilityIdentifier("detail.backdateButton")
@@ -98,9 +100,8 @@ struct EntryDetailView: View {
 
     private var backdateSheet: some View {
         NavigationStack {
-            DatePicker("Entry date", selection: $backdateDraft, displayedComponents: .date)
-                .labelsHidden()
-                .datePickerStyle(.graphical)
+            PrecisionDatePicker(date: $backdateDraft, precision: $backdatePrecisionDraft,
+                                idPrefix: "detail", dayPickerStyle: .graphical)
                 .padding()
                 .accessibilityIdentifier("detail.backdatePicker")
                 .navigationTitle("Backdate")
@@ -117,8 +118,9 @@ struct EntryDetailView: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
                             let date = backdateDraft
+                            let precision = backdatePrecisionDraft
                             showingBackdatePicker = false
-                            Task { await model.setBackdate(captureID, to: date); await refresh() }
+                            Task { await model.setBackdate(captureID, to: date, precision: precision); await refresh() }
                         }
                         .accessibilityIdentifier("detail.backdateSave")
                     }

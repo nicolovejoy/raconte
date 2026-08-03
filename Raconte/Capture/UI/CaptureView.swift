@@ -74,6 +74,7 @@ final class CaptureScreenModel {
     /// the default is never materialized (`EntryMetadata`'s doc comment).
     private(set) var backdateEnabled = false
     private(set) var backdateDate = Date()
+    private(set) var backdatePrecision: DatePrecision = .day
 
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
@@ -283,15 +284,25 @@ final class CaptureScreenModel {
     }
 
     /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
-    /// nil ("use the capture's own date"), not to whatever was last picked.
+    /// nil ("use the capture's own date"), not to whatever was last picked. Precision
+    /// resets to `.day` alongside it, for the same reason: nothing should carry over
+    /// silently into the next time the owner turns backdating back on.
     func setBackdateEnabled(_ enabled: Bool) {
         backdateEnabled = enabled
-        if !enabled { backdateDate = Date() }
+        if !enabled {
+            backdateDate = Date()
+            backdatePrecision = .day
+        }
         syncActiveEntryMetadata()
     }
 
     func setBackdateDate(_ date: Date) {
         backdateDate = date
+        syncActiveEntryMetadata()
+    }
+
+    func setBackdatePrecision(_ precision: DatePrecision) {
+        backdatePrecision = precision
         syncActiveEntryMetadata()
     }
 
@@ -399,6 +410,7 @@ final class CaptureScreenModel {
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String) -> Task<Void, Never> {
         let originalDate = backdateEnabled ? backdateDate : nil
+        let precision = backdateEnabled ? backdatePrecision : nil
         let journalID = selectedJournalID
         let store = entryMetadataStore
         let previous = pendingMetadataWrite
@@ -407,6 +419,7 @@ final class CaptureScreenModel {
             _ = try? await store.update(captureID: captureID) { metadata in
                 if let journalID { metadata.journalID = journalID }
                 metadata.originalDate = originalDate
+                metadata.precision = precision
             }
         }
         pendingMetadataWrite = task
@@ -685,21 +698,18 @@ struct BackdateField: View {
             // Always rendered, disabled until the toggle is on — a conditional picker
             // with a hidden label left no visible "place to set the date" (smoke
             // feedback, 2026-08-02). The row itself is the affordance.
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Entry date")
                     .font(.caption)
                     .foregroundStyle(Color(white: 0.55))
-                DatePicker("Entry date", selection: Binding(
-                    get: { model.backdateDate },
-                    set: { model.setBackdateDate($0) }
-                ), displayedComponents: .date)
-                .labelsHidden()
-                .datePickerStyle(.compact)
+                PrecisionDatePicker(
+                    date: Binding(get: { model.backdateDate }, set: { model.setBackdateDate($0) }),
+                    precision: Binding(get: { model.backdatePrecision }, set: { model.setBackdatePrecision($0) }),
+                    idPrefix: "capture")
                 // The capture screen's background is near-black regardless of the app's
-                // color scheme, but the system picker styles its bubble for the ambient
+                // color scheme, but system controls style themselves for the ambient
                 // scheme — in light mode that's dark-on-dark (smoke feedback 2026-08-02).
                 .environment(\.colorScheme, .dark)
-                .accessibilityIdentifier("capture.backdateField")
             }
             .disabled(!model.backdateEnabled)
             .opacity(model.backdateEnabled ? 1 : 0.45)

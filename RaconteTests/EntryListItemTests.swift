@@ -63,6 +63,19 @@ final class EntryListItemTests: XCTestCase {
         XCTAssertEqual(entry.effectiveDate, entry.capturedAt)
     }
 
+    // MARK: Precision
+
+    func testOriginalDatePrecisionDefaultsToDay() {
+        let entry = item("A", capturedAt: 1_000, originalDate: 10)
+        XCTAssertEqual(entry.originalDatePrecision, .day)
+    }
+
+    func testOriginalDatePrecisionPassesThroughFromMetadata() {
+        let metadata = EntryMetadata(originalDate: date(10), precision: .year)
+        let entry = EntryListItem(captureID: "A", capturedAt: date(1_000), metadata: metadata)
+        XCTAssertEqual(entry.originalDatePrecision, .year)
+    }
+
     // MARK: Sorting
 
     func testSortsByEffectiveDateDescendingNotByCaptureTime() {

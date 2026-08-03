@@ -306,4 +306,21 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(model.items.map(\.captureID), [idB, idA])
         XCTAssertFalse(try XCTUnwrap(model.item(idB)).isBackdated)
     }
+
+    /// Precision persists with the backdate and resets when the backdate is cleared —
+    /// there is nothing left for it to describe once `originalDate` is nil.
+    func testSetBackdateCarriesPrecisionAndClearingResetsIt() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+
+        let model = model()
+        await model.rescan()
+
+        await model.setBackdate(idA, to: Date(timeIntervalSince1970: 10), precision: .yearMonth)
+        XCTAssertEqual(try XCTUnwrap(model.item(idA)).originalDatePrecision, .yearMonth)
+
+        await model.setBackdate(idA, to: nil)
+        let persisted = try EntryMetadataStore.read(
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+        XCTAssertNil(persisted.precision)
+    }
 }

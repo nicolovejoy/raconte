@@ -150,6 +150,40 @@ final class EntryMetadataStoreTests: XCTestCase {
                        backdated)
     }
 
+    /// The one normalization rule: year precision collapses to Jan 1, year+month to the
+    /// 1st. Anchored on a date squarely mid-month so the calendar math is unambiguous.
+    func testEffectiveDateNormalizesToPrecision() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let midMonth = calendar.date(from: DateComponents(year: 1987, month: 6, day: 15, hour: 14))!
+        let captured = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let dayEntry = EntryMetadata(originalDate: midMonth, precision: .day)
+        XCTAssertEqual(dayEntry.effectiveDate(capturedAt: captured), midMonth)
+
+        let monthEntry = EntryMetadata(originalDate: midMonth, precision: .yearMonth)
+        let monthStart = calendar.date(from: DateComponents(year: 1987, month: 6, day: 1))!
+        XCTAssertEqual(monthEntry.effectiveDate(capturedAt: captured), monthStart)
+
+        let yearEntry = EntryMetadata(originalDate: midMonth, precision: .year)
+        let yearStart = calendar.date(from: DateComponents(year: 1987, month: 1, day: 1))!
+        XCTAssertEqual(yearEntry.effectiveDate(capturedAt: captured), yearStart)
+    }
+
+    func testFormattedRendersByPrecision() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let date = calendar.date(from: DateComponents(year: 1998, month: 3, day: 4))!
+
+        XCTAssertEqual(DatePrecision.year.formatted(date), "1998")
+        XCTAssertEqual(DatePrecision.yearMonth.formatted(date), "March 1998")
+        // `.day` defers to the platform's standard date formatting — pinned only to the
+        // components it must contain, not to an exact locale-dependent string.
+        let dayText = DatePrecision.day.formatted(date)
+        XCTAssertTrue(dayText.contains("1998"))
+        XCTAssertTrue(dayText.contains("4") || dayText.contains("04"))
+    }
+
     // MARK: Decoder rule (§11)
 
     /// Additive fields are lenient in both directions: a file written before a field
@@ -168,6 +202,34 @@ final class EntryMetadataStoreTests: XCTestCase {
     /// `init(from:)`, this fails.
     func testSynthesizedDecoderWouldHaveRejectedTheAllDefaultsFile() throws {
         XCTAssertNoThrow(try EntryMetadataStore.decode(Data("{}".utf8)))
+    }
+
+    // MARK: Precision (M3 issue #14 part 1)
+
+    /// An older sidecar with a backdate but no `precision` key must decode as `.day` —
+    /// the only precision that field ever had before this feature existed.
+    func testMissingPrecisionDecodesAsDay() throws {
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"J1","originalDate":"1986-11-06T00:00:00.000Z"}"#.utf8))
+        XCTAssertNil(decoded.precision)
+        XCTAssertEqual(decoded.effectivePrecision, .day)
+    }
+
+    func testPrecisionRoundTrips() async throws {
+        let metadata = EntryMetadata(originalDate: Date(timeIntervalSince1970: 533_433_600),
+                                     precision: .yearMonth)
+        let s = store()
+        try await s.write(metadata, captureID: captureID)
+        let readBack = try await s.read(captureID: captureID)
+        XCTAssertEqual(readBack, metadata)
+        XCTAssertEqual(readBack.precision, .yearMonth)
+    }
+
+    /// A wrong-typed `precision` is damage, not an older file — same rule as every other
+    /// field (`testWrongTypedFieldThrowsRatherThanFallingBackToDefaults`).
+    func testWrongTypedPrecisionThrows() throws {
+        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"precision":7}"#.utf8)))
+        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"precision":"century"}"#.utf8)))
     }
 
     // MARK: Atomic write

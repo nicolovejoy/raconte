@@ -249,7 +249,15 @@ final class LibraryScreenModel {
         guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
               metadata.isTrashed else { return false }
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        try? FileManager.default.removeItem(at: dir)
+        do {
+            try FileManager.default.removeItem(at: dir)
+        } catch {
+            // The removal walk is not atomic — a failure may still have changed the
+            // directory (even deleted the sidecar), so the list must be re-read from
+            // whatever is actually on disk now.
+            await rescan()
+            return false
+        }
         await rescan()
         return true
     }

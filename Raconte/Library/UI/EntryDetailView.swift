@@ -84,20 +84,14 @@ struct EntryDetailView: View {
             labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
                 .accessibilityIdentifier("detail.capturedAt")
 
-            HStack(spacing: 12) {
-                Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
-                    backdateDraft = item.effectiveDate
-                    showingBackdatePicker = true
-                }
-                .accessibilityIdentifier("detail.backdateButton")
-
-                if item.isBackdated {
-                    Button("Clear", role: .destructive) {
-                        Task { await model.setBackdate(captureID, to: nil); await refresh() }
-                    }
-                    .accessibilityIdentifier("detail.clearBackdateButton")
-                }
+            // No standalone Clear (owner, 2026-08-02): a set backdate is typed intent,
+            // and one stray tap must not erase it. Clearing lives inside the sheet as
+            // an explicit destructive action.
+            Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
+                backdateDraft = item.effectiveDate
+                showingBackdatePicker = true
             }
+            .accessibilityIdentifier("detail.backdateButton")
             .font(.caption)
         }
     }
@@ -111,6 +105,15 @@ struct EntryDetailView: View {
                 .accessibilityIdentifier("detail.backdatePicker")
                 .navigationTitle("Backdate")
                 .toolbar {
+                    if item.isBackdated {
+                        ToolbarItem(placement: .destructiveAction) {
+                            Button("Remove backdate", role: .destructive) {
+                                showingBackdatePicker = false
+                                Task { await model.setBackdate(captureID, to: nil); await refresh() }
+                            }
+                            .accessibilityIdentifier("detail.clearBackdateButton")
+                        }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
                             let date = backdateDraft

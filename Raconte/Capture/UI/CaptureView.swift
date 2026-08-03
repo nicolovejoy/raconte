@@ -695,6 +695,10 @@ struct BackdateField: View {
                 ), displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.compact)
+                // The capture screen's background is near-black regardless of the app's
+                // color scheme, but the system picker styles its bubble for the ambient
+                // scheme — in light mode that's dark-on-dark (smoke feedback 2026-08-02).
+                .environment(\.colorScheme, .dark)
                 .accessibilityIdentifier("capture.backdateField")
             }
             .disabled(!model.backdateEnabled)

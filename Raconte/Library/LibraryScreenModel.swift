@@ -194,9 +194,9 @@ final class LibraryScreenModel {
     /// clearing — `EntryMetadata.effectivePrecision` is meaningless without a date, so
     /// there is nothing to reset it to.
     func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async {
+        let calendar = Calendar.gregorianCurrent
         _ = try? await entryMetadataStore.update(captureID: captureID) {
-            $0.originalDate = date
-            $0.precision = date == nil ? nil : precision
+            $0.originalDate = date.map { PartialDate(from: $0, precision: precision, calendar: calendar) }
         }
         await rescan()
     }

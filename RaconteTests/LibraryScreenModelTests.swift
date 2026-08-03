@@ -347,6 +347,6 @@ final class LibraryScreenModelTests: XCTestCase {
         await model.setBackdate(idA, to: nil)
         let persisted = try EntryMetadataStore.read(
             url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
-        XCTAssertNil(persisted.precision)
+        XCTAssertNil(persisted.originalDate)
     }
 }

@@ -5,7 +5,7 @@ import Foundation
 /// reduced-precision backdates: a year-only 1998 entry bounds the range at Jan 1 1998).
 ///
 /// Each bound carries the precision of the entry that set it, so display can fall back
-/// to `DatePrecision.formatted` for a single-entry journal instead of always spelling
+/// to `PartialDate.formatted` for a single-entry journal instead of always spelling
 /// out a day that was never actually known.
 struct JournalDateRange: Equatable {
     var minDate: Date
@@ -36,7 +36,7 @@ struct JournalDateRange: Equatable {
 
 extension JournalDateRange {
     /// Terse, collapsed display: a single precision-aware date when the range is a
-    /// point (`DatePrecision.formatted`, so a lone year-only entry reads "1998" rather
+    /// point (`PartialDate.formatted`, so a lone year-only entry reads "1998" rather
     /// than "Jan 1, 1998"); "March – July 1998" within one calendar year when both
     /// bounds actually carry a month (`.yearMonth`/`.day`); "1998–2003" across years.
     /// A `.year`-precision bound never contributes a month it doesn't have — a 1998
@@ -44,7 +44,9 @@ extension JournalDateRange {
     /// "January – July 1998".
     func formatted(calendar: Calendar = .current) -> String {
         if minDate == maxDate {
-            return Self.coarser(minPrecision, maxPrecision).formatted(minDate)
+            let precision = Self.coarser(minPrecision, maxPrecision)
+            return PartialDate(from: minDate, precision: precision, calendar: calendar)
+                .formatted(calendar: calendar)
         }
         let minYear = calendar.component(.year, from: minDate)
         let maxYear = calendar.component(.year, from: maxDate)

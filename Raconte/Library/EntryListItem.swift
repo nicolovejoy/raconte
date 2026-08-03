@@ -107,7 +107,7 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     var capturedAt: Date
     /// The backdate, when the owner set one. `nil` is not "same as capturedAt" — it is
     /// "never backdated", and the two must stay distinguishable (see `EntryMetadata`).
-    var originalDate: Date? {
+    var originalDate: PartialDate? {
         get { metadata.originalDate }
         set { metadata.originalDate = newValue }
     }
@@ -148,6 +148,15 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     /// The date the library sorts and groups by. Defined once, in
     /// `EntryMetadata.effectiveDate(capturedAt:)`, and now *called* rather than restated.
     var effectiveDate: Date { metadata.effectiveDate(capturedAt: capturedAt) }
+
+    /// Precision-aware display of the effective date: `originalDate.formatted` when
+    /// backdated (so a year-only entry reads "1998", never "Jan 1, 1998"), else
+    /// `capturedAt` at day precision — the same rule `DatePrecision.formatted` used to
+    /// apply to `effectiveDate` before `PartialDate` absorbed it.
+    func formattedEffectiveDate(dayStyle: Date.FormatStyle.DateStyle = .abbreviated) -> String {
+        if let originalDate { return originalDate.formatted(dayStyle: dayStyle) }
+        return capturedAt.formatted(date: dayStyle, time: .omitted)
+    }
 
     var isBackdated: Bool { originalDate != nil }
     var isTrashed: Bool { metadata.isTrashed }

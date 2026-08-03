@@ -231,7 +231,7 @@ final class LibraryScannerTests: XCTestCase {
     // MARK: entry.json
 
     func testSidecarSuppliesJournalBackdateAndTrashState() async throws {
-        let backdate = Date(timeIntervalSince1970: 533_433_600)
+        let backdate = PartialDate(year: 1986, month: 11, day: 6)
         try writeSegment(idA)
         try write(manifest(idA), id: idA)
         try writeMetadata(EntryMetadata(journalID: "J1", originalDate: backdate), id: idA)
@@ -242,7 +242,7 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(item.journalID, "J1")
         XCTAssertEqual(item.journal?.name, "1987 Journal")
         XCTAssertEqual(item.originalDate, backdate)
-        XCTAssertEqual(item.effectiveDate, backdate)
+        XCTAssertEqual(item.effectiveDate, backdate.anchorDate(calendar: .gregorianCurrent))
         XCTAssertFalse(item.isTrashed)
         XCTAssertTrue(item.degradations.isEmpty)
     }
@@ -418,7 +418,10 @@ final class LibraryScannerTests: XCTestCase {
         try writeSegment(idB)
         try write(manifest(idB, createdAt: Date(timeIntervalSince1970: 2_000)), id: idB)
         // B was recorded later but is a reading of a 1987 notebook.
-        try writeMetadata(EntryMetadata(originalDate: Date(timeIntervalSince1970: 10)), id: idB)
+        // A date safely before the epoch — noon-anchoring a same-day `PartialDate` could
+        // otherwise land after `idB`'s capture instant (2000s) depending on the local
+        // timezone's offset from UTC.
+        try writeMetadata(EntryMetadata(originalDate: PartialDate(year: 1969, month: 1, day: 1)), id: idB)
 
         let result = await scanner().scan()
         XCTAssertEqual(result.items.map(\.captureID), [idA, idB])

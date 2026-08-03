@@ -5,8 +5,8 @@ import XCTest
 final class JournalDateRangeTests: XCTestCase {
 
     /// `.current`, not a fixed UTC calendar — matches `EntryMetadataStoreTests`'s
-    /// `DatePrecision.formatted` convention. `formatted()` below calls straight into
-    /// `Date.formatted`/`DatePrecision.formatted`, both of which render in the system
+    /// `PartialDate.formatted` convention. `formatted()` below calls straight into
+    /// `Date.formatted`/`PartialDate.formatted`, both of which render in the system
     /// time zone, so pinning dates to a different zone here would make month/year
     /// boundaries disagree with what's under test.
     private var cal: Calendar {
@@ -21,11 +21,10 @@ final class JournalDateRangeTests: XCTestCase {
         return cal.date(from: comps)!
     }
 
-    private func item(_ captureID: String, capturedAt: Date, originalDate: Date? = nil,
-                      precision: DatePrecision? = nil, trashedAt: Date? = nil) -> EntryListItem {
+    private func item(_ captureID: String, capturedAt: Date, originalDate: PartialDate? = nil,
+                      trashedAt: Date? = nil) -> EntryListItem {
         EntryListItem(captureID: captureID, capturedAt: capturedAt,
-                     metadata: EntryMetadata(originalDate: originalDate, precision: precision,
-                                             trashedAt: trashedAt))
+                     metadata: EntryMetadata(originalDate: originalDate, trashedAt: trashedAt))
     }
 
     // MARK: compute
@@ -41,23 +40,24 @@ final class JournalDateRangeTests: XCTestCase {
     }
 
     func testMixedBackdatedAndNonBackdatedSpansEffectiveDates() {
+        let backdate = PartialDate(year: 1987, month: 5, day: 1)
         let entries = [
             item("A", capturedAt: date(2026, 1, 1)),
-            item("B", capturedAt: date(2026, 6, 1), originalDate: date(1987, 5, 1), precision: .day),
+            item("B", capturedAt: date(2026, 6, 1), originalDate: backdate),
         ]
         let range = JournalDateRange.compute(from: entries)
-        XCTAssertEqual(range?.minDate, date(1987, 5, 1))
+        XCTAssertEqual(range?.minDate, backdate.anchorDate(calendar: cal))
         XCTAssertEqual(range?.maxDate, date(2026, 1, 1))
     }
 
     /// A year-only backdate bounds the range at Jan 1 of that year — `effectiveDate`
     /// already normalizes it; this pins that the range computation doesn't re-derive.
     func testReducedPrecisionYearEntryBoundsAtJanuaryFirst() {
-        let entries = [item("A", capturedAt: date(2026, 6, 1),
-                            originalDate: date(1998, 7, 20), precision: .year)]
+        let backdate = PartialDate(year: 1998)
+        let entries = [item("A", capturedAt: date(2026, 6, 1), originalDate: backdate)]
         let range = JournalDateRange.compute(from: entries)
-        XCTAssertEqual(range?.minDate, date(1998, 1, 1))
-        XCTAssertEqual(range?.maxDate, date(1998, 1, 1))
+        XCTAssertEqual(range?.minDate, backdate.anchorDate(calendar: cal))
+        XCTAssertEqual(range?.maxDate, backdate.anchorDate(calendar: cal))
         XCTAssertEqual(range?.minPrecision, .year)
     }
 

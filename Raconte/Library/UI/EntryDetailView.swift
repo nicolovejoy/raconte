@@ -46,7 +46,7 @@ struct EntryDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(item.originalDatePrecision.formatted(item.effectiveDate))
+        .navigationTitle(item.formattedEffectiveDate())
         .task { await refresh() }
         // No `deinit` on `CapturePlayback` stops the audio, and a `@State` value outlives
         // the pop by however long SwiftUI holds it — without this, backing out of a
@@ -80,7 +80,7 @@ struct EntryDetailView: View {
 
     private var datesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            labeledRow("Entry date", item.originalDatePrecision.formatted(item.effectiveDate, dayStyle: .long))
+            labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
                 .accessibilityIdentifier("detail.originalDate")
             labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
                 .accessibilityIdentifier("detail.capturedAt")
@@ -89,11 +89,11 @@ struct EntryDetailView: View {
             // and one stray tap must not erase it. Clearing lives inside the sheet as
             // an explicit destructive action.
             Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
-                // The unnormalized value, not `effectiveDate`: prefilling from the
-                // normalized date and saving it back would park a reduced-precision
-                // date on its Jan-1/month-1 boundary, where a timezone change can flip
-                // its displayed year/month.
-                backdateDraft = item.originalDate ?? item.capturedAt
+                // `anchorDate`, not `effectiveDate`: both currently agree (there is no
+                // "unnormalized" `Date` left to prefer — `PartialDate` never carried
+                // more precision than it declares), but anchoring explicitly here keeps
+                // this call site correct if `effectiveDate` ever grows a different rule.
+                backdateDraft = item.originalDate?.anchorDate(calendar: .gregorianCurrent) ?? item.capturedAt
                 backdatePrecisionDraft = item.originalDatePrecision
                 showingBackdatePicker = true
             }

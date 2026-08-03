@@ -18,7 +18,7 @@ final class TrashSweepTests: XCTestCase {
     }
 
     func testReadableAndNotTrashedIsLeftAlone() {
-        let metadata = EntryMetadata(journalID: "J1", originalDate: daysAgo(9_000))
+        let metadata = EntryMetadata(journalID: "J1", originalDate: PartialDate(year: 2000, month: 1, day: 1))
         XCTAssertEqual(TrashSweep.decide(.present(metadata), now: now), .leaveAlone)
     }
 

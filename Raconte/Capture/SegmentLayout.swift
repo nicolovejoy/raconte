@@ -224,8 +224,10 @@ enum CaptureCoding {
         return decoder
     }
 
-    // Fresh formatter per call — avoids shared non-Sendable global state.
-    private static func iso8601Formatter() -> ISO8601DateFormatter {
+    // Fresh formatter per call — avoids shared non-Sendable global state. `internal`
+    // rather than `private`: `EntryMetadata`'s decoder needs the exact same formatter to
+    // recognize a pre-#14 `originalDate` string during the string→string format switch.
+    static func iso8601Formatter() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter

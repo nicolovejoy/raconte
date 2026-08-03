@@ -88,7 +88,7 @@ final class LibraryTrashTests: XCTestCase {
     func testTrashAndRestorePreserveJournalAndBackdate() async throws {
         try writeCapture(idA, capturedAt: 1_000)
         try EntryMetadataStore.write(
-            EntryMetadata(journalID: "J1", originalDate: Date(timeIntervalSince1970: 500)),
+            EntryMetadata(journalID: "J1", originalDate: PartialDate(year: 1970, month: 1, day: 1)),
             url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
 
         let model = model()
@@ -97,7 +97,7 @@ final class LibraryTrashTests: XCTestCase {
 
         let restored = try metadata(idA)
         XCTAssertEqual(restored.journalID, "J1")
-        XCTAssertEqual(restored.originalDate, Date(timeIntervalSince1970: 500))
+        XCTAssertEqual(restored.originalDate, PartialDate(year: 1970, month: 1, day: 1))
         XCTAssertNil(restored.trashedAt)
     }
 

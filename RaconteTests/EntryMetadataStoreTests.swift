@@ -95,7 +95,7 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testEveryFieldSurvivesTheRoundTrip() async throws {
         let metadata = EntryMetadata(journalID: "JOURNAL1",
-                                     originalDate: Date(timeIntervalSince1970: 533_433_600.125),
+                                     originalDate: PartialDate(year: 1986, month: 11, day: 6),
                                      trashedAt: Date(timeIntervalSince1970: 1_700_000_000.5))
         let s = store()
         try await s.write(metadata, captureID: captureID)
@@ -109,13 +109,13 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testUpdateChangesOneFieldAndPreservesTheRest() async throws {
         let s = store()
         try await s.write(EntryMetadata(journalID: "J1",
-                                        originalDate: Date(timeIntervalSince1970: 100)),
+                                        originalDate: PartialDate(year: 1970, month: 1, day: 1)),
                           captureID: captureID)
         let updated = try await s.update(captureID: captureID) {
             $0.trashedAt = Date(timeIntervalSince1970: 200)
         }
         XCTAssertEqual(updated.journalID, "J1")
-        XCTAssertEqual(updated.originalDate, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(updated.originalDate, PartialDate(year: 1970, month: 1, day: 1))
         XCTAssertEqual(updated.trashedAt, Date(timeIntervalSince1970: 200))
         XCTAssertTrue(updated.isTrashed)
         let persisted = try await s.read(captureID: captureID)
@@ -144,42 +144,44 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testEffectiveDatePrefersTheBackdateAndOtherwiseTheCapture() {
         let captured = Date(timeIntervalSince1970: 1_700_000_000)
-        let backdated = Date(timeIntervalSince1970: 533_433_600)
+        let backdated = PartialDate(year: 1986, month: 11, day: 6)
         XCTAssertEqual(EntryMetadata().effectiveDate(capturedAt: captured), captured)
-        XCTAssertEqual(EntryMetadata(originalDate: backdated).effectiveDate(capturedAt: captured),
-                       backdated)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        XCTAssertEqual(EntryMetadata(originalDate: backdated).effectiveDate(capturedAt: captured, calendar: calendar),
+                       backdated.anchorDate(calendar: calendar))
     }
 
-    /// The one normalization rule: year precision collapses to Jan 1, year+month to the
-    /// 1st. Anchored on a date squarely mid-month so the calendar math is unambiguous.
+    /// The one anchor rule (`PartialDate.anchorDate`): year precision collapses to Jan 1,
+    /// year+month to the 1st, at noon. Anchored on a date squarely mid-month so the
+    /// calendar math is unambiguous.
     func testEffectiveDateNormalizesToPrecision() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        let midMonth = calendar.date(from: DateComponents(year: 1987, month: 6, day: 15, hour: 14))!
         let captured = Date(timeIntervalSince1970: 1_700_000_000)
 
-        let dayEntry = EntryMetadata(originalDate: midMonth, precision: .day)
-        XCTAssertEqual(dayEntry.effectiveDate(capturedAt: captured), midMonth)
+        let dayEntry = EntryMetadata(originalDate: PartialDate(year: 1987, month: 6, day: 15))
+        let dayExpected = calendar.date(from: DateComponents(year: 1987, month: 6, day: 15, hour: 12))!
+        XCTAssertEqual(dayEntry.effectiveDate(capturedAt: captured, calendar: calendar), dayExpected)
 
-        let monthEntry = EntryMetadata(originalDate: midMonth, precision: .yearMonth)
-        let monthStart = calendar.date(from: DateComponents(year: 1987, month: 6, day: 1))!
-        XCTAssertEqual(monthEntry.effectiveDate(capturedAt: captured), monthStart)
+        let monthEntry = EntryMetadata(originalDate: PartialDate(year: 1987, month: 6))
+        let monthStart = calendar.date(from: DateComponents(year: 1987, month: 6, day: 1, hour: 12))!
+        XCTAssertEqual(monthEntry.effectiveDate(capturedAt: captured, calendar: calendar), monthStart)
 
-        let yearEntry = EntryMetadata(originalDate: midMonth, precision: .year)
-        let yearStart = calendar.date(from: DateComponents(year: 1987, month: 1, day: 1))!
-        XCTAssertEqual(yearEntry.effectiveDate(capturedAt: captured), yearStart)
+        let yearEntry = EntryMetadata(originalDate: PartialDate(year: 1987))
+        let yearStart = calendar.date(from: DateComponents(year: 1987, month: 1, day: 1, hour: 12))!
+        XCTAssertEqual(yearEntry.effectiveDate(capturedAt: captured, calendar: calendar), yearStart)
     }
 
     func testFormattedRendersByPrecision() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
-        let date = calendar.date(from: DateComponents(year: 1998, month: 3, day: 4))!
 
-        XCTAssertEqual(DatePrecision.year.formatted(date), "1998")
-        XCTAssertEqual(DatePrecision.yearMonth.formatted(date), "March 1998")
+        XCTAssertEqual(PartialDate(year: 1998).formatted(calendar: calendar), "1998")
+        XCTAssertEqual(PartialDate(year: 1998, month: 3).formatted(calendar: calendar), "March 1998")
         // `.day` defers to the platform's standard date formatting — pinned only to the
         // components it must contain, not to an exact locale-dependent string.
-        let dayText = DatePrecision.day.formatted(date)
+        let dayText = PartialDate(year: 1998, month: 3, day: 4).formatted(calendar: calendar)
         XCTAssertTrue(dayText.contains("1998"))
         XCTAssertTrue(dayText.contains("4") || dayText.contains("04"))
     }
@@ -206,30 +208,57 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     // MARK: Precision (M3 issue #14 part 1)
 
-    /// An older sidecar with a backdate but no `precision` key must decode as `.day` —
-    /// the only precision that field ever had before this feature existed.
-    func testMissingPrecisionDecodesAsDay() throws {
-        let decoded = try EntryMetadataStore.decode(
-            Data(#"{"journalID":"J1","originalDate":"1986-11-06T00:00:00.000Z"}"#.utf8))
-        XCTAssertNil(decoded.precision)
-        XCTAssertEqual(decoded.effectivePrecision, .day)
-    }
-
     func testPrecisionRoundTrips() async throws {
-        let metadata = EntryMetadata(originalDate: Date(timeIntervalSince1970: 533_433_600),
-                                     precision: .yearMonth)
+        let metadata = EntryMetadata(originalDate: PartialDate(year: 1986, month: 11))
         let s = store()
         try await s.write(metadata, captureID: captureID)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertEqual(readBack, metadata)
-        XCTAssertEqual(readBack.precision, .yearMonth)
+        XCTAssertEqual(readBack.originalDate?.precision, .yearMonth)
     }
 
-    /// A wrong-typed `precision` is damage, not an older file — same rule as every other
-    /// field (`testWrongTypedFieldThrowsRatherThanFallingBackToDefaults`).
-    func testWrongTypedPrecisionThrows() throws {
-        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"precision":7}"#.utf8)))
-        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"precision":"century"}"#.utf8)))
+    // MARK: Old-format decode compatibility (M3 issue #14 part 2)
+
+    /// An older sidecar with a legacy ISO8601 `originalDate` and no `precision` key must
+    /// decode as `.day` — the only precision that field ever had before #14 part 1.
+    func testOldFormatMissingPrecisionDecodesAsDay() throws {
+        let legacyString = "1986-11-06T00:00:00.000Z"
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"J1","originalDate":"\#(legacyString)"}"#.utf8))
+        // Truncated in the *local* calendar — same conversion the legacy `.day`-precision
+        // sidecar always implied, and the same rule `init(from:precision:calendar:)` uses
+        // everywhere else. Computed rather than hardcoded so this test doesn't depend on
+        // the machine's timezone offset from UTC.
+        let legacyInstant = CaptureCoding.iso8601Formatter().date(from: legacyString)!
+        let expected = PartialDate(from: legacyInstant, precision: .day, calendar: .gregorianCurrent)
+        XCTAssertEqual(decoded.originalDate, expected)
+        XCTAssertEqual(decoded.effectivePrecision, .day)
+    }
+
+    /// An older sidecar with both the legacy ISO8601 `originalDate` and a `precision` key
+    /// decodes to the equivalent `PartialDate`, truncated to that precision.
+    func testOldFormatWithExplicitPrecisionDecodesToEquivalentPartialDate() throws {
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"J1","originalDate":"1986-11-06T12:00:00.000Z","precision":"yearMonth"}"#.utf8))
+        XCTAssertEqual(decoded.originalDate, PartialDate(year: 1986, month: 11))
+    }
+
+    /// Reading an old-format sidecar and re-encoding it upgrades it in place: the new
+    /// string form, no `precision` key, no separate migration pass.
+    func testOldFormatUpgradesToNewStringFormOnReencode() throws {
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"originalDate":"1986-11-06T00:00:00.000Z","precision":"year"}"#.utf8))
+        let reencoded = String(decoding: try EntryMetadataStore.encode(decoded), as: UTF8.self)
+        XCTAssertEqual(reencoded, #"{"originalDate":"1986"}"#)
+    }
+
+    /// A garbage `originalDate` string — neither a partial-date grammar nor a legacy
+    /// ISO8601 instant — is damage, not an older file: the identity-like field throws
+    /// rather than silently becoming "not backdated".
+    func testGarbageOriginalDateStringThrows() throws {
+        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"originalDate":"not-a-date"}"#.utf8)))
+        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"originalDate":"1998-3"}"#.utf8)))
+        XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"originalDate":"1998-02-30"}"#.utf8)))
     }
 
     // MARK: Atomic write

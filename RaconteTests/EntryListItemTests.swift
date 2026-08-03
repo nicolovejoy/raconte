@@ -10,7 +10,7 @@ final class EntryListItemTests: XCTestCase {
     private func item(_ id: String,
                       capturedAt: Double,
                       journalID: String? = nil,
-                      originalDate: Double? = nil,
+                      originalDate: PartialDate? = nil,
                       trashedAt: Double? = nil,
                       journal: Journal? = nil,
                       snippet: String? = nil,
@@ -21,7 +21,7 @@ final class EntryListItemTests: XCTestCase {
             capturedAt: date(capturedAt),
             durationSeconds: 1,
             metadata: EntryMetadata(journalID: journalID,
-                                    originalDate: originalDate.map(date),
+                                    originalDate: originalDate,
                                     trashedAt: trashedAt.map(date)),
             journal: journal,
             snippet: snippet,
@@ -39,8 +39,9 @@ final class EntryListItemTests: XCTestCase {
     }
 
     func testEffectiveDateIsTheBackdateWhenSet() {
-        let entry = item("A", capturedAt: 1_000, originalDate: 10)
-        XCTAssertEqual(entry.effectiveDate, date(10))
+        let backdate = PartialDate(year: 1970, month: 1, day: 1)
+        let entry = item("A", capturedAt: 1_000, originalDate: backdate)
+        XCTAssertEqual(entry.effectiveDate, backdate.anchorDate(calendar: .gregorianCurrent))
         XCTAssertEqual(entry.capturedAt, date(1_000), "capturedAt is never rewritten by a backdate")
         XCTAssertTrue(entry.isBackdated)
     }
@@ -48,17 +49,22 @@ final class EntryListItemTests: XCTestCase {
     /// The rule is defined once, in `EntryMetadata`. This pins the item to it so the two
     /// cannot drift into disagreeing about what a library row is sorted by.
     func testEffectiveDateAgreesWithEntryMetadata() {
-        for original in [nil, 10.0, 5_000.0] as [Double?] {
-            let metadata = EntryMetadata(originalDate: original.map(date))
+        for original in [nil, PartialDate(year: 1970, month: 1, day: 1),
+                          PartialDate(year: 1987, month: 6)] as [PartialDate?] {
+            let metadata = EntryMetadata(originalDate: original)
             let entry = EntryListItem(captureID: "A", capturedAt: date(1_000), metadata: metadata)
             XCTAssertEqual(entry.effectiveDate, metadata.effectiveDate(capturedAt: date(1_000)))
         }
     }
 
-    /// A backdate that happens to equal the capture instant is still a backdate. The
-    /// sidecar keeps them distinguishable and so must the item.
+    /// A backdate whose anchor happens to equal the capture instant is still a backdate.
+    /// The sidecar keeps them distinguishable and so must the item.
     func testBackdateEqualToCapturedAtIsStillABackdate() {
-        let entry = item("A", capturedAt: 1_000, originalDate: 1_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let noon = calendar.date(from: DateComponents(year: 1998, month: 3, day: 4, hour: 12))!
+        let entry = EntryListItem(captureID: "A", capturedAt: noon,
+                                  metadata: EntryMetadata(originalDate: PartialDate(year: 1998, month: 3, day: 4)))
         XCTAssertTrue(entry.isBackdated)
         XCTAssertEqual(entry.effectiveDate, entry.capturedAt)
     }
@@ -66,12 +72,12 @@ final class EntryListItemTests: XCTestCase {
     // MARK: Precision
 
     func testOriginalDatePrecisionDefaultsToDay() {
-        let entry = item("A", capturedAt: 1_000, originalDate: 10)
+        let entry = item("A", capturedAt: 1_000, originalDate: PartialDate(year: 1970, month: 1, day: 1))
         XCTAssertEqual(entry.originalDatePrecision, .day)
     }
 
     func testOriginalDatePrecisionPassesThroughFromMetadata() {
-        let metadata = EntryMetadata(originalDate: date(10), precision: .year)
+        let metadata = EntryMetadata(originalDate: PartialDate(year: 1970))
         let entry = EntryListItem(captureID: "A", capturedAt: date(1_000), metadata: metadata)
         XCTAssertEqual(entry.originalDatePrecision, .year)
     }
@@ -79,18 +85,19 @@ final class EntryListItemTests: XCTestCase {
     // MARK: Sorting
 
     func testSortsByEffectiveDateDescendingNotByCaptureTime() {
-        // The 1987 entry was recorded most recently and must sort last.
+        // The 1900 entry was recorded most recently and must sort last.
         let recent = item("C", capturedAt: 3_000)
-        let backdated = item("D", capturedAt: 4_000, originalDate: 10)
+        let backdated = item("D", capturedAt: 4_000, originalDate: PartialDate(year: 1900, month: 1, day: 1))
         let older = item("A", capturedAt: 1_000)
         let sorted = EntryListItem.sortedByEffectiveDate([older, backdated, recent])
         XCTAssertEqual(sorted.map(\.captureID), ["C", "A", "D"])
     }
 
     func testEqualEffectiveDatesBreakTiesOnCaptureIDDescending() {
-        let a = item("01AAA", capturedAt: 9_000, originalDate: 100)
-        let b = item("01BBB", capturedAt: 1, originalDate: 100)
-        let c = item("01CCC", capturedAt: 5, originalDate: 100)
+        let shared = PartialDate(year: 1980, month: 5, day: 1)
+        let a = item("01AAA", capturedAt: 9_000, originalDate: shared)
+        let b = item("01BBB", capturedAt: 1, originalDate: shared)
+        let c = item("01CCC", capturedAt: 5, originalDate: shared)
         XCTAssertEqual(EntryListItem.sortedByEffectiveDate([a, b, c]).map(\.captureID),
                        ["01CCC", "01BBB", "01AAA"])
         // Total order, so the result does not depend on input order.

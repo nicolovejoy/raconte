@@ -1161,6 +1161,53 @@ decisions with rationale, not as questions.
    labeled** ("machine transcript, not applied"). Hiding them makes the "a newer transcript is
    available" marker unexplainable, and revert needs them reachable.
 
+### Owner answers, 2026-08-03 — all eight decided
+
+1. **Yes as written.** Owner asked whether a *pause* exists; there is no editor-pause and none
+   is needed — a 90 s close costs nothing, since reopening the editor just starts the next
+   draft on top of the same chain. (If the question meant a capture-time pause button, that is
+   a capture feature, tracked separately.)
+2. **Yes** — silent replacement of untouched text, revert being the safety net.
+3. **3a yes, 3b T7** — and the audit log is confirmed wanted: "let's just log edits so we have
+   auditability."
+4. **Queue** — an incoming machine revision never closes an open draft.
+5. **Yes, later, as its own machine pass.** Plus a new capture-time requirement recorded in
+   §14: end-sentence / end-paragraph / **switch-voice** markers (the owner's journals are
+   conversations between "little Nico" and "big Nico", distinguished on paper by print vs
+   cursive).
+6. **Whole-revision for v1.** Open follow-on discussion (not a T6 blocker): whether entries
+   should be kept roughly one journal-page long. Current lean: one entry per read journal
+   page/date — it is also what gives per-entry spoken-date detection its chance to fire.
+7. **Yes** — decline is a recorded merge.
+8. **Yes** — detached revisions visible, labeled.
+
+## 14. Recorded requirement: capture-time structure markers (voice, sentence, paragraph)
+
+Owner, 2026-08-03, deciding OQ 5: while reading a paper journal aloud, he wants low-friction
+capture-screen buttons for **end sentence**, **end paragraph**, and **switch voice** — the
+voices being the two hands of his own journals (print = "little Nico", cursive = big Nico),
+i.e. a per-span *speaker/voice* attribute with exactly-two-values-for-now semantics.
+
+Design direction (not committed, needs its own short design pass before T7):
+
+- **Capture-time, frame-stamped.** A marker is an event `(frame, kind)` recorded the moment
+  the button is tapped, `frame` taken from the same capture-frame clock as everything else.
+  Markers are ground-truth-adjacent (they record what the *owner* said about the audio at the
+  moment it was made) — so they belong in their own append-only `transcript/markers.jsonl`,
+  written like `live.jsonl`, NOT in the revision chain: they are input to promotion, not a
+  revision.
+- **Promotion consumes markers**: a `voice` attribute lands on `TranscriptSpan` (optional,
+  additive, omitted when absent — decoder rule 4.7 already covers it), spans split at marker
+  frames the same way runs split them. Sentence/paragraph markers become punctuation/breaks in
+  the promoted text — which is exactly the §12 OQ 5 "repair pass" machinery, so they ride an
+  existing seam.
+- **UI sketch to explore**: a single thumb-reach toggle showing the active voice (LN/BN), so
+  "switch voice" is one tap and glanceable; end-sentence/end-paragraph as two adjacent buttons.
+  Spoken-command alternatives ("new paragraph") were considered and deferred — they collide
+  with the actual journal text being read aloud.
+- T7 editor must render the voice attribute distinctly (the print/cursive instinct suggests a
+  typeface change, which SwiftUI makes cheap).
+
 ---
 
 ## 13. Rev 2 changelog

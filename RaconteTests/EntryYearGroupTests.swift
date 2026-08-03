@@ -41,11 +41,8 @@ final class EntryYearGroupTests: XCTestCase {
     /// whole point of "grouped by year" is that an entry read aloud from a 1987 paper
     /// journal sorts under 1987, not under the afternoon it was recorded.
     func testGroupsByEffectiveDateNotCapturedAt() {
-        var comps = DateComponents()
-        comps.year = 1987; comps.month = 5; comps.day = 1; comps.timeZone = utc.timeZone
-        let backdate = utc.date(from: comps)!
         var backdated = item("A", year: 2026)
-        backdated.originalDate = backdate
+        backdated.originalDate = PartialDate(year: 1987, month: 5, day: 1)
 
         let groups = EntryListItem.groupedByYear([backdated], calendar: utc)
         XCTAssertEqual(groups.map(\.year), [1987])

@@ -44,6 +44,13 @@ final class JournalCaptureContextTests: XCTestCase {
     private var journalsURL: URL { AppContainer.journalsURL(containerRoot: containerRoot) }
     private var prefs: InMemoryJournalPreferenceStore!
 
+    /// The live-capture write boundary truncates the picker's `Date` to `PartialDate` at
+    /// `precision` (`.day` unless the test sets otherwise) before it reaches the sidecar.
+    private func expectedBackdate(_ seconds: Double, precision: DatePrecision = .day) -> PartialDate {
+        PartialDate(from: Date(timeIntervalSince1970: seconds), precision: precision,
+                   calendar: .gregorianCurrent)
+    }
+
     override func setUpWithError() throws {
         containerRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("JournalCaptureContext-\(UUID().uuidString)", isDirectory: true)
@@ -186,7 +193,7 @@ final class JournalCaptureContextTests: XCTestCase {
         for seconds in stride(from: 100.0, through: 1_000.0, by: 100.0) {
             model.setBackdateDate(Date(timeIntervalSince1970: seconds))
         }
-        let last = Date(timeIntervalSince1970: 1_000)
+        let last = expectedBackdate(1_000)
 
         await waitForSidecar(captureID, "sidecar settled on a stale date") {
             $0.originalDate == last
@@ -207,7 +214,7 @@ final class JournalCaptureContextTests: XCTestCase {
         model.setBackdateEnabled(true)
         model.setBackdateDate(Date(timeIntervalSince1970: 500))
         await waitForSidecar(captureID, "backdate never landed") {
-            $0.originalDate == Date(timeIntervalSince1970: 500)
+            $0.originalDate == expectedBackdate(500)
         }
         model.setBackdateEnabled(false)
         await waitForSidecar(captureID, "backdate never cleared") { $0.originalDate == nil }
@@ -254,7 +261,7 @@ final class JournalCaptureContextTests: XCTestCase {
         model.setBackdateEnabled(true)
         model.setBackdateDate(Date(timeIntervalSince1970: 700))
         await waitForSidecar(captureID, "backdate never landed") {
-            $0.originalDate == Date(timeIntervalSince1970: 700)
+            $0.originalDate == expectedBackdate(700)
         }
         XCTAssertEqual(try EntryMetadataStore.read(url: url).journalID, "FILED-EARLIER",
                        "an absent selection unfiled an already-filed entry")
@@ -282,7 +289,8 @@ final class JournalCaptureContextTests: XCTestCase {
         model.setBackdatePrecision(.yearMonth)
         model.setBackdateDate(Date(timeIntervalSince1970: 500))
         await waitForSidecar(captureID, "precision never reached entry.json") {
-            $0.originalDate == Date(timeIntervalSince1970: 500) && $0.precision == .yearMonth
+            $0.originalDate == expectedBackdate(500, precision: .yearMonth)
+                && $0.originalDate?.precision == .yearMonth
         }
     }
 
@@ -296,11 +304,11 @@ final class JournalCaptureContextTests: XCTestCase {
         model.setBackdatePrecision(.year)
         model.setBackdateDate(Date(timeIntervalSince1970: 500))
         await waitForSidecar(captureID, "precision never landed") {
-            $0.precision == .year
+            $0.originalDate?.precision == .year
         }
         model.setBackdateEnabled(false)
         await waitForSidecar(captureID, "toggle-off left precision or date behind") {
-            $0.originalDate == nil && $0.precision == nil
+            $0.originalDate == nil
         }
     }
 
@@ -322,8 +330,7 @@ final class JournalCaptureContextTests: XCTestCase {
             captureDirectory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
                                                              captureID: captureID))
         var stored = try EntryMetadataStore.read(url: url)
-        stored.originalDate = Date(timeIntervalSince1970: 900)
-        stored.precision = .year
+        stored.originalDate = PartialDate(year: 1970)
         try EntryMetadataStore.write(stored, url: url)
 
         // Re-enter `.recording` the way a resume does, without ever enabling the
@@ -334,8 +341,7 @@ final class JournalCaptureContextTests: XCTestCase {
         // asserting nothing changed.
         try await Task.sleep(for: .milliseconds(200))
         let after = try EntryMetadataStore.read(url: url)
-        XCTAssertEqual(after.originalDate, Date(timeIntervalSince1970: 900),
+        XCTAssertEqual(after.originalDate, PartialDate(year: 1970),
                        "resume erased a backdate the live capture never set")
-        XCTAssertEqual(after.precision, .year)
     }
 }

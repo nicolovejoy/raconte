@@ -437,8 +437,9 @@ final class CaptureScreenModel {
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String,
                                            clearingBackdateIfDisabled: Bool = false) -> Task<Void, Never> {
-        let originalDate = backdateEnabled ? backdateDate : nil
-        let precision = backdateEnabled ? backdatePrecision : nil
+        let originalDate = backdateEnabled
+            ? PartialDate(from: backdateDate, precision: backdatePrecision, calendar: .gregorianCurrent)
+            : nil
         let writeBackdate = backdateEnabled || clearingBackdateIfDisabled
         let journalID = selectedJournalID
         let store = entryMetadataStore
@@ -449,7 +450,6 @@ final class CaptureScreenModel {
                 if let journalID { metadata.journalID = journalID }
                 if writeBackdate {
                     metadata.originalDate = originalDate
-                    metadata.precision = precision
                 }
             }
         }

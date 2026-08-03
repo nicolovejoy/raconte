@@ -15,11 +15,41 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.journalsUnreadable { registryBanner }
             journalChips
             content
+            #if DEBUG
+            skippedNote
+            #endif
         }
         .navigationTitle("Library")
-        .onAppear { Task { await model.rescan() } }
+        .task { await model.rescan() }
+    }
+
+    /// The scan knew the registry was damaged and nothing said so. Calm and specific:
+    /// the entries are all here, only their filing is unreadable, and the chips below
+    /// are empty for a reason rather than because there are no journals.
+    private var registryBanner: some View {
+        Text("Your journals couldn’t be read, so entries aren’t showing which one they’re in.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .accessibilityIdentifier("library.journalsUnreadable")
+    }
+
+    /// DEBUG only — see `LibraryScreenModel.skipped` for why this is not shipping chrome.
+    @ViewBuilder
+    private var skippedNote: some View {
+        if !model.skipped.isEmpty {
+            Text("\(model.skipped.count) capture directory(s) skipped — nothing durable in them.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("library.skippedNote")
+        }
     }
 
     private var journalChips: some View {
@@ -60,7 +90,10 @@ struct LibraryView: View {
     @ViewBuilder
     private var content: some View {
         if model.items.isEmpty {
-            emptyState
+            // "No recordings yet" is a claim about the disk, and a running scan has not
+            // made it yet. Gated on `isLoading` so a slow first scan doesn't tell the
+            // owner his library is empty and then contradict itself.
+            if model.isLoading { scanningState } else { emptyState }
         } else {
             List {
                 ForEach(model.yearGroups) { group in
@@ -88,6 +121,12 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("library.empty")
+    }
+
+    private var scanningState: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("library.scanning")
     }
 }
 
@@ -151,20 +190,4 @@ struct LibraryEntryRow: View {
     private var dateText: String { item.effectiveDate.formatted(date: .abbreviated, time: .omitted) }
     private var recordedDateText: String { item.capturedAt.formatted(date: .abbreviated, time: .shortened) }
     private var durationText: String { CaptureCoordinator.formatDuration(item.durationSeconds) }
-}
-
-/// Calm, specific reasons for the degraded marker's accessibility label — never "error"
-/// or "corrupt", per the M3 T4 brief: a degradation is a reason to look, not to alarm.
-extension EntryDegradation {
-    var accessibilityReasons: [String] {
-        var reasons: [String] = []
-        if contains(.manifestAbsent) || contains(.manifestCorrupt) {
-            reasons.append("recording details incomplete")
-        }
-        if contains(.metadataUnreadable) { reasons.append("entry settings unreadable") }
-        if contains(.journalUnresolved) { reasons.append("journal not found") }
-        if contains(.transcriptUnreadable) { reasons.append("transcript unreadable") }
-        if contains(.transcriptTruncated) { reasons.append("transcript may be incomplete") }
-        return reasons
-    }
 }

@@ -19,6 +19,8 @@ final class CaptureScreenModel {
     private var dismissed: Set<String> = []
     private var didBootstrap = false
     private var finishing = false
+    /// Tail of the sidecar-write chain — see `enqueueEntryMetadataWrite`.
+    private var pendingMetadataWrite: Task<Void, Never>?
 
     let capturesRoot: URL
     /// The recent-recordings section (M3 T4.5) and the Library screen read through the
@@ -47,11 +49,23 @@ final class CaptureScreenModel {
     private(set) var journals: [Journal] = []
     private(set) var selectedJournalID: String?
 
+    /// `journals.json` exists and did not decode.
+    ///
+    /// Distinct from "no journals", which is a fresh install — `JournalStore.load` draws
+    /// that line and throws for everything else, and collapsing the two here would be
+    /// §11's absent-vs-unreadable mistake one level above the store that got it right.
+    /// Concretely: the header would show the "Journal" literal as if a journal were
+    /// selected, and every new `entry.json` would be written with `journalID = nil`,
+    /// silently unfiling a whole session's captures.
+    private(set) var registryUnreadable = false
+
     /// Never empty in the UI: `resolveCurrentJournal()` guarantees a selection exists
     /// before `bootstrap()` returns, per the M3 decision that "no journal selected"
-    /// never arises. The literal only covers the sliver before that resolution lands.
+    /// never arises — *unless* the registry is unreadable, which is the one case where
+    /// there is honestly nothing to name.
     var selectedJournalName: String {
-        journals.first { $0.id == selectedJournalID }?.name ?? "Journal"
+        if let name = journals.first(where: { $0.id == selectedJournalID })?.name { return name }
+        return registryUnreadable ? "Journals unavailable" : "Journal"
     }
 
     /// Optional backdate (§ "entry date — set only if backdating"). `false`/`Date()`
@@ -205,7 +219,7 @@ final class CaptureScreenModel {
         if let transcription, let format = coordinator.activeFormat {
             transcription.activate(captureID: id, inputFormat: format)
         }
-        Task { await self.writeEntryMetadata(for: id) }
+        enqueueEntryMetadataWrite(for: id)
     }
 
     func keep(_ id: String) { dismissed.insert(id) }
@@ -222,11 +236,15 @@ final class CaptureScreenModel {
     /// Switch the journal captures file into. If a capture is live, its sidecar is
     /// updated immediately — the file that's on disk when the app is killed must never
     /// disagree with what the header showed.
-    func selectJournal(_ id: String) async {
+    ///
+    /// Synchronous: it only touches main-actor state and *enqueues* the sidecar write.
+    /// Every intent that can change what the sidecar should say is synchronous for that
+    /// reason — the enqueue order then is the order the user made the changes in.
+    func selectJournal(_ id: String) {
         guard journals.contains(where: { $0.id == id }) else { return }
         selectedJournalID = id
         currentJournal.select(id)
-        await syncActiveEntryMetadata()
+        syncActiveEntryMetadata()
     }
 
     @discardableResult
@@ -235,7 +253,7 @@ final class CaptureScreenModel {
         journals.append(created)
         selectedJournalID = created.id
         currentJournal.select(created.id)
-        await syncActiveEntryMetadata()
+        syncActiveEntryMetadata()
         return created
     }
 
@@ -247,15 +265,15 @@ final class CaptureScreenModel {
 
     /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
     /// nil ("use the capture's own date"), not to whatever was last picked.
-    func setBackdateEnabled(_ enabled: Bool) async {
+    func setBackdateEnabled(_ enabled: Bool) {
         backdateEnabled = enabled
         if !enabled { backdateDate = Date() }
-        await syncActiveEntryMetadata()
+        syncActiveEntryMetadata()
     }
 
-    func setBackdateDate(_ date: Date) async {
+    func setBackdateDate(_ date: Date) {
         backdateDate = date
-        await syncActiveEntryMetadata()
+        syncActiveEntryMetadata()
     }
 
     // MARK: internals
@@ -302,7 +320,20 @@ final class CaptureScreenModel {
     /// otherwise mint "Journal" and select it. Runs once, before `recoverAtLaunch()`,
     /// so the header never shows "no journal selected" even on the very first launch.
     private func resolveCurrentJournal() async {
-        let registry = (try? await journalStore.load()) ?? JournalRegistry()
+        let registry: JournalRegistry
+        do {
+            registry = try await journalStore.load()
+            registryUnreadable = false
+        } catch {
+            // A registry we merely failed to parse is not an empty one. Falling through
+            // to `.needsDefault` here would mint a second "Journal" and write it over
+            // the file — the registry equivalent of issue #8. Capture still works; it
+            // files nothing until the next launch reads the registry successfully.
+            registryUnreadable = true
+            journals = []
+            selectedJournalID = nil
+            return
+        }
         switch JournalSelection.resolve(registry: registry, storedID: currentJournal.storedID) {
         case .existing(let id):
             journals = registry.journals
@@ -324,23 +355,43 @@ final class CaptureScreenModel {
     /// Update the live capture's sidecar after a journal/backdate change made mid-
     /// recording. A no-op when idle — the next capture picks up the new selection via
     /// `handlePhase()` when it starts.
-    private func syncActiveEntryMetadata() async {
+    private func syncActiveEntryMetadata() {
         guard let id = coordinator.activeCaptureID,
               coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
-        await writeEntryMetadata(for: id)
+        enqueueEntryMetadataWrite(for: id)
     }
 
-    /// journalID = the currently selected journal (never nil once bootstrap resolves
-    /// one); originalDate = the backdate only if the user turned it on — never
-    /// materializing `capturedAt` here is what keeps an un-backdated entry
-    /// distinguishable from one backdated to exactly its capture time.
-    private func writeEntryMetadata(for captureID: String) async {
+    /// journalID = the currently selected journal; originalDate = the backdate only if
+    /// the user turned it on — never materializing `capturedAt` here is what keeps an
+    /// un-backdated entry distinguishable from one backdated to exactly its capture time.
+    ///
+    /// With **no** selection (only reachable through `registryUnreadable`) the journal is
+    /// left alone rather than written as nil. `handlePhase` re-runs on every re-entry to
+    /// `.recording`, including an interruption resume, so writing nil there would unfile
+    /// an entry that a working earlier launch had filed.
+    ///
+    /// Writes are chained so they land in submission order.
+    ///
+    /// `BackdateField`'s `DatePicker` used to fire a fresh `Task` per change, each of
+    /// which snapshotted main-actor state and *then* awaited the store — so two spins of
+    /// the wheel could reach the actor in either order and settle on the older date.
+    /// Every caller now enqueues synchronously on the main actor and the writes run in
+    /// the order those snapshots were taken: last write wins by construction, not by luck.
+    @discardableResult
+    private func enqueueEntryMetadataWrite(for captureID: String) -> Task<Void, Never> {
         let originalDate = backdateEnabled ? backdateDate : nil
         let journalID = selectedJournalID
-        try? await entryMetadataStore.update(captureID: captureID) { metadata in
-            metadata.journalID = journalID
-            metadata.originalDate = originalDate
+        let store = entryMetadataStore
+        let previous = pendingMetadataWrite
+        let task = Task { @MainActor in
+            await previous?.value
+            _ = try? await store.update(captureID: captureID) { metadata in
+                if let journalID { metadata.journalID = journalID }
+                metadata.originalDate = originalDate
+            }
         }
+        pendingMetadataWrite = task
+        return task
     }
 
     private func runFinalizer(_ ids: [String]) async {
@@ -533,7 +584,7 @@ struct JournalHeaderView: View {
             Menu {
                 ForEach(model.journals) { journal in
                     Button {
-                        Task { await model.selectJournal(journal.id) }
+                        model.selectJournal(journal.id)
                     } label: {
                         if journal.id == model.selectedJournalID {
                             Label(journal.name, systemImage: "checkmark")
@@ -562,6 +613,16 @@ struct JournalHeaderView: View {
                 .foregroundStyle(.white)
             }
             .accessibilityIdentifier("capture.journalPicker")
+
+            // The one honest case where nothing is selected. Says what it costs — the
+            // recording is unaffected, only its filing — rather than raising an alarm.
+            if model.registryUnreadable {
+                Text("Your journals couldn’t be read. This entry will record normally "
+                     + "and stay where it is until they’re back.")
+                    .font(.caption)
+                    .foregroundStyle(Color(white: 0.55))
+                    .accessibilityIdentifier("capture.journalsUnreadable")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("capture.journalHeader")
@@ -589,9 +650,12 @@ struct BackdateField: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Both bindings write through synchronously — no `Task` per change. Two
+            // spins of the date wheel then reach the sidecar-write chain in the order
+            // the user made them, which a Task per change could not guarantee.
             Toggle(isOn: Binding(
                 get: { model.backdateEnabled },
-                set: { enabled in Task { await model.setBackdateEnabled(enabled) } }
+                set: { model.setBackdateEnabled($0) }
             )) {
                 Text("Backdate this entry")
                     .font(.caption)
@@ -608,7 +672,7 @@ struct BackdateField: View {
                     .foregroundStyle(Color(white: 0.55))
                 DatePicker("Entry date", selection: Binding(
                     get: { model.backdateDate },
-                    set: { date in Task { await model.setBackdateDate(date) } }
+                    set: { model.setBackdateDate($0) }
                 ), displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.compact)

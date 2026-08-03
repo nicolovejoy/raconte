@@ -1,15 +1,11 @@
 import SwiftUI
 
-/// Top-level navigation (M3 T4). Capture stays the app's home screen — the phone mockup
-/// and every existing UI test target it directly — with the library reachable from a
-/// toolbar button rather than a tab: the lightest thing that behaves identically on iOS
-/// and macOS. A `TabView` would also work but reshapes the whole window around a screen
-/// used far less than capture, and macOS tab chrome reads oddly for a two-item app.
+/// Top-level navigation (M3 T4). Capture is the home screen; the library is a toolbar
+/// push, not a tab, so the shape is identical on iOS and macOS.
 ///
-/// One `LibraryScreenModel` for the whole app (M3 T4.5): built here first and threaded
-/// into `CaptureScreenModel`, so the capture screen's recent-recordings section and the
-/// pushed `LibraryView` read through the same scan/store rather than two parallel data
-/// paths.
+/// ONE `LibraryScreenModel` for the whole app (M3 T4.5), built here and threaded into
+/// `CaptureScreenModel`: the capture screen's recent section and the pushed `LibraryView`
+/// must read through the same scan and the same stores, never two parallel data paths.
 struct ContentView: View {
     @State private var library: LibraryScreenModel
     @State private var model: CaptureScreenModel

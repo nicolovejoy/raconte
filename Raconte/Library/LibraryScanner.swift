@@ -168,35 +168,11 @@ struct LibraryScanner: Sendable {
         return 0
     }
 
-    struct TranscriptSummary: Equatable {
-        var state: EntryTranscriptState
-        var snippet: String?
-        var degradations: EntryDegradation
-    }
-
-    /// The snippet comes from the *consolidated* log, not the raw records: replayed raw,
-    /// a revised phrase appears twice and a retracted one appears at all (issue #10).
-    /// `LiveTranscriptReader.consolidate` is the single implementation of those rules.
-    static func transcriptSummary(_ capture: CaptureSnapshot) -> TranscriptSummary {
-        let load = LiveTranscriptReader.load(captureDirectory: capture.directory)
-        switch load.source {
-        case .absent:
-            return TranscriptSummary(state: .absent, snippet: nil, degradations: [])
-        case .unreadable:
-            // Not "no transcript". The log is there and we failed at it.
-            return TranscriptSummary(state: .unreadable, snippet: nil,
-                                     degradations: [.transcriptUnreadable])
-        case .present:
-            var degradations: EntryDegradation = []
-            if case .truncated = LiveTranscriptReader.completeness(
-                lines: load.completeLines,
-                expected: capture.manifest?.transcript?.committedRecords) {
-                degradations.insert(.transcriptTruncated)
-            }
-            let text = LiveTranscriptReader.consolidate(load.records).committedText
-            return TranscriptSummary(state: .present,
-                                     snippet: EntrySnippet.make(from: text),
-                                     degradations: degradations)
-        }
+    /// The row's view of the log — `EntryTranscriptLoader` is the one implementation,
+    /// shared with the detail screen; the row takes the truncated snippet and the screen
+    /// takes the full text, from the same read.
+    static func transcriptSummary(_ capture: CaptureSnapshot) -> EntryTranscript {
+        EntryTranscriptLoader.load(captureDirectory: capture.directory,
+                                   expectedRecords: capture.manifest?.transcript?.committedRecords)
     }
 }

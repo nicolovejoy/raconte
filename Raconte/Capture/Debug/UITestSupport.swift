@@ -6,15 +6,26 @@ import Foundation
 /// id-keyed captures root, so UI flows run with no microphone, no TCC prompt, and
 /// per-test isolation. A relaunch with the same id sees the same disk — the
 /// recovery-flow tests rely on that.
-/// Where the harness's id-keyed captures root lives, factored out so `LibraryScreenModel`
-/// (M3 T4) can point at the same tree `CaptureScreenModel`'s harness uses — two roots for
-/// one `RACONTE_UITEST_ID` would make the library scan an empty directory next to the one
-/// the capture screen is actually writing.
+/// Where the harness's id-keyed tree lives, factored out so `LibraryScreenModel` (M3 T4)
+/// points at the same one `CaptureScreenModel`'s harness uses — two roots for one
+/// `RACONTE_UITEST_ID` would make the library scan an empty directory next to the one the
+/// capture screen is actually writing.
+///
+/// The id keys a **container** root with `captures/` beneath it, the same layout
+/// `AppContainer` defines. The harness used to key the captures root itself and then pin
+/// `journals.json` *inside* it, which contradicted `AppContainer`'s "never inside
+/// captures/" rule and left the harness testing a shape no shipping build has. With the
+/// container keyed instead, `AppContainer.containerRoot(capturesRoot:)` derives the right
+/// place on its own and nothing needs pinning.
 enum UITestHarnessRoot {
-    @MainActor static func capturesRoot(id: String) -> URL {
-        let root = CaptureScreenModel.defaultCapturesRoot()
+    @MainActor static func containerRoot(id: String) -> URL {
+        CaptureScreenModel.defaultCapturesRoot()
             .deletingLastPathComponent()
-            .appendingPathComponent("uitest-captures-\(id)", isDirectory: true)
+            .appendingPathComponent("uitest-\(id)", isDirectory: true)
+    }
+
+    @MainActor static func capturesRoot(id: String) -> URL {
+        let root = AppContainer.capturesRoot(containerRoot: containerRoot(id: id))
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
     }
@@ -39,12 +50,9 @@ extension CaptureScreenModel {
             // record→finalize→relaunch over a two-branch tee rather than the
             // one-branch shape no shipping build will use.
             makeSecondarySink: { _ in NoOpPCMSink() },
-            // `root` itself, not `AppContainer.containerRoot(capturesRoot:)`: the
-            // production default (`root.deletingLastPathComponent()`) would land every
-            // test id's journals.json in the same shared `Raconte/` directory, defeating
-            // the per-id isolation this harness exists for. Colliding with a capture
-            // directory name is not a risk — capture ids are 26-char ULIDs.
-            journalsContainerRoot: root,
+            // No `journalsContainerRoot` override: the id keys the container, so the
+            // production derivation lands `journals.json` beside `captures/` — isolated
+            // per test id and the same layout the shipping app has.
             library: library)
     }
 }

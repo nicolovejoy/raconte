@@ -166,4 +166,50 @@ final class SpokenDateDetectionTests: XCTestCase {
     func testUnreadableOriginalDateStillThrows() {
         XCTAssertThrowsError(try EntryMetadataStore.decode(Data(#"{"originalDate":"nope"}"#.utf8)))
     }
+
+    // MARK: Issue #21 — the latch must not fail open when `detectedDate` is unreadable
+
+    /// The hazard: `detectedDate` decoding leniently to nil (correct, on its own) must not
+    /// look identical to "detection never ran" — that would reopen the latch and let a
+    /// later pass resurrect a backdate the owner may have deliberately cleared.
+    func testDetectionDoesNotRerunWhenDetectedDateIsPresentButUnreadable() throws {
+        var metadata = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"j1","detectedDate":"not-a-date"}"#.utf8))
+        XCTAssertNil(metadata.detectedDate, "sanity: still decodes leniently to nil")
+
+        XCTAssertFalse(SpokenDateDetection.apply(to: &metadata, transcriptText: dated),
+                        "an unreadable detectedDate must fail the latch closed, not open")
+        XCTAssertNil(metadata.originalDate, "must not resurrect a backdate from re-detection")
+    }
+
+    /// Same hazard, wrong-JSON-type variant.
+    func testDetectionDoesNotRerunWhenDetectedDateIsTheWrongType() throws {
+        var metadata = try EntryMetadataStore.decode(Data(#"{"journalID":"j1","detectedDate":7}"#.utf8))
+        XCTAssertNil(metadata.detectedDate)
+
+        XCTAssertFalse(SpokenDateDetection.apply(to: &metadata, transcriptText: dated))
+        XCTAssertNil(metadata.originalDate)
+    }
+
+    /// A genuinely absent `detectedDate` key is "never ran" — must still latch open so a
+    /// fresh entry gets a first detection pass.
+    func testDetectionStillRunsWhenDetectedDateKeyIsAbsent() throws {
+        var metadata = try EntryMetadataStore.decode(Data(#"{"journalID":"j1"}"#.utf8))
+        XCTAssertTrue(SpokenDateDetection.apply(to: &metadata, transcriptText: dated))
+        XCTAssertEqual(metadata.originalDate, march4)
+    }
+
+    /// The closed latch must survive a write that happens while the value is still
+    /// unreadable in memory — otherwise a routine edit (e.g. filing into a journal) would
+    /// silently reopen it by dropping the on-disk signal that detection had already run.
+    func testClosedLatchSurvivesAReencodeWithTheUnreadableValueStillInMemory() throws {
+        let corrupted = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"j1","detectedDate":"not-a-date"}"#.utf8))
+        let reencoded = try EntryMetadataStore.encode(corrupted)
+        var roundTripped = try EntryMetadataStore.decode(reencoded)
+
+        XCTAssertFalse(SpokenDateDetection.apply(to: &roundTripped, transcriptText: dated),
+                        "the latch must stay closed across a write that doesn't recover the value")
+        XCTAssertNil(roundTripped.originalDate)
+    }
 }

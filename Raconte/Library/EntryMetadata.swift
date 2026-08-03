@@ -75,12 +75,27 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// he is looking at.
     var detectedDate: PartialDate?
 
+    /// The latch itself (issue #21), decoded independently of `detectedDate`'s value.
+    /// `detectedDate` decodes leniently to nil on damage — correct in isolation, since a
+    /// broken derived field must not take the whole sidecar down — but if the latch were
+    /// `detectedDate != nil`, that same leniency would look identical to "detection never
+    /// ran," reopening it and letting a later pass resurrect a backdate the owner
+    /// deliberately cleared. This decodes `true` whenever the on-disk `detectedDate` key
+    /// was present, whether or not its value parsed, so damage fails the latch closed
+    /// instead of open. `SpokenDateDetection.apply` sets it alongside `detectedDate`;
+    /// nothing else should.
+    var detectionRan: Bool
+
     init(journalID: String? = nil, originalDate: PartialDate? = nil, trashedAt: Date? = nil,
-         detectedDate: PartialDate? = nil) {
+         detectedDate: PartialDate? = nil, detectionRan: Bool? = nil) {
         self.journalID = journalID
         self.originalDate = originalDate
         self.trashedAt = trashedAt
         self.detectedDate = detectedDate
+        // Defaults to "ran iff we have a value" for callers that don't think about the
+        // flag at all — the only place that constructs the ran-but-valueless state is the
+        // decoder itself.
+        self.detectionRan = detectionRan ?? (detectedDate != nil)
     }
 
     /// What an absent `entry.json` means. An unfiled, un-backdated, live entry.
@@ -129,7 +144,7 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// field a legacy `originalDate` (an ISO8601 instant) needs alongside it to convert
     /// into a `PartialDate`. New sidecars never write it.
     private enum CodingKeys: String, CodingKey {
-        case journalID, originalDate, trashedAt, detectedDate
+        case journalID, originalDate, trashedAt, detectedDate, detectionRan
         case legacyPrecision = "precision"
     }
 
@@ -158,6 +173,14 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // the whole sidecar unreadable — losing the journal, the backdate and the trash
         // state with it.
         detectedDate = (try? container.decodeIfPresent(PartialDate.self, forKey: .detectedDate)) ?? nil
+        // The latch (issue #21): true whenever `detectedDate`'s key was present at all —
+        // independent of whether the value above just decoded — or whenever an explicit
+        // `detectionRan` key says so. The explicit key exists only to carry a closed latch
+        // forward through a re-encode of an entry whose `detectedDate` is unreadable (see
+        // `encode(to:)`), since that re-encode has no valid value to write back as the
+        // signal.
+        detectionRan = container.contains(.detectedDate)
+            || ((try? container.decodeIfPresent(Bool.self, forKey: .detectionRan)) ?? false)
     }
 
     private static func decodeOriginalDate(
@@ -189,5 +212,13 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         try container.encodeIfPresent(originalDate, forKey: .originalDate)
         try container.encodeIfPresent(trashedAt, forKey: .trashedAt)
         try container.encodeIfPresent(detectedDate, forKey: .detectedDate)
+        // Only when the latch is closed with no value to carry it: `detectedDate`'s own
+        // key presence already signals "ran" on the next read whenever it has a value, so
+        // writing this alongside a real `detectedDate` would be redundant on every normal
+        // entry. It is needed exactly when `detectedDate` is nil but the latch must still
+        // read as closed — the ran-but-unreadable state a corrupted decode produces.
+        if detectionRan && detectedDate == nil {
+            try container.encode(true, forKey: .detectionRan)
+        }
     }
 }

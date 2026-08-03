@@ -133,6 +133,13 @@ final class CaptureCoordinator {
     private let levelBox = LevelBox()
     private var recordingSegmentStart: Date?
     private var accumulatedElapsed: TimeInterval = 0
+    /// The moment the system told us the current interruption ended (the
+    /// `resumeAvailable` notification), captured at receipt regardless of
+    /// `shouldResume`. Consumed (and cleared) the next time the entry closes as
+    /// resumed; reset to nil whenever a new interruption begins, since no other
+    /// path (route loss, mediaServicesReset, give-up) ever learns a true end
+    /// time (issue #19).
+    private var pendingInterruptionEndedAt: Date?
 
     // MARK: Init
 
@@ -258,6 +265,10 @@ final class CaptureCoordinator {
             if machineState.phase == .interrupted { canResume = true }
         case .resumeAvailable(let shouldResume):
             guard machineState.phase == .interrupted else { return }
+            // The only signal we ever get for when the interruption actually ended
+            // (issue #19) — capture it regardless of `shouldResume`, since a manual
+            // resume later is still closing an interruption whose true end we know.
+            pendingInterruptionEndedAt = now()
             if shouldResume { await send(.resume) } else { canResume = true }
         }
     }
@@ -381,7 +392,9 @@ final class CaptureCoordinator {
 
     private func resumeRecordingDisk() async {
         guard let store = currentStore else { return }
-        try? await store.resumeRecording()
+        let interruptionEndedAt = pendingInterruptionEndedAt
+        pendingInterruptionEndedAt = nil
+        try? await store.resumeRecording(interruptionEndedAt: interruptionEndedAt)
         startRecordingClock(reset: false)
     }
 
@@ -395,6 +408,9 @@ final class CaptureCoordinator {
     // MARK: interruption / resume
 
     private func enterInterrupted(kind: String) async {
+        // A new interruption; any end-time signal captured for a previous one no
+        // longer applies (issue #19).
+        pendingInterruptionEndedAt = nil
         currentRecorder?.stop()
         await flushPump()
         if let store = currentStore {
@@ -580,6 +596,7 @@ final class CaptureCoordinator {
         activeFormat = nil
         activeCaptureID = nil
         recordingSegmentStart = nil
+        pendingInterruptionEndedAt = nil
     }
 
     // MARK: Small helpers

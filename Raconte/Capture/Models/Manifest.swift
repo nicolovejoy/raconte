@@ -1,24 +1,66 @@
 import Foundation
 
 /// One appended entry in the manifest's interruption log (design §1/§2).
-/// `endedAt`/`resumed` are nil while an interruption is ongoing.
+/// `closedAt`/`resumed` are nil while an interruption is ongoing.
+///
+/// `endedAt` and `closedAt` answer different questions (issue #19): `endedAt` is
+/// when the *system* told us the interruption ended — the only signal for that is
+/// the `resumeAvailable` notification — and stays nil forever when that signal
+/// never arrived (route loss, a give-up on the retry budget, or the owner
+/// stopping from `interrupted` all close the entry without ever learning when it
+/// actually ended). `closedAt` is when *we* stopped waiting — resumed, gave up,
+/// or the owner tapped Done — and is always set once the entry closes. Neither
+/// is fabricated from the other.
 struct InterruptionLogEntry: Codable, Sendable, Equatable {
     var kind: String
     var beganAt: Date
     var endedAt: Date?
+    var closedAt: Date?
     var resumed: Bool?
 
-    enum CodingKeys: String, CodingKey { case kind, beganAt, endedAt, resumed }
+    init(kind: String, beganAt: Date, endedAt: Date? = nil, closedAt: Date? = nil,
+         resumed: Bool? = nil) {
+        self.kind = kind
+        self.beganAt = beganAt
+        self.endedAt = endedAt
+        self.closedAt = closedAt
+        self.resumed = resumed
+    }
 
-    // Custom encode so `endedAt`/`resumed` serialize as explicit `null` while the
-    // interruption is in progress (finding #5) — consistent with FinalRef, so in-progress
-    // and completed entries share one JSON shape instead of omitting the nil keys.
+    enum CodingKeys: String, CodingKey { case kind, beganAt, endedAt, closedAt, resumed }
+
+    // Custom encode so `endedAt`/`closedAt`/`resumed` serialize as explicit `null`
+    // while the interruption is in progress (finding #5) — consistent with FinalRef,
+    // so in-progress and completed entries share one JSON shape instead of omitting
+    // the nil keys.
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(kind, forKey: .kind)
         try c.encode(beganAt, forKey: .beganAt)
         try c.encode(endedAt, forKey: .endedAt)
+        try c.encode(closedAt, forKey: .closedAt)
         try c.encode(resumed, forKey: .resumed)
+    }
+
+    // Hand-written per the house decoder rule: `kind`/`beganAt` are identity
+    // fields (strict); `resumed` was already optional pre-#19 so stays lenient.
+    // `closedAt` is new — a pre-#19 record has no `closedAt` key at all, only a
+    // single `endedAt` that actually meant "when we stopped waiting". Migrate
+    // that value into `closedAt` on read and leave the new `endedAt` honestly
+    // nil, since a legacy record's true system-reported end time was never
+    // captured and must not be fabricated from the old field.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        beganAt = try c.decode(Date.self, forKey: .beganAt)
+        resumed = try c.decodeIfPresent(Bool.self, forKey: .resumed)
+        if c.contains(.closedAt) {
+            endedAt = try c.decodeIfPresent(Date.self, forKey: .endedAt)
+            closedAt = try c.decodeIfPresent(Date.self, forKey: .closedAt)
+        } else {
+            endedAt = nil
+            closedAt = try c.decodeIfPresent(Date.self, forKey: .endedAt)
+        }
     }
 }
 

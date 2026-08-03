@@ -116,7 +116,7 @@ struct LibraryView: View {
                        action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                JournalCoverThumbnail(data: cover, size: 20)
+                JournalCoverThumbnail(data: cover, size: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(.caption.weight(isSelected ? .semibold : .regular))

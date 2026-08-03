@@ -36,6 +36,10 @@ final class LibraryScreenModel {
     /// looking for it — making him first recall which journal it was filed in is how a
     /// recoverable entry reads as gone.
     private(set) var trashed: [EntryListItem] = []
+    /// Every non-trashed entry, across every journal, independent of `journalScope` —
+    /// the source `recent` and `dateRange(forJournal:)` both derive from, since neither
+    /// wants the current filter's narrowing (issue #14 part 2).
+    private(set) var allEntries: [EntryListItem] = []
     private(set) var journals: [Journal] = []
     /// `journals.json` exists and did not decode. Rendered by `LibraryView`: without it
     /// every filed entry reads as having a dangling journal, with no way to tell why.
@@ -130,9 +134,15 @@ final class LibraryScreenModel {
         items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)
         trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
         skipped = result.skipped
-        let live = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
-        recent = Self.mostRecentlyCaptured(live, limit: 3)
+        allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
+        recent = Self.mostRecentlyCaptured(allEntries, limit: 3)
         isLoading = false
+    }
+
+    /// Derived, not stored — see `JournalDateRange`. `nil` for a journal with no
+    /// (non-trashed) entries, including one that does not exist.
+    func dateRange(forJournal journalID: String) -> JournalDateRange? {
+        JournalDateRange.compute(from: allEntries.filter { $0.journalID == journalID })
     }
 
     /// Sorted by `capturedAt` descending — deliberately not `effectiveDate`: recency on

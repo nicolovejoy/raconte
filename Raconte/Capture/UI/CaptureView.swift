@@ -619,9 +619,9 @@ struct JournalHeaderView: View {
                         model.selectJournal(journal.id)
                     } label: {
                         if journal.id == model.selectedJournalID {
-                            Label(journal.name, systemImage: "checkmark")
+                            Label(menuTitle(for: journal), systemImage: "checkmark")
                         } else {
-                            Text(journal.name)
+                            Text(menuTitle(for: journal))
                         }
                     }
                 }
@@ -670,6 +670,14 @@ struct JournalHeaderView: View {
             Button("Rename") { Task { await model.renameCurrentJournal(to: draftName) } }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Journal name plus its derived date range in parentheses (issue #14 part 2), e.g.
+    /// "1987 (1987)" or "Trip to France (March – July 1998)". Omitted for an empty
+    /// journal — appending "()" to a journal nobody has recorded into yet is noise.
+    private func menuTitle(for journal: Journal) -> String {
+        guard let range = model.library.dateRange(forJournal: journal.id) else { return journal.name }
+        return "\(journal.name) (\(range.formatted()))"
     }
 }
 

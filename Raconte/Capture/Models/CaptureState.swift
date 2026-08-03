@@ -16,6 +16,22 @@ enum CaptureState: String, Codable, Sendable, CaseIterable {
     case complete
 }
 
+extension CaptureState {
+    /// Issue #12: the display should stay awake exactly while frames are being captured
+    /// live — `.recording` and `.resuming` (the brief reconnect after an interruption).
+    /// `.interrupted` is deliberately excluded: the owner may be mid-phone-call and wants
+    /// normal lock behavior. Every other phase (including `.idle`, which a freshly spawned
+    /// coordinator starts in) is false, so a fresh per-capture coordinator can't leak the
+    /// hold from the one it replaced. `CaseIterable` lets the test enumerate every case —
+    /// a new phase fails the test until classified here.
+    var keepsDisplayAwake: Bool {
+        switch self {
+        case .recording, .resuming: true
+        case .idle, .preparing, .interrupted, .stopping, .captured, .finalizing, .complete: false
+        }
+    }
+}
+
 /// Why a segment stopped receiving frames (sidecar `closedReason`).
 enum SegmentClosedReason: String, Codable, Sendable {
     case rotation

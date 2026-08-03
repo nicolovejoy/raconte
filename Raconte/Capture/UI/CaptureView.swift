@@ -572,12 +572,14 @@ struct CaptureView: View {
             model.handleFinalizeQueue()
         }
         #if os(iOS)
-        // Derived from phase, not paired start/stop calls: whatever ends recording
-        // (stop, finalize, interruption) flips this back through the same onChange, and
+        // Derived from phase via `CaptureState.keepsDisplayAwake` (pure, unit-tested), not
+        // paired start/stop calls: whatever ends recording (stop, finalize, interruption,
+        // route-loss-without-resume) flips this back through the same onChange, and
         // `initial: true` covers a screen that mounts already mid-recording (e.g. a
-        // relaunch). `onDisappear` is the backstop against leaving it stuck true.
+        // relaunch) or a freshly spawned coordinator swapped in after finalize. `onDisappear`
+        // is the backstop against leaving it stuck true.
         .onChange(of: model.coordinator.phase, initial: true) { _, phase in
-            UIApplication.shared.isIdleTimerDisabled = (phase == .recording)
+            UIApplication.shared.isIdleTimerDisabled = phase.keepsDisplayAwake
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false

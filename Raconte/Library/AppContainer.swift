@@ -11,10 +11,17 @@ import Foundation
 ///     <Application Support>/Raconte/
 ///       captures/<ULID>/…      capture machine territory
 ///       journals.json          journals registry (M3 T1)
+///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
     static let journalsFileName = "journals.json"
+    /// Not the same name as `journalsFileName` — a directory named `journals` sitting
+    /// beside a file named `journals.json` is deliberate; `capturesDirectoryName`
+    /// establishes that a scan only walks `captures/`, so this tree is invisible to
+    /// `DirectorySnapshot.gather` regardless of what it's called.
+    static let journalCoversDirectoryName = "journals"
+    static let journalCoverFileName = "cover.jpg"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -42,6 +49,13 @@ enum AppContainer {
 
     static func journalsURL(containerRoot: URL) -> URL {
         containerRoot.appendingPathComponent(journalsFileName)
+    }
+
+    static func journalCoverURL(containerRoot: URL, journalID: String) -> URL {
+        containerRoot
+            .appendingPathComponent(journalCoversDirectoryName, isDirectory: true)
+            .appendingPathComponent(journalID, isDirectory: true)
+            .appendingPathComponent(journalCoverFileName)
     }
 
     /// The container root inferred from a captures root — the inverse of

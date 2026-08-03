@@ -23,6 +23,7 @@ final class LibraryScreenModel {
     /// update in it. One actor per file, app-wide, is the whole point of the type.
     let journalStore: JournalStore
     let entryMetadataStore: EntryMetadataStore
+    let journalCoverStore: JournalCoverStore
 
     private(set) var items: [EntryListItem] = []
     /// The 3 most recently *captured* entries, across every journal, regardless of
@@ -41,6 +42,11 @@ final class LibraryScreenModel {
     /// wants the current filter's narrowing (issue #14 part 2).
     private(set) var allEntries: [EntryListItem] = []
     private(set) var journals: [Journal] = []
+    /// Cover JPEG bytes by journal id (issue #14 part 3), for whichever journals have
+    /// one. Reloaded on every `rescan()` alongside `journals` — the chips and the
+    /// capture header both read this rather than hitting the store themselves, the same
+    /// "one scan, three consumers" shape `items`/`recent`/`trashed` already use.
+    private(set) var journalCovers: [String: Data] = [:]
     /// `journals.json` exists and did not decode. Rendered by `LibraryView`: without it
     /// every filed entry reads as having a dangling journal, with no way to tell why.
     private(set) var journalsUnreadable = false
@@ -79,6 +85,7 @@ final class LibraryScreenModel {
         self.sweeper = TrashSweeper(capturesRoot: capturesRoot)
         self.journalStore = JournalStore(containerRoot: containerRoot)
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
+        self.journalCoverStore = JournalCoverStore(containerRoot: containerRoot)
     }
 
     /// Live composition root, matching `CaptureScreenModel.live()`'s captures root exactly
@@ -123,6 +130,12 @@ final class LibraryScreenModel {
         // with `try?` is the same mistake one level up from the store that draws the
         // line — the chips would silently show no journals over a registry that has them.
         let loadedJournals = try? await journalStore.list()
+        var loadedCovers: [String: Data] = [:]
+        for journal in loadedJournals ?? [] {
+            if let data = await journalCoverStore.read(journalID: journal.id) {
+                loadedCovers[journal.id] = data
+            }
+        }
         let result = await scanner.scan(filter: EntryListFilter(journal: .all, trash: .all))
 
         // A superseded scan publishes nothing, and leaves `isLoading` set — the scan
@@ -130,6 +143,7 @@ final class LibraryScreenModel {
         guard generation == scanGeneration else { return }
 
         journals = loadedJournals ?? []
+        journalCovers = loadedCovers
         journalsUnreadable = loadedJournals == nil || result.journalsUnreadable
         items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)
         trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
@@ -184,6 +198,23 @@ final class LibraryScreenModel {
             $0.originalDate = date
             $0.precision = date == nil ? nil : precision
         }
+        await rescan()
+    }
+
+    // MARK: - Journal cover (issue #14 part 3)
+
+    /// Sets or replaces a journal's cover image. `imageData` is any ImageIO-decodable
+    /// format (JPEG/PNG/HEIC) straight from the camera or `PhotosPicker` — the store
+    /// re-encodes and downscales it. Rethrows `JournalCoverError.invalidImage` so the
+    /// picker sheet can tell the owner the pick didn't take; every other read of a cover
+    /// degrades silently instead.
+    func setJournalCover(_ journalID: String, imageData: Data) async throws {
+        try await journalCoverStore.write(imageData: imageData, journalID: journalID)
+        await rescan()
+    }
+
+    func removeJournalCover(_ journalID: String) async {
+        await journalCoverStore.delete(journalID: journalID)
         await rescan()
     }
 

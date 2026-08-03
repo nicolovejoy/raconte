@@ -1,5 +1,20 @@
 import Foundation
 
+extension Calendar {
+    /// Gregorian, in the system's current time zone. `.current` follows the user's
+    /// calendar *preference* (e.g. Islamic Umm al-Qura), but the year/month semantics
+    /// of `originalDate`/`DatePrecision` and the library's year grouping are defined in
+    /// Gregorian terms — under a non-Gregorian `.current`, normalizing or grouping by
+    /// `.year` would land on the wrong year entirely. Only the calendar *identifier* is
+    /// pinned; the time zone still follows the system, matching every other date
+    /// display in the app.
+    static var gregorianCurrent: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }
+}
+
 /// Precision `originalDate` was set at (M3 issue #14 part 1) — paper journals are often
 /// dated only to a year, or a year and month. Meaningless when `originalDate` is `nil`.
 enum DatePrecision: String, Codable, Sendable, CaseIterable {
@@ -12,7 +27,7 @@ enum DatePrecision: String, Codable, Sendable, CaseIterable {
     /// The one place this happens: `EntryMetadata.effectiveDate(capturedAt:)` calls it,
     /// and every sort/date-range/display call site goes through that, not `originalDate`
     /// directly, so there is exactly one rule for what a reduced-precision date "is".
-    func normalized(_ date: Date, calendar: Calendar = .current) -> Date {
+    func normalized(_ date: Date, calendar: Calendar = .gregorianCurrent) -> Date {
         switch self {
         case .day: return date
         case .yearMonth: return calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date

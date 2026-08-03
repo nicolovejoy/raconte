@@ -101,4 +101,28 @@ final class JournalDateRangeTests: XCTestCase {
                                      maxDate: date(2003, 7, 20), maxPrecision: .day)
         XCTAssertEqual(range.formatted(calendar: cal), "1998–2003")
     }
+
+    /// FIX 5: a `.year`-precision bound never contributes a month it doesn't have. A
+    /// year-only 1998 entry alongside a July 1998 day entry must not fabricate
+    /// "January – July 1998" — January was never said.
+    func testYearPrecisionBoundCollapsesToYearEvenWithinOneCalendarYear() {
+        let range = JournalDateRange(minDate: date(1998, 1, 1), minPrecision: .year,
+                                     maxDate: date(1998, 7, 20), maxPrecision: .day)
+        XCTAssertEqual(range.formatted(calendar: cal), "1998")
+    }
+
+    func testYearPrecisionBoundCollapsesToYearRangeAcrossYears() {
+        let range = JournalDateRange(minDate: date(1998, 1, 1), minPrecision: .year,
+                                     maxDate: date(2003, 7, 20), maxPrecision: .day)
+        XCTAssertEqual(range.formatted(calendar: cal), "1998–2003")
+    }
+
+    /// When the range collapses to a point but the two bounds disagree on precision
+    /// (a tie in `compute`'s min/max tracking), the coarser precision wins — it's the
+    /// honest description of what's actually known about that instant.
+    func testPointRangeWithDifferingPrecisionsUsesTheCoarserOne() {
+        let range = JournalDateRange(minDate: date(1998, 1, 1), minPrecision: .day,
+                                     maxDate: date(1998, 1, 1), maxPrecision: .year)
+        XCTAssertEqual(range.formatted(calendar: cal), "1998")
+    }
 }

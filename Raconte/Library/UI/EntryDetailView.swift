@@ -89,7 +89,11 @@ struct EntryDetailView: View {
             // and one stray tap must not erase it. Clearing lives inside the sheet as
             // an explicit destructive action.
             Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
-                backdateDraft = item.effectiveDate
+                // The unnormalized value, not `effectiveDate`: prefilling from the
+                // normalized date and saving it back would park a reduced-precision
+                // date on its Jan-1/month-1 boundary, where a timezone change can flip
+                // its displayed year/month.
+                backdateDraft = item.originalDate ?? item.capturedAt
                 backdatePrecisionDraft = item.originalDatePrecision
                 showingBackdatePicker = true
             }

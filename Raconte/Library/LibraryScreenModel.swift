@@ -196,7 +196,7 @@ final class LibraryScreenModel {
     func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async {
         let calendar = Calendar.gregorianCurrent
         _ = try? await entryMetadataStore.update(captureID: captureID) {
-            $0.originalDate = date.map { PartialDate(from: $0, precision: precision, calendar: calendar) }
+            $0.setOriginalDate(date.map { PartialDate(from: $0, precision: precision, calendar: calendar) })
         }
         await rescan()
     }

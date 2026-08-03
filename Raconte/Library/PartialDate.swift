@@ -129,6 +129,16 @@ struct PartialDate: Sendable, Equatable, Hashable {
         comps.hour = 12
         return calendar.date(from: comps) ?? Date(timeIntervalSince1970: 0)
     }
+
+    /// Precision-aware future check (disallow-future-backdates): compares against `now`
+    /// truncated to *this value's own precision*, not `now` itself — so a year-only
+    /// "2026" is future only once the current year has rolled past it, and a day-only
+    /// "2026-08-03" is future only once tomorrow arrives, not merely because `now` carries
+    /// a later hour. `now` is a parameter, not `Date()` inline, so callers (and their
+    /// tests) control the reference instant instead of this racing the real clock.
+    func isFuture(now: Date = Date(), calendar: Calendar = .gregorianCurrent) -> Bool {
+        self > PartialDate(from: now, precision: precision, calendar: calendar)
+    }
 }
 
 extension PartialDate: Comparable {

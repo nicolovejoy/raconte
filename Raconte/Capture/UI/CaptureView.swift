@@ -546,7 +546,7 @@ final class CaptureScreenModel {
             _ = try? await store.update(captureID: captureID) { metadata in
                 if let journalID { metadata.journalID = journalID }
                 if writeBackdate {
-                    metadata.originalDate = originalDate
+                    metadata.setOriginalDate(originalDate)
                 }
             }
         }

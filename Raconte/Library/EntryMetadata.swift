@@ -112,6 +112,19 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         return originalDate.anchorDate(calendar: calendar)
     }
 
+    /// The one place a backdate is written (disallow-future-backdates). Rejects — leaves
+    /// `originalDate` unchanged — rather than clamping to `now`: silently rewriting a
+    /// future dial to "today" would record a value the owner never entered. Every write
+    /// site must go through this rather than assigning the stored property directly, or
+    /// the guard is just UI-deep again. Clearing (`date == nil`) always succeeds.
+    @discardableResult
+    mutating func setOriginalDate(_ date: PartialDate?, now: Date = Date(),
+                                   calendar: Calendar = .gregorianCurrent) -> Bool {
+        if let date, date.isFuture(now: now, calendar: calendar) { return false }
+        originalDate = date
+        return true
+    }
+
     /// `precision` only exists as a decode-time key now — the pre-#14-part-2 on-disk
     /// field a legacy `originalDate` (an ISO8601 instant) needs alongside it to convert
     /// into a `PartialDate`. New sidecars never write it.

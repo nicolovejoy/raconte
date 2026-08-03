@@ -133,6 +133,32 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(model.items.count, 2)
     }
 
+    // MARK: Journal date ranges (issue #14 part 2)
+
+    /// `dateRange` reads off `allEntries`, not the currently filtered `items` — narrowing
+    /// the scope to a different journal must not change another journal's range.
+    func testDateRangeIsIndependentOfJournalScope() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Trip")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+        try writeCapture(idB, capturedAt: 2_000, journalID: "J1")
+        try writeCapture(idC, capturedAt: 3_000, journalID: "J2")
+
+        let model = model()
+        await model.selectJournalScope(.journal("J2"))
+
+        let range = try XCTUnwrap(model.dateRange(forJournal: "J1"))
+        XCTAssertEqual(range.minDate, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(range.maxDate, Date(timeIntervalSince1970: 2_000))
+    }
+
+    func testDateRangeIsNilForAnEmptyOrUnknownJournal() async throws {
+        try writeJournals([journal("J1", "1987")])
+        let model = model()
+        await model.rescan()
+        XCTAssertNil(model.dateRange(forJournal: "J1"))
+        XCTAssertNil(model.dateRange(forJournal: "does-not-exist"))
+    }
+
     // MARK: Honesty signals
 
     func testUnreadableRegistryIsPublishedRatherThanReadAsNoJournals() async throws {

@@ -93,6 +93,7 @@ struct LibraryView: View {
                 }
                 ForEach(model.journals) { journal in
                     chip(title: journal.name,
+                         subtitle: model.dateRange(forJournal: journal.id)?.formatted(),
                          isSelected: model.journalScope == .journal(journal.id)) {
                         Task { await model.selectJournalScope(.journal(journal.id)) }
                     }
@@ -104,19 +105,29 @@ struct LibraryView: View {
         .accessibilityIdentifier("library.journalChips")
     }
 
+    /// `subtitle` is the journal's derived date range (issue #14 part 2) — `nil` for an
+    /// empty journal, which shows just the name rather than a blank second line.
     @ViewBuilder
-    private func chip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private func chip(title: String, subtitle: String? = nil, isSelected: Bool,
+                       action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.caption.weight(isSelected ? .semibold : .regular))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.12),
-                           in: Capsule())
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.caption.weight(isSelected ? .semibold : .regular))
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor.opacity(0.22) : Color.secondary.opacity(0.12),
+                       in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library.journalChip")
-        .accessibilityLabel(title)
+        .accessibilityLabel(subtitle.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 

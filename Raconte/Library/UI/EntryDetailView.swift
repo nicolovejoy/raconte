@@ -19,8 +19,7 @@ struct EntryDetailView: View {
 
     @State private var item: EntryListItem
     @State private var playback: CapturePlayback?
-    @State private var transcriptState: EntryTranscriptState = .absent
-    @State private var transcriptText: String?
+    @State private var transcript = EntryTranscript(state: .absent, text: nil, degradations: [])
     @State private var showingBackdatePicker = false
     @State private var backdateDraft = Date()
 
@@ -43,17 +42,23 @@ struct EntryDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(item.effectiveDate.formatted(date: .abbreviated, time: .omitted))
-        .onAppear { refresh() }
+        .task { await refresh() }
+        // No `deinit` on `CapturePlayback` stops the audio, and a `@State` value outlives
+        // the pop by however long SwiftUI holds it — without this, backing out of a
+        // playing entry keeps playing.
+        .onDisappear { playback?.stop() }
         .sheet(isPresented: $showingBackdatePicker) { backdateSheet }
     }
 
-    private func refresh() {
+    /// Both loads are off the main actor: the transcript is an O(records) parse and
+    /// `CapturePlayback`'s convenience init walks the whole captures tree. Opening an
+    /// entry used to do both synchronously while the screen was on screen.
+    private func refresh() async {
         if let latest = model.item(captureID) { item = latest }
-        let loaded = model.transcriptText(for: captureID)
-        transcriptState = loaded.state
-        transcriptText = loaded.text
+        transcript = await model.transcript(for: captureID)
         if playback == nil {
-            playback = CapturePlayback(capturesRoot: model.capturesRoot, captureID: captureID)
+            playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,
+                                                  captureID: captureID)
         }
     }
 
@@ -75,7 +80,7 @@ struct EntryDetailView: View {
 
                 if item.isBackdated {
                     Button("Clear", role: .destructive) {
-                        Task { await model.setBackdate(captureID, to: nil); refresh() }
+                        Task { await model.setBackdate(captureID, to: nil); await refresh() }
                     }
                     .accessibilityIdentifier("detail.clearBackdateButton")
                 }
@@ -97,7 +102,7 @@ struct EntryDetailView: View {
                         Button("Save") {
                             let date = backdateDraft
                             showingBackdatePicker = false
-                            Task { await model.setBackdate(captureID, to: date); refresh() }
+                            Task { await model.setBackdate(captureID, to: date); await refresh() }
                         }
                         .accessibilityIdentifier("detail.backdateSave")
                     }
@@ -122,7 +127,7 @@ struct EntryDetailView: View {
             Menu {
                 ForEach(model.journals) { journal in
                     Button(journal.name) {
-                        Task { await model.moveEntry(captureID, toJournal: journal.id); refresh() }
+                        Task { await model.moveEntry(captureID, toJournal: journal.id); await refresh() }
                     }
                 }
             } label: {
@@ -158,13 +163,15 @@ struct EntryDetailView: View {
     // MARK: - Transcript
 
     /// Absent / unreadable / present-but-empty are three distinct, calm answers — issue
-    /// #11's rule, one layer up from the log reader that first drew this line.
+    /// #11's rule, one layer up from the log reader that first drew this line. A short
+    /// tail is a fourth: the text is real and there may simply be less of it than was
+    /// spoken, which the library row already marks and this screen used not to.
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
                 .font(.headline)
 
-            switch transcriptState {
+            switch transcript.state {
             case .absent:
                 Text("This entry was not transcribed.")
                     .foregroundStyle(.secondary)
@@ -174,8 +181,8 @@ struct EntryDetailView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("detail.transcript.unreadable")
             case .present:
-                if let transcriptText, !transcriptText.isEmpty {
-                    Text(transcriptText)
+                if let text = transcript.text, !text.isEmpty {
+                    Text(text)
                         .font(.system(.body, design: .serif))
                         .textSelection(.enabled)
                         .accessibilityIdentifier("detail.transcript.text")
@@ -184,6 +191,14 @@ struct EntryDetailView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("detail.transcript.empty")
                 }
+            }
+
+            if transcript.isTruncated {
+                Text("The end of this transcript is missing — the app closed before it "
+                     + "finished writing. The recording itself is complete.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("detail.transcript.truncated")
             }
         }
     }

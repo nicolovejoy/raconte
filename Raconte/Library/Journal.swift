@@ -71,15 +71,20 @@ struct JournalRegistry: Codable, Sendable, Equatable {
 
     func contains(id: String) -> Bool { journal(id: id) != nil }
 
-    /// Appends a journal. Names are *not* required to be unique — two "1987 Journal"s
-    /// are the user's business, and an id collision is the only thing that would corrupt
-    /// filing.
-    mutating func insert(_ journal: Journal) throws {
+    /// Appends a journal and returns what was actually stored — the name is normalized,
+    /// so the argument is not it. Returning it saves the caller reaching back into
+    /// `journals[count - 1]`, which is only correct while insert appends.
+    ///
+    /// Names are *not* required to be unique — two "1987 Journal"s are the user's
+    /// business, and an id collision is the only thing that would corrupt filing.
+    @discardableResult
+    mutating func insert(_ journal: Journal) throws -> Journal {
         guard !Self.normalized(journal.name).isEmpty else { throw JournalError.emptyName }
         guard !contains(id: journal.id) else { throw JournalError.duplicateID(journal.id) }
         var stored = journal
         stored.name = Self.normalized(journal.name)
         journals.append(stored)
+        return stored
     }
 
     @discardableResult

@@ -49,11 +49,10 @@ actor JournalStore {
     @discardableResult
     func create(name: String) throws -> Journal {
         var registry = try load()
-        let journal = Journal(id: mintID(), name: name, createdAt: now())
-        try registry.insert(journal)
+        // `insert` normalizes the name and hands back what it stored.
+        let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: now()))
         try save(registry)
-        // `insert` normalizes the name; return what was actually stored.
-        return registry.journals[registry.journals.count - 1]
+        return created
     }
 
     @discardableResult

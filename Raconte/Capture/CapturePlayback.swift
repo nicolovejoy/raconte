@@ -91,14 +91,28 @@ final class CapturePlayback {
     }
 
     /// Build by walking `capturesRoot` for `captureID` (reads disk once at init).
+    ///
+    /// Synchronous, so on the main actor it walks the *whole* captures tree before the
+    /// caller's next line. Fine for the recovery banner, which is built at launch off a
+    /// gather that just ran; use `load(capturesRoot:captureID:)` from a screen.
     convenience init(capturesRoot: URL, captureID: String) {
-        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
-            .captures.first { $0.captureID == captureID }
-        if let snapshot {
-            self.init(snapshot: snapshot)
-        } else {
-            self.init(source: .none)
-        }
+        self.init(source: Self.source(capturesRoot: capturesRoot, captureID: captureID))
+    }
+
+    /// Same thing with the tree walk on the cooperative pool. `PlayableSource` is
+    /// `Sendable`, so only the decision crosses back.
+    static func load(capturesRoot: URL, captureID: String) async -> CapturePlayback {
+        let source = await Task.detached(priority: .userInitiated) {
+            Self.source(capturesRoot: capturesRoot, captureID: captureID)
+        }.value
+        return CapturePlayback(source: source)
+    }
+
+    nonisolated static func source(capturesRoot: URL, captureID: String) -> PlayableSource {
+        guard let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+            .captures.first(where: { $0.captureID == captureID })
+        else { return .none }
+        return PlayableSourceSelector.select(snapshot)
     }
 
     var hasAudio: Bool {

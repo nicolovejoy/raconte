@@ -40,6 +40,42 @@ struct EntryDegradation: OptionSet, Sendable, Hashable {
     /// Fewer log lines than `TranscriptRef.committedRecords` — the app was killed and
     /// the tail is short. The snippet is still real, just possibly not the whole story.
     static let transcriptTruncated = EntryDegradation(rawValue: 1 << 5)
+
+    /// Every flag declared above. **Add a new flag here and to `reasonTable`.**
+    ///
+    /// Swift cannot enumerate an `OptionSet`'s static members (no `Mirror` over a type),
+    /// so this list is the closest thing to T2.5's manifest field-count tripwire:
+    /// `EntryDegradationTableTests` pins its bit count, so adding a flag without
+    /// updating both lists fails the suite rather than silently dropping the new flag
+    /// out of every accessibility label.
+    static let allDeclared: EntryDegradation = [
+        .manifestAbsent, .manifestCorrupt, .metadataUnreadable,
+        .transcriptUnreadable, .journalUnresolved, .transcriptTruncated,
+    ]
+
+    /// Calm, specific phrases for the library row's degraded marker — never "error" or
+    /// "corrupt", per the M3 T4 brief: a degradation is a reason to look, not to alarm.
+    ///
+    /// Lives here rather than in `LibraryView` (where it started) so the flags and the
+    /// words for them are read together and the tripwire above can cover both.
+    static let reasonTable: [(flag: EntryDegradation, reason: String)] = [
+        (.manifestAbsent, "recording details incomplete"),
+        (.manifestCorrupt, "recording details incomplete"),
+        (.metadataUnreadable, "entry settings unreadable"),
+        (.journalUnresolved, "journal not found"),
+        (.transcriptUnreadable, "transcript unreadable"),
+        (.transcriptTruncated, "transcript may be incomplete"),
+    ]
+
+    /// The reasons this value carries, in table order and de-duplicated (absent and
+    /// corrupt manifests share a phrase — the owner does not need the difference).
+    var accessibilityReasons: [String] {
+        var reasons: [String] = []
+        for entry in Self.reasonTable where contains(entry.flag) && !reasons.contains(entry.reason) {
+            reasons.append(entry.reason)
+        }
+        return reasons
+    }
 }
 
 /// One row of the library, derived from one capture directory.
@@ -51,9 +87,18 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     var captureID: String
     var id: String { captureID }
 
+    /// The sidecar, whole. Held rather than flattened into copies: `effectiveDate` and
+    /// friends below are `EntryMetadata`'s own rules, and three parallel fields with
+    /// re-derived accessors are three chances for the row and the file to disagree —
+    /// only a pinning test held them together before.
+    var metadata: EntryMetadata
+
     /// The journal id as written in `entry.json` — kept raw so a dangling reference is
     /// visible rather than silently reading as "unfiled".
-    var journalID: String?
+    var journalID: String? {
+        get { metadata.journalID }
+        set { metadata.journalID = newValue }
+    }
     /// Resolved against the registry. `nil` when unfiled, dangling, or unresolvable.
     var journal: Journal?
 
@@ -62,7 +107,10 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     var capturedAt: Date
     /// The backdate, when the owner set one. `nil` is not "same as capturedAt" — it is
     /// "never backdated", and the two must stay distinguishable (see `EntryMetadata`).
-    var originalDate: Date?
+    var originalDate: Date? {
+        get { metadata.originalDate }
+        set { metadata.originalDate = newValue }
+    }
 
     var durationSeconds: Double
     /// First stretch of committed transcript text, whitespace-collapsed and truncated.
@@ -70,7 +118,10 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     var snippet: String?
     var transcript: EntryTranscriptState
 
-    var trashedAt: Date?
+    var trashedAt: Date? {
+        get { metadata.trashedAt }
+        set { metadata.trashedAt = newValue }
+    }
     var degradations: EntryDegradation
 
     init(captureID: String,
@@ -84,22 +135,19 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
         self.captureID = captureID
         self.capturedAt = capturedAt
         self.durationSeconds = durationSeconds
-        self.journalID = metadata.journalID
-        self.originalDate = metadata.originalDate
-        self.trashedAt = metadata.trashedAt
+        self.metadata = metadata
         self.journal = journal
         self.snippet = snippet
         self.transcript = transcript
         self.degradations = degradations
     }
 
-    /// The date the library sorts and groups by. One rule, defined once in
-    /// `EntryMetadata.effectiveDate(capturedAt:)`; this is the same rule spelled out
-    /// over the flattened fields, and a test pins the two together.
-    var effectiveDate: Date { originalDate ?? capturedAt }
+    /// The date the library sorts and groups by. Defined once, in
+    /// `EntryMetadata.effectiveDate(capturedAt:)`, and now *called* rather than restated.
+    var effectiveDate: Date { metadata.effectiveDate(capturedAt: capturedAt) }
 
     var isBackdated: Bool { originalDate != nil }
-    var isTrashed: Bool { trashedAt != nil }
+    var isTrashed: Bool { metadata.isTrashed }
 
     /// A journal was named and could not be resolved. Distinct from unfiled.
     var hasDanglingJournal: Bool { journalID != nil && journal == nil }

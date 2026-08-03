@@ -203,6 +203,53 @@ final class CaptureUITests: XCTestCase {
         }
     }
 
+    // MARK: M3 T5 (flow) — trash → restore, over the real sidecar
+
+    /// Record, trash the entry from its detail screen, confirm it leaves the library and
+    /// turns up in the Trash with a countdown, then restore it and confirm it comes back.
+    /// The whole round trip is one `entry.json` field, so this is really a check that the
+    /// three lists (`items`, `recent`, `trashed`) all republish off one scan.
+    func testTrashAndRestoreAnEntry() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 2)
+        press(record)
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
+        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+        press(recentRows(app).firstMatch)
+
+        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        press(trashButton)
+        let confirm = app.buttons["detail.confirmTrash"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
+        press(confirm)
+
+        // Back on the capture screen: the entry is gone from Recent.
+        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+
+        press(app.buttons["capture.libraryButton"].firstMatch)
+        let trashLink = app.buttons["library.trashLink"].firstMatch
+        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
+        waitUntil(15, "trash count never showed the entry") { trashLink.label.contains("1") }
+        press(trashLink)
+
+        let remaining = app.staticTexts["trash.row.remaining"].firstMatch
+        XCTAssertTrue(remaining.waitForExistence(timeout: 15), "trashed entry not listed")
+        XCTAssertTrue(remaining.label.contains("days left"),
+                      "no countdown on the trashed row: \(remaining.label)")
+
+        press(app.buttons["trash.row.restore"].firstMatch)
+        waitUntil(20, "the restored entry is still in the trash") {
+            app.staticTexts.matching(identifier: "trash.row.remaining").count == 0
+        }
+    }
+
     /// `XCUIElement.value` is `Any?`; a SwiftUI slider reports its number as a
     /// string on some platforms and a `Double` on others.
     private static func number(_ value: Any?) -> Double? {

@@ -15,8 +15,14 @@ import Foundation
 final class LibraryScreenModel {
     nonisolated let capturesRoot: URL
     private let scanner: LibraryScanner
-    private let journalStore: JournalStore
-    private let entryMetadataStore: EntryMetadataStore
+    private let sweeper: TrashSweeper
+    /// Not private (M3 T5): `CaptureScreenModel` uses **these** instances rather than
+    /// building its own pair over the same files. Two `EntryMetadataStore` actors do not
+    /// serialize with each other, so a backdate written from the detail screen and a
+    /// journal write from the capture screen were a read-modify-write race with a lost
+    /// update in it. One actor per file, app-wide, is the whole point of the type.
+    let journalStore: JournalStore
+    let entryMetadataStore: EntryMetadataStore
 
     private(set) var items: [EntryListItem] = []
     /// The 3 most recently *captured* entries, across every journal, regardless of
@@ -25,6 +31,11 @@ final class LibraryScreenModel {
     /// `effectiveDate` for the library list, and recency here means capture time, not
     /// the (possibly backdated) effective date.
     private(set) var recent: [EntryListItem] = []
+    /// Everything in the trash, across every journal and independent of `journalScope`
+    /// (M3 T5). Not journal-scoped on purpose: the owner deletes an entry, then goes
+    /// looking for it — making him first recall which journal it was filed in is how a
+    /// recoverable entry reads as gone.
+    private(set) var trashed: [EntryListItem] = []
     private(set) var journals: [Journal] = []
     /// `journals.json` exists and did not decode. Rendered by `LibraryView`: without it
     /// every filed entry reads as having a dangling journal, with no way to tell why.
@@ -40,6 +51,13 @@ final class LibraryScreenModel {
     /// disappears without anyone noticing, so the owner's own builds get to see the
     /// count rather than the scanner recording it for nobody.
     private(set) var skipped: [SkippedCapture] = []
+    /// What the launch sweep did, once it has run (M3 T5). `nil` until then.
+    ///
+    /// Surfaced only in DEBUG, for `skipped`'s reason: a permanent deletion the owner
+    /// asked for thirty days ago needs no announcement, but a sweep that keeps skipping
+    /// the same directory — an unreadable sidecar, a removal that keeps failing — is a
+    /// capture stuck in the trash forever, and nothing else would ever say so.
+    private(set) var lastSweep: TrashSweepResult?
 
     var journalScope: JournalScope = .all
 
@@ -54,6 +72,7 @@ final class LibraryScreenModel {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
         self.scanner = LibraryScanner(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        self.sweeper = TrashSweeper(capturesRoot: capturesRoot)
         self.journalStore = JournalStore(containerRoot: containerRoot)
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
     }
@@ -77,9 +96,15 @@ final class LibraryScreenModel {
 
     // MARK: - Scan
 
-    /// Reloads journals and re-scans captures under the current `journalScope`. Trashed
-    /// entries are always excluded — T5 owns the Trash screen and its own filter value;
-    /// this screen never asks for anything but `.excludeTrashed`.
+    /// Reloads journals and re-scans captures. **One** disk scan, unfiltered, with the
+    /// three published lists derived from it in memory (M3 T5).
+    ///
+    /// It used to be up to two scans, and T5 would have made it three (list, recents,
+    /// trash). `EntryListFilter.apply` is pure over `[EntryListItem]` and the scan itself
+    /// is the expensive half — it reads and consolidates every capture's `live.jsonl` —
+    /// so scanning the superset once and filtering it three ways is both cheaper and
+    /// strictly more consistent: the list, the recents strip and the trash count now
+    /// always describe the same instant on disk.
     func rescan() async {
         scanGeneration &+= 1
         let generation = scanGeneration
@@ -89,16 +114,12 @@ final class LibraryScreenModel {
         // belong to the filter that was current when it was asked for, not to whatever
         // a concurrent `selectJournalScope` has since set.
         let scope = journalScope
-        let filter = EntryListFilter(journal: scope, trash: .excludeTrashed)
 
         // `nil` is an unreadable registry, `[]` a genuinely empty one. Collapsing them
         // with `try?` is the same mistake one level up from the store that draws the
         // line — the chips would silently show no journals over a registry that has them.
         let loadedJournals = try? await journalStore.list()
-        let result = await scanner.scan(filter: filter)
-        let recentResult = scope == .all
-            ? result
-            : await scanner.scan(filter: EntryListFilter(journal: .all, trash: .excludeTrashed))
+        let result = await scanner.scan(filter: EntryListFilter(journal: .all, trash: .all))
 
         // A superseded scan publishes nothing, and leaves `isLoading` set — the scan
         // that overtook it is still running and owns clearing it.
@@ -106,9 +127,11 @@ final class LibraryScreenModel {
 
         journals = loadedJournals ?? []
         journalsUnreadable = loadedJournals == nil || result.journalsUnreadable
-        items = result.items
+        items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)
+        trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
         skipped = result.skipped
-        recent = Self.mostRecentlyCaptured(recentResult.items, limit: 3)
+        let live = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
+        recent = Self.mostRecentlyCaptured(live, limit: 3)
         isLoading = false
     }
 
@@ -132,7 +155,7 @@ final class LibraryScreenModel {
     /// an edit that moves it out of the active journal filter. Callers (the detail screen)
     /// must keep their own last-known copy rather than treating `nil` as "gone".
     func item(_ captureID: String) -> EntryListItem? {
-        items.first { $0.captureID == captureID }
+        items.first { $0.captureID == captureID } ?? trashed.first { $0.captureID == captureID }
     }
 
     // MARK: - Entry edits (detail screen)
@@ -147,6 +170,52 @@ final class LibraryScreenModel {
     func setBackdate(_ captureID: String, to date: Date?) async {
         _ = try? await entryMetadataStore.update(captureID: captureID) { $0.originalDate = date }
         await rescan()
+    }
+
+    // MARK: - Trash (M3 T5)
+
+    /// Soft-delete: stamp `trashedAt`. The entry leaves the library list and the recents
+    /// strip (the filter already excluded trashed items) and appears in the Trash view
+    /// with its countdown running. Nothing is removed from disk.
+    ///
+    /// Through `update`, so an `entry.json` we cannot parse is never overwritten with a
+    /// tombstone-plus-defaults — the read throws first and the entry stays exactly as it
+    /// is, visible and undeleted. That is the same rule the sweep holds one layer down.
+    func trashEntry(_ captureID: String, now: Date = Date()) async {
+        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = now }
+        await rescan()
+    }
+
+    /// Undo. Clearing the tombstone is the whole restore — nothing ever moved.
+    func restoreEntry(_ captureID: String) async {
+        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = nil }
+        await rescan()
+    }
+
+    /// "Delete Now" from the Trash view: skip the remaining grace period.
+    ///
+    /// Re-reads the sidecar and refuses unless it says the entry is trashed, rather than
+    /// trusting the row the button was drawn from. The row is a snapshot of a scan that
+    /// may be seconds old and, on a synced device later, may describe a restore that has
+    /// since landed. The only thing that may cost a recording is what is on disk now.
+    @discardableResult
+    func deleteEntryPermanently(_ captureID: String) async -> Bool {
+        guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
+              metadata.isTrashed else { return false }
+        let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try? FileManager.default.removeItem(at: dir)
+        await rescan()
+        return true
+    }
+
+    /// The 30-day sweep. Called once per launch, after the first scan has published, so
+    /// it never sits between the owner and his library.
+    func sweepTrash() async {
+        let result = await sweeper.run()
+        lastSweep = result
+        // Only rescan when the disk actually changed — a launch with nothing expired is
+        // the normal case and must not pay for a second scan.
+        if !result.deleted.isEmpty { await rescan() }
     }
 
     // MARK: - Transcript (detail screen)

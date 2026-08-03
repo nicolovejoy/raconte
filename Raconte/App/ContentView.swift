@@ -39,6 +39,8 @@ struct ContentView: View {
                         if let item = library.item(captureID) {
                             EntryDetailView(model: library, item: item)
                         }
+                    case .trash:
+                        TrashView(model: library)
                     }
                 }
         }

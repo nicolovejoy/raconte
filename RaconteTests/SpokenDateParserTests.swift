@@ -84,6 +84,24 @@ final class SpokenDateParserTests: XCTestCase {
         XCTAssertNil(SpokenDateParser.detect(in: "We talked about 1998 for hours"))
     }
 
+    /// Issue #12b: filler-stripping used to promote a mid-sentence year to token 0 before
+    /// the position check ran, so "so"/"in"/"the" being filler words silently defeated the
+    /// bare-year rule's own defence. The gate is now the RAW first token, before any
+    /// filler is dropped — filler tolerance is a month-led-pattern feature only.
+    func testFillerStrippingDoesNotPromoteAMidSentenceYear() {
+        XCTAssertNil(SpokenDateParser.detect(in: "So, in the 1998 election I voted"))
+        XCTAssertNil(SpokenDateParser.detect(in: "The 1998 election was close"))
+    }
+
+    /// Documented false positive: the bare-year rule has no signal beyond "is this the
+    /// first word", so a number that genuinely opens the utterance detects even when it
+    /// isn't a year in spirit. Visible and editable in the UI, never applied silently —
+    /// this is the accepted cost of the position-0 rule, not a bug to chase further.
+    func testBareYearAcceptedFalsePositive() {
+        XCTAssertEqual(SpokenDateParser.detect(in: "2000 dollars was a lot back then"),
+                       PartialDate(year: 2000))
+    }
+
     func testYearOutsideRangeIsNotDetected() {
         XCTAssertNil(SpokenDateParser.detect(in: "1899 was before the range"))
         XCTAssertNil(SpokenDateParser.detect(in: "2100 is after it"))
@@ -99,8 +117,39 @@ final class SpokenDateParserTests: XCTestCase {
         XCTAssertEqual(SpokenDateParser.detect(in: "Uh, entry for March 4th 1998"), expected)
     }
 
-    func testLeadingFillerBeforeBareYear() {
-        XCTAssertEqual(SpokenDateParser.detect(in: "Okay. So, 1998."), PartialDate(year: 1998))
+    /// Bare year does NOT tolerate leading filler (see `testFillerStrippingDoesNotPromoteAMidSentenceYear`)
+    /// — filler tolerance is a month-led-pattern feature only, so a year preceded by even
+    /// "Okay. So," is not a detected opening.
+    func testLeadingFillerBeforeBareYearIsNotDetected() {
+        XCTAssertNil(SpokenDateParser.detect(in: "Okay. So, 1998."))
+    }
+
+    func testTodayIsMonthDayYear() {
+        XCTAssertEqual(SpokenDateParser.detect(in: "Today is March 4th, 1998"),
+                       PartialDate(year: 1998, month: 3, day: 4))
+    }
+
+    func testItWasMonthYear() {
+        let detected = SpokenDateParser.detect(in: "It was March 1998, we had just moved")
+        XCTAssertEqual(detected, PartialDate(year: 1998, month: 3))
+        XCTAssertEqual(detected?.precision, .yearMonth)
+    }
+
+    func testLetMeSeeMonthDayYear() {
+        XCTAssertEqual(SpokenDateParser.detect(in: "Let me see, March 4th, 1998"),
+                       PartialDate(year: 1998, month: 3, day: 4))
+    }
+
+    func testImRecordingThisOnMonthDayYear() {
+        XCTAssertEqual(SpokenDateParser.detect(in: "I'm recording this on March 4th, 1998"),
+                       PartialDate(year: 1998, month: 3, day: 4))
+    }
+
+    /// Interior "the" between month and day — the filler run only strips leading tokens,
+    /// so "March the 4th" needs `monthDayYear` itself to skip it.
+    func testMonthTheDayYear() {
+        XCTAssertEqual(SpokenDateParser.detect(in: "March the 4th, 1998"),
+                       PartialDate(year: 1998, month: 3, day: 4))
     }
 
     /// "May" is a month and a filler-shaped word; the filler run must never eat it.
@@ -133,13 +182,23 @@ final class SpokenDateParserTests: XCTestCase {
     // MARK: Position
 
     /// Only the opening is scanned — a date named a paragraph in dates something else.
+    /// The preamble here is pure filler, so a failure could only come from the character
+    /// window cutting the date off, not from a non-filler word defeating the filler run
+    /// (that would pass even with the window deleted — the bug this replaces).
     func testDatePastTheOpeningWindowIsNotDetected() {
-        let preamble = String(repeating: "words and more words ", count: 6)
+        let preamble = String(repeating: "um ", count: 40)
         XCTAssertNil(SpokenDateParser.detect(in: preamble + "March 4th, 1998"))
     }
 
+    /// Same string, two limits: nil at a limit that truncates before the date, detected at
+    /// the default window. Pins the window itself, not incidental non-filler content —
+    /// the old version of this test passed at `limit: 5` regardless of what the window
+    /// was, because "Okay so anyway" contains a non-filler word ("anyway") that already
+    /// defeats the filler run.
     func testWindowIsCharacterLimited() {
-        XCTAssertNil(SpokenDateParser.detect(in: "Okay so anyway March 4th, 1998", limit: 5))
+        XCTAssertNil(SpokenDateParser.detect(in: "Okay, um, March 4th, 1998", limit: 9))
+        XCTAssertEqual(SpokenDateParser.detect(in: "Okay, um, March 4th, 1998"),
+                       PartialDate(year: 1998, month: 3, day: 4))
     }
 
     // MARK: Nothing there

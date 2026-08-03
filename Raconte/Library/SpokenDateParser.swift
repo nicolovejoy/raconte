@@ -18,7 +18,8 @@ enum SpokenDateParser {
     /// `nil` when the opening names no date this recognizes. Never throws and never
     /// guesses: an impossible date ("February 30th, 1998") is no detection at all.
     static func detect(in transcript: String, limit: Int = openingCharacterLimit) -> PartialDate? {
-        let tokens = dropLeadingFiller(tokenize(String(transcript.prefix(limit))))
+        let rawTokens = tokenize(String(transcript.prefix(limit)))
+        let tokens = dropLeadingFiller(rawTokens)
         guard !tokens.isEmpty else { return nil }
 
         // Most specific first. Each returns nil rather than falling back to a coarser
@@ -26,7 +27,16 @@ enum SpokenDateParser {
         if let date = dayOfMonthYear(tokens) { return date }
         if let date = monthDayYear(tokens) { return date }
         if let date = monthYear(tokens) { return date }
-        return bareYear(tokens)
+        // Bare year reads the UNFILTERED tokens, not `tokens` — filler tolerance is a
+        // month-led-pattern feature. A four-digit number carries no signal of its own, so
+        // its only defence is position, and filler stripping moving it TO position 0 is
+        // exactly the hole this closes ("So, in the 1998 election I voted" — "so"/"in"/
+        // "the" are all filler words, and stripping them would otherwise promote 1998 to
+        // a detected year). Accepted, documented false positive: "2000 dollars was a
+        // lot" — the year genuinely opens the utterance, so it detects; there is no
+        // signal left to tell that case apart from a real bare-year opening, and the
+        // result is visible and editable in the UI, never silently applied.
+        return bareYear(rawTokens)
     }
 
     // MARK: - Patterns
@@ -42,10 +52,11 @@ enum SpokenDateParser {
         return makeDate(year: year, month: month, day: day)
     }
 
-    /// "March 4th, 1998" / "March 4 1998".
+    /// "March 4th, 1998" / "March 4 1998" / "March the 4th, 1998".
     private static func monthDayYear(_ t: [String]) -> PartialDate? {
         guard let month = monthNumber(t[safe: 0]) else { return nil }
         var i = 1
+        if t[safe: i] == "the" { i += 1 }
         guard let day = dayNumber(at: &i, in: t) else { return nil }
         guard let year = yearNumber(t[safe: i]) else { return nil }
         return makeDate(year: year, month: month, day: day)
@@ -60,11 +71,14 @@ enum SpokenDateParser {
         return makeDate(year: year, month: month, day: nil)
     }
 
-    /// A bare year, and **only** when it opens the utterance. Anywhere else it is prose
-    /// — "I bought 1998 stamps" must not become a 1998 backdate — and the position test
-    /// is the whole defence, since a four-digit number carries no other signal.
-    private static func bareYear(_ t: [String]) -> PartialDate? {
-        guard let year = yearNumber(t[safe: 0]) else { return nil }
+    /// A bare year, and **only** when it is the very FIRST token of the raw transcript —
+    /// before any filler is stripped. Anywhere else it is prose — "I bought 1998 stamps"
+    /// must not become a 1998 backdate — and the position test is the whole defence,
+    /// since a four-digit number carries no other signal. Filler tolerance does not
+    /// extend here (see the call site in `detect`): a bare year preceded by so much as
+    /// "so" or "the" is not a dated opening, it is a number that happens to appear early.
+    private static func bareYear(_ rawTokens: [String]) -> PartialDate? {
+        guard let year = yearNumber(rawTokens[safe: 0]) else { return nil }
         return makeDate(year: year, month: nil, day: nil)
     }
 
@@ -142,6 +156,8 @@ enum SpokenDateParser {
         "okay", "ok", "um", "umm", "uh", "uhh", "er", "erm", "hmm", "mmm",
         "so", "well", "alright", "right", "now", "and", "this", "is", "it", "it’s", "it's",
         "the", "entry", "for", "from", "dated", "date", "on", "in",
+        "today", "was", "were", "i", "i’m", "i'm", "im", "let", "let’s", "let's", "lets",
+        "me", "see", "recording", "my", "we", "here",
     ]
 
     private static func dropLeadingFiller(_ tokens: [String]) -> [String] {

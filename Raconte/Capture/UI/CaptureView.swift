@@ -280,6 +280,7 @@ final class CaptureScreenModel {
         guard journals.contains(where: { $0.id == id }) else { return }
         selectedJournalID = id
         currentJournal.select(id)
+        resolveBackdateForJournalChange()
         syncActiveEntryMetadata()
     }
 
@@ -289,6 +290,7 @@ final class CaptureScreenModel {
         journals.append(created)
         selectedJournalID = created.id
         currentJournal.select(created.id)
+        resolveBackdateForJournalChange()
         syncActiveEntryMetadata()
         return created
     }
@@ -360,6 +362,28 @@ final class CaptureScreenModel {
     /// tests that pin the carry-over rule; the view reads it only through the pre-fill.
     func carriedBackdate() -> PartialDate? {
         selectedJournalID.flatMap { carriedBackdates[$0] }
+    }
+
+    /// Re-anchors the live backdate picker to the JUST-selected journal, when the toggle
+    /// is on. Carry-over is per journal (M3 issue #15, owner decision) — leaving
+    /// `backdateDate`/`backdatePrecision` untouched across a journal switch would carry
+    /// journal A's dialled date into journal B's next capture, which is not what "on"
+    /// means for B. The toggle itself is left alone: switching journals is not the
+    /// owner turning backdating off.
+    ///
+    /// Must run AFTER `selectedJournalID` is updated to the new journal (so
+    /// `carriedBackdate()` reads B's entry, not A's) and does not call `rememberBackdate()`
+    /// — writing the resolved value back would either re-stamp B's own carry with itself
+    /// or, worse, invent a carry for B out of a same-session default.
+    private func resolveBackdateForJournalChange() {
+        guard backdateEnabled else { return }
+        if let carried = carriedBackdate() {
+            backdateDate = carried.anchorDate(calendar: .gregorianCurrent)
+            backdatePrecision = carried.precision
+        } else {
+            backdateDate = Date()
+            backdatePrecision = .day
+        }
     }
 
     /// Records whatever backdate is currently in force. Only while the toggle is on: a
@@ -654,6 +678,14 @@ struct CaptureView: View {
         .onChange(of: model.coordinator.phase, initial: true) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = phase.keepsDisplayAwake
         }
+        // `CaptureView` is the NavigationStack root: pushing Library/detail fires ITS
+        // onDisappear (below), and popping back never re-runs the onChange above —
+        // `initial: true` only fires once, at first mount, not on every reappearance.
+        // Without this, navigating away mid-recording and back drops the hold for the
+        // rest of the capture. onDisappear remains the backstop for every other exit.
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = model.coordinator.phase.keepsDisplayAwake
+        }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
@@ -828,6 +860,10 @@ struct BackdateField: View {
                     .foregroundStyle(Color(white: 0.55))
             }
             .accessibilityIdentifier("capture.backdateToggle")
+            // The capture screen's background is near-black regardless of the app's
+            // color scheme; an ambient-scheme system control renders dark-on-dark in
+            // light mode (smoke feedback 2026-08-02) — same rule as the date picker below.
+            .environment(\.colorScheme, .dark)
 
             // Always rendered, disabled until the toggle is on — a conditional picker
             // with a hidden label left no visible "place to set the date" (smoke

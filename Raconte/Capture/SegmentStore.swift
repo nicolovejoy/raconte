@@ -156,11 +156,29 @@ actor SegmentStore: PCMSink {
     /// is the moment the system told us the interruption ended (the `resumeAvailable`
     /// notification) — nil when the resume was never preceded by that signal (route
     /// loss auto-resume, or a manual resume after `mediaServicesReset`; issue #19).
+    ///
+    /// Issue #20: a throw leaves the in-memory manifest exactly as it was — still
+    /// `interrupted`, with the interruption entry still OPEN. Without that rollback
+    /// a failed open (manifest already persisted as `recording`) would leave the
+    /// store claiming a resume that never happened, and the caller's next write
+    /// would stamp the entry `resumed: true`. `stateSeq`/`stateUpdatedAt` are
+    /// deliberately NOT rolled back: a persist may already have landed on disk, and
+    /// the sequence must never go backwards.
     func resumeRecording(interruptionEndedAt: Date? = nil) throws {
-        closeMostRecentOpenInterruption(resumed: true, endedAt: interruptionEndedAt)
-        manifest.state = .recording
-        try persistManifest()
-        try openCurrentSegmentFile()
+        let rollback = manifest
+        do {
+            closeMostRecentOpenInterruption(resumed: true, endedAt: interruptionEndedAt)
+            manifest.state = .recording
+            try persistManifest()
+            try openCurrentSegmentFile()
+        } catch {
+            let seq = manifest.stateSeq
+            let updatedAt = manifest.stateUpdatedAt
+            manifest = rollback
+            manifest.stateSeq = seq
+            manifest.stateUpdatedAt = updatedAt
+            throw error
+        }
     }
 
     /// Generic state transition + operational-field update, atomically persisted

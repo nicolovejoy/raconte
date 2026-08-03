@@ -184,21 +184,41 @@ final class LibraryScreenModel {
 
     // MARK: - Entry edits (detail screen)
 
-    /// Reassign an entry's journal. `nil` files it as unfiled.
-    func moveEntry(_ captureID: String, toJournal journalID: String?) async {
-        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.journalID = journalID }
+    /// Reassign an entry's journal. `nil` files it as unfiled. Returns `false` (and
+    /// leaves the sidecar untouched) when the store throws — an unreadable/undecodable
+    /// `entry.json`, or a write that fails on disk. The move never happened silently
+    /// either way: the caller decides whether to tell the owner.
+    @discardableResult
+    func moveEntry(_ captureID: String, toJournal journalID: String?) async -> Bool {
+        let succeeded: Bool
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.journalID = journalID }
+            succeeded = true
+        } catch {
+            succeeded = false
+        }
         await rescan()
+        return succeeded
     }
 
     /// Set, change, or clear (`date == nil`) the backdate. `precision` is ignored when
     /// clearing — `EntryMetadata.effectivePrecision` is meaningless without a date, so
-    /// there is nothing to reset it to.
-    func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async {
+    /// there is nothing to reset it to. Returns `false` on a store failure — see
+    /// `moveEntry`.
+    @discardableResult
+    func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async -> Bool {
         let calendar = Calendar.gregorianCurrent
-        _ = try? await entryMetadataStore.update(captureID: captureID) {
-            $0.setOriginalDate(date.map { PartialDate(from: $0, precision: precision, calendar: calendar) })
+        let succeeded: Bool
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) {
+                $0.setOriginalDate(date.map { PartialDate(from: $0, precision: precision, calendar: calendar) })
+            }
+            succeeded = true
+        } catch {
+            succeeded = false
         }
         await rescan()
+        return succeeded
     }
 
     // MARK: - Journal cover (issue #14 part 3)
@@ -227,15 +247,36 @@ final class LibraryScreenModel {
     /// Through `update`, so an `entry.json` we cannot parse is never overwritten with a
     /// tombstone-plus-defaults — the read throws first and the entry stays exactly as it
     /// is, visible and undeleted. That is the same rule the sweep holds one layer down.
-    func trashEntry(_ captureID: String, now: Date = Date()) async {
-        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = now }
+    ///
+    /// Returns `false` (never resurrecting/backdating anything, just reporting the
+    /// truth) when the store throws — the device failure this guards against: an
+    /// `update` that silently no-ops while the caller believes the entry is trashed.
+    @discardableResult
+    func trashEntry(_ captureID: String, now: Date = Date()) async -> Bool {
+        let succeeded: Bool
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = now }
+            succeeded = true
+        } catch {
+            succeeded = false
+        }
         await rescan()
+        return succeeded
     }
 
-    /// Undo. Clearing the tombstone is the whole restore — nothing ever moved.
-    func restoreEntry(_ captureID: String) async {
-        _ = try? await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = nil }
+    /// Undo. Clearing the tombstone is the whole restore — nothing ever moved. Returns
+    /// `false` on a store failure — see `trashEntry`.
+    @discardableResult
+    func restoreEntry(_ captureID: String) async -> Bool {
+        let succeeded: Bool
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = nil }
+            succeeded = true
+        } catch {
+            succeeded = false
+        }
         await rescan()
+        return succeeded
     }
 
     /// "Delete Now" from the Trash view: skip the remaining grace period.

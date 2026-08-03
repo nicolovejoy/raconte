@@ -182,6 +182,38 @@ fallback (landed), and the CloudKit container (already reserved on the portal �
 `iCloud.org.pianohouseproject.raconte` exists, description "Raconte"). The app's
 entitlements still carry no iCloud keys, which is correct until M4.
 
+## M3 dogfood MVP landed 2026-08-02 (evening session)
+
+Plan of record: `docs/plans/2026-08-02-m3-dogfood-mvp-plan.md`; journeys draft
+`docs/user-journeys.md`. T0–T5 all landed via supervised subagent builds, every diff
+reviewed before commit; 320 → 478 unit tests, 6 UI tests. Shipped: journals first-class
+(registry + `entry.json` sidecar, default journal auto-created), journal-context capture
+with optional backdate, scan-based library (degrade-never-skip), library/detail screens,
+one data path for recents (FinishedRecording deleted), 30-day trash (sweep never touches
+an unreadable sidecar — mutation-verified), and an adversarial-review pass whose worst
+find was `journals.json` unreadable→empty collapse silently unfiling a session.
+Both devices carry current main. Trash flow has no manual smoke number yet.
+
+**UI design rules (owner, 2026-08-02):**
+- The capture screen pins a near-black background; any system control placed on it must
+  pin `.environment(\.colorScheme, .dark)` — ambient-scheme bubbles render dark-on-dark
+  in light mode (bit us once).
+- Prefer semantic colors over `Color(white:)` literals anywhere the background isn't
+  pinned.
+- Backdates are sticky: editable with explicit overrides, never clearable by one tap.
+  Owner wants metadata edits auditable eventually (fold into T6 revision design).
+
+**Next steps:**
+1. **#14 variable-precision `originalDate` (year / year-month / day) — land before the
+   dogfood corpus grows.** Additive field, lenient decode. Then cover images + derived
+   date ranges (same issue).
+2. #15 spoken leading date → backdate (composes with precision). #16 verify capture-page
+   recents on the new build before treating as a bug.
+3. Owner questions open: backdate carry-over between consecutive captures; auto-apply vs
+   suggestion chip for #15; cover image source (camera only?).
+4. T6 revision-chain design doc (editorial foundation; include metadata-edit
+   auditability), then T7/T8, then T9 CloudKit before multi-device editorial.
+
 ## Landed 2026-08-02
 
 **The 7.80 s transcript is trailing silence — closed, not a bug.** The 9.1 s capture

@@ -15,8 +15,11 @@ enum SpokenDateDetection {
     @discardableResult
     static func apply(to metadata: inout EntryMetadata, transcriptText: String?,
                        now: Date = Date()) -> Bool {
-        // The latch. Checked before parsing, so a re-run costs nothing.
-        guard metadata.detectedDate == nil else { return false }
+        // The latch. `detectionRan`, not `detectedDate == nil` (issue #21) — an unreadable
+        // `detectedDate` decodes to nil too, and checking the value would let that damage
+        // reopen a latch that already fired. Checked before parsing, so a re-run costs
+        // nothing.
+        guard !metadata.detectionRan else { return false }
         guard let transcriptText,
               let detected = SpokenDateParser.detect(in: transcriptText) else { return false }
 
@@ -28,6 +31,7 @@ enum SpokenDateDetection {
         guard !detected.isFuture(now: now) else { return false }
 
         metadata.detectedDate = detected
+        metadata.detectionRan = true
         // Manual first, always. A date the owner typed outranks one the room said, and
         // recording the detection anyway is what keeps this a one-shot.
         if metadata.originalDate == nil {

@@ -151,8 +151,11 @@ actor SegmentStore: PCMSink {
     }
 
     /// Reacquired the engine after an interruption (§2 row 9): persist `recording`
-    /// (write-ahead) then open the next segment.
+    /// (write-ahead) then open the next segment. Closes the open interruption entry
+    /// (issue #9) in the SAME write as the state flip, so a kill right after resume
+    /// can't land `recording` on disk with the entry still open.
     func resumeRecording() throws {
+        closeMostRecentOpenInterruption(resumed: true)
         manifest.state = .recording
         try persistManifest()
         try openCurrentSegmentFile()
@@ -160,9 +163,17 @@ actor SegmentStore: PCMSink {
 
     /// Generic state transition + operational-field update, atomically persisted
     /// (§2 rows 8/12/15/16/17/18/19). Only non-nil operational fields are changed.
+    /// `closingInterruption`, when non-nil, closes the most recent open interruption
+    /// entry (issue #9) with that `resumed` value in the same write — used for the two
+    /// `-> captured` paths that leave an interruption while it's still open: the user
+    /// stopping from `interrupted` (row 14) and reacquire giving up its retry budget
+    /// (row 11). Never pass it for `.interrupted`/`.resuming`, which must leave the
+    /// entry open.
     func setState(_ state: CaptureState,
                   needsAttention: Bool? = nil, lastError: String? = nil,
-                  retryCount: Int? = nil, finalizeAttempts: Int? = nil) throws {
+                  retryCount: Int? = nil, finalizeAttempts: Int? = nil,
+                  closingInterruption resumed: Bool? = nil) throws {
+        if let resumed { closeMostRecentOpenInterruption(resumed: resumed) }
         manifest.state = state
         if let needsAttention { manifest.needsAttention = needsAttention }
         if let lastError { manifest.lastError = lastError }
@@ -261,6 +272,17 @@ actor SegmentStore: PCMSink {
         manifest.segmentCount = segmentCount
         manifest.lastKnownFrameOffset = cumulativeFrameOffset
         try persistManifest()
+    }
+
+    /// Closes the most recent open interruption entry (`endedAt == nil`), stamping
+    /// `endedAt`/`resumed`. A well-formed log never has more than one open entry, but
+    /// if a crash between `markInterrupted` and its close somehow left an earlier one
+    /// open too, that entry is left alone — it's evidence, not clutter. No-op if none
+    /// open. Caller persists the manifest.
+    private func closeMostRecentOpenInterruption(resumed: Bool) {
+        guard let index = manifest.interruptions.lastIndex(where: { $0.endedAt == nil }) else { return }
+        manifest.interruptions[index].endedAt = clock.now()
+        manifest.interruptions[index].resumed = resumed
     }
 
     private func persistManifest() throws {

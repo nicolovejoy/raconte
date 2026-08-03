@@ -269,4 +269,73 @@ final class JournalCaptureContextTests: XCTestCase {
         XCTAssertFalse(model.registryUnreadable)
         XCTAssertEqual(model.journals.map(\.name), ["Journal"])
     }
+
+    // MARK: precision write path (adversarial-review test gap)
+
+    func testPrecisionReachesTheSidecarAlongsideOriginalDate() async throws {
+        let recorder = ContextFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let captureID = try await startRecording(model, recorder)
+
+        model.setBackdateEnabled(true)
+        model.setBackdatePrecision(.yearMonth)
+        model.setBackdateDate(Date(timeIntervalSince1970: 500))
+        await waitForSidecar(captureID, "precision never reached entry.json") {
+            $0.originalDate == Date(timeIntervalSince1970: 500) && $0.precision == .yearMonth
+        }
+    }
+
+    func testTogglingOffClearsBothOriginalDateAndPrecision() async throws {
+        let recorder = ContextFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let captureID = try await startRecording(model, recorder)
+
+        model.setBackdateEnabled(true)
+        model.setBackdatePrecision(.year)
+        model.setBackdateDate(Date(timeIntervalSince1970: 500))
+        await waitForSidecar(captureID, "precision never landed") {
+            $0.precision == .year
+        }
+        model.setBackdateEnabled(false)
+        await waitForSidecar(captureID, "toggle-off left precision or date behind") {
+            $0.originalDate == nil && $0.precision == nil
+        }
+    }
+
+    /// FIX 6 regression: `handlePhase` re-runs `enqueueEntryMetadataWrite` on every
+    /// re-entry to `.recording`, including an interruption resume. Before the fix, that
+    /// write carried `originalDate = nil` unconditionally whenever the live-capture
+    /// toggle was off — even when the sidecar already held a backdate the detail screen
+    /// wrote while the capture sat interrupted. Resume must leave that backdate alone.
+    func testResumeWithBackdateOffDoesNotEraseAPreviouslyStoredBackdate() async throws {
+        let recorder = ContextFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let captureID = try await startRecording(model, recorder)
+        await waitForSidecarFile(captureID)
+
+        // Stand in for a backdate set from the detail screen while interrupted —
+        // the live model's own `backdateEnabled` never turned on for this capture.
+        let url = SegmentLayout.entryMetadataURL(
+            captureDirectory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                             captureID: captureID))
+        var stored = try EntryMetadataStore.read(url: url)
+        stored.originalDate = Date(timeIntervalSince1970: 900)
+        stored.precision = .year
+        try EntryMetadataStore.write(stored, url: url)
+
+        // Re-enter `.recording` the way a resume does, without ever enabling the
+        // live-capture backdate toggle.
+        XCTAssertFalse(model.backdateEnabled)
+        model.handlePhase()
+        // Give the (no-op, by contract) write a chance to land and settle before
+        // asserting nothing changed.
+        try await Task.sleep(for: .milliseconds(200))
+        let after = try EntryMetadataStore.read(url: url)
+        XCTAssertEqual(after.originalDate, Date(timeIntervalSince1970: 900),
+                       "resume erased a backdate the live capture never set")
+        XCTAssertEqual(after.precision, .year)
+    }
 }

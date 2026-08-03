@@ -310,7 +310,10 @@ final class CaptureScreenModel {
             backdateDate = Date()
             backdatePrecision = .day
         }
-        syncActiveEntryMetadata()
+        // The explicit toggle-off must still clear the sidecar's date — unlike a
+        // phase re-entry sync (see `enqueueEntryMetadataWrite`), this IS the user
+        // asking for the backdate to go away.
+        syncActiveEntryMetadata(clearingBackdateIfDisabled: true)
     }
 
     func setBackdateDate(_ date: Date) {
@@ -402,10 +405,10 @@ final class CaptureScreenModel {
     /// Update the live capture's sidecar after a journal/backdate change made mid-
     /// recording. A no-op when idle — the next capture picks up the new selection via
     /// `handlePhase()` when it starts.
-    private func syncActiveEntryMetadata() {
+    private func syncActiveEntryMetadata(clearingBackdateIfDisabled: Bool = false) {
         guard let id = coordinator.activeCaptureID,
               coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
-        enqueueEntryMetadataWrite(for: id)
+        enqueueEntryMetadataWrite(for: id, clearingBackdateIfDisabled: clearingBackdateIfDisabled)
     }
 
     /// journalID = the currently selected journal; originalDate = the backdate only if
@@ -417,6 +420,13 @@ final class CaptureScreenModel {
     /// `.recording`, including an interruption resume, so writing nil there would unfile
     /// an entry that a working earlier launch had filed.
     ///
+    /// `clearingBackdateIfDisabled` draws the same distinction for originalDate/precision
+    /// that `if let journalID` already draws for the journal: `handlePhase`'s phase
+    /// re-entry sync (default `false`) must NOT write nil over a backdate the detail
+    /// screen set while this capture sat interrupted — the model's `backdateEnabled` here
+    /// reflects the live-capture UI, not the sidecar's actual state. Only an explicit user
+    /// toggle-off (`setBackdateEnabled(false)`) passes `true` and clears it for real.
+    ///
     /// Writes are chained so they land in submission order.
     ///
     /// `BackdateField`'s `DatePicker` used to fire a fresh `Task` per change, each of
@@ -425,9 +435,11 @@ final class CaptureScreenModel {
     /// Every caller now enqueues synchronously on the main actor and the writes run in
     /// the order those snapshots were taken: last write wins by construction, not by luck.
     @discardableResult
-    private func enqueueEntryMetadataWrite(for captureID: String) -> Task<Void, Never> {
+    private func enqueueEntryMetadataWrite(for captureID: String,
+                                           clearingBackdateIfDisabled: Bool = false) -> Task<Void, Never> {
         let originalDate = backdateEnabled ? backdateDate : nil
         let precision = backdateEnabled ? backdatePrecision : nil
+        let writeBackdate = backdateEnabled || clearingBackdateIfDisabled
         let journalID = selectedJournalID
         let store = entryMetadataStore
         let previous = pendingMetadataWrite
@@ -435,8 +447,10 @@ final class CaptureScreenModel {
             await previous?.value
             _ = try? await store.update(captureID: captureID) { metadata in
                 if let journalID { metadata.journalID = journalID }
-                metadata.originalDate = originalDate
-                metadata.precision = precision
+                if writeBackdate {
+                    metadata.originalDate = originalDate
+                    metadata.precision = precision
+                }
             }
         }
         pendingMetadataWrite = task
@@ -695,6 +709,8 @@ struct JournalHeaderView: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showingCoverPicker) {
+            // Reset the capture screen's inherited .white foreground —
+            // it renders invisible on the system sheet background.
             JournalCoverPickerSheet(
                 journalName: model.selectedJournalName,
                 hasCover: model.selectedJournalCover != nil,
@@ -703,6 +719,7 @@ struct JournalHeaderView: View {
                     catch { return false }
                 },
                 onRemove: { await model.removeCurrentJournalCover() })
+            .foregroundStyle(Color.primary)
         }
     }
 

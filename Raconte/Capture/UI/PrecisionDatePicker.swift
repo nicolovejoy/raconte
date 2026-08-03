@@ -82,11 +82,14 @@ struct PrecisionDatePicker: View {
         .accessibilityIdentifier("\(idPrefix).backdateYear")
     }
 
-    /// A century-plus back from today, forward through the current year — wide enough
-    /// for a paper journal from any point in a lifetime, without an unbounded wheel.
+    /// Two centuries back from today, forward through the current year — and always
+    /// widened to include whatever year is currently selected. An unbounded `.day`
+    /// `DatePicker` can land outside a fixed floor (an 1890s paper journal), which would
+    /// otherwise leave this segmented `Picker`'s tag unmatched and undated.
     private var yearRange: ClosedRange<Int> {
         let current = calendar.component(.year, from: Date())
-        return (current - 120)...current
+        let selected = calendar.component(.year, from: date)
+        return min(current - 200, selected)...max(current, selected)
     }
 
     private func componentBinding(_ component: Calendar.Component) -> Binding<Int> {
@@ -98,6 +101,16 @@ struct PrecisionDatePicker: View {
                 case .month: comps.month = newValue
                 case .year: comps.year = newValue
                 default: break
+                }
+                // Reduced precision must not carry a stale day/month component through
+                // `Calendar.date(from:)`, which is lenient and rolls a nonexistent date
+                // (Jan 31 + month=Feb) into the following month. Noon, not midnight —
+                // parking a reduced-precision date at a midnight boundary flips its
+                // displayed year/month under a more-westward timezone.
+                if precision == .year {
+                    comps = DateComponents(year: comps.year, month: 1, day: 1, hour: 12)
+                } else if precision == .yearMonth {
+                    comps = DateComponents(year: comps.year, month: comps.month, day: 1, hour: 12)
                 }
                 date = calendar.date(from: comps) ?? date
             })

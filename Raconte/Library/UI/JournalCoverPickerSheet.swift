@@ -22,6 +22,10 @@ struct JournalCoverPickerSheet: View {
     @State private var pickError = false
     #if os(iOS)
     @State private var showingCamera = false
+    /// Set by the camera's completion closure, applied once `fullScreenCover` has
+    /// actually dismissed — setting `pickError` in the same turn as `showingCamera =
+    /// false` can race the cover's own dismissal and drop the alert.
+    @State private var pendingCameraError = false
     #endif
 
     var body: some View {
@@ -59,9 +63,14 @@ struct JournalCoverPickerSheet: View {
             Task {
                 guard let data = try? await newValue.loadTransferable(type: Data.self) else {
                     pickError = true
+                    photosPickerItem = nil
                     return
                 }
                 if await onPick(data) { dismiss() } else { pickError = true }
+                // Reset even on success: a re-presented sheet (a later failed pick,
+                // Cancel-then-reopen) must not inherit a stale item that no longer
+                // fires `onChange` when the same photo is picked again.
+                photosPickerItem = nil
             }
         }
         #if os(iOS)
@@ -69,10 +78,17 @@ struct JournalCoverPickerSheet: View {
             CameraCapture { data in
                 showingCamera = false
                 if let data {
-                    Task { if await onPick(data) { dismiss() } else { pickError = true } }
+                    Task {
+                        if await onPick(data) { dismiss() } else { pendingCameraError = true }
+                    }
                 }
             }
             .ignoresSafeArea()
+        }
+        .onChange(of: showingCamera) { _, isShowing in
+            guard !isShowing, pendingCameraError else { return }
+            pendingCameraError = false
+            pickError = true
         }
         #endif
     }

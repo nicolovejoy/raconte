@@ -17,7 +17,7 @@ extension EntryListItem {
     /// rather than a group-then-resort. Callers that pass unsorted input get groups split
     /// wherever the year changes, which is still correct, just not maximally compact.
     static func groupedByYear(_ items: [EntryListItem],
-                              calendar: Calendar = .current) -> [EntryYearGroup] {
+                              calendar: Calendar = .gregorianCurrent) -> [EntryYearGroup] {
         var groups: [EntryYearGroup] = []
         for item in items {
             let year = calendar.component(.year, from: item.effectiveDate)

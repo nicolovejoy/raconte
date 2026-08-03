@@ -33,8 +33,13 @@ final class CaptureUITests: XCTestCase {
         app.buttons["capture.record"].firstMatch
     }
 
-    private func finishedRows(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.staticTexts.matching(identifier: "finished.duration")
+    /// Rows in the capture screen's "Recent" section (M3 T4.5) — each a `NavigationLink`
+    /// wrapping a `LibraryEntryRow`. Queried by the link's own `capture.recentRow`
+    /// identifier, not the row's nested `library.row.duration` text: a `NavigationLink`,
+    /// like `Button`, merges its label's children into ONE accessibility element, so the
+    /// nested identifier is not independently queryable — only the link's own is.
+    private func recentRows(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(identifier: "capture.recentRow")
     }
 
     private func recoveryBanner(_ app: XCUIApplication) -> XCUIElement {
@@ -65,8 +70,12 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)    // let synthetic audio flow
         press(record)                       // Stop → flush → captured → finalize
 
-        waitUntil(30, "finished entry never appeared") { self.finishedRows(app).count == 1 }
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+        let row = recentRows(app).firstMatch
+        XCTAssertNotNil(Self.durationSeconds(in: row.label),
+                        "recent row shows no duration: \(row.label)")
     }
 
     // MARK: doc tests 6/30 (flow) — kill mid-recording → relaunch recovers
@@ -99,11 +108,11 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 1)
         press(record)
-        waitUntil(30, "finished entry never appeared") { self.finishedRows(app).count == 1 }
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         app.terminate()                     // idle now — a clean-ish quit
 
         let relaunched = launchApp()
-        let rows = finishedRows(relaunched)
+        let rows = recentRows(relaunched)
         waitUntil(20, "entry lost across relaunch") { rows.count == 1 }
         XCTAssertFalse(recoveryBanner(relaunched).exists,
                        "spurious recovery banner on idle relaunch")
@@ -125,13 +134,13 @@ final class CaptureUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 1)
             press(record)
             waitUntil(30, "cycle \(cycle): entry never appeared") {
-                self.finishedRows(app).count == cycle
+                self.recentRows(app).count == cycle
             }
         }
-        XCTAssertEqual(finishedRows(app).count, 3)
+        XCTAssertEqual(recentRows(app).count, 3)
     }
 
-    // MARK: issue #6 (flow) — drag the scrubber on a finished entry
+    // MARK: issue #6 (flow) — drag the scrubber on a finished entry, from its detail screen
 
     /// Asserts on the position label, not audibility: a headless simulator may
     /// have no output route, and `endScrubbing` writes `currentTime`
@@ -140,6 +149,9 @@ final class CaptureUITests: XCTestCase {
     /// Covers the m4a path only — the raw-segment path is unreachable from UI
     /// tests (bootstrap drains the finalize queue at launch), so that one stays
     /// manual in the smoke doc.
+    ///
+    /// Playback moved from the capture screen's recent row to `EntryDetailView` (M3
+    /// T4.5), so this test now taps the recent row to push detail before scrubbing.
     func testScrubbingAFinishedEntryMovesThePosition() throws {
         let app = launchApp()
         let record = recordButton(app)
@@ -149,22 +161,26 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 3)    // ~3 s so half is unambiguous
         press(record)
-        waitUntil(30, "finished entry never appeared") { self.finishedRows(app).count == 1 }
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
+        let recentRow = recentRows(app).firstMatch
+        XCTAssertTrue(recentRow.waitForExistence(timeout: 10), "recent row never appeared")
+        press(recentRow)
+
         // The scrubber only exists once playback has been started at least once.
-        let play = app.buttons["finished.play"].firstMatch
+        let play = app.buttons["detail.play"].firstMatch
         XCTAssertTrue(play.waitForExistence(timeout: 10), "play button never appeared")
         press(play)
-        let scrubber = app.sliders["finished.scrubber"].firstMatch
+        let scrubber = app.sliders["detail.scrubber"].firstMatch
         XCTAssertTrue(scrubber.waitForExistence(timeout: 15), "scrubber never appeared")
 
-        let total = app.staticTexts["finished.total"].firstMatch
+        let total = app.staticTexts["detail.total"].firstMatch
         XCTAssertTrue(total.waitForExistence(timeout: 5))
         let totalSeconds = try XCTUnwrap(Self.seconds(total.label), "unreadable total \(total.label)")
         XCTAssertGreaterThan(totalSeconds, 1, "capture too short to scrub meaningfully")
 
-        let position = app.staticTexts["finished.position"].firstMatch
+        let position = app.staticTexts["detail.position"].firstMatch
         XCTAssertTrue(position.waitForExistence(timeout: 5))
 
         scrubber.adjust(toNormalizedSliderPosition: 0.5)
@@ -202,5 +218,15 @@ final class CaptureUITests: XCTestCase {
         let parts = label.split(separator: ":").compactMap { Double($0) }
         guard parts.count == 2 else { return nil }
         return parts[0] * 60 + parts[1]
+    }
+
+    /// A `NavigationLink`-wrapped `LibraryEntryRow`'s accessibility label is every child
+    /// `Text`'s label concatenated by SwiftUI (date, duration, snippet, journal) — so the
+    /// duration check searches for the `m:ss` shape rather than parsing the whole label.
+    private static func durationSeconds(in label: String) -> Double? {
+        guard let range = label.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) else {
+            return nil
+        }
+        return seconds(String(label[range]))
     }
 }

@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// One entry, full detail (M3 T4, phone mockup): both dates clearly labeled, journal,
-/// duration, playback (the same `CapturePlayback` / `PlaybackProgressLine` machinery
-/// `FinishedRow` uses on the capture screen — no second implementation), and the
-/// committed transcript as serif prose. Journal and backdate are editable here through
+/// duration, playback (the same `CapturePlayback` / `PlaybackProgressLine` machinery —
+/// playback lives only here since M3 T4.5 removed it from the capture screen's recent
+/// section), and the committed transcript as serif prose. Journal and backdate are
+/// editable here through
 /// `LibraryScreenModel`, which owns the one `EntryMetadataStore` instance both this screen
 /// and the library list read and write through.
 ///

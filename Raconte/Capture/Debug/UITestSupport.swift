@@ -21,7 +21,13 @@ enum UITestHarnessRoot {
 }
 
 extension CaptureScreenModel {
-    @MainActor static func uiTestHarness() -> CaptureScreenModel? {
+    /// `library` is threaded through (M3 T4.5) rather than dropped: `ContentView`'s
+    /// `navigationDestination(for: LibraryDestination.self)` reads its OWN
+    /// `LibraryScreenModel.item(_:)`, which only ever sees rows that instance itself
+    /// scanned — if the harness quietly built a second, disconnected `LibraryScreenModel`
+    /// here, a tap on a capture-screen recent row would push a detail screen for an id
+    /// the caller's library never scanned, and render nothing.
+    @MainActor static func uiTestHarness(library: LibraryScreenModel) -> CaptureScreenModel? {
         guard let id = ProcessInfo.processInfo.environment["RACONTE_UITEST_ID"] else { return nil }
         let root = UITestHarnessRoot.capturesRoot(id: id)
         return CaptureScreenModel(
@@ -38,7 +44,8 @@ extension CaptureScreenModel {
             // test id's journals.json in the same shared `Raconte/` directory, defeating
             // the per-id isolation this harness exists for. Colliding with a capture
             // directory name is not a risk — capture ids are 26-char ULIDs.
-            journalsContainerRoot: root)
+            journalsContainerRoot: root,
+            library: library)
     }
 }
 

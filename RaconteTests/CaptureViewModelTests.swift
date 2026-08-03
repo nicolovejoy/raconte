@@ -147,7 +147,7 @@ final class CaptureViewModelTests: XCTestCase {
         for offset in [0.0, 1_000_000.0, 1_800_000_000.0] {
             let original = Date(timeIntervalSince1970: offset)
             let id = CaptureCoordinator.makeULID(now: original)
-            let decoded = FinishedRecording.timestamp(fromULID: id)
+            let decoded = ULID.timestamp(from: id)
             XCTAssertNotNil(decoded)
             // ULID timestamps are whole milliseconds.
             XCTAssertEqual(decoded!.timeIntervalSince1970, offset, accuracy: 0.001)
@@ -155,17 +155,7 @@ final class CaptureViewModelTests: XCTestCase {
     }
 
     func testULIDTimestampRejectsMalformedIDs() {
-        XCTAssertNil(FinishedRecording.timestamp(fromULID: "short"))
-        XCTAssertNil(FinishedRecording.timestamp(fromULID: "UUUUUUUUUU0000000000000000"))  // U not in Crockford
-    }
-
-    func testCreatedAtLabelDistinguishesToday() {
-        let today = FinishedRecording(captureID: "A", durationSeconds: 1, createdAt: Date())
-        XCTAssertTrue(today.formattedCreatedAt.hasPrefix("Today"))
-
-        let old = FinishedRecording(captureID: "B", durationSeconds: 1,
-                                    createdAt: Date(timeIntervalSince1970: 1_700_000_000))
-        XCTAssertFalse(old.formattedCreatedAt.hasPrefix("Today"))
-        XCTAssertFalse(old.formattedCreatedAt.hasPrefix("Yesterday"))
+        XCTAssertNil(ULID.timestamp(from: "short"))
+        XCTAssertNil(ULID.timestamp(from: "UUUUUUUUUU0000000000000000"))  // U not in Crockford
     }
 }

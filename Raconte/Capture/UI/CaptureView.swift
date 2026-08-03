@@ -3,31 +3,6 @@ import SwiftUI
 import UIKit
 #endif
 
-/// One playable capture on disk, for the "recent recordings" list (design §5 playback).
-struct FinishedRecording: Identifiable, Equatable, Sendable {
-    let captureID: String
-    let durationSeconds: Double
-    let createdAt: Date
-    var id: String { captureID }
-    var formattedDuration: String { CaptureCoordinator.formatDuration(durationSeconds) }
-
-    /// "Today 3:42 PM" / "Jul 28, 3:42 PM" — the date is only worth the width once the
-    /// recording isn't from today.
-    var formattedCreatedAt: String {
-        let cal = Calendar.current
-        let time = createdAt.formatted(date: .omitted, time: .shortened)
-        if cal.isDateInToday(createdAt) { return "Today \(time)" }
-        if cal.isDateInYesterday(createdAt) { return "Yesterday \(time)" }
-        return "\(createdAt.formatted(.dateTime.month(.abbreviated).day())), \(time)"
-    }
-
-    /// A ULID's first 10 Crockford-base32 chars are a 48-bit millisecond timestamp, so a
-    /// capture whose manifest is missing or corrupt still shows the right date. The
-    /// decode itself lives on `ULID` beside the mint (M3 T2) — the library needs it too,
-    /// and a second copy of a base32 decoder is a second copy to get wrong.
-    static func timestamp(fromULID id: String) -> Date? { ULID.timestamp(from: id) }
-}
-
 /// Composition + orchestration for the capture screen. Owns the (per-capture, ephemeral)
 /// `CaptureCoordinator`, the launch-recovery banner list, the background finalizer, and
 /// the recent-recordings list. Kept out of the pure-tested layer on purpose: the testable
@@ -41,12 +16,17 @@ struct FinishedRecording: Identifiable, Equatable, Sendable {
 final class CaptureScreenModel {
     private(set) var coordinator: CaptureCoordinator
     private(set) var recovered: [RecoveredRecording] = []
-    private(set) var finished: [FinishedRecording] = []
     private var dismissed: Set<String> = []
     private var didBootstrap = false
     private var finishing = false
 
     let capturesRoot: URL
+    /// The recent-recordings section (M3 T4.5) and the Library screen read through the
+    /// SAME instance — one scanner, one `JournalStore`/`EntryMetadataStore` pair, per
+    /// the "don't build a second data path" rule this task exists to fix. Defaults to a
+    /// model over the same `capturesRoot`/`journalsContainerRoot` when the caller (a
+    /// test, the UI-test harness) does not share one in.
+    let library: LibraryScreenModel
     private let spawn: @MainActor () -> CaptureCoordinator
     private let finalizer: FinalizerWorker
 
@@ -93,14 +73,17 @@ final class CaptureScreenModel {
          makeSecondarySink: SecondarySinkFactory? = nil,
          transcription: LiveTranscriptionCoordinator? = nil,
          journalsContainerRoot: URL? = nil,
-         journalPreferenceStore: any JournalPreferenceStore = UserDefaultsJournalPreferenceStore()) {
+         journalPreferenceStore: any JournalPreferenceStore = UserDefaultsJournalPreferenceStore(),
+         library: LibraryScreenModel? = nil) {
         self.capturesRoot = capturesRoot
         self.transcription = transcription
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
-        self.journalStore = JournalStore(
-            containerRoot: journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot))
+        let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
+        self.journalStore = JournalStore(containerRoot: containerRoot)
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
         self.currentJournal = CurrentJournal(store: journalPreferenceStore)
+        self.library = library ?? LibraryScreenModel(
+            capturesRoot: capturesRoot, journalsContainerRoot: containerRoot)
         let spawn: @MainActor () -> CaptureCoordinator = {
             CaptureCoordinator(
                 capturesRoot: capturesRoot,
@@ -118,9 +101,9 @@ final class CaptureScreenModel {
 
     /// Live composition root: platform session controller, real engine recorder, and the
     /// AVAssetWriter encoder, over Application Support.
-    static func live() -> CaptureScreenModel {
+    static func live(library: LibraryScreenModel = LibraryScreenModel.live()) -> CaptureScreenModel {
         #if DEBUG
-        if let harness = uiTestHarness() { return harness }
+        if let harness = uiTestHarness(library: library) { return harness }
         #endif
         return CaptureScreenModel(
             capturesRoot: Self.defaultCapturesRoot(),
@@ -133,7 +116,8 @@ final class CaptureScreenModel {
             },
             makeRecorder: { AudioEngineRecorder() },
             encoder: AVAssetWriterAudioEncoder(),
-            startCue: { await StartCue().play() })
+            startCue: { await StartCue().play() },
+            library: library)
     }
 
     /// Composition root with live transcription attached.
@@ -141,9 +125,15 @@ final class CaptureScreenModel {
     /// The transcription coordinator is built *before* the model because the model's init
     /// constructs the capture coordinator, which needs the sink factory — so the factory
     /// closure captures the transcription coordinator, never the model.
-    static func liveWithTranscription() -> CaptureScreenModel {
+    ///
+    /// `library` is the SAME `LibraryScreenModel` instance `ContentView` pushes the
+    /// Library screen with — the recent-recordings section and the library list must
+    /// read through one scanner, not two (M3 T4.5). Ignored under the UI-test harness,
+    /// which builds its own matching-root library the same way `LibraryScreenModel.live()`
+    /// does for the caller's copy.
+    static func liveWithTranscription(library: LibraryScreenModel) -> CaptureScreenModel {
         #if DEBUG
-        if let harness = uiTestHarness() { return harness }
+        if let harness = uiTestHarness(library: library) { return harness }
         #endif
         let root = Self.defaultCapturesRoot()
         let transcription = LiveTranscriptionCoordinator(
@@ -162,7 +152,8 @@ final class CaptureScreenModel {
             encoder: AVAssetWriterAudioEncoder(),
             startCue: { await StartCue().play() },
             makeSecondarySink: { [weak transcription] id in transcription?.begin(captureID: id) },
-            transcription: transcription)
+            transcription: transcription,
+            library: library)
     }
 
     /// Same path as before (`Application Support/Raconte/captures`), now owned by
@@ -180,7 +171,7 @@ final class CaptureScreenModel {
         await coordinator.recoverAtLaunch()
         recovered = coordinator.recoveredRecordings
         await runFinalizer(coordinator.finalizeQueue)
-        refreshFinished()
+        await library.rescan()
     }
 
     func record() async { await coordinator.record() }
@@ -223,7 +214,7 @@ final class CaptureScreenModel {
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
         try? FileManager.default.removeItem(at: dir)
         dismissed.insert(id)
-        refreshFinished()
+        Task { await library.rescan() }
     }
 
     // MARK: Journal + backdate intents (M3 T3)
@@ -284,7 +275,7 @@ final class CaptureScreenModel {
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
         for id in transcribed { await recordTranscriptRef(for: id) }
-        refreshFinished()
+        await library.rescan()
         coordinator = spawn()
         finishing = false
     }
@@ -356,26 +347,6 @@ final class CaptureScreenModel {
         guard !ids.isEmpty else { return }
         await finalizer.enqueue(contentsOf: ids)
         _ = await finalizer.drain()
-    }
-
-    private func refreshFinished() {
-        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
-        finished = snapshot.captures.compactMap { cap -> FinishedRecording? in
-            if case .none = PlayableSourceSelector.select(cap) { return nil }
-            let seconds: Double
-            if cap.finalM4APresent, let frames = cap.manifest?.final.durationFrames, frames > 0 {
-                seconds = Double(frames) / Double(max(1, cap.format.sampleRate))
-            } else {
-                seconds = PlayableSourceSelector.rawDurationSeconds(cap)
-            }
-            let created = cap.manifest?.createdAt
-                ?? FinishedRecording.timestamp(fromULID: cap.captureID)
-                ?? Date(timeIntervalSince1970: 0)
-            return FinishedRecording(captureID: cap.captureID,
-                                     durationSeconds: seconds,
-                                     createdAt: created)
-        }
-        .sorted { $0.captureID > $1.captureID }   // ULID descending == newest first
     }
 }
 
@@ -462,7 +433,7 @@ struct CaptureView: View {
                             .multilineTextAlignment(.center)
                     }
 
-                    finishedSection
+                    recentSection
 
                     Spacer(minLength: 24)
 
@@ -500,16 +471,32 @@ struct CaptureView: View {
         #endif
     }
 
+    /// The 3 most recently captured entries (M3 T4.5), sourced from `model.library` —
+    /// the SAME scan/store the Library screen reads — and rendered with the same
+    /// `LibraryEntryRow` the library list uses. No play/delete affordances here: those
+    /// moved to `EntryDetailView`, which every row pushes into via the existing
+    /// `LibraryDestination.entry` route.
     @ViewBuilder
-    private var finishedSection: some View {
-        if !model.finished.isEmpty {
+    private var recentSection: some View {
+        if !model.library.recent.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Recordings")
-                    .font(.headline)
-                    .foregroundStyle(Color(white: 0.7))
-                ForEach(model.finished) { item in
-                    FinishedRow(recording: item, capturesRoot: model.capturesRoot,
-                                onDelete: { model.delete(item.captureID) })
+                HStack {
+                    Text("Recent")
+                        .font(.headline)
+                        .foregroundStyle(Color(white: 0.7))
+                    Spacer()
+                    NavigationLink(value: RootDestination.library) {
+                        Text("See all")
+                            .font(.caption)
+                            .foregroundStyle(Color(white: 0.7))
+                    }
+                    .accessibilityIdentifier("capture.seeAllLink")
+                }
+                ForEach(model.library.recent) { item in
+                    NavigationLink(value: LibraryDestination.entry(item.captureID)) {
+                        LibraryEntryRow(item: item)
+                    }
+                    .accessibilityIdentifier("capture.recentRow")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -523,61 +510,6 @@ struct CaptureView: View {
         case .resume: Task { await model.resume() }
         case .none: break
         }
-    }
-}
-
-/// One row in the recent-recordings list: duration + a play/pause toggle backed by a
-/// lazily-built `CapturePlayback` (finalized `.m4a` or raw-segment fallback, design §5).
-struct FinishedRow: View {
-    let recording: FinishedRecording
-    let capturesRoot: URL
-    let onDelete: () -> Void
-
-    @State private var playback: CapturePlayback?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: toggle) {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(Color(white: 0.9))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("finished.play")
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(recording.formattedDuration)
-                    .font(.body.monospacedDigit())
-                    .accessibilityIdentifier("finished.duration")
-                Text(recording.formattedCreatedAt)
-                    .font(.caption2)
-                    .foregroundStyle(Color(white: 0.55))
-                    .accessibilityIdentifier("finished.createdAt")
-                if let playback {
-                    PlaybackProgressLine(playback: playback)
-                }
-            }
-            Spacer()
-
-            Button(role: .destructive) {
-                playback?.stop()
-                onDelete()
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(Color(white: 0.5))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(12)
-        .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var isPlaying: Bool { playback?.isPlaying ?? false }
-
-    private func toggle() {
-        let p = playback ?? CapturePlayback(capturesRoot: capturesRoot, captureID: recording.captureID)
-        playback = p
-        if p.isPlaying { p.pause() } else { p.play() }
     }
 }
 

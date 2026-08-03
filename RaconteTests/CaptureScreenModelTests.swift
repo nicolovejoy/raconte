@@ -85,7 +85,7 @@ final class CaptureScreenModelTests: XCTestCase {
         // Simulate the view's onChange(of: finalizeQueue) relay.
         model.handleFinalizeQueue()
 
-        await waitUntil({ model.finished.isEmpty == false }, "finished list never refreshed")
+        await waitUntil({ model.library.items.isEmpty == false }, "library never refreshed")
         XCTAssertEqual(encoder.calls.count, 1, "encoder must run in-session, not at next launch")
         XCTAssertTrue(model.coordinator !== liveCoordinator,
                       "model should reset to a fresh idle coordinator after the commit")
@@ -117,12 +117,12 @@ final class CaptureScreenModelTests: XCTestCase {
             await waitUntil({ live.finalizeQueue.isEmpty == false },
                             "cycle \(cycle) never committed")
             model.handleFinalizeQueue()   // the view's onChange relay
-            await waitUntil({ model.finished.count == cycle && model.coordinator !== live },
+            await waitUntil({ model.library.items.count == cycle && model.coordinator !== live },
                             "cycle \(cycle) did not finalize + respawn")
         }
 
-        XCTAssertEqual(model.finished.count, 10)
-        XCTAssertEqual(Set(model.finished.map(\.captureID)).count, 10, "entries must be distinct")
+        XCTAssertEqual(model.library.items.count, 10)
+        XCTAssertEqual(Set(model.library.items.map(\.captureID)).count, 10, "entries must be distinct")
         XCTAssertEqual(encoder.calls.count, 10)
         XCTAssertEqual(model.coordinator.phase, .idle, "stuck non-idle state after last cycle")
     }
@@ -143,7 +143,7 @@ final class CaptureScreenModelTests: XCTestCase {
         await model.done()
         await waitUntil({ live.finalizeQueue.isEmpty == false }, "capture never committed")
         model.handleFinalizeQueue()
-        await waitUntil({ model.finished.count == 1 }, "capture never finalized")
+        await waitUntil({ model.library.items.count == 1 }, "capture never finalized")
 
         // "Relaunch": a brand-new model over the same root.
         let relaunch = CaptureScreenModel(
@@ -154,7 +154,8 @@ final class CaptureScreenModelTests: XCTestCase {
         await relaunch.bootstrap()
 
         XCTAssertTrue(relaunch.visibleRecovered.isEmpty, "spurious recovery banner")
-        XCTAssertEqual(relaunch.finished.map(\.captureID), model.finished.map(\.captureID))
+        XCTAssertEqual(Set(relaunch.library.items.map(\.captureID)),
+                       Set(model.library.items.map(\.captureID)))
     }
 
     /// Launch-recovery fills the queue while the phase is idle — the onChange relay

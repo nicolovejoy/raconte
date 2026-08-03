@@ -82,6 +82,16 @@ struct EntryDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
                 .accessibilityIdentifier("detail.originalDate")
+
+            // M3 issue #15. Shown only while the detected date is still the one in force
+            // — the moment the owner edits it this is his date, not the recording's, and
+            // saying otherwise would be wrong rather than merely stale.
+            if item.backdateWasDetected {
+                Text("Detected from the recording")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("detail.detectedDate")
+            }
             labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
                 .accessibilityIdentifier("detail.capturedAt")
 

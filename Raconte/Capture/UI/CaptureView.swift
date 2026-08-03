@@ -76,6 +76,17 @@ final class CaptureScreenModel {
     private(set) var backdateDate = Date()
     private(set) var backdatePrecision: DatePrecision = .day
 
+    /// The last backdate the owner set, per journal (M3 issue #15, second half): reading
+    /// a paper journal aloud is a sitting of many captures all dated near each other, and
+    /// re-dialling 1987 for each one is the friction.
+    ///
+    /// Keyed by journal because that is the unit a sitting belongs to, and in-memory
+    /// because a carried date is a convenience for the session in front of you, not a
+    /// preference — a relaunch a week later should not pre-fill 1987. Upgrading it to
+    /// survive relaunch is a one-line swap for a `JournalPreferenceStore`-style store,
+    /// which is why the read and write are funnelled through two private helpers.
+    private var carriedBackdates: [String: PartialDate] = [:]
+
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
         recovered.filter { !dismissed.contains($0.captureID) }
@@ -193,7 +204,12 @@ final class CaptureScreenModel {
         await resolveCurrentJournal()
         await coordinator.recoverAtLaunch()
         recovered = coordinator.recoveredRecordings
-        await runFinalizer(coordinator.finalizeQueue)
+        let recoveredQueue = coordinator.finalizeQueue
+        await runFinalizer(recoveredQueue)
+        // Same hook, launch-recovery side: a capture killed before its transcript could
+        // be read has never had detection run over it, and this is the one other place a
+        // transcript first becomes available.
+        for id in recoveredQueue { await detectSpokenDate(for: id) }
         await library.rescan()
         // Last, deliberately: the library is already on screen, and the sweep runs off
         // the main actor. Also strictly after the finalizer has drained, so it can never
@@ -304,9 +320,21 @@ final class CaptureScreenModel {
     /// nil ("use the capture's own date"), not to whatever was last picked. Precision
     /// resets to `.day` alongside it, for the same reason: nothing should carry over
     /// silently into the next time the owner turns backdating back on.
+    /// Turning it *on* pre-fills from the last backdate set in this journal this session,
+    /// if there is one — date and precision together, since carrying a 1987 day-precision
+    /// picker over a year-precision sitting would re-invent the fabricated-day problem.
+    /// The toggle itself is never flipped on automatically: pre-filling a field the owner
+    /// opened is help, opening it for him is a decision he did not make.
     func setBackdateEnabled(_ enabled: Bool) {
+        let wasEnabled = backdateEnabled
         backdateEnabled = enabled
-        if !enabled {
+        if enabled {
+            if !wasEnabled, let carried = carriedBackdate() {
+                backdateDate = carried.anchorDate(calendar: .gregorianCurrent)
+                backdatePrecision = carried.precision
+            }
+            rememberBackdate()
+        } else {
             backdateDate = Date()
             backdatePrecision = .day
         }
@@ -318,12 +346,29 @@ final class CaptureScreenModel {
 
     func setBackdateDate(_ date: Date) {
         backdateDate = date
+        rememberBackdate()
         syncActiveEntryMetadata()
     }
 
     func setBackdatePrecision(_ precision: DatePrecision) {
         backdatePrecision = precision
+        rememberBackdate()
         syncActiveEntryMetadata()
+    }
+
+    /// The carried backdate for the currently selected journal, if any. Exposed for the
+    /// tests that pin the carry-over rule; the view reads it only through the pre-fill.
+    func carriedBackdate() -> PartialDate? {
+        selectedJournalID.flatMap { carriedBackdates[$0] }
+    }
+
+    /// Records whatever backdate is currently in force. Only while the toggle is on: a
+    /// disabled backdate is "use the capture's own date", which is nothing to carry.
+    private func rememberBackdate() {
+        guard backdateEnabled, let journalID = selectedJournalID else { return }
+        carriedBackdates[journalID] = PartialDate(from: backdateDate,
+                                                  precision: backdatePrecision,
+                                                  calendar: .gregorianCurrent)
     }
 
     // MARK: internals
@@ -343,9 +388,37 @@ final class CaptureScreenModel {
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
         for id in transcribed { await recordTranscriptRef(for: id) }
+        for id in transcribed { await detectSpokenDate(for: id) }
         await library.rescan()
         coordinator = spawn()
         finishing = false
+    }
+
+    /// M3 issue #15. Run when a capture's transcript first exists — after finalize, and
+    /// after launch recovery for one that never got here — rather than from the library
+    /// scan: detection is a per-capture event, and hanging it off `rescan()` would mean
+    /// re-reading every entry's `live.jsonl` a second time on every filter change.
+    ///
+    /// Everything about it degrades to silence. An absent, unreadable or empty transcript
+    /// is not an error; neither is a sidecar we cannot write. A detected date is a
+    /// convenience, and nothing here may stand between the owner and a finished recording.
+    private func detectSpokenDate(for captureID: String) async {
+        let transcript = await library.transcript(for: captureID)
+        guard transcript.state == .present, let text = transcript.text, !text.isEmpty else { return }
+
+        // After the pending sidecar chain, so a backdate the owner set during this very
+        // capture is already on disk when the "no manual backdate" test is made.
+        await pendingMetadataWrite?.value
+
+        // Read first purely to avoid writing when there is nothing to write — `update`
+        // always writes. The decision is then *remade* inside `update`, under the actor's
+        // serialization, so a concurrent edit between the two is honoured rather than
+        // clobbered by the copy read out here.
+        guard var probe = try? await entryMetadataStore.read(captureID: captureID),
+              SpokenDateDetection.apply(to: &probe, transcriptText: text) else { return }
+        _ = try? await entryMetadataStore.update(captureID: captureID) { metadata in
+            SpokenDateDetection.apply(to: &metadata, transcriptText: text)
+        }
     }
 
     private func recordTranscriptRef(for captureID: String) async {

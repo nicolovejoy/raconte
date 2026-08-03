@@ -21,6 +21,12 @@ final class LibraryScreenModel {
     private let entryMetadataStore: EntryMetadataStore
 
     private(set) var items: [EntryListItem] = []
+    /// The 3 most recently *captured* entries, across every journal, regardless of
+    /// `journalScope` — the capture screen's "what I just did" section (M3 T4.5). A
+    /// separate scan rather than a slice of `items`: `items` is filtered/sorted by
+    /// `effectiveDate` for the library list, and recency here means capture time, not
+    /// the (possibly backdated) effective date.
+    private(set) var recent: [EntryListItem] = []
     private(set) var journals: [Journal] = []
     private(set) var journalsUnreadable = false
     private(set) var isLoading = false
@@ -64,6 +70,22 @@ final class LibraryScreenModel {
         let result = await scanner.scan(filter: filter)
         items = result.items
         journalsUnreadable = result.journalsUnreadable
+
+        let recentResult = journalScope == .all
+            ? result
+            : await scanner.scan(filter: EntryListFilter(journal: .all, trash: .excludeTrashed))
+        recent = Self.mostRecentlyCaptured(recentResult.items, limit: 3)
+    }
+
+    /// Sorted by `capturedAt` descending — deliberately not `effectiveDate`: recency on
+    /// the capture screen means "what I just recorded", not wherever a backdate put it.
+    static func mostRecentlyCaptured(_ items: [EntryListItem], limit: Int) -> [EntryListItem] {
+        let sorted = items.sorted {
+            $0.capturedAt == $1.capturedAt
+                ? $0.captureID > $1.captureID
+                : $0.capturedAt > $1.capturedAt
+        }
+        return Array(sorted.prefix(limit))
     }
 
     func selectJournalScope(_ scope: JournalScope) async {

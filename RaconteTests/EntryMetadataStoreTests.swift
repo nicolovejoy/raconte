@@ -274,7 +274,7 @@ final class ULIDTests: XCTestCase {
         let now = Date(timeIntervalSince1970: 1_234_567.891)
         let head = { (id: String) in String(id.prefix(10)) }
         XCTAssertEqual(head(CaptureCoordinator.makeULID(now: now)), head(ULID.make(now: now)))
-        XCTAssertEqual(FinishedRecording.timestamp(fromULID: ULID.make(now: now))
+        XCTAssertEqual(ULID.timestamp(from: ULID.make(now: now))
                         .map { ($0.timeIntervalSince1970 * 1000).rounded() },
                        (now.timeIntervalSince1970 * 1000).rounded())
     }

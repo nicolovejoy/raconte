@@ -6,8 +6,7 @@ import Foundation
 /// Extracted from `CaptureCoordinator.makeULID` (which now calls this) because M3 mints
 /// IDs for journals too, and "the capture coordinator" is the wrong owner of an ID scheme
 /// that is about to key three different kinds of thing. Byte-for-byte the same algorithm;
-/// `CaptureViewModelTests`' round-trip against `FinishedRecording.timestamp(fromULID:)`
-/// still covers it.
+/// `CaptureViewModelTests`' round-trip against `ULID.timestamp(from:)` still covers it.
 enum ULID {
     static let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
     static let length = 26

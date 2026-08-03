@@ -144,8 +144,8 @@ struct LibraryScanner: Sendable {
     // MARK: - Per-capture facts
 
     /// The manifest's `createdAt`, else the ULID's millisecond prefix, else the epoch.
-    /// Same ladder `CaptureScreenModel.refreshFinished` already uses, so a capture whose
-    /// manifest went bad still shows the right date instead of vanishing from the sort.
+    /// Falls back through the ULID's own timestamp so a capture whose manifest went bad
+    /// still shows the right date instead of vanishing from the sort.
     static func capturedAt(_ capture: CaptureSnapshot) -> Date {
         capture.manifest?.createdAt
             ?? ULID.timestamp(from: capture.captureID)

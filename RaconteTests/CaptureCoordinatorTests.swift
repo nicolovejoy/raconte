@@ -97,6 +97,8 @@ final class CaptureCoordinatorTests: XCTestCase {
                                  byteCap: Int = .max,
                                  flush: Duration = .zero,
                                  capturesRoot: URL? = nil,
+                                 machine: CaptureMachine = CaptureMachine(),
+                                 resumeBackoff: Duration = .milliseconds(500),
                                  makeSecondarySink: SecondarySinkFactory? = nil,
                                  now: @escaping @Sendable () -> Date = Date.init) -> CaptureCoordinator {
         let root = capturesRoot ?? root!
@@ -110,7 +112,9 @@ final class CaptureCoordinatorTests: XCTestCase {
             },
             mintCaptureID: { kCaptureID },
             now: now,
+            machine: machine,
             flushInterval: flush,
+            resumeBackoff: resumeBackoff,
             makeSecondarySink: makeSecondarySink)
     }
 
@@ -224,6 +228,65 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(manifest.state, .captured)
         XCTAssertEqual(manifest.segmentCount, 2)
         XCTAssertEqual(manifest.lastKnownFrameOffset, 1000)
+        // Issue #9: the interruption entry must close, not stay open forever.
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertNotNil(manifest.interruptions[0].endedAt)
+        XCTAssertEqual(manifest.interruptions[0].resumed, true)
+    }
+
+    // MARK: issue #9 — stopping from `interrupted` closes the entry as not resumed
+
+    func testStopFromInterruptedClosesInterruptionAsNotResumed() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertNotNil(manifest.interruptions[0].endedAt,
+                        "row 14 (interrupted -> done) must close the open entry")
+        XCTAssertEqual(manifest.interruptions[0].resumed, false)
+    }
+
+    /// Reacquire keeps failing until the resume-retry budget is exhausted (rows
+    /// 10/11): the machine gives up straight to `captured` without ever resuming.
+    /// That interruption never ended either, so it closes the same way a user's
+    /// explicit stop-from-interrupted does.
+    func testReacquireBudgetExhaustedClosesInterruptionAsNotResumed() async throws {
+        let session = FakeSession()
+        let recorder = FakeRecorder()
+        // A budget of 1 plus a short backoff keeps this test from waiting on the
+        // default 3-retry x 500ms schedule: the automatic backoff resume (scheduled
+        // by `scheduleResumeBackoff` after every failed reacquire) alone drives the
+        // machine straight to giving up.
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          machine: CaptureMachine(resumeRetryBudget: 1),
+                                          resumeBackoff: .milliseconds(20))
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        // Only now start failing `activate()` — the initial `record()` above must
+        // succeed, or the capture never reaches `recording` in the first place.
+        session.activateError = CocoaError(.fileWriteUnknown)
+        await coordinator.resume()
+        await waitUntil({ coordinator.phase == .captured },
+                        "budget exhaustion did not reach captured")
+
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.interruptions.count, 1)
+        XCTAssertNotNil(manifest.interruptions[0].endedAt,
+                        "rows 10/11 give-up must close the open entry")
+        XCTAssertEqual(manifest.interruptions[0].resumed, false)
     }
 
     // MARK: 3b — route loss auto-resumes onto the new device (issue #5)

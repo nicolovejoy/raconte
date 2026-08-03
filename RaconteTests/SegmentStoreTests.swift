@@ -203,6 +203,113 @@ final class SegmentStoreTests: XCTestCase {
         XCTAssertEqual(total, 1000)
     }
 
+    // MARK: issue #9 — interruption entries must close, not stay open forever
+
+    /// Resume closes the entry it opened, stamped `resumed: true` at the store's
+    /// injected clock (the same clock `fixedClock()` pins for every other timestamp
+    /// in this file).
+    func testResumeClosesOpenInterruptionAsResumed() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+
+        try await store.begin()
+        try await store.append(chunk(frames: 750))
+        try await store.markInterrupted(kind: "call", beganAt: Date(timeIntervalSince1970: 100))
+        try await store.resumeRecording()
+
+        let m = try decodeManifest(dir: dir)
+        XCTAssertEqual(m.interruptions.count, 1)
+        XCTAssertEqual(m.interruptions[0].endedAt, fixedClock().now())
+        XCTAssertEqual(m.interruptions[0].resumed, true)
+    }
+
+    /// Stopping from `interrupted` (`setState(.captured, closingInterruption: false)`,
+    /// the coordinator's row-14 path) closes the entry as never resumed.
+    func testSetStateCapturedClosesOpenInterruptionAsNotResumed() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+
+        try await store.begin()
+        try await store.append(chunk(frames: 750))
+        try await store.markInterrupted(kind: "call", beganAt: Date(timeIntervalSince1970: 100))
+        try await store.setState(.captured, closingInterruption: false)
+
+        let m = try decodeManifest(dir: dir)
+        XCTAssertEqual(m.interruptions.count, 1)
+        XCTAssertEqual(m.interruptions[0].endedAt, fixedClock().now())
+        XCTAssertEqual(m.interruptions[0].resumed, false)
+    }
+
+    /// `setState` without `closingInterruption` (the `.resuming`/`.interrupted` calls
+    /// the coordinator makes mid-retry) must leave the entry open — a reacquire
+    /// attempt in flight has not resolved yet.
+    func testSetStateWithoutClosingInterruptionLeavesEntryOpen() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+
+        try await store.begin()
+        try await store.append(chunk(frames: 750))
+        try await store.markInterrupted(kind: "call", beganAt: Date(timeIntervalSince1970: 100))
+        try await store.setState(.interrupted, retryCount: 1)
+
+        let m = try decodeManifest(dir: dir)
+        XCTAssertEqual(m.interruptions.count, 1)
+        XCTAssertNil(m.interruptions[0].endedAt)
+        XCTAssertNil(m.interruptions[0].resumed)
+    }
+
+    /// Interrupt -> resume -> interrupt -> stop: two full cycles, two closed entries,
+    /// each with its own outcome.
+    func testDoubleInterruptionCycleProducesTwoClosedEntries() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+
+        try await store.begin()
+        try await store.append(chunk(frames: 500))
+        try await store.markInterrupted(kind: "call", beganAt: Date(timeIntervalSince1970: 100))
+        try await store.resumeRecording()
+
+        try await store.append(chunk(frames: 500))
+        try await store.markInterrupted(kind: "routeChange", beganAt: Date(timeIntervalSince1970: 200))
+        try await store.setState(.captured, closingInterruption: false)
+
+        let m = try decodeManifest(dir: dir)
+        XCTAssertEqual(m.interruptions.count, 2)
+        XCTAssertEqual(m.interruptions[0].kind, "call")
+        XCTAssertEqual(m.interruptions[0].resumed, true)
+        XCTAssertNotNil(m.interruptions[0].endedAt)
+        XCTAssertEqual(m.interruptions[1].kind, "routeChange")
+        XCTAssertEqual(m.interruptions[1].resumed, false)
+        XCTAssertNotNil(m.interruptions[1].endedAt)
+    }
+
+    /// A crash between `markInterrupted` and its close can, in principle, leave two
+    /// open entries (nothing in this actor prevents a second `markInterrupted` call
+    /// while one is already open — the state machine is what normally prevents it).
+    /// Closing must only ever touch the most recent: the earlier one is left exactly
+    /// as it was, historical evidence rather than tidied away.
+    func testCloseOnlyTouchesTheMostRecentOpenEntry() async throws {
+        let store = makeStore(byteCap: .max)
+        let dir = store.captureDirectory
+
+        try await store.begin()
+        try await store.markInterrupted(kind: "first", beganAt: Date(timeIntervalSince1970: 100))
+        // Simulated crash recovery re-entering markInterrupted without an intervening
+        // resume: a second open entry, exactly what "crash between mark and close"
+        // would produce.
+        try await store.markInterrupted(kind: "second", beganAt: Date(timeIntervalSince1970: 200))
+        try await store.resumeRecording()
+
+        let m = try decodeManifest(dir: dir)
+        XCTAssertEqual(m.interruptions.count, 2)
+        XCTAssertEqual(m.interruptions[0].kind, "first")
+        XCTAssertNil(m.interruptions[0].endedAt, "earlier open entry must not be touched")
+        XCTAssertNil(m.interruptions[0].resumed)
+        XCTAssertEqual(m.interruptions[1].kind, "second")
+        XCTAssertEqual(m.interruptions[1].endedAt, fixedClock().now())
+        XCTAssertEqual(m.interruptions[1].resumed, true)
+    }
+
     // MARK: setState persists operational fields
 
     func testSetStatePersistsOperationalFields() async throws {

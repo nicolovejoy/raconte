@@ -152,6 +152,34 @@ final class RecoveryDataLossRegressionTests: XCTestCase {
                        "the live log itself is untouched by recovery")
     }
 
+    // MARK: Issue #9 — a capture killed mid-interruption keeps the entry open
+
+    /// A capture killed while `interrupted` (the interruption genuinely never ended —
+    /// no resume, no stop, just gone) must round-trip through recovery with the entry
+    /// still open. Recovery only rebuilds `state`/segment stats; it must not choke on,
+    /// or silently "fix", an open entry.
+    func testRecoveryLeavesAnOpenInterruptionEntryOpen() throws {
+        let created = Date(timeIntervalSince1970: 1_700_000_000)
+        let openEntry = InterruptionLogEntry(
+            kind: "phoneCall", beganAt: created.addingTimeInterval(5),
+            endedAt: nil, resumed: nil)
+        let manifest = Manifest(
+            captureID: "cap", createdAt: created, state: .interrupted,
+            stateSeq: 3, stateUpdatedAt: created, format: format,
+            segmentCount: 1, lastKnownFrameOffset: 48_000,
+            interruptions: [openEntry])
+        try write(manifest, id: "cap")
+        try writeSegment("cap")
+
+        runRecovery()
+
+        let recovered = try XCTUnwrap(readManifest("cap"))
+        XCTAssertEqual(recovered.state, .captured, "normalized like any mid-recording crash")
+        XCTAssertEqual(recovered.interruptions, [openEntry],
+                       "recovery must carry the open entry through untouched, not close it")
+        XCTAssertNil(recovered.interruptions.first?.endedAt)
+    }
+
     func testACompleteTranscriptDoesNotAskForRetranscription() {
         let ref = TranscriptRef(generator: "SpeechTranscriber", locale: "en_US",
                                 coverageFrames: 48_000, skippedRanges: [],

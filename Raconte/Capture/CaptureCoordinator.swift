@@ -303,7 +303,8 @@ final class CaptureCoordinator {
             await beginFlushWindow()
 
         case .done where previousPhase == .interrupted:
-            await store(setState: .captured)
+            // Stop while interrupted: the entry never resumed (issue #9).
+            await store(setState: .captured, closingInterruption: false)
             await completeCapture()
 
         case .tailDrained:
@@ -430,7 +431,8 @@ final class CaptureCoordinator {
             await store(setState: .interrupted, retryCount: next.retryCount)
             scheduleResumeBackoff()
         } else if next.phase == .captured {
-            await store(setState: .captured)
+            // Resume-retry budget exhausted: gave up without ever resuming (issue #9).
+            await store(setState: .captured, closingInterruption: false)
             await completeCapture()
         }
     }
@@ -484,10 +486,12 @@ final class CaptureCoordinator {
     /// generic `setState` (no segment close involved).
     private func store(setState state: CaptureState,
                        needsAttention: Bool? = nil, lastError: String? = nil,
-                       retryCount: Int? = nil, finalizeAttempts: Int? = nil) async {
+                       retryCount: Int? = nil, finalizeAttempts: Int? = nil,
+                       closingInterruption resumed: Bool? = nil) async {
         guard let store = currentStore else { return }
         try? await store.setState(state, needsAttention: needsAttention, lastError: lastError,
-                                  retryCount: retryCount, finalizeAttempts: finalizeAttempts)
+                                  retryCount: retryCount, finalizeAttempts: finalizeAttempts,
+                                  closingInterruption: resumed)
     }
 
     private func enqueueFinalize(_ id: String) {

@@ -138,6 +138,57 @@ final class PartialDateTests: XCTestCase {
         XCTAssertEqual(PartialDate(year: 1998, month: 3, day: 4).precision, .day)
     }
 
+    // MARK: isFuture (disallow-future-backdates)
+    //
+    // Fixed "now" of June 15, 2026 — deliberately clear of any year boundary, per the
+    // house rule that backdate fixtures near Jan 1 have broken CI under UTC before.
+
+    private var referenceNow: Date {
+        cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 12))!
+    }
+
+    func testTodayAtDayPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 2026, month: 6, day: 15).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testTomorrowAtDayPrecisionIsFuture() {
+        XCTAssertTrue(PartialDate(year: 2026, month: 6, day: 16).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testYesterdayAtDayPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 2026, month: 6, day: 14).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testCurrentMonthAtYearMonthPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 2026, month: 6).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testNextMonthAtYearMonthPrecisionIsFuture() {
+        XCTAssertTrue(PartialDate(year: 2026, month: 7).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testPreviousMonthAtYearMonthPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 2026, month: 5).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testCurrentYearAtYearPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 2026).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testNextYearAtYearPrecisionIsFuture() {
+        XCTAssertTrue(PartialDate(year: 2027).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    func testPastYearAtYearPrecisionIsNotFuture() {
+        XCTAssertFalse(PartialDate(year: 1998).isFuture(now: referenceNow, calendar: cal))
+    }
+
+    /// A future day within the *current* month must not be masked by the month-level
+    /// comparison — day precision compares day-for-day, not just year+month.
+    func testLaterDayInCurrentMonthIsFutureEvenThoughSameMonth() {
+        XCTAssertTrue(PartialDate(year: 2026, month: 6, day: 30).isFuture(now: referenceNow, calendar: cal))
+    }
+
     // MARK: formatted
 
     func testFormattedRendersByPrecision() {

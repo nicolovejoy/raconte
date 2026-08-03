@@ -142,6 +142,69 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertEqual(String(decoding: try EntryMetadataStore.encode(.defaults), as: UTF8.self), "{}")
     }
 
+    // MARK: setOriginalDate (disallow-future-backdates)
+    //
+    // Fixed "now" of June 15, 2026 — away from any year boundary, per the house rule
+    // that near-epoch/year-boundary backdate fixtures have broken CI under UTC before.
+
+    private var referenceCalendar: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal
+    }
+
+    private var referenceNow: Date {
+        referenceCalendar.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 12))!
+    }
+
+    func testSetOriginalDateAcceptsToday() {
+        var metadata = EntryMetadata.defaults
+        let today = PartialDate(year: 2026, month: 6, day: 15)
+        XCTAssertTrue(metadata.setOriginalDate(today, now: referenceNow, calendar: referenceCalendar))
+        XCTAssertEqual(metadata.originalDate, today)
+    }
+
+    func testSetOriginalDateRejectsTomorrow() {
+        var metadata = EntryMetadata.defaults
+        let tomorrow = PartialDate(year: 2026, month: 6, day: 16)
+        XCTAssertFalse(metadata.setOriginalDate(tomorrow, now: referenceNow, calendar: referenceCalendar))
+        XCTAssertNil(metadata.originalDate)
+    }
+
+    func testSetOriginalDateRejectsNextMonth() {
+        var metadata = EntryMetadata.defaults
+        let nextMonth = PartialDate(year: 2026, month: 7)
+        XCTAssertFalse(metadata.setOriginalDate(nextMonth, now: referenceNow, calendar: referenceCalendar))
+        XCTAssertNil(metadata.originalDate)
+    }
+
+    func testSetOriginalDateRejectsNextYear() {
+        var metadata = EntryMetadata.defaults
+        let nextYear = PartialDate(year: 2027)
+        XCTAssertFalse(metadata.setOriginalDate(nextYear, now: referenceNow, calendar: referenceCalendar))
+        XCTAssertNil(metadata.originalDate)
+    }
+
+    func testSetOriginalDateAcceptsCurrentYearAndMonth() {
+        var metadata = EntryMetadata.defaults
+        XCTAssertTrue(metadata.setOriginalDate(PartialDate(year: 2026), now: referenceNow, calendar: referenceCalendar))
+        XCTAssertTrue(metadata.setOriginalDate(PartialDate(year: 2026, month: 6), now: referenceNow, calendar: referenceCalendar))
+    }
+
+    /// A rejection leaves the previous value alone — it does not clamp to `now`, which
+    /// would silently misrepresent input the owner never entered.
+    func testSetOriginalDateRejectionDoesNotClampOrClear() {
+        var metadata = EntryMetadata(originalDate: PartialDate(year: 1987, month: 6, day: 2))
+        XCTAssertFalse(metadata.setOriginalDate(PartialDate(year: 2027), now: referenceNow, calendar: referenceCalendar))
+        XCTAssertEqual(metadata.originalDate, PartialDate(year: 1987, month: 6, day: 2))
+    }
+
+    func testSetOriginalDateNilAlwaysClears() {
+        var metadata = EntryMetadata(originalDate: PartialDate(year: 1987))
+        XCTAssertTrue(metadata.setOriginalDate(nil, now: referenceNow, calendar: referenceCalendar))
+        XCTAssertNil(metadata.originalDate)
+    }
+
     func testEffectiveDatePrefersTheBackdateAndOtherwiseTheCapture() {
         let captured = Date(timeIntervalSince1970: 1_700_000_000)
         let backdated = PartialDate(year: 1986, month: 11, day: 6)

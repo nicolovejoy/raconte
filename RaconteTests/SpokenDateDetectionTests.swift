@@ -94,6 +94,43 @@ final class SpokenDateDetectionTests: XCTestCase {
         XCTAssertNil(metadata.originalDate)
     }
 
+    // MARK: Future dates (disallow-future-backdates)
+    //
+    // Fixed "now" of June 15, 2026 — away from any year boundary, per the house rule
+    // that near-epoch/year-boundary backdate fixtures have broken CI under UTC before.
+
+    private var referenceNow: Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        return cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 12))!
+    }
+
+    /// A future spoken date is a misrecognition, not a real backdate to clamp — it must
+    /// be discarded outright, not applied and not clamped to today.
+    func testFutureDetectionIsDiscardedNotApplied() {
+        var metadata = EntryMetadata.defaults
+        XCTAssertFalse(SpokenDateDetection.apply(
+            to: &metadata, transcriptText: "March 4th, 2027, we drove to the coast", now: referenceNow))
+        XCTAssertNil(metadata.originalDate)
+        XCTAssertEqual(metadata, .defaults)
+    }
+
+    /// Discarding a future detection must not spend the latch — unlike a detection that
+    /// correctly declined to apply because a manual backdate already existed, this one
+    /// was never valid, so a later re-derivation gets another try.
+    func testFutureDetectionDoesNotLatch() {
+        var metadata = EntryMetadata.defaults
+        SpokenDateDetection.apply(
+            to: &metadata, transcriptText: "March 4th, 2027, we drove to the coast", now: referenceNow)
+        XCTAssertNil(metadata.detectedDate)
+    }
+
+    func testPastDetectionAtTheSameReferenceStillApplies() {
+        var metadata = EntryMetadata.defaults
+        XCTAssertTrue(SpokenDateDetection.apply(to: &metadata, transcriptText: dated, now: referenceNow))
+        XCTAssertEqual(metadata.originalDate, march4)
+    }
+
     // MARK: On-disk shape
 
     func testDetectedDateRoundTripsAndDoesNotDisturbTheEmptyDefault() throws {

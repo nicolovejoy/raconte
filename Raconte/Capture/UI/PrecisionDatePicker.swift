@@ -50,14 +50,17 @@ struct PrecisionDatePicker: View {
 
     @ViewBuilder
     private var dayPicker: some View {
+        // `in: ...Date()` disallows dialing a future day directly (disallow-future-
+        // backdates) — the model-level `EntryMetadata.setOriginalDate` clamp is the real
+        // guard, this just keeps the wheel from offering a value it will reject.
         switch dayPickerStyle {
         case .compact:
-            DatePicker("Entry date", selection: $date, displayedComponents: .date)
+            DatePicker("Entry date", selection: $date, in: ...Date(), displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.compact)
                 .accessibilityIdentifier("\(idPrefix).backdateField")
         case .graphical:
-            DatePicker("Entry date", selection: $date, displayedComponents: .date)
+            DatePicker("Entry date", selection: $date, in: ...Date(), displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.graphical)
                 .accessibilityIdentifier("\(idPrefix).backdateField")
@@ -66,11 +69,22 @@ struct PrecisionDatePicker: View {
 
     private var monthPicker: some View {
         Picker("Month", selection: componentBinding(.month)) {
-            ForEach(1...12, id: \.self) { month in
+            ForEach(1...monthUpperBound, id: \.self) { month in
                 Text(calendar.monthSymbols[month - 1]).tag(month)
             }
         }
         .accessibilityIdentifier("\(idPrefix).backdateMonth")
+    }
+
+    /// 12 for any year before the current one; this month, for the current year — and
+    /// always widened to include whatever month is currently selected (same reasoning as
+    /// `yearRange` below: an unmatched `Picker` tag renders blank rather than clamping).
+    private var monthUpperBound: Int {
+        let now = Date()
+        let currentYear = calendar.component(.year, from: now)
+        let selectedYear = calendar.component(.year, from: date)
+        guard selectedYear >= currentYear else { return 12 }
+        return max(calendar.component(.month, from: now), calendar.component(.month, from: date))
     }
 
     private var yearPicker: some View {

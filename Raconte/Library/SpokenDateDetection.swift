@@ -13,11 +13,19 @@ enum SpokenDateDetection {
     /// Mutates `metadata` and reports whether anything changed. `false` means the caller
     /// must not write: a no-op rewrite of a sidecar is how a scan turns into a disk churn.
     @discardableResult
-    static func apply(to metadata: inout EntryMetadata, transcriptText: String?) -> Bool {
+    static func apply(to metadata: inout EntryMetadata, transcriptText: String?,
+                       now: Date = Date()) -> Bool {
         // The latch. Checked before parsing, so a re-run costs nothing.
         guard metadata.detectedDate == nil else { return false }
         guard let transcriptText,
               let detected = SpokenDateParser.detect(in: transcriptText) else { return false }
+
+        // A future date is a misrecognition (disallow-future-backdates), not a real
+        // backdate to clamp — discard outright. Not latched either: unlike a date the
+        // parser found and correctly declined to apply (manual wins), this one was never
+        // valid, so there is nothing to remember and a later transcript re-derivation gets
+        // another try.
+        guard !detected.isFuture(now: now) else { return false }
 
         metadata.detectedDate = detected
         // Manual first, always. A date the owner typed outranks one the room said, and

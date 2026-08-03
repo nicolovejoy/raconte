@@ -6,13 +6,24 @@ import Foundation
 /// id-keyed captures root, so UI flows run with no microphone, no TCC prompt, and
 /// per-test isolation. A relaunch with the same id sees the same disk — the
 /// recovery-flow tests rely on that.
-extension CaptureScreenModel {
-    @MainActor static func uiTestHarness() -> CaptureScreenModel? {
-        guard let id = ProcessInfo.processInfo.environment["RACONTE_UITEST_ID"] else { return nil }
-        let root = defaultCapturesRoot()
+/// Where the harness's id-keyed captures root lives, factored out so `LibraryScreenModel`
+/// (M3 T4) can point at the same tree `CaptureScreenModel`'s harness uses — two roots for
+/// one `RACONTE_UITEST_ID` would make the library scan an empty directory next to the one
+/// the capture screen is actually writing.
+enum UITestHarnessRoot {
+    @MainActor static func capturesRoot(id: String) -> URL {
+        let root = CaptureScreenModel.defaultCapturesRoot()
             .deletingLastPathComponent()
             .appendingPathComponent("uitest-captures-\(id)", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+}
+
+extension CaptureScreenModel {
+    @MainActor static func uiTestHarness() -> CaptureScreenModel? {
+        guard let id = ProcessInfo.processInfo.environment["RACONTE_UITEST_ID"] else { return nil }
+        let root = UITestHarnessRoot.capturesRoot(id: id)
         return CaptureScreenModel(
             capturesRoot: root,
             makeSession: { UITestSessionController() },

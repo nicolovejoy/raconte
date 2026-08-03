@@ -15,6 +15,13 @@ enum LibraryDestination: Hashable {
 struct LibraryView: View {
     let model: LibraryScreenModel
 
+    /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
+    /// trash or move, if any. Held here rather than per-row `@State` because the
+    /// confirmation dialogs are single instances shared across every row, keyed by the
+    /// captured id — the same shape `EntryDetailView` uses for its own trash confirm.
+    @State private var pendingTrashCaptureID: String?
+    @State private var pendingMoveCaptureID: String?
+
     var body: some View {
         VStack(spacing: 0) {
             if model.journalsUnreadable { registryBanner }
@@ -30,6 +37,44 @@ struct LibraryView: View {
             ToolbarItem(placement: .primaryAction) { trashLink }
         }
         .task { await model.rescan() }
+        .confirmationDialog("Move this entry to the trash?",
+                            isPresented: Binding(
+                                get: { pendingTrashCaptureID != nil },
+                                set: { if !$0 { pendingTrashCaptureID = nil } }),
+                            titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) {
+                if let id = pendingTrashCaptureID {
+                    Task { await model.trashEntry(id) }
+                }
+                pendingTrashCaptureID = nil
+            }
+            .accessibilityIdentifier("library.row.confirmTrash")
+            Button("Cancel", role: .cancel) { pendingTrashCaptureID = nil }
+        } message: {
+            Text("You can restore it from the Trash for \(TrashPolicy.retentionDays) days.")
+        }
+        .confirmationDialog("Move to journal",
+                            isPresented: Binding(
+                                get: { pendingMoveCaptureID != nil },
+                                set: { if !$0 { pendingMoveCaptureID = nil } })) {
+            if let id = pendingMoveCaptureID {
+                ForEach(journalChoices(for: id)) { journal in
+                    Button(journal.name) {
+                        Task { await model.moveEntry(id, toJournal: journal.id) }
+                        pendingMoveCaptureID = nil
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingMoveCaptureID = nil }
+        }
+    }
+
+    /// Every journal except the entry's current one — reassigning to where it already is
+    /// isn't a choice. `model.items` (not `allEntries`): the library list is already
+    /// scoped to non-trashed entries, which is the only place these rows appear.
+    private func journalChoices(for captureID: String) -> [Journal] {
+        let currentJournalID = model.items.first { $0.captureID == captureID }?.journalID
+        return model.journals.filter { $0.id != currentJournalID }
     }
 
     /// Quiet by design: a text button, always present so the trash is never a place you
@@ -152,6 +197,39 @@ struct LibraryView: View {
                         ForEach(group.items) { item in
                             NavigationLink(value: LibraryDestination.entry(item.captureID)) {
                                 LibraryEntryRow(item: item)
+                            }
+                            // Trailing swipe (trash first, so a full swipe trashes —
+                            // platform convention) plus a Mac-convention right-click
+                            // context menu with the same two handlers, reusing
+                            // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
+                            // detail screen does — no second delete or move path.
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    pendingTrashCaptureID = item.captureID
+                                } label: {
+                                    Label("Trash", systemImage: "trash")
+                                }
+                                .accessibilityIdentifier("library.row.trashSwipe")
+
+                                Button {
+                                    pendingMoveCaptureID = item.captureID
+                                } label: {
+                                    Label("Move", systemImage: "folder")
+                                }
+                                .tint(.blue)
+                                .accessibilityIdentifier("library.row.moveSwipe")
+                            }
+                            .contextMenu {
+                                Button {
+                                    pendingMoveCaptureID = item.captureID
+                                } label: {
+                                    Label("Move to Journal…", systemImage: "folder")
+                                }
+                                Button(role: .destructive) {
+                                    pendingTrashCaptureID = item.captureID
+                                } label: {
+                                    Label("Move to Trash", systemImage: "trash")
+                                }
                             }
                         }
                     }

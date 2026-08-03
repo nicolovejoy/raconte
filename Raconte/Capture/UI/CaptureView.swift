@@ -53,6 +53,33 @@ final class CaptureScreenModel {
     /// Live transcription, or nil when the build has none wired (the UI-test harness).
     let transcription: LiveTranscriptionCoordinator?
 
+    // MARK: Journal context (M3 T3)
+    //
+    // ONE `JournalStore` and ONE `EntryMetadataStore` instance for the whole screen —
+    // T1 flagged that two actors over the same file don't serialize with each other, so
+    // every read/write of the registry or a sidecar goes through these.
+    private let journalStore: JournalStore
+    private let entryMetadataStore: EntryMetadataStore
+    private let currentJournal: CurrentJournal
+
+    /// The registry, refreshed at bootstrap and on every create/rename. Not reloaded on
+    /// every keystroke — the menu is the only reader, and it opens infrequently.
+    private(set) var journals: [Journal] = []
+    private(set) var selectedJournalID: String?
+
+    /// Never empty in the UI: `resolveCurrentJournal()` guarantees a selection exists
+    /// before `bootstrap()` returns, per the M3 decision that "no journal selected"
+    /// never arises. The literal only covers the sliver before that resolution lands.
+    var selectedJournalName: String {
+        journals.first { $0.id == selectedJournalID }?.name ?? "Journal"
+    }
+
+    /// Optional backdate (§ "entry date — set only if backdating"). `false`/`Date()`
+    /// until the user opts in; `originalDate` in the sidecar stays nil while disabled —
+    /// the default is never materialized (`EntryMetadata`'s doc comment).
+    private(set) var backdateEnabled = false
+    private(set) var backdateDate = Date()
+
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
         recovered.filter { !dismissed.contains($0.captureID) }
@@ -64,10 +91,16 @@ final class CaptureScreenModel {
          encoder: AudioEncoder,
          startCue: (@MainActor () async -> Void)? = nil,
          makeSecondarySink: SecondarySinkFactory? = nil,
-         transcription: LiveTranscriptionCoordinator? = nil) {
+         transcription: LiveTranscriptionCoordinator? = nil,
+         journalsContainerRoot: URL? = nil,
+         journalPreferenceStore: any JournalPreferenceStore = UserDefaultsJournalPreferenceStore()) {
         self.capturesRoot = capturesRoot
         self.transcription = transcription
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
+        self.journalStore = JournalStore(
+            containerRoot: journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot))
+        self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
+        self.currentJournal = CurrentJournal(store: journalPreferenceStore)
         let spawn: @MainActor () -> CaptureCoordinator = {
             CaptureCoordinator(
                 capturesRoot: capturesRoot,
@@ -143,6 +176,7 @@ final class CaptureScreenModel {
     func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
+        await resolveCurrentJournal()
         await coordinator.recoverAtLaunch()
         recovered = coordinator.recoveredRecordings
         await runFinalizer(coordinator.finalizeQueue)
@@ -166,17 +200,21 @@ final class CaptureScreenModel {
         Task { await finishCurrentCapture() }
     }
 
-    /// Stand the transcription session up once the format is readable.
+    /// Stand the transcription session up once the format is readable, and write the
+    /// entry's journal/backdate sidecar now that the capture directory exists (M3 T3 —
+    /// `SegmentStore.begin()`, called just before this phase publishes, creates it).
     ///
     /// Keyed off `.recording` rather than the factory call: the factory runs inside
     /// `configureAndStart`, before `recorder.start` returns, so `activeFormat` is still
-    /// nil there. Idempotent — SwiftUI may deliver the same phase more than once.
+    /// nil there. Idempotent — SwiftUI may deliver the same phase more than once (also
+    /// true on resume from an interruption, which re-enters `.recording`; rewriting the
+    /// same journal/backdate values is harmless).
     func handlePhase() {
-        guard let transcription,
-              coordinator.phase == .recording,
-              let id = coordinator.activeCaptureID,
-              let format = coordinator.activeFormat else { return }
-        transcription.activate(captureID: id, inputFormat: format)
+        guard coordinator.phase == .recording, let id = coordinator.activeCaptureID else { return }
+        if let transcription, let format = coordinator.activeFormat {
+            transcription.activate(captureID: id, inputFormat: format)
+        }
+        Task { await self.writeEntryMetadata(for: id) }
     }
 
     func keep(_ id: String) { dismissed.insert(id) }
@@ -186,6 +224,47 @@ final class CaptureScreenModel {
         try? FileManager.default.removeItem(at: dir)
         dismissed.insert(id)
         refreshFinished()
+    }
+
+    // MARK: Journal + backdate intents (M3 T3)
+
+    /// Switch the journal captures file into. If a capture is live, its sidecar is
+    /// updated immediately — the file that's on disk when the app is killed must never
+    /// disagree with what the header showed.
+    func selectJournal(_ id: String) async {
+        guard journals.contains(where: { $0.id == id }) else { return }
+        selectedJournalID = id
+        currentJournal.select(id)
+        await syncActiveEntryMetadata()
+    }
+
+    @discardableResult
+    func createJournal(name: String) async -> Journal? {
+        guard let created = try? await journalStore.create(name: name) else { return nil }
+        journals.append(created)
+        selectedJournalID = created.id
+        currentJournal.select(created.id)
+        await syncActiveEntryMetadata()
+        return created
+    }
+
+    func renameCurrentJournal(to name: String) async {
+        guard let id = selectedJournalID,
+              let renamed = try? await journalStore.rename(id: id, to: name) else { return }
+        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
+    }
+
+    /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
+    /// nil ("use the capture's own date"), not to whatever was last picked.
+    func setBackdateEnabled(_ enabled: Bool) async {
+        backdateEnabled = enabled
+        if !enabled { backdateDate = Date() }
+        await syncActiveEntryMetadata()
+    }
+
+    func setBackdateDate(_ date: Date) async {
+        backdateDate = date
+        await syncActiveEntryMetadata()
     }
 
     // MARK: internals
@@ -225,6 +304,52 @@ final class CaptureScreenModel {
         // Best-effort by design: a manifest we cannot update costs the re-derive hint,
         // not the recording or the transcript, both of which are already on disk.
         try? AtomicFile.replace(at: url, writing: encoded)
+    }
+
+    /// Decide which journal capture files into, per the M3 default-journal rule: a
+    /// stored, still-valid selection wins; otherwise fall back to an existing journal;
+    /// otherwise mint "Journal" and select it. Runs once, before `recoverAtLaunch()`,
+    /// so the header never shows "no journal selected" even on the very first launch.
+    private func resolveCurrentJournal() async {
+        let registry = (try? await journalStore.load()) ?? JournalRegistry()
+        switch JournalSelection.resolve(registry: registry, storedID: currentJournal.storedID) {
+        case .existing(let id):
+            journals = registry.journals
+            selectedJournalID = id
+            currentJournal.select(id)
+        case .needsDefault:
+            if let created = try? await journalStore.create(name: "Journal") {
+                journals = [created]
+                selectedJournalID = created.id
+                currentJournal.select(created.id)
+            } else {
+                // Best-effort: the registry stays empty and the header falls back to the
+                // "Journal" literal in `selectedJournalName` until the next bootstrap.
+                journals = registry.journals
+            }
+        }
+    }
+
+    /// Update the live capture's sidecar after a journal/backdate change made mid-
+    /// recording. A no-op when idle — the next capture picks up the new selection via
+    /// `handlePhase()` when it starts.
+    private func syncActiveEntryMetadata() async {
+        guard let id = coordinator.activeCaptureID,
+              coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
+        await writeEntryMetadata(for: id)
+    }
+
+    /// journalID = the currently selected journal (never nil once bootstrap resolves
+    /// one); originalDate = the backdate only if the user turned it on — never
+    /// materializing `capturedAt` here is what keeps an un-backdated entry
+    /// distinguishable from one backdated to exactly its capture time.
+    private func writeEntryMetadata(for captureID: String) async {
+        let originalDate = backdateEnabled ? backdateDate : nil
+        let journalID = selectedJournalID
+        try? await entryMetadataStore.update(captureID: captureID) { metadata in
+            metadata.journalID = journalID
+            metadata.originalDate = originalDate
+        }
     }
 
     private func runFinalizer(_ ids: [String]) async {
@@ -289,6 +414,9 @@ struct CaptureView: View {
                             .foregroundStyle(Color.primary)
                     }
                     #endif
+
+                    JournalHeaderView(model: model)
+                    BackdateField(model: model)
 
                     ForEach(model.visibleRecovered) { rec in
                         RecoveryBanner(recording: rec,
@@ -450,5 +578,104 @@ struct FinishedRow: View {
         let p = playback ?? CapturePlayback(capturesRoot: capturesRoot, captureID: recording.captureID)
         playback = p
         if p.isPlaying { p.pause() } else { p.play() }
+    }
+}
+
+/// "Recording into: <journal>" (M3 T3, phone mockup). A `Menu` doubles as the switcher
+/// — tap to pick any existing journal — plus "Rename…" and "New Journal…", both taken
+/// through an `.alert` text field so this stays a menu-and-alert screen, no navigation
+/// push, matching M1/M2's quiet-chrome style.
+struct JournalHeaderView: View {
+    let model: CaptureScreenModel
+
+    @State private var showingNewJournalPrompt = false
+    @State private var showingRenamePrompt = false
+    @State private var draftName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Recording into")
+                .font(.caption)
+                .foregroundStyle(Color(white: 0.55))
+
+            Menu {
+                ForEach(model.journals) { journal in
+                    Button {
+                        Task { await model.selectJournal(journal.id) }
+                    } label: {
+                        if journal.id == model.selectedJournalID {
+                            Label(journal.name, systemImage: "checkmark")
+                        } else {
+                            Text(journal.name)
+                        }
+                    }
+                }
+                Divider()
+                Button("Rename “\(model.selectedJournalName)”…") {
+                    draftName = model.selectedJournalName
+                    showingRenamePrompt = true
+                }
+                Button("New Journal…") {
+                    draftName = ""
+                    showingNewJournalPrompt = true
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(model.selectedJournalName)
+                        .font(.title3.weight(.semibold))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(Color(white: 0.6))
+                }
+                .foregroundStyle(.white)
+            }
+            .accessibilityIdentifier("capture.journalPicker")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("capture.journalHeader")
+        .alert("New Journal", isPresented: $showingNewJournalPrompt) {
+            TextField("Journal name", text: $draftName)
+                .accessibilityIdentifier("capture.newJournalNameField")
+            Button("Create") { Task { await model.createJournal(name: draftName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename Journal", isPresented: $showingRenamePrompt) {
+            TextField("Journal name", text: $draftName)
+                .accessibilityIdentifier("capture.renameJournalNameField")
+            Button("Rename") { Task { await model.renameCurrentJournal(to: draftName) } }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+}
+
+/// Optional backdate — off by default, so an un-backdated entry never has a date
+/// materialized into its sidecar (`EntryMetadata.originalDate == nil` means "use the
+/// capture's own date"). Settable before or during recording (M3 T3); the model pushes
+/// every change straight to the live capture's `entry.json` when one is in progress.
+struct BackdateField: View {
+    let model: CaptureScreenModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { model.backdateEnabled },
+                set: { enabled in Task { await model.setBackdateEnabled(enabled) } }
+            )) {
+                Text("Backdate this entry")
+                    .font(.caption)
+                    .foregroundStyle(Color(white: 0.55))
+            }
+            .accessibilityIdentifier("capture.backdateToggle")
+
+            if model.backdateEnabled {
+                DatePicker("Entry date", selection: Binding(
+                    get: { model.backdateDate },
+                    set: { date in Task { await model.setBackdateDate(date) } }
+                ), displayedComponents: .date)
+                .labelsHidden()
+                .accessibilityIdentifier("capture.backdateField")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

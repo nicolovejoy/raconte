@@ -21,7 +21,13 @@ extension CaptureScreenModel {
             // A second branch on every capture, so the simulator suite drives
             // record→finalize→relaunch over a two-branch tee rather than the
             // one-branch shape no shipping build will use.
-            makeSecondarySink: { _ in NoOpPCMSink() })
+            makeSecondarySink: { _ in NoOpPCMSink() },
+            // `root` itself, not `AppContainer.containerRoot(capturesRoot:)`: the
+            // production default (`root.deletingLastPathComponent()`) would land every
+            // test id's journals.json in the same shared `Raconte/` directory, defeating
+            // the per-id isolation this harness exists for. Colliding with a capture
+            // directory name is not a risk — capture ids are 26-char ULIDs.
+            journalsContainerRoot: root)
     }
 }
 

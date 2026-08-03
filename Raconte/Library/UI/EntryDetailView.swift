@@ -22,6 +22,9 @@ struct EntryDetailView: View {
     @State private var transcript = EntryTranscript(state: .absent, text: nil, degradations: [])
     @State private var showingBackdatePicker = false
     @State private var backdateDraft = Date()
+    @State private var showingTrashConfirmation = false
+
+    @Environment(\.dismiss) private var dismiss
 
     init(model: LibraryScreenModel, item: EntryListItem) {
         self.model = model
@@ -36,6 +39,7 @@ struct EntryDetailView: View {
                 journalSection
                 playbackSection
                 transcriptSection
+                trashSection
             }
             .padding(24)
             .frame(maxWidth: 560, alignment: .leading)
@@ -48,6 +52,15 @@ struct EntryDetailView: View {
         // playing entry keeps playing.
         .onDisappear { playback?.stop() }
         .sheet(isPresented: $showingBackdatePicker) { backdateSheet }
+        .confirmationDialog("Move this entry to the trash?",
+                            isPresented: $showingTrashConfirmation,
+                            titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) { moveToTrash() }
+                .accessibilityIdentifier("detail.confirmTrash")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You can restore it from the Trash for \(TrashPolicy.retentionDays) days.")
+        }
     }
 
     /// Both loads are off the main actor: the transcript is an O(records) parse and
@@ -201,6 +214,27 @@ struct EntryDetailView: View {
                     .accessibilityIdentifier("detail.transcript.truncated")
             }
         }
+    }
+
+    // MARK: - Trash
+
+    /// Bottom of the screen, quiet, and behind a confirmation — but present on every
+    /// entry on every platform, per the M3 decision that deletion works anywhere.
+    private var trashSection: some View {
+        Button("Move to Trash", role: .destructive) { showingTrashConfirmation = true }
+            .font(.caption)
+            .accessibilityIdentifier("detail.trashButton")
+    }
+
+    /// Stop playback and pop **before** the write. `ContentView`'s destination renders
+    /// this screen only while `library.item(captureID)` resolves, and the rescan inside
+    /// `trashEntry` republishes the lists — leaving the pop until afterwards means the
+    /// screen the owner is looking at is briefly a view of an entry that is no longer in
+    /// the list it was pushed from.
+    private func moveToTrash() {
+        playback?.stop()
+        dismiss()
+        Task { await model.trashEntry(captureID) }
     }
 
     private func labeledRow(_ label: String, _ value: String) -> some View {

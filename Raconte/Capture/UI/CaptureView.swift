@@ -37,9 +37,10 @@ final class CaptureScreenModel {
 
     // MARK: Journal context (M3 T3)
     //
-    // ONE `JournalStore` and ONE `EntryMetadataStore` instance for the whole screen —
+    // ONE `JournalStore` and ONE `EntryMetadataStore` instance for the whole **app** —
     // T1 flagged that two actors over the same file don't serialize with each other, so
-    // every read/write of the registry or a sidecar goes through these.
+    // every read/write of the registry or a sidecar goes through these. Since T5 they
+    // are `library`'s instances rather than a second pair over the same paths.
     private let journalStore: JournalStore
     private let entryMetadataStore: EntryMetadataStore
     private let currentJournal: CurrentJournal
@@ -93,11 +94,18 @@ final class CaptureScreenModel {
         self.transcription = transcription
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
-        self.journalStore = JournalStore(containerRoot: containerRoot)
-        self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
-        self.currentJournal = CurrentJournal(store: journalPreferenceStore)
-        self.library = library ?? LibraryScreenModel(
+        let resolvedLibrary = library ?? LibraryScreenModel(
             capturesRoot: capturesRoot, journalsContainerRoot: containerRoot)
+        assert(resolvedLibrary.capturesRoot.standardizedFileURL == capturesRoot.standardizedFileURL,
+               "the shared library must be over this model's captures root")
+        self.library = resolvedLibrary
+        // The library's instances, NOT new ones over the same files (M3 T5). Two actors
+        // over one file serialize with nobody: `update` is a read-modify-write, and the
+        // capture screen writing a journal while the detail screen writes a backdate was
+        // a lost update with no failure mode that would ever show up in a test.
+        self.journalStore = resolvedLibrary.journalStore
+        self.entryMetadataStore = resolvedLibrary.entryMetadataStore
+        self.currentJournal = CurrentJournal(store: journalPreferenceStore)
         let spawn: @MainActor () -> CaptureCoordinator = {
             CaptureCoordinator(
                 capturesRoot: capturesRoot,
@@ -186,6 +194,10 @@ final class CaptureScreenModel {
         recovered = coordinator.recoveredRecordings
         await runFinalizer(coordinator.finalizeQueue)
         await library.rescan()
+        // Last, deliberately: the library is already on screen, and the sweep runs off
+        // the main actor. Also strictly after the finalizer has drained, so it can never
+        // remove a directory an encode is still writing into.
+        await library.sweepTrash()
     }
 
     func record() async { await coordinator.record() }
@@ -224,11 +236,18 @@ final class CaptureScreenModel {
 
     func keep(_ id: String) { dismissed.insert(id) }
 
+    /// The recovery banner's Delete. Trash semantics since M3 T5, not a hard delete:
+    /// a capture the owner rejects at launch is a delete like any other, and "delete
+    /// anywhere, recoverable 30 days" has no exception for the one delete that happens
+    /// before he has heard the recording.
+    ///
+    /// This never touched the recovery executor — it removed the directory directly —
+    /// so nothing about the recovery machine changes here. The capture is left fully
+    /// intact and still finalizes normally; it is simply filed in the trash, and the
+    /// sweep removes it in thirty days on the same terms as everything else.
     func delete(_ id: String) {
-        let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
-        try? FileManager.default.removeItem(at: dir)
         dismissed.insert(id)
-        Task { await library.rescan() }
+        Task { await library.trashEntry(id) }
     }
 
     // MARK: Journal + backdate intents (M3 T3)

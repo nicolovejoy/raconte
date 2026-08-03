@@ -5,6 +5,8 @@ import SwiftUI
 /// screen is what mints the value `NavigationLink`s push.
 enum LibraryDestination: Hashable {
     case entry(String)
+    /// The Trash screen (M3 T5). Pushed from the library's toolbar.
+    case trash
 }
 
 /// The library screen (M3 T4, phone mockup): journal filter chips, entries grouped by
@@ -20,10 +22,26 @@ struct LibraryView: View {
             content
             #if DEBUG
             skippedNote
+            sweepNote
             #endif
         }
         .navigationTitle("Library")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { trashLink }
+        }
         .task { await model.rescan() }
+    }
+
+    /// Quiet by design: a text button, always present so the trash is never a place you
+    /// have to already know about, carrying its count only when there is one. Trash is
+    /// somewhere you go looking for something, not something the app should keep
+    /// pointing at.
+    private var trashLink: some View {
+        NavigationLink(value: LibraryDestination.trash) {
+            Text(model.trashed.isEmpty ? "Trash" : "Trash (\(model.trashed.count))")
+                .font(.caption)
+        }
+        .accessibilityIdentifier("library.trashLink")
     }
 
     /// The scan knew the registry was damaged and nothing said so. Calm and specific:
@@ -49,6 +67,21 @@ struct LibraryView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .accessibilityIdentifier("library.skippedNote")
+        }
+    }
+
+    /// DEBUG only, and only for skips — see `LibraryScreenModel.lastSweep`. A permanent
+    /// deletion the owner asked for thirty days ago needs no notice; a directory the
+    /// sweep *keeps* declining to remove is one that will sit in the trash forever.
+    @ViewBuilder
+    private var sweepNote: some View {
+        if let sweep = model.lastSweep, !sweep.skipped.isEmpty {
+            Text("Trash sweep: \(sweep.deleted.count) erased, \(sweep.skipped.count) skipped.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("library.sweepNote")
         }
     }
 

@@ -250,6 +250,79 @@ final class CaptureUITests: XCTestCase {
         }
     }
 
+    // MARK: owner report 2026-08-03 — Trash → Delete Now must actually erase the entry
+
+    /// Record, trash it, then "Delete Now" + confirm from the Trash screen. Asserts the
+    /// row disappears from Trash AND the entry never reappears in the Library, then
+    /// relaunches the app and checks both hold across a fresh scan — the owner's report
+    /// was "I deleted it and it's still there," which a stale in-memory list would not
+    /// catch but a relaunch-then-rescan will.
+    func testDeleteNowPermanentlyRemovesEntry() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 2)
+        press(record)
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
+        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+        press(recentRows(app).firstMatch)
+
+        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        press(trashButton)
+        let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
+        XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
+        press(confirmTrash)
+
+        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+
+        press(app.buttons["capture.libraryButton"].firstMatch)
+        let trashLink = app.buttons["library.trashLink"].firstMatch
+        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
+        waitUntil(15, "trash count never showed the entry") { trashLink.label.contains("1") }
+        press(trashLink)
+
+        let remaining = app.staticTexts["trash.row.remaining"].firstMatch
+        XCTAssertTrue(remaining.waitForExistence(timeout: 15), "trashed entry not listed")
+
+        press(app.buttons["trash.row.deleteNow"].firstMatch)
+        let confirmDelete = app.buttons["trash.confirmDeleteNow"].firstMatch
+        XCTAssertTrue(confirmDelete.waitForExistence(timeout: 10), "no Delete Now confirmation")
+        press(confirmDelete)
+
+        waitUntil(20, "entry still listed in Trash after Delete Now") {
+            app.staticTexts.matching(identifier: "trash.row.remaining").count == 0
+        }
+        XCTAssertTrue(app.staticTexts["trash.empty"].waitForExistence(timeout: 10),
+                      "Trash not showing empty state after the only entry was deleted")
+
+        // Back to the Library: the entry must not have resurrected there either.
+        app.navigationBars.buttons.firstMatch.tap()
+        waitUntil(15, "library still shows the permanently-deleted entry") {
+            app.staticTexts.matching(identifier: "library.row.duration").count == 0
+        }
+
+        // Relaunch and rescan from scratch: the deletion must be on disk, not just
+        // in the in-memory list this process happened to be holding.
+        app.terminate()
+        let relaunched = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15)
+                      || relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(recentRows(relaunched).count, 0,
+                       "permanently-deleted entry reappeared in Recent after relaunch")
+
+        press(relaunched.buttons["capture.libraryButton"].firstMatch)
+        let trashLinkAfter = relaunched.buttons["library.trashLink"].firstMatch
+        if trashLinkAfter.waitForExistence(timeout: 10) {
+            XCTAssertFalse(trashLinkAfter.label.contains("1"),
+                           "trash count shows the permanently-deleted entry after relaunch")
+        }
+    }
+
     /// `XCUIElement.value` is `Any?`; a SwiftUI slider reports its number as a
     /// string on some platforms and a `Double` on others.
     private static func number(_ value: Any?) -> Double? {

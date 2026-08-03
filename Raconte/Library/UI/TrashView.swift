@@ -14,6 +14,10 @@ struct TrashView: View {
     /// dialog can name what it is about to destroy permanently.
     @State private var pendingPermanentDelete: EntryListItem?
 
+    /// A permanent delete that reported failure. Surfaced, never swallowed — the owner
+    /// hit exactly this on device with no feedback (the entry quietly stayed).
+    @State private var permanentDeleteFailed = false
+
     var body: some View {
         Group {
             if model.trashed.isEmpty {
@@ -40,12 +44,21 @@ struct TrashView: View {
         ) { item in
             Button("Delete Permanently", role: .destructive) {
                 pendingPermanentDelete = nil
-                Task { await model.deleteEntryPermanently(item.captureID) }
+                Task {
+                    if !(await model.deleteEntryPermanently(item.captureID)) {
+                        permanentDeleteFailed = true
+                    }
+                }
             }
             .accessibilityIdentifier("trash.confirmDeleteNow")
             Button("Cancel", role: .cancel) { pendingPermanentDelete = nil }
         } message: { _ in
             Text("The audio and its transcript are erased. This can’t be undone.")
+        }
+        .alert("Couldn’t delete this recording", isPresented: $permanentDeleteFailed) {
+            Button("OK") { permanentDeleteFailed = false }
+        } message: {
+            Text("The files couldn’t be removed. Try again, or restart the app.")
         }
     }
 

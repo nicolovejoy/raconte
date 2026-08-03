@@ -155,6 +155,42 @@ final class LibraryTrashTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path))
     }
 
+    /// Owner report 2026-08-03: "deleted it and it's still there." `removeItem` was
+    /// `try?`, so a failed delete (permissions, a locked file, anything) still returned
+    /// `true` — the caller believes the entry is gone while it sits untouched on disk.
+    ///
+    /// Sealing the capture directory itself (0o555, no write) blocks unlinking anything
+    /// inside it — `entry.json` included — so the failure is clean: nothing on disk
+    /// changes. (Sealing `capturesRoot` instead was tried first and is worse than
+    /// useless as a fixture: `FileManager.removeItem`'s recursive walk can still delete
+    /// every *child* of the capture directory, `entry.json` included, before failing on
+    /// the final `rmdir` against the sealed parent — so the sidecar is destroyed even
+    /// though the directory survives and the call reports failure. That is a second,
+    /// real hazard — a failed permanent-delete can silently erase the sidecar while
+    /// leaving an orphaned, unfiled directory behind — filed as a follow-up rather than
+    /// fixed here, since a real fix needs staged/atomic removal, not a bigger catch
+    /// block.)
+    func testDeleteNowReturnsFalseWhenRemovalFails() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let dir = captureDir(idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        }
+
+        let deleted = await model.deleteEntryPermanently(idA)
+
+        XCTAssertFalse(deleted)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path),
+                      "the directory must survive a failed removal")
+        XCTAssertNotNil(try metadata(idA).trashedAt,
+                        "a failed permanent delete must not resurrect the entry")
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+    }
+
     // MARK: - Sweep
 
     func testSweepRemovesExpiredEntriesAndRepublishesTheLists() async throws {

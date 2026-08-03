@@ -324,7 +324,10 @@ final class LibraryScreenModelTests: XCTestCase {
         await model.rescan()
         XCTAssertEqual(model.items.map(\.captureID), [idB, idA])
 
-        await model.setBackdate(idB, to: Date(timeIntervalSince1970: 10))
+        // Well clear of the epoch: a near-epoch instant lands on 1969-12-31 or
+        // 1970-01-01 depending on the runner's timezone, and the noon anchor of the
+        // latter sorts *after* this fixture's capturedAt values (caught on CI, UTC).
+        await model.setBackdate(idB, to: Date(timeIntervalSince1970: -50_000_000))
         XCTAssertEqual(model.items.map(\.captureID), [idA, idB])
         XCTAssertTrue(try XCTUnwrap(model.item(idB)).isBackdated)
 

@@ -1189,7 +1189,13 @@ capture-screen buttons for **end sentence**, **end paragraph**, and **switch voi
 voices being the two hands of his own journals (print = "little Nico", cursive = big Nico),
 i.e. a per-span *speaker/voice* attribute with exactly-two-values-for-now semantics.
 
-Design direction (not committed, needs its own short design pass before T7):
+**Designed 2026-08-05 — see `docs/plans/2026-08-05-capture-structure-markers-design.md`,
+which supersedes the direction below.** Notable deltas from this sketch: end-sentence
+markers are dropped (the transcriber already punctuates sentences acceptably), a
+multi-voice toggle gates the feature and defaults off with per-journal carry-over, and
+markers are stored raw and snapped to word gaps on read rather than at capture time.
+
+Original design direction (superseded):
 
 - **Capture-time, frame-stamped.** A marker is an event `(frame, kind)` recorded the moment
   the button is tapped, `frame` taken from the same capture-frame clock as everything else.

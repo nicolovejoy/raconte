@@ -432,6 +432,81 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(s0.startFrameOffset, 0)
     }
 
+    // MARK: issue #24 — every path to `captured` releases the audio session
+
+    /// Rows 10/11 give-up: the reacquire budget runs out and the machine lands in
+    /// `captured` without ever passing through `drainAndFinish`, which used to be the
+    /// only place that deactivated. The session must be released here too.
+    func testGiveUpPathDeactivatesTheAudioSession() async throws {
+        let session = FakeSession()
+        let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          machine: CaptureMachine(resumeRetryBudget: 1),
+                                          resumeBackoff: .milliseconds(20))
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        // Only now start failing `activate()` — the initial `record()` above must
+        // succeed, or the capture never reaches `recording` in the first place.
+        session.activateError = CocoaError(.fileWriteUnknown)
+        await coordinator.resume()
+        await waitUntil({ coordinator.phase == .captured },
+                        "budget exhaustion did not reach captured")
+
+        XCTAssertEqual(session.deactivateCount, 1,
+                       "giving up on the retry budget must release the audio session")
+    }
+
+    /// Row 14 (Done tapped while interrupted) reaches `captured` by the same shortcut.
+    /// Issue #24 names only the give-up path; this is the second leak it does not name.
+    func testStopFromInterruptedDeactivatesTheAudioSession() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertEqual(session.deactivateCount, 1,
+                       "stopping from interrupted must release the audio session")
+    }
+
+    /// GUARD. Fails at 2 if the `session.deactivate()` deleted from `drainAndFinish`
+    /// is left in place alongside the new one in `completeCapture()`.
+    func testNormalStopDeactivatesExactlyOnce() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertEqual(session.deactivateCount, 1,
+                       "the normal stop must deactivate once, not twice")
+    }
+
+    /// GUARD. Fails at 2 if the new `session.deactivate()` is moved from
+    /// `completeCapture()` into `resetCaptureWiring()`, which `handlePrepareFailed`
+    /// calls *after* deactivating itself.
+    func testPrepareFailureDeactivatesExactlyOnce() async throws {
+        let session = FakeSession(); session.permissionGranted = false
+        let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertEqual(coordinator.lastError, "Microphone access denied")
+        XCTAssertEqual(session.deactivateCount, 1,
+                       "a failed prepare must deactivate once, not twice")
+    }
+
     // MARK: 3b — route loss auto-resumes onto the new device (issue #5)
 
     func testRouteLostAutoResumesOntoNewDevice() async throws {

@@ -1,5 +1,34 @@
 # CLAUDE.md
 
+## Session 2026-08-05 afternoon (laptop — Xcode landed; crashed-session recovery)
+
+Short session before owner travel. Xcode 26.6 (17F113) is now installed, selected, and
+license-accepted on the laptop — **still unverified by an actual test run**.
+
+- **Morning session crash post-mortemed**: the 09:02 plan-writing session hung at
+  09:07:40 PT, immediately after the third of three Explore agents returned — the model
+  API stream after those tool results never completed. Not local: the agents only
+  read/grepped source, hooks have 5 s timeouts, and the Xcode license (accepted 09:21,
+  mid-hang) was ruled out — the session stayed dead after acceptance. Nothing was lost;
+  the tree was clean.
+- **The three Explore code maps were recovered** from the dead session's transcript and
+  stowed as `docs/plans/2026-08-05-structure-markers-code-maps.md` on branch
+  **`plan/structure-markers`** (`77c55878`). A **cloud session is writing the T6 §14
+  implementation plan on that branch** (per §9's seven steps, against the maps; it cannot
+  build, so the plan is unverified-pending-local-run). Review its output before merging.
+- **CI is red on `main`** at `1f2a44b5` — a docs-only commit, and `f516761` (also
+  docs-only) failed on 08-03 while code commits between them passed. Likely flake or a
+  docs-path trigger bug; uninvestigated. `gh run view 31022907852 --log-failed`.
+
+**Next steps:**
+1. Pull `plan/structure-markers`, review the cloud-written implementation plan, then run
+   it locally (this machine can now build — verify with a macOS test run first).
+2. Root-cause the red CI on main (docs-only commits failing).
+3. Owner smoke test still outstanding on phone build `a477999` (detail-trash, Delete Now,
+   restore round-trip, swipe actions).
+4. `/resync` on the laptop now that Xcode works (never run here).
+5. T7 editor UI (whole-revision accept v1) + audit log; T8 retranscribe.
+
 ## Session 2026-08-05 (laptop, design-only — no Xcode on this machine)
 
 First session on the **laptop**. It cannot build: only CommandLineTools is installed, no

@@ -414,7 +414,8 @@ final class CaptureCoordinator {
         currentRecorder?.stop()
         await flushPump()
         if let store = currentStore {
-            try? await store.markInterrupted(kind: kind, beganAt: now())
+            do { try await store.markInterrupted(kind: kind, beganAt: now()) }
+            catch { lastError = Self.storeWriteFailedMessage }
         }
         stopRecordingClock()
     }
@@ -544,9 +545,15 @@ final class CaptureCoordinator {
                        retryCount: Int? = nil, finalizeAttempts: Int? = nil,
                        closingInterruption resumed: Bool? = nil) async {
         guard let store = currentStore else { return }
-        try? await store.setState(state, needsAttention: needsAttention, lastError: lastError,
-                                  retryCount: retryCount, finalizeAttempts: finalizeAttempts,
-                                  closingInterruption: resumed)
+        do {
+            try await store.setState(state, needsAttention: needsAttention, lastError: lastError,
+                                     retryCount: retryCount, finalizeAttempts: finalizeAttempts,
+                                     closingInterruption: resumed)
+        } catch {
+            // Every caller with a more specific message assigns AFTER this returns, so the
+            // specific line always wins (see the plan's §0.3.3 site-by-site check).
+            self.lastError = Self.storeWriteFailedMessage
+        }
     }
 
     private func enqueueFinalize(_ id: String) {
@@ -648,6 +655,12 @@ final class CaptureCoordinator {
         default: return "interruption"
         }
     }
+
+    /// A plain manifest write failed. The transition still happened and the audio is
+    /// enqueued either way — relaunch recovery rebuilds the manifest from the segments —
+    /// so this records the failure instead of discarding it (issue #23), and never blocks
+    /// the transition.
+    private static let storeWriteFailedMessage = "Couldn't save recording status. The audio is safe."
 
     private func message(for error: CaptureError) -> String {
         switch error {

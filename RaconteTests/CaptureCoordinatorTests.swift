@@ -349,6 +349,18 @@ final class CaptureCoordinatorTests: XCTestCase {
         return segs
     }
 
+    /// Make every manifest write fail while leaving `segments/` writable:
+    /// `AtomicFile.replace` creates `manifest.json.part` in — and renames within — the
+    /// capture directory, both of which need write permission on it. `segments/` is a
+    /// subdirectory and is unaffected by its parent's mode.
+    @discardableResult
+    private func sealCaptureDirectory(_ sealed: Bool) throws -> URL {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: kCaptureID)
+        try FileManager.default.setAttributes([.posixPermissions: sealed ? 0o555 : 0o755],
+                                              ofItemAtPath: dir.path)
+        return dir
+    }
+
     /// Retry budget left: the machine must land back in `interrupted` (blinking,
     /// Done offered, clock stopped), NOT `recording`, and the failure must be on
     /// disk for launch recovery to see.
@@ -505,6 +517,119 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.lastError, "Microphone access denied")
         XCTAssertEqual(session.deactivateCount, 1,
                        "a failed prepare must deactivate once, not twice")
+    }
+
+    // MARK: issue #23 — a swallowed manifest write is recorded, not discarded
+
+    /// The interruption still happens and the segment still closes; only the manifest
+    /// write fails. Before the fix the failure was dropped on the floor by `try?`.
+    func testFailedInterruptedManifestWriteSetsLastErrorAndStillInterrupts() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+
+        let dir = try sealCaptureDirectory(true)
+        defer { try? sealCaptureDirectory(false) }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: dir.path),
+                      "running as root — permissions cannot be made to bite")
+
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        // `send` publishes the phase before realizing disk effects, so the failed write
+        // lands after the phase flips — the same race test 2 documents.
+        await waitUntil({ coordinator.lastError != nil },
+                        "the failed manifest write was never surfaced")
+
+        XCTAssertEqual(coordinator.lastError,
+                       "Couldn't save recording status. The audio is safe.")
+        // Proof the write really failed, rather than the test proving nothing.
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .recording,
+                       "the manifest write failed, so disk must still read `recording`")
+        // The segment close runs before the manifest write and is unaffected.
+        let s0 = try decodeSidecar(0)
+        XCTAssertEqual(s0.frameCount, 750)
+        XCTAssertEqual(s0.closedReason, .interruption)
+    }
+
+    /// The lie issue #23 names: the screen says Saved while the manifest still reads
+    /// `interrupted`. The audio is safe either way — relaunch recovery rebuilds the
+    /// manifest from the segments — but the owner must be told.
+    func testFailedCapturedManifestWriteSetsLastErrorAndStillSaves() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        await waitUntil({ [self] in (try? decodeManifest())?.state == .interrupted },
+                        "manifest not interrupted on disk")
+
+        let dir = try sealCaptureDirectory(true)
+        defer { try? sealCaptureDirectory(false) }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: dir.path),
+                      "running as root — permissions cannot be made to bite")
+
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertEqual(coordinator.finalizeQueue, [kCaptureID],
+                       "the audio must still reach the finalizer")
+        let manifest = try decodeManifest()
+        XCTAssertEqual(manifest.state, .interrupted,
+                       "the write failed, so disk still reads `interrupted` while the UI says Saved")
+        XCTAssertEqual(coordinator.lastError,
+                       "Couldn't save recording status. The audio is safe.")
+    }
+
+    /// GUARD. Fails with the generic store-write line if the resume-failure message in
+    /// `handleReacquireResult` is assigned BEFORE its `store(setState: .captured, …)`
+    /// call instead of after it.
+    func testStoreWriteFailureDoesNotClobberTheResumeFailureMessage() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder,
+                                          machine: CaptureMachine(resumeRetryBudget: 0),
+                                          resumeBackoff: .milliseconds(20))
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        await waitUntil({ [self] in (try? decodeManifest())?.state == .interrupted },
+                        "manifest not interrupted on disk")
+
+        // Both halves must fail: the resume's disk write AND the give-up's `.captured`
+        // manifest write. LIFO `defer` unseals innermost (segments/) first.
+        let dir = try sealCaptureDirectory(true)
+        defer { try? sealCaptureDirectory(false) }
+        try sealSegmentsDirectory(true)
+        defer { try? sealSegmentsDirectory(false) }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: dir.path),
+                      "running as root — permissions cannot be made to bite")
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .captured },
+                        "a failed resume with no budget left must give up to captured")
+
+        XCTAssertEqual(coordinator.lastError, "Couldn't resume recording. Saved what was recorded.",
+                       "the specific resume-failure line must outrank the generic store-write line")
+    }
+
+    /// GUARD. Fails if the `self.lastError = …` assignment in the `store(setState:)`
+    /// helper is moved out of its `catch` onto the success path.
+    func testASuccessfulCaptureLeavesLastErrorNil() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertNil(coordinator.lastError, "a clean capture must surface no error")
     }
 
     // MARK: 3b — route loss auto-resumes onto the new device (issue #5)

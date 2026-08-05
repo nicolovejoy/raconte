@@ -91,6 +91,12 @@ final class CaptureCoordinator {
     /// what lets a derived consumer keep one frame axis across an interruption.
     private(set) var activeFormat: AudioFormatDescriptor?
 
+    /// Current position on the capture-frame axis, nil when no capture is wired.
+    /// Same axis as `SegmentSidecar.startFrameOffset` — position in the eventual
+    /// `final/recording.m4a`. Structure markers (T6 §14) stamp their raw tap frame
+    /// from here; it survives an interruption resume because the clock rides the tee.
+    var currentCaptureFrame: Int64? { currentFrameClock?.currentFrame }
+
     /// Root of the on-disk capture tree; T8/T9 use it to locate queued captures.
     let capturesRoot: URL
 
@@ -125,6 +131,10 @@ final class CaptureCoordinator {
     /// object — a conditional tee would give the resume path a different sink and
     /// silently kill the second branch at the first interruption.
     private var currentTee: TeeSink?
+    /// Capture-frame clock (T6 §14): the last tee branch, built once per capture and
+    /// inherited by the resume `recorder.start` through the tee's identity, so it
+    /// never restarts mid-capture.
+    private var currentFrameClock: FrameClockSink?
     // nonisolated(unsafe): mutated only on the main actor; `deinit` (nonisolated in
     // Swift 6) cancels them, and it runs only when no other reference survives.
     nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
@@ -361,7 +371,10 @@ final class CaptureCoordinator {
         // after `start` returns — so the factory gets the ID only and reads
         // `activeFormat` afterwards.
         let secondary = makeSecondarySink?(captureID)
-        let tee = TeeSink(branches: [forwarder] + (secondary.map { [$0] } ?? []))
+        // Last branch (design §3): the marker frame clock counts what every earlier
+        // branch already saw, and adds nothing to the disk path's critical section.
+        let frameClock = FrameClockSink()
+        let tee = TeeSink(branches: [forwarder] + (secondary.map { [$0] } ?? []) + [frameClock])
         let level = levelBox
         do {
             try recorder.start(sink: tee, matching: nil, onLevel: { level.set($0) })
@@ -379,6 +392,7 @@ final class CaptureCoordinator {
         currentRecorder = recorder
         currentForwarder = forwarder
         currentTee = tee
+        currentFrameClock = frameClock
         activeFormat = format
         await send(.engineReady)
     }
@@ -639,6 +653,7 @@ final class CaptureCoordinator {
         currentStore = nil
         currentForwarder = nil
         currentTee = nil
+        currentFrameClock = nil
         activeFormat = nil
         activeCaptureID = nil
         recordingSegmentStart = nil

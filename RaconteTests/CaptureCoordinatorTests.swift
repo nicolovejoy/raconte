@@ -904,6 +904,54 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(counter.frames, 1000, "second branch died at the route switch")
     }
 
+    // MARK: T6 §14 step 1 — the frame clock survives resume
+
+    /// The marker frame axis must be one clock per capture. The resume
+    /// `recorder.start` reuses the SAME tee, so the clock is inherited; build a
+    /// fresh one there and this fails at 250 ≠ 1000 while every on-disk
+    /// assertion stays green. Asserted while still `.recording` — the wiring
+    /// (and with it `currentCaptureFrame`) is torn down at `done()`.
+    func testFrameClockSurvivesInterruptionResume() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .recording }, "did not resume")
+
+        recorder.feed(frames: 250)
+
+        XCTAssertEqual(coordinator.phase, .recording)
+        XCTAssertEqual(coordinator.currentCaptureFrame, 1000,
+                       "the frame clock reset across the resume — the resume start "
+                       + "is not installing the same tee")
+
+        await coordinator.done()
+    }
+
+    func testFrameClockSurvivesRouteLossResume() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.routeLost)
+        await waitUntil({ coordinator.phase == .recording && recorder.startCount >= 2 },
+                        "did not auto-resume after route loss")
+
+        recorder.feed(frames: 250)
+
+        XCTAssertEqual(coordinator.phase, .recording)
+        XCTAssertEqual(coordinator.currentCaptureFrame, 1000,
+                       "the frame clock died at the route switch")
+
+        await coordinator.done()
+    }
+
     // MARK: M2 T1 — factory + published active IDs
 
     func testSecondarySinkFactoryIsCalledOncePerCaptureWithTheCaptureID() async throws {

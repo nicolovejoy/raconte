@@ -87,15 +87,24 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
    tap. The haptic is the felt confirmation the design asks for; a failed append is felt
    as its absence, plus the existing red `lastError` line. "The control shows a failure
    state" (§7) is satisfied by that `lastError` rendering (`CaptureView.swift:640-645`);
-   no bespoke error UI.
+   no bespoke error UI. The feedback modifier must use the **condition variant**, firing
+   only when the count *increases* — `markerCount` resets at capture teardown and the
+   coordinator is respawned per capture, and a bare `trigger:` fires on any change,
+   which would buzz on `done()`.
 5. **The Two-voices toggle is disabled while a capture is live.** Design §5 places it
    "pre-record, in the setup area"; the frame-0 `bn` opener can only be written at
    recording start, so mid-capture enabling has no coherent meaning in this build.
-6. **Carry-over adds an in-session per-journal override map** beside the disk read
-   (mirrors `carriedBackdates`). Disk alone cannot satisfy §8's "survives a journal
-   switch and back" for a journal that has no entries yet: toggle on in journal A,
-   switch to B and back, and a disk-only read would drop the choice. Explicit toggle →
-   override for the current journal; journal switch reads override ?? disk.
+6. **Carry-over is a computed property, not an imperative refresh.** `multiVoiceEnabled`
+   is derived on read: an in-session per-journal override map (mirrors
+   `carriedBackdates`) consulted first, else the journal's most recent entry on disk via
+   `library.lastMultiVoice(forJournal:)`. Two reasons. (a) Disk alone cannot satisfy
+   §8's "survives a journal switch and back" for a journal that has no entries yet:
+   toggle on in journal A, switch to B and back, and a disk-only read would drop the
+   choice — the override map holds it. (b) The library's launch `rescan()` is **async**:
+   an imperative read at `onAppear` would race it and show the toggle off until the next
+   journal switch. Computing through `library.allEntries` (`@Observable` state) means
+   SwiftUI re-renders the toggle the moment the scan lands — durable-across-launch
+   carry-over with zero new storage and no refresh choreography.
 7. **Snapping details** (§6 left three micro-choices open):
    - Rule 0: a marker whose raw frame already lies outside every spoken interval is
      already in a gap — keep the raw frame, not approximate. This is what makes the
@@ -695,43 +704,38 @@ func lastMultiVoice(forJournal journalID: String) -> Bool {
 
 **Edit: `Raconte/Capture/UI/CaptureView.swift`** (`CaptureScreenModel`):
 
-New state beside `carriedBackdates` (line ~88):
+New state beside `carriedBackdates` (line ~88), plus a computed read (plan §0.3.6 —
+derived, not imperatively refreshed, so the async launch rescan can't race it):
 
 ```swift
-private(set) var multiVoiceEnabled = false
-/// In-session explicit choices, keyed by journal id — read before the disk value so
-/// a toggle set on an entry-less journal survives a switch-and-back (plan §0.3.6).
+/// In-session explicit choices, keyed by journal id — consulted before the disk value
+/// so a toggle set on an entry-less journal survives a switch-and-back (plan §0.3.6).
 private var multiVoiceOverrides: [String: Bool] = [:]
-```
 
-New API:
-
-```swift
-func setMultiVoiceEnabled(_ enabled: Bool) {
-    multiVoiceEnabled = enabled
-    if let journalID = selectedJournalID { multiVoiceOverrides[journalID] = enabled }
+/// Carry-over (design decision 5): the explicit in-session choice for the selected
+/// journal, else the journal's most recent entry on disk. Computed through
+/// `library.allEntries`, so the toggle re-renders when the launch rescan lands.
+var multiVoiceEnabled: Bool {
+    guard let journalID = selectedJournalID else { return false }
+    return multiVoiceOverrides[journalID] ?? library.lastMultiVoice(forJournal: journalID)
 }
 
-/// Carry-over read: explicit in-session choice, else the journal's latest entry on
-/// disk. Called on journal switch/create and when the capture screen appears.
-func refreshMultiVoiceCarryOver() {
-    guard let journalID = selectedJournalID else { multiVoiceEnabled = false; return }
-    multiVoiceEnabled = multiVoiceOverrides[journalID] ?? library.lastMultiVoice(forJournal: journalID)
+func setMultiVoiceEnabled(_ enabled: Bool) {
+    guard let journalID = selectedJournalID else { return }
+    multiVoiceOverrides[journalID] = enabled
 }
 ```
 
 Call sites:
-- `selectJournal(_:)` (line 279) and `createJournal(name:)` (line 288): call
-  `refreshMultiVoiceCarryOver()` right where `resolveBackdateForJournalChange()` is
-  called today.
-- `CaptureView` gets `.onAppear { model.refreshMultiVoiceCarryOver() }` (the library's
-  launch rescan populates `allEntries`; on first appearance the read lands the durable
-  value — this is what makes carry-over survive a relaunch with zero new storage).
+- `selectJournal(_:)` (line 279) and `createJournal(name:)` (line 288): **no change** —
+  the computed property re-derives per journal by construction. (Contrast with
+  `resolveBackdateForJournalChange()`, which exists because backdate state is stored.)
 - `handlePhase()` (line 246), in the existing `.recording` arm: snapshot
   `let multiVoice = multiVoiceEnabled` and (a) extend the
   `enqueueEntryMetadataWrite` closure to set `metadata.multiVoice = multiVoice`,
-  (b) `if multiVoice { coordinator.markOpeningVoice() }`. The snapshot matters: the
-  closure runs later on a serialized Task chain.
+  (b) `if multiVoice { coordinator.markOpeningVoice() }`. The snapshot matters twice
+  over: the closure runs later on a serialized Task chain, and the computed value
+  could shift under it if a rescan lands mid-capture.
 - `enqueueEntryMetadataWrite(for:clearingBackdateIfDisabled:)` (lines 534-555): thread
   the snapshot through (add a parameter or capture it — follow the existing
   `journalID` capture pattern).
@@ -755,8 +759,9 @@ in-memory model tests mirror `BackdateCarryOverTests.swift` (fakes at its lines 
 `LibraryScreenModel` tests do (mirror their fixture helpers), then `await rescan()`.
 
 - `testMultiVoiceAutoEnablesFromTheJournalsMostRecentEntry` — journal A's latest entry
-  has `multiVoice: true`; a **freshly constructed** model + `refreshMultiVoiceCarryOver()`
-  → enabled. Put the divergence note in a comment: this deliberately inverts
+  has `multiVoice: true`; a **freshly constructed** model over the same root, after
+  `await rescan()`, reads `multiVoiceEnabled == true` with no user action. Put the
+  divergence note in a comment: this deliberately inverts
   `BackdateCarryOverTests.testCarryOverNeverAutoEnablesTheToggle`.
 - `testCarryOverDoesNotCrossJournals` — A latest true, B latest false (or no entries) →
   switching to B disables.
@@ -775,7 +780,8 @@ in-memory model tests mirror `BackdateCarryOverTests.swift` (fakes at its lines 
 ### Red/green evidence
 
 Red: add the `multiVoice` field with decode/encode wired but leave the carry-over API as
-stubs (`refreshMultiVoiceCarryOver` empty, `lastMultiVoice` returning false), run
+stubs (`multiVoiceEnabled` computed returning false, `lastMultiVoice` returning false),
+run
 
 ```
 xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' test -only-testing:RaconteTests/MultiVoiceCarryOverTests -only-testing:RaconteTests/EntryMetadataStoreTests
@@ -805,12 +811,15 @@ RaconteTests/BackdateCarryOverTests.swift.
 Task, exactly as specified in the plan: (1) EntryMetadata.multiVoice — lenient decode
 ((try? decodeIfPresent) ?? false), encode-only-when-true so defaults stay `{}`;
 (2) EntryListItem.multiVoice passthrough; (3) LibraryScreenModel.lastMultiVoice(forJournal:)
-off allEntries via mostRecentlyCaptured; (4) CaptureScreenModel: multiVoiceEnabled,
-multiVoiceOverrides, setMultiVoiceEnabled, refreshMultiVoiceCarryOver, called from
-selectJournal/createJournal and CaptureView.onAppear; (5) handlePhase's .recording arm
-snapshots the toggle, writes it through enqueueEntryMetadataWrite's closure, and calls
-coordinator.markOpeningVoice() when enabled. Carry-over AUTO-ENABLES by design — this is
-the recorded divergence from the backdate rule; do not "fix" it.
+off allEntries via mostRecentlyCaptured; (4) CaptureScreenModel: multiVoiceOverrides map,
+setMultiVoiceEnabled(_:), and multiVoiceEnabled as a COMPUTED property
+(override ?? library.lastMultiVoice) — no stored toggle state, no imperative refresh, no
+onAppear hook; the computed read through library.allEntries is what makes carry-over
+survive relaunch and not race the async launch rescan (plan §0.3.6); (5) handlePhase's
+.recording arm snapshots the computed value into a local, writes it through
+enqueueEntryMetadataWrite's closure, and calls coordinator.markOpeningVoice() when
+enabled. Carry-over AUTO-ENABLES by design — this is the recorded divergence from the
+backdate rule; do not "fix" it.
 
 TDD, in this order:
 1. Write the four EntryMetadata Codable tests (in the file that owns its decode tests)
@@ -881,11 +890,17 @@ every other phase → nothing shown. Exhaustive `switch`, no `default`.
    Both: `.disabled(!markers.isEnabled)`, `.environment(\.colorScheme, .dark)` + the
    standard comment, thumb-reach sizing (`.buttonStyle(.bordered)`,
    `.controlSize(.large)` — match the Done button's visual weight).
-3. Haptics — on the HStack:
-   `.sensoryFeedback(.impact, trigger: model.coordinator.markerCount)`. Pure SwiftUI,
-   available on both platforms at the 26.0 deployment targets, no `#if os(iOS)`
-   needed, and the trigger firing only on successful append is the felt confirmation
-   (plan §0.3.4).
+3. Haptics — on the HStack, the **condition variant** (plan §0.3.4):
+
+   ```swift
+   .sensoryFeedback(.impact, trigger: model.coordinator.markerCount) { old, new in
+       new > old   // fires per recorded marker; never on the teardown reset to 0
+   }
+   ```
+
+   Pure SwiftUI, available on both platforms at the 26.0 deployment targets, no
+   `#if os(iOS)` needed. A bare `trigger:` would also fire when `markerCount` drops to
+   0 at capture teardown / coordinator respawn — a phantom buzz on Done.
 4. Failure state — none to add: a failed append sets `coordinator.lastError`, already
    rendered red at lines 640-645.
 
@@ -949,8 +964,9 @@ Task: (1) new Raconte/Capture/UI/MarkerControls.swift with MarkerControlsModel.m
 (id capture.multiVoiceToggle, disabled unless .idle, dark-scheme-pinned) in the setup
 area, and the recording-time voice switch (id capture.voiceSwitch, label BN/LN off
 coordinator.currentVoice) + paragraph button (id capture.paragraph), dark-scheme-pinned,
-disabled unless .recording, with .sensoryFeedback(.impact, trigger:
-model.coordinator.markerCount); (3) UI test
+disabled unless .recording, with the sensoryFeedback CONDITION variant firing only when
+markerCount increases (the exact modifier is in the plan — a bare trigger buzzes on the
+teardown reset); (3) UI test
 testVoiceControlsFollowTheMultiVoiceToggle per the plan — note carry-over auto-arms the
 toggle after the first multi-voice recording, so the second half of the test explicitly
 toggles it off.
@@ -1103,7 +1119,7 @@ Pure functions only — no I/O, no actor, no clock, no import beyond Foundation.
 marker frame is never mutated; snapping output is a separate snappedFrame. Rules 0-4 and
 the intersection-midpoint/tie details are spelled out in the plan — follow them exactly.
 
-TDD: write RaconteTests/MarkerSnappingTests.swift with all sixteen tests named in the
+TDD: write RaconteTests/MarkerSnappingTests.swift with all fifteen tests named in the
 plan's Step 6 FIRST, against stubs (intervals → [], snap → raw/approximate);
 `xcodegen generate`; run
 `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' test -only-testing:RaconteTests/MarkerSnappingTests`

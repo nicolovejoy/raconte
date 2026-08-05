@@ -1,5 +1,51 @@
 # CLAUDE.md
 
+## Session 2026-08-05 (laptop, design-only — no Xcode on this machine)
+
+First session on the **laptop**. It cannot build: only CommandLineTools is installed, no
+`Xcode.app`, so no `xcodebuild` and no simulators. App Store install started; macOS here is
+26.6, matching the mini. Until it finishes, this machine is docs/design only.
+
+- **Machine-local trap, fixed:** `sync-claude-md.sh --check` reported drift and `--apply`
+  would have *deleted* the UTC-at-rest/Pacific-on-display convention added on the mini the
+  day before (`a7fae6e4`). Cause: the script reads `~/.claude/claude-md-shared.md`, which is
+  **not** git-synced and was two weeks stale here; `~/src/prompt-lab` was current. Refreshed
+  the canonical copy from the repo. **On any new machine, read the diff before `--apply`** —
+  drift can mean your local canonical is old, not that the repo is behind.
+- **T6 §14 designed and committed** (`d031c213`):
+  `docs/plans/2026-08-05-capture-structure-markers-design.md`. §14 now points at it.
+  Voice + paragraph markers only — **end-sentence dropped** (the transcriber punctuates
+  acceptably; per-sentence tapping costs the most flow for the least gain). Owner decisions:
+  multi-voice toggle gates the feature, defaults off with **per-journal durable** carry-over,
+  opens in `bn` as a frame-0 marker; voice stored as a string id, not a bool; **raw tap
+  frames stored, snapped to word gaps on read** (±1.5 s, tunable); no capture-time undo;
+  paragraph markers independent of the voice toggle. Frame source is a `FrameClockSink` tee
+  branch (rejected the `elapsed` timer — a wall-clock accumulator that drifts from the frame
+  axis across an interruption, so it passes every test and fails only on interrupted
+  recordings). Markers hang off `CaptureCoordinator`, not `TranscriptionSession`, so they
+  survive captures where transcription never ran.
+- **Deliberate divergence recorded**: multi-voice carry-over auto-enables, where backdate
+  carry-over (2026-08-02) explicitly never does. A wrong voice attribute is visible and
+  editable; a wrong backdate is a quiet data error.
+- **Edit ↔ capture round-tripping: rejected for now**, not filed. Follow-on material becomes
+  its own entry (page-per-entry already makes entries small and numerous); an entry owning
+  multiple recordings would break "transcript time = position in *the* m4a", playback seek,
+  and the recovery scan, and is hard to walk back. #26 (capture pause) is unaffected and
+  stays cheap — it is the interruption path driven by a button.
+
+**Next steps:**
+1. Finish the Xcode install on the laptop, then `sudo xcode-select -s
+   /Applications/Xcode.app/Contents/Developer && xcodebuild -runFirstLaunch`. Verify with a
+   macOS test run before trusting this machine.
+2. Structure-markers build — task breakdown is §9 of the new design doc, seven steps,
+   step 7 (T7 renders the voice attribute) deferred to T7. Write the implementation plan
+   against a machine that can run the tests it specifies.
+3. Owner smoke test still outstanding on phone build `a477999` (detail-trash, Delete Now,
+   restore round-trip, swipe actions).
+4. T7 editor UI (whole-revision accept v1) + audit log; T8 retranscribe.
+5. `/resync` on this machine once Xcode works — it was skipped here because nothing could
+   be verified by building.
+
 ## Session 2026-08-03 afternoon (subagent-driven; 595 → 632 unit tests, 8 UI tests)
 
 **Closed: #19 #20 #21**, plus no-future-backdates (owner ask) and library swipe actions.

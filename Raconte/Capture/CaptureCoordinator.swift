@@ -516,13 +516,19 @@ final class CaptureCoordinator {
             do { try await store.finish(reason: .stop) }
             catch { lastError = message(for: .diskFull) }
         }
-        session.deactivate()
         await completeCapture()
     }
 
     /// A capture reached `captured` (durability commit point). Hand it to the finalizer
     /// queue and tear down the live wiring.
+    ///
+    /// Releases the audio session for EVERY path to `captured` (issue #24): the normal
+    /// stop (row 13), Done-while-interrupted (row 14), and the resume-retry give-up
+    /// (row 11). The last two used to leave the session active with no recorder — row 13
+    /// happened to deactivate on its way here, and the other two had nowhere that did.
+    /// The recorder is already stopped on all three paths before this runs.
     private func completeCapture() async {
+        session.deactivate()
         if let id = activeCaptureID { enqueueFinalize(id) }
         stopRecordingClock()
         finishPump()

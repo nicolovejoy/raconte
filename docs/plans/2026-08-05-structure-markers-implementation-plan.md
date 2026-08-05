@@ -49,7 +49,7 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
   before the implementation lands, or the exact mutation that must make them fail.
   Subagent prompts require the pasted failing output.
 - **JSONL uses `CaptureCoding.lineEncoder()`**, never the shared `.prettyPrinted`
-  `encoder()` (`SegmentLayout.swift:202-211`).
+  `encoder()` (`SegmentLayout.swift:207-211`).
 - **Hand-written `init(from:)`** for any persisted struct: identity fields strict,
   additive fields lenient. Synthesized decoding ignores property defaults.
 - **Lazy log open** — never create `transcript/` before the first append
@@ -58,10 +58,10 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
 - **`O_APPEND` torn-tail handling** — terminate a torn tail before the first new record,
   in-process and across reopens, or both records are lost.
 - **Concurrency primitive** is `NSLock` + `@unchecked Sendable` (`LevelBox` is the
-  canonical example, `CaptureCoordinator.swift:757-764`). No package deps exist; do not
+  canonical example, `CaptureCoordinator.swift:759-764`). No package deps exist; do not
   add swift-atomics.
 - **Capture-screen controls pin `.environment(\.colorScheme, .dark)`** (the two existing
-  sites are `CaptureView.swift:866,882`).
+  sites are the `BackdateField` toggle and `PrecisionDatePicker`, `CaptureView.swift` ~863-882).
 - Subagent builds: **leave changes uncommitted** — the parent session reviews the diff,
   then commits. Report red-run and green-run output verbatim.
 
@@ -78,11 +78,18 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
    disabled outright" is enforced as a guard in the marker entry points
    (`currentFrameClock != nil`), so any path where the clock is absent — mis-sequenced
    calls, a phase where wiring is torn down — disables markers rather than writing
-   frame-0 garbage.
+   frame-0 garbage. Stated honestly: the nil-clock-*while-recording* state is
+   unreachable by construction (`configureAndStart` installs the clock before
+   `.engineReady`, and teardown exits `.recording` first), so the clock guard is
+   defense in depth with no dedicated test — its reachable half (wiring gone AND phase
+   wrong, after `done()`) is pinned by step 3's `testMarksOutsideRecordingAreIgnored`.
 3. **Open-failure latches, append-failure does not.** A failed `MarkerLogWriter.open()`
    sets a `markerLoggingBroken` latch (mirrors `TranscriptionSession.loggingBroken`); a
    failed `append` sets `lastError` and leaves the writer open — its torn-tail machinery
-   keeps the file safe and the next tap retries.
+   keeps the file safe and the next tap retries. `lastError` is **sticky for the
+   capture** after a marker failure (nothing clears it on a later successful append;
+   `record()` clears it at the next capture, its existing behavior) — one transient
+   failure leaving a red line for the rest of the sitting is honest, not a bug.
 4. **Haptic fires on successful append** (trigger = published `markerCount`), not on raw
    tap. The haptic is the felt confirmation the design asks for; a failed append is felt
    as its absence, plus the existing red `lastError` line. "The control shows a failure
@@ -100,16 +107,22 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
    `library.lastMultiVoice(forJournal:)`. Two reasons. (a) Disk alone cannot satisfy
    §8's "survives a journal switch and back" for a journal that has no entries yet:
    toggle on in journal A, switch to B and back, and a disk-only read would drop the
-   choice — the override map holds it. (b) The library's launch `rescan()` is **async**:
-   an imperative read at `onAppear` would race it and show the toggle off until the next
-   journal switch. Computing through `library.allEntries` (`@Observable` state) means
-   SwiftUI re-renders the toggle the moment the scan lands — durable-across-launch
-   carry-over with zero new storage and no refresh choreography.
+   choice — the override map holds it. (b) The `rescan()` ordering becomes a non-issue:
+   `bootstrap()` does await the launch rescan (`CaptureView.swift:213`), so a carefully
+   placed imperative read *could* work — but it would depend on that ordering forever,
+   and every future call site (journal switch, capture completion's rescan at
+   `CaptureView.swift:416`, T7 edits) would need its own refresh call. Computing
+   through `library.allEntries` (`@Observable` state) re-renders the toggle whenever
+   the scan state changes — durable-across-launch carry-over with zero new storage and
+   no refresh choreography to forget.
 7. **Snapping details** (§6 left three micro-choices open):
    - Rule 0: a marker whose raw frame already lies outside every spoken interval is
      already in a gap — keep the raw frame, not approximate. This is what makes the
      frame-0 opener, marker-before-first-run, and marker-after-last-run cases exact
-     rather than pulled toward speech.
+     rather than pulled toward speech. Stated plainly: rule 0 **pre-empts** §6's
+     largest-gap ranking for a marker already sitting in an interior gap, even when a
+     larger gap lies elsewhere in the window — a tap that landed in silence is already
+     a correct boundary and moving it can only lose information.
    - Candidate gaps are ranked by the length of their **intersection with the window**
      (a gap is only as useful as the part inside ±1.5 s), and the snapped frame is the
      **midpoint of that intersection** — so the snap never lands more than the window
@@ -121,6 +134,23 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
    generalizing it. The design says "built like", and refactoring a shipped, reviewed
    writer inside a feature step is the wrong risk. If a third JSONL log ever appears,
    factor then.
+9. **Marker controls are shown-but-disabled through `.interrupted`/`.resuming`.** The
+   design says only "enabled only in `.recording`" and is silent on visibility outside
+   it; showing them disabled keeps the layout from jumping across an interruption.
+10. **"Read from disk" means: the journal's most recently captured non-trashed entry
+    decides.** The design names no tiebreak; the plan uses `mostRecentlyCaptured` over
+    the same `allEntries` collection `dateRange(forJournal:)` uses. Stated consequence:
+    trashing a journal's latest entry changes its carry-over to the next-latest — a
+    coherent reading of "the journal's durable state", not an accident.
+11. **`multiVoice` encodes only when true.** A sidecar-shape convention (an unfiled
+    entry's sidecar is literally `{}`, per `encode(to:)`'s own comment and the
+    `detectionRan` precedent), not a correctness requirement — an omitted key decodes
+    false either way.
+12. **Voice-switch label falls back to "BN" when `currentVoice` is nil** (a multi-voice
+    capture opens in bn, so nil-before-the-opener-lands shows the truth). And both
+    marker controls disable when `markerLoggingBroken` — after a failed open every tap
+    would silently no-op, and a live-looking control over a dead path would contradict
+    §7's "the control shows a failure state".
 
 ### 0.4 Step order and dependencies
 
@@ -168,7 +198,7 @@ final class FrameClockSink: PCMSink, @unchecked Sendable {
   let tee = TeeSink(branches: [forwarder] + (secondary.map { [$0] } ?? []) + [frameClock])
   ```
 
-  and set `currentFrameClock = frameClock` beside `currentTee = tee` (line ~383), i.e.
+  and set `currentFrameClock = frameClock` beside `currentTee = tee` (line 381), i.e.
   only after `recorder.start` succeeded and the format guard passed.
 - `rebuildAndReacquire()` — **no change.** It already reuses `currentTee`
   (line 429-431), which is the whole point: the clock must not reset on resume. The new
@@ -200,7 +230,7 @@ final class FrameClockSinkTests: XCTestCase
 `FakeSession` / `FakeRecorder` / `makeCoordinator` / `waitUntil` fixtures (lines 10-130):
 
 - `testFrameClockSurvivesInterruptionResume` — mirror of
-  `testSecondBranchSurvivesInterruptionResume` (line 663): `record()`, `feed(frames: 750)`,
+  `testSecondBranchSurvivesInterruptionResume` (line 666): `record()`, `feed(frames: 750)`,
   emit `.interrupted`, wait interrupted, emit `.resumeAvailable(shouldResume: true)`,
   wait recording, `feed(frames: 250)`, then assert
   `coordinator.currentCaptureFrame == 1000` **while still recording** (wiring is torn
@@ -222,10 +252,13 @@ and paste the failures. Then implement and re-run to green.
 Mutation checks (run after green, revert after):
 1. In `receive`, replace `frames += Int64(chunk.frameCount)` with
    `frames = Int64(chunk.frameCount)` → `testAccumulatesFrameCountsAcrossChunks` must fail.
-2. In `rebuildAndReacquire()`, temporarily construct a fresh clock and tee
-   (`currentFrameClock = FrameClockSink(); let tee = TeeSink(branches: [forwarder…, currentFrameClock!])`
-   — any variant that swaps clock identity on resume) →
-   `testFrameClockSurvivesInterruptionResume` must fail at 250 ≠ 1000. This is the
+2. In `rebuildAndReacquire()`, temporarily replace the `guard let tee = currentTee`
+   reuse with a freshly built tee carrying a fresh clock —
+   `currentFrameClock = FrameClockSink()` and
+   `TeeSink(branches: [currentForwarder!, currentFrameClock!])` (only
+   `currentForwarder`/`currentTee` are in scope there; `forwarder` is a local of
+   `configureAndStart`) → `testFrameClockSurvivesInterruptionResume` must fail at
+   250 ≠ 1000. This is the
    design's named mutation ("mutation-verified that both `recorder.start` sites install
    it", §8), inherited for free from tee identity — the mutation proves the test would
    catch anyone breaking that inheritance.
@@ -252,7 +285,7 @@ TDD, in this order:
    coordinator tests (testFrameClockSurvivesInterruptionResume,
    testFrameClockSurvivesRouteLossResume) as a new MARK section in
    RaconteTests/CaptureCoordinatorTests.swift, mirroring
-   testSecondBranchSurvivesInterruptionResume (line ~663) and its route-loss companion.
+   testSecondBranchSurvivesInterruptionResume (line ~666) and its route-loss companion.
    Assert currentCaptureFrame == 1000 while phase is still .recording.
 2. Add stubs only (no-op receive, currentCaptureFrame returning nil), run
    `xcodegen generate` then
@@ -421,7 +454,13 @@ pin were real):
   `.unreadable` (never empty-array collapse); real file → `.present`.
 - `testAppendBeforeOpenThrows`
 - `testCloseIsIdempotent`
-- `testAMultilineVoiceStringThrowsRatherThanTrapping` — voice id containing `\n`.
+- `testAMultilineVoiceStringIsEscapedNotTorn` — voice id containing `\n`:
+  `XCTAssertNoThrow` on the append and exactly one marker reads back. JSON encoders
+  escape control characters, so the `multilineRecord` guard is unreachable through the
+  public API — the precedent test says exactly this
+  (`LiveTranscriptStoreTests.swift:207-217` asserts NoThrow, not throws). The guard
+  still exists and still earns its keep: it is what catches an accidental
+  pretty-printing encoder (mutation check 2).
 
 Decoder (same file, `// MARK: Decoding`):
 - `testUnknownKindRoundTripsIntact` — decode `{"frame":10,"kind":"chapter","seq":0}` →
@@ -450,8 +489,9 @@ Mutation checks (run, observe failure, revert):
 1. Delete the torn-tail newline block in `open()` →
    `testReopeningAfterATornLineDoesNotCorruptNewMarkers` must fail.
 2. Swap `lineEncoder()` for `encoder()` in `append` →
-   `testAMultilineVoiceStringThrowsRatherThanTrapping` is joined by every round-trip
-   test failing (the multiline guard trips on pretty-printing).
+   `testAMultilineVoiceStringIsEscapedNotTorn` fails (the multiline guard trips on
+   pretty-printed output, so the NoThrow assertion breaks), joined by the round-trip
+   tests.
 3. In `Kind.init(string:)`, map unknown strings to `.paragraph` →
    `testUnknownKindRoundTripsIntact` must fail.
 
@@ -514,7 +554,15 @@ private(set) var markerCount = 0
 
 private var markerLog: MarkerLogWriter?
 /// Latched when the log could not be opened (mirrors TranscriptionSession.loggingBroken).
-private var markerLoggingBroken = false
+/// private(set), not private: step 5 disables the marker controls off it — a control
+/// that can only no-op must not look live (design §7's "failure state").
+private(set) var markerLoggingBroken = false
+/// The frame-0 opener is once per capture. The caller is `handlePhase()`, which
+/// re-enters `.recording` on interruption resume (its own doc comment says so, and
+/// the hazard already shipped one bug — see JournalCaptureContextTests' idempotency
+/// regression tests). Without this latch a resumed multi-voice capture gets a
+/// duplicate frame-0 marker.
+private var didWriteOpeningVoice = false
 ```
 
 New API, all `@MainActor` (the class already is):
@@ -522,7 +570,9 @@ New API, all `@MainActor` (the class already is):
 ```swift
 /// The frame-0 "bn" opener (owner decision 4): a multi-voice capture opens in bigNico,
 /// written as an ordinary marker at frame 0 so "what voice is this span" has one rule.
-/// Called by the screen model when a multi-voice capture reaches .recording.
+/// Called by the screen model when a multi-voice capture reaches .recording — which
+/// happens MORE THAN ONCE per capture (resume re-enters .recording), so this is
+/// once-per-capture via `didWriteOpeningVoice`; later calls are no-ops.
 func markOpeningVoice()
 
 /// Raw tap: current clock frame, voice marker. No-op outside .recording or with no
@@ -567,9 +617,11 @@ private func openMarkerLogIfNeeded(captureID: String) throws -> MarkerLogWriter 
 }
 ```
 
-`markOpeningVoice()` calls
+`markOpeningVoice()` guards `!didWriteOpeningVoice`, sets the latch, then calls
 `appendMarker(kind: .voice, voice: StructureMarker.Voice.bigNico, atFrame: 0)` — the
-literal 0, never the clock. `markVoice(_:)` / `markParagraph()` read
+literal 0, never the clock. (Set the latch only if the append path was actually
+reached — i.e. after the phase/clock guards — so a call in the wrong phase doesn't
+burn the one opener.) `markVoice(_:)` / `markParagraph()` read
 `currentFrameClock?.currentFrame` (via a `guard let frame = currentCaptureFrame`) and
 pass it through.
 
@@ -580,6 +632,7 @@ try? markerLog?.close()
 markerLog = nil
 markerLoggingBroken = false
 currentVoice = nil
+didWriteOpeningVoice = false
 ```
 
 (`markerCount` may stay — the coordinator is single-capture and respawned — but reset it
@@ -590,8 +643,9 @@ anyway for symmetry.)
 **Edit: `RaconteTests/CaptureCoordinatorTests.swift`** — new section
 `// MARK: T6 §14 step 3 — structure markers`, reusing the existing fixtures. Read
 markers back with `MarkerLogReader.load(captureDirectory:)` composed from the test's
-captures root + `coordinator.activeCaptureID` (capture it while recording — it nils on
-teardown).
+`root` + the capture ID — the fixture injects a constant
+(`mintCaptureID: { kCaptureID }`), so the directory is addressable even after `done()`
+nils `activeCaptureID`.
 
 - `testMarkParagraphWritesTheRawTapFrame` — `record()`, `feed(frames: 750)`,
   `markParagraph()` → one `.paragraph` marker, `frame == 750`, no `voice` value.
@@ -600,11 +654,22 @@ teardown).
 - `testMarkOpeningVoiceWritesLiteralFrameZero` — `feed(frames: 750)` **first**, then
   `markOpeningVoice()` → `frame == 0`, `voice == "bn"`. (The feed-first ordering *is*
   the mutation check: an implementation that reads the clock fails at 750.)
+- `testResumeDoesNotWriteASecondOpeningVoiceMarker` — `markOpeningVoice()`, then
+  `markVoice("ln")`, interrupt, resume, `markOpeningVoice()` again (exactly what
+  `handlePhase`'s re-entry into `.recording` does) → still exactly one frame-0 marker,
+  and `currentVoice` is still `"ln"`, not reset to `"bn"`. Pins the
+  `didWriteOpeningVoice` latch; without it a resumed multi-voice capture gets a
+  duplicate opener and mis-attributes everything after the resume.
 - `testMarkerSeqsAreMonotonicAcrossKinds` — opener, paragraph, voice → seqs 0,1,2.
 - `testNoMarksMeansNoTranscriptDirectory` — record, feed, `done()` → the capture
   directory contains no `transcript/`. (The lazy-open lesson, at the call site.)
 - `testFirstMarkCreatesTheLogLazily` — `transcript/` absent before the first
-  `markParagraph()`, present with `markers.jsonl` after.
+  `markParagraph()`, present with `markers.jsonl` after; and a `DirectorySnapshot`
+  gathered afterwards reports `holdsIrreplaceableArtifacts` (design §4's "correct, not
+  incidental" quarantine consequence, asserted rather than assumed). Side effect worth
+  knowing, not testing: the same flag feeds `LibraryScanner.holdsSomethingToShow`, so a
+  marked capture surfaces as a library row even with zero recorded frames — reachable
+  only by marking a capture that was never fed audio, and harmless.
 - `testMarksOutsideRecordingAreIgnored` — `markParagraph()` before `record()` and again
   after `done()` → no file, no crash, `markerCount == 0`.
 - `testMarkerFramesSurviveInterruptionResume` — feed 750, interrupt, resume, feed 250,
@@ -644,12 +709,15 @@ Raconte/Capture/MarkerLog.swift before starting.
 
 Task: add to Raconte/Capture/CaptureCoordinator.swift exactly the state, API, and helper
 shown in the plan's Step 3 (markOpeningVoice / markVoice / markParagraph / appendMarker /
-openMarkerLogIfNeeded, currentVoice, markerCount, markerLog, markerLoggingBroken), plus
-teardown in resetCaptureWiring(). Non-negotiable behaviors: markers hang off the
-coordinator, NOT TranscriptionSession; the log opens lazily at first append, never
-earlier; markOpeningVoice writes literal frame 0 with voice "bn"; append failure sets
-lastError and never touches the recording; open failure latches; no capture-time undo —
-do not add any removal API; guards are phase == .recording AND currentFrameClock != nil.
+openMarkerLogIfNeeded, currentVoice, markerCount, markerLog, markerLoggingBroken,
+didWriteOpeningVoice), plus teardown in resetCaptureWiring(). Non-negotiable behaviors:
+markers hang off the coordinator, NOT TranscriptionSession; the log opens lazily at
+first append, never earlier; markOpeningVoice writes literal frame 0 with voice "bn"
+and is ONCE PER CAPTURE via the didWriteOpeningVoice latch (its caller re-enters
+.recording on interruption resume — a duplicate opener resets currentVoice to "bn" and
+mis-attributes the rest of the capture); append failure sets lastError and never
+touches the recording; open failure latches; no capture-time undo — do not add any
+removal API; guards are phase == .recording AND currentFrameClock != nil.
 
 TDD, in this order:
 1. Add the twelve tests named in the plan's Step 3 as a new MARK section in
@@ -681,9 +749,11 @@ output, green output.
 - `init(from:)` (lines 165-...): lenient additive decode, matching the `detectedDate`
   idiom: `multiVoice = (try? container.decodeIfPresent(Bool.self, forKey: .multiVoice)) ?? false`.
 - `encode(to:)` (lines 209-223): encode **only when true** —
-  `if multiVoice { try container.encode(true, forKey: .multiVoice) }` — so a default
-  sidecar stays literally `{}` and `isDefault` keeps working unchanged (it is an
-  `Equatable` compare against `.defaults`).
+  `if multiVoice { try container.encode(true, forKey: .multiVoice) }` — preserving the
+  encoder's own stated convention that an unfiled entry's sidecar is literally `{}`
+  (its `detectionRan` clause is the precedent for a conditional Bool). `isDefault` is
+  an in-memory compare against `.defaults` and is unaffected by encoding either way;
+  the asymmetric encode is a sidecar-shape choice, recorded in §0.3.11.
 
 **Edit: `Raconte/Library/EntryListItem.swift`** — computed passthrough beside
 `journalID`/`originalDate` (lines 97-127): `var multiVoice: Bool { metadata.multiVoice }`.
@@ -730,15 +800,22 @@ Call sites:
 - `selectJournal(_:)` (line 279) and `createJournal(name:)` (line 288): **no change** —
   the computed property re-derives per journal by construction. (Contrast with
   `resolveBackdateForJournalChange()`, which exists because backdate state is stored.)
-- `handlePhase()` (line 246), in the existing `.recording` arm: snapshot
+- `handlePhase()` (line 246 — a single `guard coordinator.phase == .recording…` body, not a switch): snapshot
   `let multiVoice = multiVoiceEnabled` and (a) extend the
   `enqueueEntryMetadataWrite` closure to set `metadata.multiVoice = multiVoice`,
   (b) `if multiVoice { coordinator.markOpeningVoice() }`. The snapshot matters twice
   over: the closure runs later on a serialized Task chain, and the computed value
   could shift under it if a rescan lands mid-capture.
-- `enqueueEntryMetadataWrite(for:clearingBackdateIfDisabled:)` (lines 534-555): thread
-  the snapshot through (add a parameter or capture it — follow the existing
-  `journalID` capture pattern).
+- `enqueueEntryMetadataWrite(for:clearingBackdateIfDisabled:)` (lines 534-556): thread
+  the snapshot through as an **explicit parameter, defaulted to `nil` = leave
+  `metadata.multiVoice` alone** (`multiVoice: Bool? = nil`, closure does
+  `if let multiVoice { metadata.multiVoice = multiVoice }`). Do NOT read the computed
+  property inside the closure: this function is shared with
+  `syncActiveEntryMetadata()` (lines 505-509), which runs on mid-capture journal
+  switches — a live read there would re-derive carry-over for the *new* journal and
+  rewrite the running entry's `multiVoice` out from under the markers already on disk.
+  Same hazard class as the backdate-overwrite bug that function's doc comment already
+  warns about. Only `handlePhase`'s `.recording` path passes a non-nil value.
 
 ### Tests — write first
 
@@ -752,11 +829,30 @@ them):
 - `testMultiVoiceGarbageDecodesFalse` — `{"multiVoice":"yes"}` → false, no throw.
 
 **New: `RaconteTests/MultiVoiceCarryOverTests.swift`** —
-`@MainActor final class MultiVoiceCarryOverTests: XCTestCase`. Two fixture layers:
-in-memory model tests mirror `BackdateCarryOverTests.swift` (fakes at its lines 5-22,
-`makeModel()` at 41-46); disk-backed tests build real capture directories with
-`entry.json` sidecars under a temp root the way the existing `LibraryScanner` /
-`LibraryScreenModel` tests do (mirror their fixture helpers), then `await rescan()`.
+`@MainActor final class MultiVoiceCarryOverTests: XCTestCase`. Three fixture layers,
+each with a named precedent (an `entry.json` alone is NOT enough for the scan —
+`LibraryScanner.holdsSomethingToShow` requires durable content or segment frames, else
+the capture is skipped as `.noDurableContent`):
+- **Disk entries**: mirror `LibraryScreenModelTests.swift:36-58`
+  `writeCapture(_:capturedAt:journalID:frames:)` — `segments/000000.pcm` with
+  `frames*4` bytes + a `.captured` `manifest.json` + the sidecar; extend it to take a
+  full `EntryMetadata` (so `multiVoice` can be set) instead of just `journalID`. Root
+  setup as at its lines 17-25 (`containerRoot` temp dir,
+  `capturesRoot = AppContainer.capturesRoot(containerRoot:)`), registry writer at
+  60-63. The `CaptureScreenModel` under test must be built over the **same** roots —
+  it asserts `library.capturesRoot == capturesRoot` (`CaptureView.swift:110-113`) —
+  so construct `LibraryScreenModel(capturesRoot:journalsContainerRoot:)` explicitly
+  (`BackdateCarryOverTests.makeModel()` does not, and its root is not an
+  `AppContainer` captures root).
+- **In-memory toggle/switch behavior**: mirror `BackdateCarryOverTests.swift` (fakes
+  at lines 5-22, `makeModel()` at 41-46) — but note those fakes cannot record.
+- **The two recording tests**: mirror `JournalCaptureContextTests.swift` —
+  `ContextFakeRecorder` (retains the sink, has `feed`, lines 14-33),
+  `startRecording(_:_:)` (lines 98-104: `await model.record()` → `feed` →
+  **`model.handlePhase()`** — nothing outside `CaptureView`'s `onChange` calls it, so
+  the test must, exactly as that file's comment says), `waitForSidecar` /
+  `waitForSidecarFile` (lines 80-120). `await model.bootstrap()` already awaits
+  `library.rescan()` (`CaptureView.swift:213`) where a scan is needed first.
 
 - `testMultiVoiceAutoEnablesFromTheJournalsMostRecentEntry` — journal A's latest entry
   has `multiVoice: true`; a **freshly constructed** model over the same root, after
@@ -771,11 +867,18 @@ in-memory model tests mirror `BackdateCarryOverTests.swift` (fakes at its lines 
   the same root → enabled matches disk.
 - `testMostRecentEntryDecidesWhenEntriesDisagree` — older true + newer false → off
   (ordering via `mostRecentlyCaptured`: `capturedAt` desc).
-- `testRecordingWritesMultiVoiceToTheSidecar` — toggle on, record via fakes, await the
-  metadata chain → `entry.json` has `multiVoice: true`; toggle off → key absent.
-- `testMultiVoiceCaptureOpensWithFrameZeroBigNico` — toggle on, record →
-  `markers.jsonl` holds `{seq:0, frame:0, kind:voice, voice:"bn"}`; toggle off, record
-  → no `transcript/` at all.
+- `testRecordingWritesMultiVoiceToTheSidecar` — toggle on, record via the
+  `JournalCaptureContextTests`-style fixtures (explicit `model.handlePhase()` after
+  `record()`), await the metadata chain → `entry.json` has `multiVoice: true`; toggle
+  off → key absent.
+- `testMultiVoiceCaptureOpensWithFrameZeroBigNico` — toggle on, record (same fixtures)
+  → `markers.jsonl` holds `{seq:0, frame:0, kind:voice, voice:"bn"}`; toggle off,
+  record → no `transcript/` at all.
+- `testMidCaptureJournalSwitchDoesNotRewriteMultiVoice` — record with the toggle on,
+  then `selectJournal` to a journal whose carry-over is off (triggering
+  `syncActiveEntryMetadata`), await the chain → the live entry's sidecar still has
+  `multiVoice: true`. Pins the nil-defaulted parameter: carry-over chooses the *next*
+  capture's mode, it never mutates a running one.
 
 ### Red/green evidence
 
@@ -815,17 +918,25 @@ off allEntries via mostRecentlyCaptured; (4) CaptureScreenModel: multiVoiceOverr
 setMultiVoiceEnabled(_:), and multiVoiceEnabled as a COMPUTED property
 (override ?? library.lastMultiVoice) — no stored toggle state, no imperative refresh, no
 onAppear hook; the computed read through library.allEntries is what makes carry-over
-survive relaunch and not race the async launch rescan (plan §0.3.6); (5) handlePhase's
-.recording arm snapshots the computed value into a local, writes it through
-enqueueEntryMetadataWrite's closure, and calls coordinator.markOpeningVoice() when
-enabled. Carry-over AUTO-ENABLES by design — this is the recorded divergence from the
-backdate rule; do not "fix" it.
+survive relaunch with no refresh choreography (plan §0.3.6); (5) handlePhase (a
+single guard-gated `.recording` body, not a switch — and it RE-ENTERS on interruption
+resume; the coordinator's step-3 opener latch is what makes the repeated call safe)
+snapshots the computed value into a local, threads it into enqueueEntryMetadataWrite as
+an EXPLICIT nil-defaulted parameter (nil = leave metadata.multiVoice alone; never a
+live read inside the closure, or a mid-capture journal switch via
+syncActiveEntryMetadata rewrites the running entry), and calls
+coordinator.markOpeningVoice() when enabled. Carry-over AUTO-ENABLES by design — this is the recorded
+divergence from the backdate rule; do not "fix" it.
 
 TDD, in this order:
 1. Write the four EntryMetadata Codable tests (in the file that owns its decode tests)
-   and RaconteTests/MultiVoiceCarryOverTests.swift with the seven tests named in the
-   plan, mirroring BackdateCarryOverTests' fakes for model tests and the existing
-   scanner-test fixtures for disk-backed ones.
+   and RaconteTests/MultiVoiceCarryOverTests.swift with the eight tests named in the
+   plan. Fixtures are prescribed precisely in the plan's Step 4 — three layers:
+   LibraryScreenModelTests.writeCapture (extended to take EntryMetadata; a bare
+   entry.json does NOT produce a scan row), BackdateCarryOverTests' fakes for
+   in-memory toggle behavior, and JournalCaptureContextTests' ContextFakeRecorder /
+   startRecording / waitForSidecar for the recording tests (call model.handlePhase()
+   explicitly — nothing else does in a test).
 2. Stub the carry-over API, `xcodegen generate`, run
    `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' test -only-testing:RaconteTests/MultiVoiceCarryOverTests -only-testing:RaconteTests/EntryMetadataStoreTests`
    and CAPTURE the red output.
@@ -880,16 +991,20 @@ every other phase → nothing shown. Exhaustive `switch`, no `default`.
    an `HStack` of
    - voice switch (shown when `markers.showsVoiceControl`): a `Button` labelled with the
      active voice — `"BN"` when `coordinator.currentVoice != "ln"` (nil ⇒ the capture
-     opened in bn), `"LN"` otherwise — whose action marks the *other* voice:
+     opened in bn; fallback recorded in §0.3.12), `"LN"` otherwise — whose action marks
+     the *other* voice:
      `coordinator.markVoice(coordinator.currentVoice == StructureMarker.Voice.littleNico
      ? StructureMarker.Voice.bigNico : StructureMarker.Voice.littleNico)`.
      `.accessibilityIdentifier("capture.voiceSwitch")`.
    - paragraph button (shown when `markers.showsParagraphControl`): label "¶ Paragraph",
      action `coordinator.markParagraph()`,
      `.accessibilityIdentifier("capture.paragraph")`.
-   Both: `.disabled(!markers.isEnabled)`, `.environment(\.colorScheme, .dark)` + the
-   standard comment, thumb-reach sizing (`.buttonStyle(.bordered)`,
-   `.controlSize(.large)` — match the Done button's visual weight).
+   Both: `.disabled(!markers.isEnabled || model.coordinator.markerLoggingBroken)` —
+   a broken log means every tap would no-op, and a live-looking control over a dead
+   path is the §7 failure-state violation (§0.3.12) — plus
+   `.environment(\.colorScheme, .dark)` + the standard comment, thumb-reach sizing
+   (`.buttonStyle(.bordered)`, `.controlSize(.large)` — match the Done button's
+   visual weight).
 3. Haptics — on the HStack, the **condition variant** (plan §0.3.4):
 
    ```swift
@@ -917,14 +1032,21 @@ every other phase → nothing shown. Exhaustive `switch`, no `default`.
 **Edit: `RaconteUITests/CaptureUITests.swift`** — the design §8 UI test:
 
 - `testVoiceControlsFollowTheMultiVoiceToggle` — launch with the harness env;
-  activate `capture.multiVoiceToggle`; tap `capture.record`; assert
-  `capture.voiceSwitch` and `capture.paragraph` exist; tap `capture.done`; wait for
-  idle. Then toggle `capture.multiVoiceToggle` **off** (carry-over will have auto-armed
-  it from the just-recorded entry — the explicit off-toggle is part of what's being
-  tested); tap record again; assert `capture.voiceSwitch` does NOT exist while
-  `capture.paragraph` does; done. Use the file's `activate(_:)` and `waitUntil`
-  helpers (lines 24-59). The harness needs no changes: the coordinator builds its own
-  frame clock (plan §0.3.2) and `SyntheticRecorder` feeds real chunks.
+  `press` `capture.multiVoiceToggle`; `press` `capture.record` and
+  `waitUntil(10, …) { record.label == "Stop" }` (there is **no** `capture.done` while
+  recording — `RecordControlModel` shows Done only from `.interrupted`; every existing
+  UI test stops by pressing `capture.record` again and polling its label,
+  `CaptureUITests.swift:68-76`); assert `capture.voiceSwitch` and `capture.paragraph`
+  exist; press `capture.record` again and `waitUntil(15, …) { record.label == "Record" }`
+  for the return to idle (the setup area is unconditionally in the main VStack, so the
+  toggle stays queryable). Then press `capture.multiVoiceToggle` **off** (carry-over
+  will have auto-armed it from the just-recorded entry — the explicit off-toggle is
+  part of what's being tested); record again the same way; assert `capture.voiceSwitch`
+  does NOT exist while `capture.paragraph` does; stop. Use the file's `press(_:)`
+  (lines 23-30 — there is no `activate` helper) and its synchronous
+  `waitUntil(_ timeout:_ message:…)` (lines 49-59; timeout first, trailing closure —
+  not the RaconteTests variant). The harness needs no changes: the coordinator builds
+  its own frame clock (plan §0.3.2) and `SyntheticRecorder` feeds real chunks.
 
 ### Red/green evidence
 
@@ -966,10 +1088,14 @@ area, and the recording-time voice switch (id capture.voiceSwitch, label BN/LN o
 coordinator.currentVoice) + paragraph button (id capture.paragraph), dark-scheme-pinned,
 disabled unless .recording, with the sensoryFeedback CONDITION variant firing only when
 markerCount increases (the exact modifier is in the plan — a bare trigger buzzes on the
-teardown reset); (3) UI test
-testVoiceControlsFollowTheMultiVoiceToggle per the plan — note carry-over auto-arms the
-toggle after the first multi-voice recording, so the second half of the test explicitly
-toggles it off.
+teardown reset), and .disabled also
+when coordinator.markerLoggingBroken; (3) UI test
+testVoiceControlsFollowTheMultiVoiceToggle per the plan. UI-test mechanics that will
+bite if ignored: there is NO capture.done button while recording — stop a capture by
+pressing capture.record again and polling its label ("Stop" → "Record"), exactly as
+every existing test does; the cross-platform helper is press(_:), not activate; and
+carry-over auto-arms the toggle after the first multi-voice recording, so the second
+half of the test explicitly toggles it off.
 
 TDD: write RaconteTests/MarkerControlsModelTests.swift (six tests named in the plan)
 against a stub make() first; `xcodegen generate`; run
@@ -1018,7 +1144,8 @@ enum MarkerSnapping {
 
     /// Interval extraction with the untimed-run rule (design §6): a record whose runs
     /// are all timed contributes one interval per run; a record containing ANY untimed
-    /// run contributes its record-level frameRange as a single interval (conservative —
+    /// run contributes its record-level `TranscriptResult.range` as a single interval
+    /// (the design's "record-level captureFrameStart/End"; conservative —
     /// no interior gaps invented from partial data). Output is sorted and merged.
     static func intervals(fromCommitted committed: [TranscriptResult]) -> [SpokenInterval]
 
@@ -1158,6 +1285,11 @@ Nothing in this plan renders or edits the voice attribute. What T7 inherits:
 4. Execute steps 1→6, each as a subagent build with the prompt above, parent diff
    review before each commit, red output demanded every time.
 5. After step 5, run the full `RaconteUI` simulator suite, not just the new test.
-6. Device pass (owner, phone): record a real two-voice page — the ±1.5 s window
+6. One API in this plan has no in-repo precedent and could not be checked against an
+   SDK here: `.sensoryFeedback(_:trigger:condition:)` (step 5). Confirm it compiles on
+   the macOS destination at the first step-5 build; if it doesn't, fall back to an
+   `#if os(iOS)` `UIImpactFeedbackGenerator` fired from the same `markerCount`
+   observation and note the substitution in the commit.
+7. Device pass (owner, phone): record a real two-voice page — the ±1.5 s window
    (design §10) gets tuned from that recording, in `MarkerSnapping.snapWindowSeconds`
    only.

@@ -1,5 +1,64 @@
 # CLAUDE.md
 
+## Session 2026-08-05 evening (laptop — Xcode verified; T6 §14 built; 640 → 706 tests)
+
+**The laptop is now a real build machine.** Xcode 26.6 was already installed and selected;
+the actual blocker was **signing** — zero codesigning identities, so every `xcodebuild`
+died with "No Mac Development signing certificate" before running a test. Owner minted an
+Apple Development cert in Xcode → Settings → Accounts (two now exist, both valid, harmless).
+CI's own workaround also works locally and is what the subagent prompts used:
+`CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO`. iOS 26.5 simulator runtime installed.
+
+- **#22 root-caused and CLOSED (`97eb62e8`, PR #30) — it was three tests, not one.**
+  All the same defect as issue #4: `send()` publishes the phase before the commit effects
+  reach disk, so a test gating on `phase == .captured` and then reading the artifact races
+  it. #4's fix taught the *sibling* tests to poll the on-disk manifest; these kept the old
+  pattern. `testReacquireBudgetExhaustedClosesInterruptionAsNotResumed` and
+  `testFailedResumeDiskWriteGivesUpToCapturedWithAudioIntact` (empty `finalizeQueue`), plus
+  a third a subagent surfaced, `testGiveUpPathDeactivatesTheAudioSession`.
+  **Method worth reusing: none of them reproduce in isolation** (12/12 green), so the race
+  was forced with 6–8 `yes > /dev/null` spinners — 3/15 and 1/15 failures unfixed, 15/15 and
+  20/20 green after. The two siblings that `await coordinator.done()` directly are *not*
+  racy; only the polled give-up paths are.
+- **T6 §14 capture-time structure markers built and merged (`6562c6f0`, PR #31)** — steps
+  1–6 of `docs/plans/2026-08-05-structure-markers-implementation-plan.md`, one subagent per
+  step on its own branch in its own worktree, parent diff review + mutation check before
+  every commit. 640 → 706 unit tests, 9 UI tests. Step 7 stays deferred to T7.
+  Most informative mutations: dropping `didWriteOpeningVoice` mis-attributes every span
+  after an interruption resume (3 markers != 2, voice reset to `bn`); making the
+  `multiVoice` decode strict breaks **14** tests, every extra one a pre-feature sidecar
+  fixture — the exact device-data hazard the leniency exists for.
+  `.sensoryFeedback(_:trigger:condition:)` **does** compile on macOS (plan checklist item 6
+  answered); the `condition:` variant is required, since `markerCount` resets at teardown
+  and a bare trigger buzzes on Done.
+
+**Two false-failure patterns that each cost an hour — read before debugging a red suite:**
+- **`xcodegen generate` after every *checkout*, not just after editing `project.yml`.** The
+  `.xcodeproj` is gitignored, so switching to a branch without a file the project references
+  fails as a bare `** TEST FAILED **` naming no test. It cost a whole 15-run experiment that
+  reported 15/15 "failures" that were a stale project.
+- **Never pipe `xcodebuild` through `head`.** It closes the pipe, wedges xcodebuild and its
+  simulator runner, and leaves the sim's accessibility service bad — which then fails
+  *unrelated* UI tests with `XC_kAXXCAttributeFocusedApplications` timeouts. Tell is timing
+  (441 s vs 41 s for the same test). Recover with `simctl shutdown all` + `erase`. Related:
+  after any interrupted UI run, shut simulators down before re-running.
+
+Also: the Agent tool's worktrees branch from **main**, not from your current checkout —
+subagents building on a stack must be told explicitly to `git checkout -b <name> <base>`.
+`.claude/worktrees/` is now gitignored (it was making `git status` take 3.6 s).
+
+**Next steps:**
+1. **Owner smoke test (next session).** Two things at once: the outstanding
+   `a477999` items (detail-trash, Delete Now, restore round-trip, swipe actions) and the
+   new marker controls — record a real two-voice page.
+2. **Tune `MarkerSnapping.snapWindowSeconds`** (currently 1.5) from that recording. It is a
+   guess no test can validate, and deliberately a single constant.
+3. T7 editor UI (whole-revision accept v1) + audit log — it consumes the voice attribute
+   (design §9 step 7); T8 retranscribe.
+4. `/resync` on the laptop now that it builds (never run here).
+5. Filed, unscheduled: #25 staged removal (data-safety adjacent, build prompts already
+   written), #23/#24 follow-ups, #17 cover polish, #18 journal switcher.
+
 ## Session 2026-08-05 afternoon (laptop — Xcode landed; crashed-session recovery)
 
 Short session before owner travel. Xcode 26.6 (17F113) is now installed, selected, and

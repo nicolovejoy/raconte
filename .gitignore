@@ -5,3 +5,6 @@ build/
 *.xcodeproj
 !project.yml
 .swiftpm/
+
+# Claude Code agent worktrees (isolated subagent workspaces)
+.claude/worktrees/

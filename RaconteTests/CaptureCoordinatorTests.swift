@@ -320,6 +320,13 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.resume()
         await waitUntil({ coordinator.phase == .captured },
                         "budget exhaustion did not reach captured")
+        // `send()` publishes the phase before the commit effects reach disk (the
+        // issue #4 race, which was fixed in the sibling tests above but not here):
+        // gating on `.captured` alone reads the manifest with the interruption
+        // still open. Poll the artifact this test is actually asserting on.
+        await waitUntil({ [self] in
+            (try? decodeManifest())?.interruptions.first?.closedAt != nil
+        }, "give-up did not close the interruption on disk")
 
         let manifest = try decodeManifest()
         XCTAssertEqual(manifest.interruptions.count, 1)
@@ -429,6 +436,12 @@ final class CaptureCoordinatorTests: XCTestCase {
         session.emit(.resumeAvailable(shouldResume: true))
         await waitUntil({ coordinator.phase == .captured },
                         "a failed resume with no budget left must give up to captured")
+        // Same issue #4 race: `.captured` is published ahead of the commit effects
+        // that fill `finalizeQueue` and close the interruption on disk.
+        await waitUntil({ [self] in
+            coordinator.finalizeQueue == [kCaptureID]
+                && (try? decodeManifest())?.interruptions.first?.closedAt != nil
+        }, "give-up commit effects did not land")
 
         XCTAssertEqual(coordinator.finalizeQueue, [kCaptureID],
                        "the audio that WAS recorded must still reach the finalizer")
@@ -467,6 +480,12 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.resume()
         await waitUntil({ coordinator.phase == .captured },
                         "budget exhaustion did not reach captured")
+        // Same issue #4 race as the two tests above: `.captured` is published before
+        // the give-up path's side effects run, so asserting the count straight off the
+        // phase reads 0. Wait for the release, then still assert the exact count so a
+        // double-deactivate regression stays caught.
+        await waitUntil({ session.deactivateCount >= 1 },
+                        "giving up did not release the audio session")
 
         XCTAssertEqual(session.deactivateCount, 1,
                        "giving up on the retry budget must release the audio session")

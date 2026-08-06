@@ -628,6 +628,11 @@ struct CaptureView: View {
                                 canResume: model.coordinator.canResume)
     }
 
+    private var markers: MarkerControlsModel {
+        MarkerControlsModel.make(phase: model.coordinator.phase,
+                                 multiVoice: model.multiVoiceEnabled)
+    }
+
     var body: some View {
         ZStack {
             Color(white: 0.05).ignoresSafeArea()
@@ -652,6 +657,7 @@ struct CaptureView: View {
 
                     JournalHeaderView(model: model)
                     BackdateField(model: model)
+                    MultiVoiceField(model: model)
 
                     ForEach(model.visibleRecovered) { rec in
                         RecoveryBanner(recording: rec,
@@ -682,6 +688,8 @@ struct CaptureView: View {
 
                     RecordButton(model: control, action: primaryAction)
                         .accessibilityIdentifier("capture.record")
+
+                    MarkerControlsRow(model: model, markers: markers)
 
                     if control.showsDoneButton {
                         Button("Done") { Task { await model.done() } }
@@ -938,5 +946,104 @@ struct BackdateField: View {
             .opacity(model.backdateEnabled ? 1 : 0.45)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Whether this is a two-voice reading (T6 §14, design §5) — the setup-area gate for the
+/// voice switch. Pre-record only: the frame-0 `bn` opener can only be written at recording
+/// start, so enabling mid-capture has no coherent meaning in this build (plan §0.3.5).
+///
+/// The toggle reads `multiVoiceEnabled`, which is *computed* — the in-session per-journal
+/// override, else the journal's most recent entry on disk. Unlike the backdate toggle this
+/// one auto-enables from carry-over: a wrong voice attribute is visible and editable in T7,
+/// where a wrong backdate is a quiet data error (the deliberate divergence, design §2).
+struct MultiVoiceField: View {
+    let model: CaptureScreenModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { model.multiVoiceEnabled },
+                set: { model.setMultiVoiceEnabled($0) }
+            )) {
+                Text("Two voices")
+                    .font(.caption)
+                    .foregroundStyle(Color(white: 0.55))
+            }
+            .accessibilityIdentifier("capture.multiVoiceToggle")
+            // The capture screen's background is near-black regardless of the app's
+            // color scheme; an ambient-scheme system control renders dark-on-dark in
+            // light mode (smoke feedback 2026-08-02) — same rule as the date picker above.
+            .environment(\.colorScheme, .dark)
+            .disabled(model.coordinator.phase != .idle)
+            .opacity(model.coordinator.phase == .idle ? 1 : 0.45)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The recording-time structure-marker controls (T6 §14, design §5): a thumb-reach voice
+/// switch showing the *active* voice, and a paragraph button that is always present while
+/// recording (owner decision 7 — paragraphs are structure in a single-voice reading too).
+///
+/// Visibility and enablement come from the pure `MarkerControlsModel`; everything here is
+/// presentation plus the two coordinator calls.
+struct MarkerControlsRow: View {
+    let model: CaptureScreenModel
+    let markers: MarkerControlsModel
+
+    /// The voice the capture is currently in. A multi-voice capture opens with a frame-0
+    /// `bn` marker, so nil — the window before that opener lands — shows "BN", which is
+    /// the truth rather than a placeholder (plan §0.3.12).
+    private var activeVoice: String {
+        model.coordinator.currentVoice == StructureMarker.Voice.littleNico ? "LN" : "BN"
+    }
+
+    /// A tap switches to the *other* voice — the label states where you are, the tap
+    /// says where you're going.
+    private var otherVoice: String {
+        model.coordinator.currentVoice == StructureMarker.Voice.littleNico
+            ? StructureMarker.Voice.bigNico
+            : StructureMarker.Voice.littleNico
+    }
+
+    /// A broken marker log means every tap can only no-op; a live-looking control over a
+    /// dead path is the design §7 failure-state violation (plan §0.3.12). The failure is
+    /// *reported* through `coordinator.lastError`, already rendered red below the button.
+    private var isEnabled: Bool {
+        markers.isEnabled && !model.coordinator.markerLoggingBroken
+    }
+
+    var body: some View {
+        if markers.showsVoiceControl || markers.showsParagraphControl {
+            HStack(spacing: 16) {
+                if markers.showsVoiceControl {
+                    Button(activeVoice) { model.coordinator.markVoice(otherVoice) }
+                        .accessibilityIdentifier("capture.voiceSwitch")
+                }
+                if markers.showsParagraphControl {
+                    Button("¶ Paragraph") { model.coordinator.markParagraph() }
+                        .accessibilityIdentifier("capture.paragraph")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(!isEnabled)
+            .opacity(isEnabled ? 1 : 0.45)
+            // The capture screen's background is near-black regardless of the app's
+            // color scheme; an ambient-scheme system control renders dark-on-dark in
+            // light mode (smoke feedback 2026-08-02) — same rule as the setup fields.
+            .environment(\.colorScheme, .dark)
+            // The owner is reading a page, not watching the screen: confirmation has to
+            // be felt (design §5). Trigger is `markerCount`, which counts what reached
+            // disk — a failed append is felt as the absence of a buzz.
+            //
+            // The CONDITION variant, not a bare trigger: `markerCount` resets to 0 at
+            // capture teardown (the coordinator is respawned per capture), and a bare
+            // trigger fires on any change — a phantom buzz on Done (plan §0.3.4).
+            .sensoryFeedback(.impact, trigger: model.coordinator.markerCount) { old, new in
+                new > old
+            }
+        }
     }
 }

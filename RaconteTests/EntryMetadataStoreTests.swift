@@ -269,6 +269,44 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertNoThrow(try EntryMetadataStore.decode(Data("{}".utf8)))
     }
 
+    // MARK: multiVoice (T6 §14 step 4)
+    //
+    // Additive and lenient, like `detectedDate`: every sidecar already on both devices
+    // predates the field, and a capture-time voice attribute is not worth taking the
+    // journal, backdate and trash state down with it. Encoded only when true, so an
+    // all-defaults sidecar stays literally `{}`.
+
+    func testMultiVoiceAbsentDecodesFalse() throws {
+        XCTAssertFalse(try EntryMetadataStore.decode(Data("{}".utf8)).multiVoice)
+        XCTAssertFalse(try EntryMetadataStore.decode(Data(#"{"journalID":"J1"}"#.utf8)).multiVoice)
+    }
+
+    func testMultiVoiceTrueRoundTrips() async throws {
+        let metadata = EntryMetadata(journalID: "J1", multiVoice: true)
+        let s = store()
+        try await s.write(metadata, captureID: captureID)
+        let readBack = try await s.read(captureID: captureID)
+        XCTAssertTrue(readBack.multiVoice)
+        XCTAssertEqual(readBack, metadata)
+        XCTAssertTrue(String(decoding: try Data(contentsOf: sidecarURL), as: UTF8.self)
+            .contains("multiVoice"))
+    }
+
+    func testMultiVoiceFalseIsOmittedFromTheSidecar() throws {
+        XCTAssertEqual(String(decoding: try EntryMetadataStore.encode(.defaults), as: UTF8.self),
+                       "{}")
+        let text = String(decoding: try EntryMetadataStore.encode(EntryMetadata(journalID: "J1")),
+                          as: UTF8.self)
+        XCTAssertFalse(text.contains("multiVoice"))
+    }
+
+    func testMultiVoiceGarbageDecodesFalse() throws {
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"J1","multiVoice":"yes"}"#.utf8))
+        XCTAssertFalse(decoded.multiVoice)
+        XCTAssertEqual(decoded.journalID, "J1")
+    }
+
     // MARK: Precision (M3 issue #14 part 1)
 
     func testPrecisionRoundTrips() async throws {

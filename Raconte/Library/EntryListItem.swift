@@ -115,6 +115,10 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     /// is nil — display code should gate on `isBackdated` before reading it.
     var originalDatePrecision: DatePrecision { metadata.effectivePrecision }
 
+    /// The capture was a two-voice reading (T6 §14). Read-only: nothing on the library
+    /// side edits it, and the capture screen's carry-over reads it through here.
+    var multiVoice: Bool { metadata.multiVoice }
+
     var durationSeconds: Double
     /// First stretch of committed transcript text, whitespace-collapsed and truncated.
     /// `nil` when there is no readable text — which includes a readable but empty log.

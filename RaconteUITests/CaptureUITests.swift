@@ -376,6 +376,75 @@ final class CaptureUITests: XCTestCase {
                       "entry not listed in Trash after Move to Trash during playback")
     }
 
+    // MARK: T6 §14 design §8 (flow) — the Two-voices toggle gates the voice switch
+
+    /// Record twice over the synthetic engine: once with "Two voices" on, once off.
+    /// With it on, both marker controls are present while recording; with it off, the
+    /// paragraph button is still there (owner decision 7 — paragraphs are independent
+    /// of the voice toggle) and the voice switch is gone.
+    ///
+    /// The explicit toggle-*off* in the second half is part of what's being tested:
+    /// multi-voice carry-over auto-arms the toggle from the just-recorded entry, which
+    /// is the deliberate divergence from backdate carry-over (design §2).
+    ///
+    /// There is no `capture.done` button while recording (`RecordControlModel` offers
+    /// Done only from `.interrupted`), so captures are stopped the way every other test
+    /// here stops them: press `capture.record` again and poll its label.
+    func testVoiceControlsFollowTheMultiVoiceToggle() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
+        XCTAssertTrue(multiVoice.waitForExistence(timeout: 10), "no Two voices toggle")
+        setToggle(multiVoice, on: true)
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+
+        let voiceSwitch = app.buttons["capture.voiceSwitch"].firstMatch
+        let paragraph = app.buttons["capture.paragraph"].firstMatch
+        XCTAssertTrue(voiceSwitch.waitForExistence(timeout: 10),
+                      "no voice switch while recording with Two voices on")
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10),
+                      "no paragraph button while recording")
+        XCTAssertEqual(voiceSwitch.label, "BN",
+                       "a multi-voice capture opens in bn, so the switch shows BN")
+
+        Thread.sleep(forTimeInterval: 1)
+        press(record)
+        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
+        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+        // Carry-over will have armed it from the entry just recorded — turn it off by hand.
+        setToggle(multiVoice, on: false)
+
+        press(record)
+        waitUntil(10, "never entered recording (second capture)") { record.label == "Stop" }
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10),
+                      "the paragraph button must survive Two voices being off")
+        XCTAssertFalse(voiceSwitch.exists,
+                       "voice switch shown while recording with Two voices off")
+
+        Thread.sleep(forTimeInterval: 1)
+        press(record)
+        waitUntil(30, "second entry never appeared") { self.recentRows(app).count == 2 }
+    }
+
+    /// Drive a SwiftUI `Toggle` to a known state and confirm it landed there — the
+    /// switch reports "0"/"1" through `value`, and tapping an already-correct toggle
+    /// would silently invert the thing under test.
+    private func setToggle(_ toggle: XCUIElement, on: Bool,
+                           file: StaticString = #filePath, line: UInt = #line) {
+        let wanted = on ? "1" : "0"
+        if (toggle.value as? String) != wanted {
+            press(toggle)
+        }
+        waitUntil(5, "toggle never reached \(on ? "on" : "off")", file: file, line: line) {
+            (toggle.value as? String) == wanted
+        }
+    }
+
     /// `XCUIElement.value` is `Any?`; a SwiftUI slider reports its number as a
     /// string on some platforms and a `Double` on others.
     private static func number(_ value: Any?) -> Double? {

@@ -86,12 +86,24 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// nothing else should.
     var detectionRan: Bool
 
+    /// The capture was recorded as a two-voice reading (T6 §14, owner decision 4) — his
+    /// journals are conversations between "little Nico" and "big Nico", and the toggle
+    /// that gates voice markers is *per capture*, recorded here.
+    ///
+    /// Also the durable half of per-journal carry-over (owner decision 5): the journal's
+    /// most recently captured entry is what the next capture's toggle initializes from,
+    /// so this field is both the record of what happened and the setting that survives a
+    /// relaunch. No separate preference store, and nothing to keep in sync with the file.
+    var multiVoice: Bool
+
     init(journalID: String? = nil, originalDate: PartialDate? = nil, trashedAt: Date? = nil,
-         detectedDate: PartialDate? = nil, detectionRan: Bool? = nil) {
+         detectedDate: PartialDate? = nil, detectionRan: Bool? = nil,
+         multiVoice: Bool = false) {
         self.journalID = journalID
         self.originalDate = originalDate
         self.trashedAt = trashedAt
         self.detectedDate = detectedDate
+        self.multiVoice = multiVoice
         // Defaults to "ran iff we have a value" for callers that don't think about the
         // flag at all — the only place that constructs the ran-but-valueless state is the
         // decoder itself.
@@ -144,7 +156,7 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// field a legacy `originalDate` (an ISO8601 instant) needs alongside it to convert
     /// into a `PartialDate`. New sidecars never write it.
     private enum CodingKeys: String, CodingKey {
-        case journalID, originalDate, trashedAt, detectedDate, detectionRan
+        case journalID, originalDate, trashedAt, detectedDate, detectionRan, multiVoice
         case legacyPrecision = "precision"
     }
 
@@ -181,6 +193,14 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // signal.
         detectionRan = container.contains(.detectedDate)
             || ((try? container.decodeIfPresent(Bool.self, forKey: .detectionRan)) ?? false)
+        // Additive and lenient, like `detectedDate`: every sidecar on both devices
+        // predates this field, and a damaged voice flag must not take the journal,
+        // backdate and trash state down with it. Absent or garbage ⇒ single-voice, which
+        // is also what every pre-feature entry actually was.
+        // (The inner `?? nil` flattens `try?`'s extra optional, exactly as `detectedDate`
+        // above does; the outer `?? false` is this field's own "absent ⇒ single-voice".)
+        multiVoice = ((try? container.decodeIfPresent(Bool.self, forKey: .multiVoice)) ?? nil)
+            ?? false
     }
 
     private static func decodeOriginalDate(
@@ -219,6 +239,12 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // read as closed — the ran-but-unreadable state a corrupted decode produces.
         if detectionRan && detectedDate == nil {
             try container.encode(true, forKey: .detectionRan)
+        }
+        // Only when true, following `detectionRan`'s precedent above: an absent key
+        // decodes false either way, and writing `false` on every entry would break this
+        // encoder's own stated convention that an unfiled, untouched entry is `{}`.
+        if multiVoice {
+            try container.encode(true, forKey: .multiVoice)
         }
     }
 }

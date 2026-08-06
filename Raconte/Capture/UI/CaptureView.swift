@@ -87,6 +87,13 @@ final class CaptureScreenModel {
     /// which is why the read and write are funnelled through two private helpers.
     private var carriedBackdates: [String: PartialDate] = [:]
 
+    /// The owner's explicit in-session multi-voice choices, keyed by journal id (T6 §14).
+    ///
+    /// Consulted *before* the disk value, and the reason this map exists at all: a journal
+    /// with no entries yet has nothing on disk to read, so toggling it on, switching away
+    /// and switching back would silently drop the choice on a disk-only read.
+    private var multiVoiceOverrides: [String: Bool] = [:]
+
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
         recovered.filter { !dismissed.contains($0.captureID) }
@@ -248,7 +255,15 @@ final class CaptureScreenModel {
         if let transcription, let format = coordinator.activeFormat {
             transcription.activate(captureID: id, inputFormat: format)
         }
-        enqueueEntryMetadataWrite(for: id)
+        // Snapshot the computed value once, here: the sidecar write runs later on a
+        // serialized Task chain, and a rescan landing mid-capture could shift what
+        // `multiVoiceEnabled` derives underneath it.
+        let multiVoice = multiVoiceEnabled
+        enqueueEntryMetadataWrite(for: id, multiVoice: multiVoice)
+        // Once per capture, enforced by the coordinator's own latch — this method
+        // re-enters `.recording` on an interruption resume, and a duplicate frame-0
+        // opener would reset `currentVoice` to "bn" and mis-attribute the rest.
+        if multiVoice { coordinator.markOpeningVoice() }
     }
 
     func keep(_ id: String) { dismissed.insert(id) }
@@ -356,6 +371,33 @@ final class CaptureScreenModel {
         backdatePrecision = precision
         rememberBackdate()
         syncActiveEntryMetadata()
+    }
+
+    /// Whether the next capture is a two-voice reading (T6 §14, owner decisions 4 and 5).
+    ///
+    /// **Computed, never stored.** The explicit in-session choice for the selected journal
+    /// wins; otherwise the journal's most recent entry on disk. Deriving it on read rather
+    /// than refreshing a stored flag is what makes carry-over survive a relaunch with no
+    /// choreography: `library.allEntries` is `@Observable`, so the toggle re-renders when
+    /// the launch rescan lands, and every future call site — journal switch, the rescan
+    /// after a capture completes, T7 edits — is correct without remembering to call
+    /// anything. (Contrast `resolveBackdateForJournalChange()`, which exists precisely
+    /// because backdate state *is* stored.)
+    ///
+    /// Unlike the backdate toggle, this one **auto-enables** — the deliberate divergence
+    /// recorded in the design (§2): a wrong voice attribute is visible and editable in T7,
+    /// where a wrong backdate is a quiet data error.
+    var multiVoiceEnabled: Bool {
+        guard let journalID = selectedJournalID else { return false }
+        return multiVoiceOverrides[journalID] ?? library.lastMultiVoice(forJournal: journalID)
+    }
+
+    /// The owner's explicit choice, for this journal, for the rest of the session. It is
+    /// never written back to disk from here — the *capture* records what it actually was
+    /// (`handlePhase`), and that entry becomes the next capture's carry-over.
+    func setMultiVoiceEnabled(_ enabled: Bool) {
+        guard let journalID = selectedJournalID else { return }
+        multiVoiceOverrides[journalID] = enabled
     }
 
     /// The carried backdate for the currently selected journal, if any. Exposed for the
@@ -524,6 +566,15 @@ final class CaptureScreenModel {
     /// reflects the live-capture UI, not the sidecar's actual state. Only an explicit user
     /// toggle-off (`setBackdateEnabled(false)`) passes `true` and clears it for real.
     ///
+    /// `multiVoice` draws the same distinction a third time, as an explicit **nil-defaulted
+    /// parameter**: nil means "leave `metadata.multiVoice` alone". It is a parameter rather
+    /// than a live read of `multiVoiceEnabled` inside the closure because this function is
+    /// shared with `syncActiveEntryMetadata()`, which runs on a mid-capture journal switch
+    /// — a live read there would re-derive carry-over for the *new* journal and rewrite the
+    /// running entry's mode out from under the markers already on disk. Only
+    /// `handlePhase`'s `.recording` path passes a value; carry-over chooses the next
+    /// capture's mode, never a running one's.
+    ///
     /// Writes are chained so they land in submission order.
     ///
     /// `BackdateField`'s `DatePicker` used to fire a fresh `Task` per change, each of
@@ -533,7 +584,8 @@ final class CaptureScreenModel {
     /// the order those snapshots were taken: last write wins by construction, not by luck.
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String,
-                                           clearingBackdateIfDisabled: Bool = false) -> Task<Void, Never> {
+                                           clearingBackdateIfDisabled: Bool = false,
+                                           multiVoice: Bool? = nil) -> Task<Void, Never> {
         let originalDate = backdateEnabled
             ? PartialDate(from: backdateDate, precision: backdatePrecision, calendar: .gregorianCurrent)
             : nil
@@ -548,6 +600,7 @@ final class CaptureScreenModel {
                 if writeBackdate {
                     metadata.setOriginalDate(originalDate)
                 }
+                if let multiVoice { metadata.multiVoice = multiVoice }
             }
         }
         pendingMetadataWrite = task
@@ -575,6 +628,11 @@ struct CaptureView: View {
                                 canResume: model.coordinator.canResume)
     }
 
+    private var markers: MarkerControlsModel {
+        MarkerControlsModel.make(phase: model.coordinator.phase,
+                                 multiVoice: model.multiVoiceEnabled)
+    }
+
     var body: some View {
         ZStack {
             Color(white: 0.05).ignoresSafeArea()
@@ -599,6 +657,7 @@ struct CaptureView: View {
 
                     JournalHeaderView(model: model)
                     BackdateField(model: model)
+                    MultiVoiceField(model: model)
 
                     ForEach(model.visibleRecovered) { rec in
                         RecoveryBanner(recording: rec,
@@ -629,6 +688,8 @@ struct CaptureView: View {
 
                     RecordButton(model: control, action: primaryAction)
                         .accessibilityIdentifier("capture.record")
+
+                    MarkerControlsRow(model: model, markers: markers)
 
                     if control.showsDoneButton {
                         Button("Done") { Task { await model.done() } }
@@ -885,5 +946,104 @@ struct BackdateField: View {
             .opacity(model.backdateEnabled ? 1 : 0.45)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Whether this is a two-voice reading (T6 §14, design §5) — the setup-area gate for the
+/// voice switch. Pre-record only: the frame-0 `bn` opener can only be written at recording
+/// start, so enabling mid-capture has no coherent meaning in this build (plan §0.3.5).
+///
+/// The toggle reads `multiVoiceEnabled`, which is *computed* — the in-session per-journal
+/// override, else the journal's most recent entry on disk. Unlike the backdate toggle this
+/// one auto-enables from carry-over: a wrong voice attribute is visible and editable in T7,
+/// where a wrong backdate is a quiet data error (the deliberate divergence, design §2).
+struct MultiVoiceField: View {
+    let model: CaptureScreenModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: { model.multiVoiceEnabled },
+                set: { model.setMultiVoiceEnabled($0) }
+            )) {
+                Text("Two voices")
+                    .font(.caption)
+                    .foregroundStyle(Color(white: 0.55))
+            }
+            .accessibilityIdentifier("capture.multiVoiceToggle")
+            // The capture screen's background is near-black regardless of the app's
+            // color scheme; an ambient-scheme system control renders dark-on-dark in
+            // light mode (smoke feedback 2026-08-02) — same rule as the date picker above.
+            .environment(\.colorScheme, .dark)
+            .disabled(model.coordinator.phase != .idle)
+            .opacity(model.coordinator.phase == .idle ? 1 : 0.45)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The recording-time structure-marker controls (T6 §14, design §5): a thumb-reach voice
+/// switch showing the *active* voice, and a paragraph button that is always present while
+/// recording (owner decision 7 — paragraphs are structure in a single-voice reading too).
+///
+/// Visibility and enablement come from the pure `MarkerControlsModel`; everything here is
+/// presentation plus the two coordinator calls.
+struct MarkerControlsRow: View {
+    let model: CaptureScreenModel
+    let markers: MarkerControlsModel
+
+    /// The voice the capture is currently in. A multi-voice capture opens with a frame-0
+    /// `bn` marker, so nil — the window before that opener lands — shows "BN", which is
+    /// the truth rather than a placeholder (plan §0.3.12).
+    private var activeVoice: String {
+        model.coordinator.currentVoice == StructureMarker.Voice.littleNico ? "LN" : "BN"
+    }
+
+    /// A tap switches to the *other* voice — the label states where you are, the tap
+    /// says where you're going.
+    private var otherVoice: String {
+        model.coordinator.currentVoice == StructureMarker.Voice.littleNico
+            ? StructureMarker.Voice.bigNico
+            : StructureMarker.Voice.littleNico
+    }
+
+    /// A broken marker log means every tap can only no-op; a live-looking control over a
+    /// dead path is the design §7 failure-state violation (plan §0.3.12). The failure is
+    /// *reported* through `coordinator.lastError`, already rendered red below the button.
+    private var isEnabled: Bool {
+        markers.isEnabled && !model.coordinator.markerLoggingBroken
+    }
+
+    var body: some View {
+        if markers.showsVoiceControl || markers.showsParagraphControl {
+            HStack(spacing: 16) {
+                if markers.showsVoiceControl {
+                    Button(activeVoice) { model.coordinator.markVoice(otherVoice) }
+                        .accessibilityIdentifier("capture.voiceSwitch")
+                }
+                if markers.showsParagraphControl {
+                    Button("¶ Paragraph") { model.coordinator.markParagraph() }
+                        .accessibilityIdentifier("capture.paragraph")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(!isEnabled)
+            .opacity(isEnabled ? 1 : 0.45)
+            // The capture screen's background is near-black regardless of the app's
+            // color scheme; an ambient-scheme system control renders dark-on-dark in
+            // light mode (smoke feedback 2026-08-02) — same rule as the setup fields.
+            .environment(\.colorScheme, .dark)
+            // The owner is reading a page, not watching the screen: confirmation has to
+            // be felt (design §5). Trigger is `markerCount`, which counts what reached
+            // disk — a failed append is felt as the absence of a buzz.
+            //
+            // The CONDITION variant, not a bare trigger: `markerCount` resets to 0 at
+            // capture teardown (the coordinator is respawned per capture), and a bare
+            // trigger fires on any change — a phantom buzz on Done (plan §0.3.4).
+            .sensoryFeedback(.impact, trigger: model.coordinator.markerCount) { old, new in
+                new > old
+            }
+        }
     }
 }

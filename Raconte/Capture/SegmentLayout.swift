@@ -10,6 +10,7 @@ enum SegmentLayout {
     static let finalDirName = "final"
     static let transcriptDirName = "transcript"
     static let liveTranscriptFileName = "live.jsonl"
+    static let markerLogFileName = "markers.jsonl"
     static let canonicalTranscriptPrefix = "canonical-"
     static let finalRecordingName = "recording.m4a"
     static let partExtension = "part"
@@ -108,6 +109,13 @@ enum SegmentLayout {
     static func liveTranscriptURL(captureDirectory: URL) -> URL {
         transcriptDirectory(captureDirectory: captureDirectory)
             .appendingPathComponent(liveTranscriptFileName)
+    }
+
+    /// Capture-time structure markers (T6 §14): raw tap frames, append-only JSONL.
+    /// Lives in `transcript/` so issue #8's guard already covers it with zero changes.
+    static func markerLogURL(captureDirectory: URL) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent(markerLogFileName)
     }
 
     /// `canonical-<n>.json`. Revisions are addressable and never rewritten — a

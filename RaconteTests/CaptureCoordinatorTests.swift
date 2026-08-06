@@ -480,6 +480,12 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.resume()
         await waitUntil({ coordinator.phase == .captured },
                         "budget exhaustion did not reach captured")
+        // Same issue #4 race as the two tests above: `.captured` is published before
+        // the give-up path's side effects run, so asserting the count straight off the
+        // phase reads 0. Wait for the release, then still assert the exact count so a
+        // double-deactivate regression stays caught.
+        await waitUntil({ session.deactivateCount >= 1 },
+                        "giving up did not release the audio session")
 
         XCTAssertEqual(session.deactivateCount, 1,
                        "giving up on the retry budget must release the audio session")

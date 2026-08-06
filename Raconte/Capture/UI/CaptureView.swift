@@ -87,6 +87,13 @@ final class CaptureScreenModel {
     /// which is why the read and write are funnelled through two private helpers.
     private var carriedBackdates: [String: PartialDate] = [:]
 
+    /// The owner's explicit in-session multi-voice choices, keyed by journal id (T6 §14).
+    ///
+    /// Consulted *before* the disk value, and the reason this map exists at all: a journal
+    /// with no entries yet has nothing on disk to read, so toggling it on, switching away
+    /// and switching back would silently drop the choice on a disk-only read.
+    private var multiVoiceOverrides: [String: Bool] = [:]
+
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
         recovered.filter { !dismissed.contains($0.captureID) }
@@ -248,7 +255,15 @@ final class CaptureScreenModel {
         if let transcription, let format = coordinator.activeFormat {
             transcription.activate(captureID: id, inputFormat: format)
         }
-        enqueueEntryMetadataWrite(for: id)
+        // Snapshot the computed value once, here: the sidecar write runs later on a
+        // serialized Task chain, and a rescan landing mid-capture could shift what
+        // `multiVoiceEnabled` derives underneath it.
+        let multiVoice = multiVoiceEnabled
+        enqueueEntryMetadataWrite(for: id, multiVoice: multiVoice)
+        // Once per capture, enforced by the coordinator's own latch — this method
+        // re-enters `.recording` on an interruption resume, and a duplicate frame-0
+        // opener would reset `currentVoice` to "bn" and mis-attribute the rest.
+        if multiVoice { coordinator.markOpeningVoice() }
     }
 
     func keep(_ id: String) { dismissed.insert(id) }
@@ -356,6 +371,33 @@ final class CaptureScreenModel {
         backdatePrecision = precision
         rememberBackdate()
         syncActiveEntryMetadata()
+    }
+
+    /// Whether the next capture is a two-voice reading (T6 §14, owner decisions 4 and 5).
+    ///
+    /// **Computed, never stored.** The explicit in-session choice for the selected journal
+    /// wins; otherwise the journal's most recent entry on disk. Deriving it on read rather
+    /// than refreshing a stored flag is what makes carry-over survive a relaunch with no
+    /// choreography: `library.allEntries` is `@Observable`, so the toggle re-renders when
+    /// the launch rescan lands, and every future call site — journal switch, the rescan
+    /// after a capture completes, T7 edits — is correct without remembering to call
+    /// anything. (Contrast `resolveBackdateForJournalChange()`, which exists precisely
+    /// because backdate state *is* stored.)
+    ///
+    /// Unlike the backdate toggle, this one **auto-enables** — the deliberate divergence
+    /// recorded in the design (§2): a wrong voice attribute is visible and editable in T7,
+    /// where a wrong backdate is a quiet data error.
+    var multiVoiceEnabled: Bool {
+        guard let journalID = selectedJournalID else { return false }
+        return multiVoiceOverrides[journalID] ?? library.lastMultiVoice(forJournal: journalID)
+    }
+
+    /// The owner's explicit choice, for this journal, for the rest of the session. It is
+    /// never written back to disk from here — the *capture* records what it actually was
+    /// (`handlePhase`), and that entry becomes the next capture's carry-over.
+    func setMultiVoiceEnabled(_ enabled: Bool) {
+        guard let journalID = selectedJournalID else { return }
+        multiVoiceOverrides[journalID] = enabled
     }
 
     /// The carried backdate for the currently selected journal, if any. Exposed for the
@@ -524,6 +566,15 @@ final class CaptureScreenModel {
     /// reflects the live-capture UI, not the sidecar's actual state. Only an explicit user
     /// toggle-off (`setBackdateEnabled(false)`) passes `true` and clears it for real.
     ///
+    /// `multiVoice` draws the same distinction a third time, as an explicit **nil-defaulted
+    /// parameter**: nil means "leave `metadata.multiVoice` alone". It is a parameter rather
+    /// than a live read of `multiVoiceEnabled` inside the closure because this function is
+    /// shared with `syncActiveEntryMetadata()`, which runs on a mid-capture journal switch
+    /// — a live read there would re-derive carry-over for the *new* journal and rewrite the
+    /// running entry's mode out from under the markers already on disk. Only
+    /// `handlePhase`'s `.recording` path passes a value; carry-over chooses the next
+    /// capture's mode, never a running one's.
+    ///
     /// Writes are chained so they land in submission order.
     ///
     /// `BackdateField`'s `DatePicker` used to fire a fresh `Task` per change, each of
@@ -533,7 +584,8 @@ final class CaptureScreenModel {
     /// the order those snapshots were taken: last write wins by construction, not by luck.
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String,
-                                           clearingBackdateIfDisabled: Bool = false) -> Task<Void, Never> {
+                                           clearingBackdateIfDisabled: Bool = false,
+                                           multiVoice: Bool? = nil) -> Task<Void, Never> {
         let originalDate = backdateEnabled
             ? PartialDate(from: backdateDate, precision: backdatePrecision, calendar: .gregorianCurrent)
             : nil
@@ -548,6 +600,7 @@ final class CaptureScreenModel {
                 if writeBackdate {
                     metadata.setOriginalDate(originalDate)
                 }
+                if let multiVoice { metadata.multiVoice = multiVoice }
             }
         }
         pendingMetadataWrite = task

@@ -97,6 +97,19 @@ final class CaptureCoordinator {
     /// from here; it survives an interruption resume because the clock rides the tee.
     var currentCaptureFrame: Int64? { currentFrameClock?.currentFrame }
 
+    /// Most recent voice marker's id, nil when none has been written this capture.
+    /// The UI voice toggle binds this (T6 §14).
+    private(set) var currentVoice: String?
+    /// Successful marker appends this capture — the haptic trigger. It counts what
+    /// reached disk, not what was tapped: a failed append is felt as the absence of
+    /// the buzz, plus the `lastError` line.
+    private(set) var markerCount = 0
+    /// Latched when the marker log could not be opened (mirrors
+    /// `TranscriptionSession.loggingBroken`). `private(set)` rather than `private`
+    /// because the capture screen disables the marker controls off it — a control
+    /// whose every tap can only no-op must not look live (design §7).
+    private(set) var markerLoggingBroken = false
+
     /// Root of the on-disk capture tree; T8/T9 use it to locate queued captures.
     let capturesRoot: URL
 
@@ -135,6 +148,13 @@ final class CaptureCoordinator {
     /// inherited by the resume `recorder.start` through the tee's identity, so it
     /// never restarts mid-capture.
     private var currentFrameClock: FrameClockSink?
+    /// Marker log for this capture, opened LAZILY at the first append (never at
+    /// capture start) — see `openMarkerLogIfNeeded`.
+    private var markerLog: MarkerLogWriter?
+    /// The frame-0 opener is once per capture. Its caller re-enters `.recording` on
+    /// an interruption resume, and a duplicate opener would both double the marker
+    /// and reset `currentVoice` to `bn`, mis-attributing everything after the resume.
+    private var didWriteOpeningVoice = false
     // nonisolated(unsafe): mutated only on the main actor; `deinit` (nonisolated in
     // Swift 6) cancels them, and it runs only when no other reference survives.
     nonisolated(unsafe) private var pumpTask: Task<Void, Never>?
@@ -232,6 +252,95 @@ final class CaptureCoordinator {
         guard machineState.phase == .interrupted else { return }
         canResume = false
         await send(.resume)
+    }
+
+    // MARK: Structure markers (T6 §14)
+    //
+    // Markers hang off the coordinator, NOT `TranscriptionSession`: they must survive a
+    // capture where transcription never ran (no assets, denied permission, dead engine).
+    // They annotate the audio, and the audio is what the app guarantees.
+    //
+    // There is deliberately NO capture-time undo (owner decision 6). A mis-tap is fixed
+    // in T7, which has to handle mis-taps regardless; a remove API here would mean an
+    // append-only log that isn't.
+
+    /// The frame-0 `bn` opener (owner decision 4): a multi-voice capture opens in
+    /// bigNico, written as an ordinary marker at frame 0 so "what voice is this span"
+    /// has exactly one rule — the most recent marker at or before it — with no special
+    /// case for the beginning.
+    ///
+    /// Called by the screen model when a multi-voice capture reaches `.recording`,
+    /// which happens MORE THAN ONCE per capture (a resume re-enters `.recording`), so
+    /// this is once-per-capture via `didWriteOpeningVoice`; later calls are no-ops.
+    /// The latch is set only once the phase/clock guards have passed, so a call in the
+    /// wrong phase cannot burn the one opener.
+    func markOpeningVoice() {
+        guard !didWriteOpeningVoice, canMark else { return }
+        didWriteOpeningVoice = true
+        // The literal 0, never the clock: the opener describes the start of the
+        // capture, not the moment the screen model got around to calling it.
+        appendMarker(kind: .voice, voice: StructureMarker.Voice.bigNico, atFrame: 0)
+    }
+
+    /// Raw tap: the current clock frame, as a voice marker.
+    func markVoice(_ voice: String) {
+        guard canMark, let frame = currentCaptureFrame else { return }
+        appendMarker(kind: .voice, voice: voice, atFrame: frame)
+    }
+
+    /// Raw tap: the current clock frame, as a paragraph marker. Independent of the
+    /// multi-voice toggle (owner decision 7) — always available, including in
+    /// single-voice entries.
+    func markParagraph() {
+        guard canMark, let frame = currentCaptureFrame else { return }
+        appendMarker(kind: .paragraph, voice: nil, atFrame: frame)
+    }
+
+    /// Markers are live only while actually recording and only with a frame clock
+    /// installed (design §7: no clock → disabled outright, rather than a stream of
+    /// frame-0 garbage). The clock half is defense in depth — `configureAndStart`
+    /// installs it before `.engineReady` and teardown leaves `.recording` first — but
+    /// its reachable half (wiring gone AND phase wrong, after `done()`) is real.
+    private var canMark: Bool {
+        phase == .recording && currentFrameClock != nil && !markerLoggingBroken
+    }
+
+    private func appendMarker(kind: StructureMarker.Kind, voice: String?, atFrame frame: Int64) {
+        guard canMark, let captureID = activeCaptureID else { return }
+        do {
+            let writer = try openMarkerLogIfNeeded(captureID: captureID)
+            // `seq` is stamped by the writer, which resumes numbering from the file.
+            try writer.append(StructureMarker(seq: 0, frame: frame, kind: kind, voice: voice))
+            if case .voice = kind { currentVoice = voice }
+            markerCount += 1
+        } catch {
+            // The recording is NEVER interrupted for a marker (design §7): continuity
+            // of audio outranks marker fidelity. But it does not fail silently either
+            // (the 2026-08-03 "sidecar writes fail loudly" rule) — the owner sees the
+            // red line and feels no haptic.
+            //
+            // Sticky for the capture by design: nothing clears it on a later
+            // successful append, and `record()` clears it for the next capture. One
+            // transient failure leaving a red line for the rest of a sitting is honest.
+            lastError = "Couldn't save a marker"
+            // The open itself failed, so every later tap could only no-op — latch, and
+            // let the UI disable the controls rather than show a live-looking dead one.
+            if markerLog == nil { markerLoggingBroken = true }
+        }
+    }
+
+    /// Opens at the FIRST append, never at capture start. `open()` creates
+    /// `transcript/`, and any file there flips `holdsIrreplaceableArtifacts` — so an
+    /// eager open would make every mis-tapped capture permanently undeletable (the T3
+    /// zero-byte-log lesson, restated as rev 2 rule 10).
+    private func openMarkerLogIfNeeded(captureID: String) throws -> MarkerLogWriter {
+        if let markerLog { return markerLog }
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                       captureID: captureID)
+        let writer = MarkerLogWriter(captureDirectory: directory)
+        try writer.open()
+        markerLog = writer
+        return writer
     }
 
     // MARK: Event pipeline
@@ -654,6 +763,16 @@ final class CaptureCoordinator {
         currentForwarder = nil
         currentTee = nil
         currentFrameClock = nil
+        // The bytes are already durable (plain `write` under `O_APPEND`); this is the
+        // final fsync + fd release. `try?` because a marker log that failed to sync
+        // must not affect a capture that is already committed — the failure path that
+        // matters (append/open) already surfaced through `lastError`.
+        try? markerLog?.close()
+        markerLog = nil
+        markerLoggingBroken = false
+        currentVoice = nil
+        didWriteOpeningVoice = false
+        markerCount = 0
         activeFormat = nil
         activeCaptureID = nil
         recordingSegmentStart = nil

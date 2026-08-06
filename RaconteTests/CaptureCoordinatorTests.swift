@@ -1043,4 +1043,296 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.activeFormat, initial)
         XCTAssertEqual(recorder.lastMatching, initial)
     }
+
+    // MARK: T6 §14 step 3 — structure markers
+
+    /// Markers are read back off *disk*, not off the coordinator: the log is the
+    /// artifact T7 consumes, and the fixture's constant `mintCaptureID` keeps the
+    /// directory addressable after `done()` has nil'd `activeCaptureID`.
+    private func loadMarkers(root: URL? = nil) -> MarkerLogReader.LoadResult {
+        MarkerLogReader.load(captureDirectory: markerCaptureDirectory(root: root))
+    }
+
+    private func markerCaptureDirectory(root: URL? = nil) -> URL {
+        SegmentLayout.captureDirectory(capturesRoot: root ?? self.root, captureID: kCaptureID)
+    }
+
+    private func transcriptDirectoryExists(root: URL? = nil) -> Bool {
+        FileManager.default.fileExists(atPath: SegmentLayout
+            .transcriptDirectory(captureDirectory: markerCaptureDirectory(root: root)).path)
+    }
+
+    /// Break `MarkerLogWriter.open()`'s `createDirectory` with a plain FILE where
+    /// `transcript/` must go — no chmod, so it bites as root too.
+    private func blockTranscriptDirectory() throws {
+        try Data("not a directory".utf8)
+            .write(to: SegmentLayout.transcriptDirectory(captureDirectory: markerCaptureDirectory()))
+    }
+
+    func testMarkParagraphWritesTheRawTapFrame() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        coordinator.markParagraph()
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.count, 1)
+        XCTAssertEqual(markers.first?.kind, .paragraph)
+        XCTAssertEqual(markers.first?.frame, 750, "the raw tap frame, off the frame clock")
+        XCTAssertNil(markers.first?.voice, "a paragraph marker carries no voice")
+        XCTAssertEqual(coordinator.markerCount, 1)
+
+        await coordinator.done()
+    }
+
+    func testMarkVoiceWritesTheMarkerAndPublishesCurrentVoice() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.count, 1)
+        XCTAssertEqual(markers.first?.kind, .voice)
+        XCTAssertEqual(markers.first?.frame, 480)
+        XCTAssertEqual(markers.first?.voice, "ln")
+        XCTAssertEqual(coordinator.currentVoice, "ln",
+                       "the toggle binds `currentVoice`; it must follow the marker")
+
+        await coordinator.done()
+    }
+
+    /// The opener is the literal frame 0, never the clock — feeding 750 frames FIRST
+    /// is the mutation check: an implementation that reads `currentCaptureFrame`
+    /// fails here at 750.
+    func testMarkOpeningVoiceWritesLiteralFrameZero() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        coordinator.markOpeningVoice()
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.count, 1)
+        XCTAssertEqual(markers.first?.frame, 0, "the opener is frame 0, not the clock")
+        XCTAssertEqual(markers.first?.kind, .voice)
+        XCTAssertEqual(markers.first?.voice, "bn")
+        XCTAssertEqual(coordinator.currentVoice, "bn")
+
+        await coordinator.done()
+    }
+
+    /// `handlePhase` re-enters `.recording` on an interruption resume and calls the
+    /// opener again. Without the once-per-capture latch that writes a second frame-0
+    /// marker AND resets `currentVoice` to "bn", mis-attributing everything after the
+    /// resume to the wrong voice.
+    func testResumeDoesNotWriteASecondOpeningVoiceMarker() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        coordinator.markOpeningVoice()
+        recorder.feed(frames: 750)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .recording }, "did not resume")
+
+        coordinator.markOpeningVoice()   // exactly what the re-entered `.recording` does
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.filter { $0.frame == 0 }.count, 1,
+                       "the frame-0 opener is once per capture, not once per .recording")
+        XCTAssertEqual(markers.count, 2)
+        XCTAssertEqual(coordinator.currentVoice, "ln",
+                       "a duplicate opener would silently reset the voice to bn")
+
+        await coordinator.done()
+    }
+
+    func testMarkerSeqsAreMonotonicAcrossKinds() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        coordinator.markOpeningVoice()
+        recorder.feed(frames: 480)
+        coordinator.markParagraph()
+        recorder.feed(frames: 480)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.map(\.seq), [0, 1, 2])
+        XCTAssertEqual(markers.map(\.kind), [.voice, .paragraph, .voice])
+        XCTAssertEqual(markers.map(\.frame), [0, 480, 960])
+
+        await coordinator.done()
+    }
+
+    /// The lazy-open discipline at the CALL SITE: an unmarked capture must leave no
+    /// `transcript/` behind, or a mis-tapped recording becomes permanently
+    /// undeletable (a zero-byte log flips `holdsIrreplaceableArtifacts`).
+    func testNoMarksMeansNoTranscriptDirectory() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertFalse(transcriptDirectoryExists(), "no marks must mean no transcript/")
+        XCTAssertEqual(loadMarkers().source, .absent)
+    }
+
+    func testFirstMarkCreatesTheLogLazily() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 500)
+        XCTAssertFalse(transcriptDirectoryExists(),
+                       "the log must not open until a marker actually lands")
+
+        coordinator.markParagraph()
+
+        XCTAssertTrue(transcriptDirectoryExists())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: SegmentLayout
+            .markerLogURL(captureDirectory: markerCaptureDirectory()).path))
+
+        // Design §4: the quarantine consequence is correct, not incidental — assert it
+        // rather than assume it.
+        let snapshot = DirectorySnapshot.gather(capturesRoot: root)
+        let capture = try XCTUnwrap(snapshot.captures.first { $0.captureID == kCaptureID })
+        XCTAssertTrue(capture.holdsIrreplaceableArtifacts,
+                      "a marked capture must be quarantined, never deleted")
+
+        await coordinator.done()
+    }
+
+    func testMarksOutsideRecordingAreIgnored() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        coordinator.markParagraph()          // idle: no capture, no clock
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+        coordinator.markOpeningVoice()
+        XCTAssertEqual(coordinator.markerCount, 0)
+        XCTAssertFalse(transcriptDirectoryExists())
+
+        await coordinator.record()
+        recorder.feed(frames: 100)
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+
+        coordinator.markParagraph()          // captured: wiring already torn down
+        coordinator.markVoice(StructureMarker.Voice.bigNico)
+        XCTAssertEqual(coordinator.markerCount, 0)
+        XCTAssertNil(coordinator.currentVoice)
+        XCTAssertFalse(transcriptDirectoryExists())
+        XCTAssertEqual(loadMarkers().source, .absent)
+    }
+
+    /// Step 1's frame clock, pinned at the marker level: the axis a marker lands on
+    /// must not restart when the capture is interrupted and resumed.
+    func testMarkerFramesSurviveInterruptionResume() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 750)
+        session.emit(.interrupted)
+        await waitUntil({ coordinator.phase == .interrupted }, "did not interrupt")
+        session.emit(.resumeAvailable(shouldResume: true))
+        await waitUntil({ coordinator.phase == .recording }, "did not resume")
+
+        recorder.feed(frames: 250)
+        coordinator.markParagraph()
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.count, 1)
+        XCTAssertEqual(markers.first?.frame, 1000,
+                       "the marker frame axis restarted across the resume")
+
+        await coordinator.done()
+    }
+
+    /// Design §7: continuity of audio outranks marker fidelity — the recording is
+    /// never interrupted for a marker — but the failure is loud (the 2026-08-03
+    /// "sidecar writes fail loudly" rule), never silent.
+    func testOpenFailureSetsLastErrorAndRecordingContinues() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 500)
+        try blockTranscriptDirectory()
+
+        coordinator.markParagraph()
+
+        XCTAssertNotNil(coordinator.lastError, "a failed marker write must not be silent")
+        XCTAssertEqual(coordinator.phase, .recording, "a marker failure must not stop the capture")
+        XCTAssertEqual(coordinator.markerCount, 0)
+
+        recorder.feed(frames: 250)
+        await coordinator.done()
+        XCTAssertEqual(coordinator.phase, .captured)
+        XCTAssertEqual(coordinator.finalizeQueue, [kCaptureID])
+
+        let s0 = try decodeSidecar(0)
+        XCTAssertEqual(s0.frameCount, 750, "every fed frame must still have reached disk")
+    }
+
+    func testOpenFailureLatchesFurtherMarks() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 500)
+        try blockTranscriptDirectory()
+
+        coordinator.markParagraph()
+        let firstError = coordinator.lastError
+        XCTAssertNotNil(firstError)
+        XCTAssertTrue(coordinator.markerLoggingBroken,
+                      "a failed open latches — the control must not look live")
+
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+        coordinator.markParagraph()
+
+        XCTAssertEqual(coordinator.lastError, firstError,
+                       "a latched failure must not be cleared back to a success state")
+        XCTAssertEqual(coordinator.markerCount, 0)
+        XCTAssertNil(coordinator.currentVoice,
+                     "a voice marker that was never written must not publish a voice")
+
+        await coordinator.done()
+    }
+
+    /// The haptic seam (plan §0.3.4): the feedback fires on a successful append, so
+    /// the count must move once per marker that actually reached disk.
+    func testMarkerCountIncrementsPerSuccessfulAppend() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        XCTAssertEqual(coordinator.markerCount, 0)
+        coordinator.markOpeningVoice()
+        recorder.feed(frames: 240)
+        coordinator.markParagraph()
+        recorder.feed(frames: 240)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+
+        XCTAssertEqual(coordinator.markerCount, 3)
+        XCTAssertEqual(loadMarkers().markers.count, 3)
+
+        await coordinator.done()
+    }
 }

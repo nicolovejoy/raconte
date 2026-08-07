@@ -10,8 +10,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.app || ls /Applications | grep Xcode
+      - name: Select Xcode 26.6
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
@@ -20,11 +20,21 @@ jobs:
         run: |
           xcodebuild -project Raconte.xcodeproj -scheme Raconte \
             -destination 'platform=macOS' \
+            -resultBundlePath TestResults/unit.xcresult \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
             test
       - name: UI tests (iOS simulator)
         run: |
           xcodebuild -project Raconte.xcodeproj -scheme RaconteUI \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -resultBundlePath TestResults/ui.xcresult \
+            -retry-tests-on-failure -test-iterations 2 \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
             test
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore

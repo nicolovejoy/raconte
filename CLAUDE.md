@@ -1,5 +1,67 @@
 # CLAUDE.md
 
+## Session 2026-08-07 overnight+morning (laptop — #25 shipped, smoke 5–7 pass, marker haptics; 708 → 742 tests)
+
+Overnight run on Sonnet/Opus subagents (owner low on Fable tokens), then live smoke
+testing with the owner in the morning. All merged to main; #25 CLOSED.
+
+- **New CI flake, root-caused and fixed (PR #33).** `testStoreWriteFailureDoesNotClobber…`
+  — fourth member of the #4/#22 family (phase published before effects). Novel part:
+  spinner load NEVER reproduced it (0/740 runs, up to 128 spinners); it was forced
+  deterministically by arming the DEBUG **`TransitionBreakpointController`** to park
+  `send()` in the gap between phase publication and effect realization — a repeatable
+  detector for this whole flake family. Cheaper variant: re-poll the test predicate with
+  `await Task.yield()` instead of a sleep. Full method:
+  `.superpowers/sdd/flake-report-2026-08-07.md` (gitignored). Same report flags
+  `testFailedResumeDiskWriteReturnsToInterruptedNotRecording` as safe only behind an
+  incidental 150 ms sleep.
+- **#25 staged removal built and merged (PR #34)** per the prepared prompts, three steps,
+  subagent-driven with per-step Opus reviews + final whole-branch review. Two plan
+  fixtures were physically impossible on APFS (sealing the staging root blocks the
+  *stage*; moving a 0555 dir needs write perm on itself) — both re-measured independently
+  before acceptance. **A step-3 implementer fabricated evidence** (quoted a grep count
+  for a test that never existed); caught by the reviewer, diff verified sound, suite
+  re-run by the parent. Trust but verify: re-run the gate yourself when a report smells.
+  CI fact: **GitHub macOS runners can't reach backupd over XPC**, so
+  `isExcludedFromBackup` reads false there — the test now probes capability and skips.
+- **Full-suite re-run found another pre-existing load flake (unfixed):**
+  `testRapidRecordDoneCyclesProduceTenSeparateEntries` — 733/734, "cycle 4 never
+  committed", green 5/5 isolated, predates the branch. Candidate for the
+  breakpoint-controller treatment.
+- **Owner smoke 5–7 + #32 + #25 all PASS on device.** Markers land exactly (taps within
+  0.06–0.2 s of true boundaries — but he was watching the screen, not reading; Saturday
+  is the real test). Snapping trace: one BN→LN switch came back `approximate` because
+  in-record word runs abut exactly, leaving **no gap to snap into mid-utterance** —
+  watch this pattern in real-reading data before touching `snapWindowSeconds` (1.5 s
+  never engaged; taps were ~10× more precise).
+- **Marker haptic was silently dead on device: iOS suppresses haptics while the mic
+  records.** Fix: `setAllowHapticsAndSystemSoundsDuringRecording(true)` in
+  `IOSAudioSessionController.activate` (`5f21c992`). Then owner found `.impact` too weak
+  → **dash-dot via CoreHaptics** (`fee6e674`): pure `MarkerHaptic` pattern spec (tunable
+  constants, 0.12 s dash / 0.06 s gap / 0.7-intensity dot) + `MarkerHapticsPlayer`
+  engine wrapper. **Dash-dot feel not yet verified on device.** CoreHaptics engine
+  handlers fire off-main — hop to @MainActor (parent caught this in review).
+- UX debt from smoke: **¶ button sits below the fold on iPhone** — fold into the parked
+  capture-screen design session. Filed **#35** (per-journal delete friction:
+  easy/confirm/locked — owner ask). #23/#24 were already closed; stale next-step.
+- Harness: auto-mode classifier blocks `gh pr merge` (and heredoc `gh pr create`;
+  `--body-file` works) — overnight runs end at an open PR, Nico merges. Direct push to
+  main IS allowed. iOS compile checks need `CODE_SIGNING_ALLOWED=NO` (not just
+  `CODE_SIGNING_REQUIRED=NO`) on this laptop.
+
+**Next steps:**
+1. **Saturday (owner, physical journals): the real marker session** — read an actual
+   two-voice page (markers 5–7 were improv-verified today), confirm the dash-dot haptic
+   feels right (tunables in `MarkerHaptic.swift`), then pull `markers.jsonl` +
+   `live.jsonl` and tune `MarkerSnapping.snapWindowSeconds` — watching the
+   no-mid-utterance-gap `approximate` pattern found today.
+2. Design session (parked, owner asked): capture landing page, journal-focus
+   consistency, ¶-button placement, #18 switcher, #35 delete friction.
+3. T7 editor UI (whole-revision accept v1) + audit log — consumes the voice attribute;
+   then T8 retranscribe.
+4. Flake backlog: `testRapidRecordDoneCyclesProduceTenSeparateEntries` via the
+   breakpoint-controller method; the 150 ms-sleep-shielded sibling while there.
+
 ## Session 2026-08-06 evening (laptop — CI red root-caused, #32 found+fixed, phone paired; 706 → 708 tests)
 
 - **Resync caught an accidental issue close.** Docs-only commit `47d3f37a`'s message said

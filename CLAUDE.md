@@ -1,5 +1,58 @@
 # CLAUDE.md
 
+## Session 2026-08-06 evening (laptop — CI red root-caused, #32 found+fixed, phone paired; 706 → 708 tests)
+
+- **Resync caught an accidental issue close.** Docs-only commit `47d3f37a`'s message said
+  "carries fixes #25", so the PR #28 merge closed #25 — with zero code shipped (the
+  removal walk at `LibraryScreenModel.swift:312` / `TrashSweeper.swift:80` is untouched).
+  Reopened. **Never write "fixes #N" in a commit message as prose** — say "build prompts
+  for #25". GitHub reads it as a close-command on merge to main.
+- **The "docs-only CI failures" were a mirage — there was never a path bug.** Opus
+  subagent over 40 runs: docs commits 5/14 failed vs code 7/26 — statistically the same
+  flake, two populations. (1) The #22 give-up race, dead since `97eb62e8`. (2) UI-test
+  timeouts on contended runners — `testRepeatedRecordStopCyclesProduceSeparateEntries`
+  spent 7 s in one wait-for-idle and blew its 30 s finalize budget; it flaked identically
+  on 08-02, pre-markers. Hardened in `1f330f49`: `-retry-tests-on-failure
+  -test-iterations 2` on the UI step (a twice-failing test still fails the run), the
+  Xcode pin fixed (`/Applications/Xcode_26.app` doesn't exist on macos-26 and the
+  `|| ls` fallback swallowed the error — the pin was decorative; now 26.6, loud), and
+  xcresult upload on failure. Both runs since: green.
+  Related tooling trap: `gh run view --log-failed` returns empty (exit 0) when a step
+  name contains parentheses — use `gh api repos/…/actions/jobs/<id>/logs`.
+- **Owner smoke tests 1–4 all pass** on `a4779994` (detail-trash, Delete Now, restore
+  round-trip, swipe actions).
+- **#32 found by owner mid-smoke, root-caused, fixed same evening (`c61c0d97`).** Two
+  symptoms, one defect: capture-screen Recents pushed a blank detail page (with any
+  journal chip selected), and move-to-journal blanked the live detail screen in place.
+  `LibraryScreenModel.item(_:)` searched only journal-scoped `items` (`?? trashed`) while
+  Recents pushes ids from the cross-journal `allEntries`; ContentView's `.entry`
+  destination was `if let` with no else, and a destination builder returning nothing
+  still pushes — a blank page. Fix: items → allEntries → trashed fallthrough (nil now
+  means "exists nowhere") + a `ContentUnavailableView` else branch (the app's first use
+  of that component; `entry.unavailable` a11y id). TDD red-first; 708 unit tests.
+  Instructive: `EntryDetailView`'s keep-last-known defence was dead code for this case —
+  the ContentView gate destroyed the view before its own defence could run.
+- **Phone is now paired to the laptop** (one-time USB-C cable + Trust) — all future
+  installs from this machine are wireless (`devicectl device install app`). Fresh main
+  (`c61c0d97`: markers + #32 fix) installed. Remote `process launch` fails on a locked
+  device — owner taps the icon instead.
+- **Parked for a design session (owner asked, explicitly "later"):** capture landing
+  page redesign — Recents styling, the two journal switchers (library vs capture) and
+  where journal focus lives, and landing back on the journal's entry list after
+  move-to-journal instead of staying on the detail screen.
+
+**Next steps:**
+1. **Saturday (owner home with physical journals):** record a real two-voice page —
+   marker smoke tests 5–7 (toggle + controls, real recording with voice/paragraph taps,
+   carry-over check). Also re-verify #32 on the phone: journal chip selected → tap a
+   cross-journal recent → real detail page.
+2. Pull the marker log from that recording; tune `MarkerSnapping.snapWindowSeconds`
+   (1.5 s, a guess no test can validate).
+3. Design discussion: capture landing page / journal-focus consistency (parked list above).
+4. #25 staged-removal build — prompts ready in
+   `docs/plans/2026-08-05-staged-removal-build-prompts.md`.
+5. T7 editor UI (whole-revision accept v1) + audit log; T8 retranscribe.
+
 ## Session 2026-08-05 evening (laptop — Xcode verified; T6 §14 built; 640 → 706 tests)
 
 **The laptop is now a real build machine.** Xcode 26.6 was already installed and selected;

@@ -632,6 +632,18 @@ final class CaptureCoordinatorTests: XCTestCase {
         session.emit(.resumeAvailable(shouldResume: true))
         await waitUntil({ coordinator.phase == .captured },
                         "a failed resume with no budget left must give up to captured")
+        // Issue #4's race once more. `send` publishes `.captured` BEFORE it realizes the
+        // transition, and the specific message is assigned at the END of
+        // `handleReacquireResult` — after its own `store(setState: .captured, …)` call.
+        // For that whole span `lastError` still holds the generic store-write line left
+        // by the failed `store(setState: .resuming)` write in `rebuildAndReacquire`, so
+        // asserting straight off the phase reads the generic line and fails. (CI run
+        // 31149494129 did exactly that.) `finalizeQueue` is filled by `completeCapture()`
+        // — the last step of the give-up path, strictly after the assignment — so it is
+        // the honest "this path has finished" marker. The manifest cannot serve as one
+        // here: the capture directory is sealed, so it never reaches `.captured` on disk.
+        await waitUntil({ coordinator.finalizeQueue == [kCaptureID] },
+                        "the give-up path did not run to completion")
 
         XCTAssertEqual(coordinator.lastError, "Couldn't resume recording. Saved what was recorded.",
                        "the specific resume-failure line must outrank the generic store-write line")

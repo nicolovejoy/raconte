@@ -84,10 +84,16 @@ enum TrashSweepAction: Sendable, Equatable {
 }
 
 struct TrashSweepResult: Sendable, Equatable {
+    /// Staged (#25) — gone from the library's point of view, whether or not the bytes
+    /// have actually been reclaimed yet.
     var deleted: [String] = []
     var skipped: [SkippedSweep] = []
+    /// Staged directories the purge could not remove. Not a `SkippedSweep`: there is no
+    /// capture id to attach — the capture is already gone from `captures/` and this is a
+    /// disk-space leak, not an entry stuck in the trash. Retried every launch.
+    var pendingRemovalFailures: [String] = []
 
-    var isEmpty: Bool { deleted.isEmpty && skipped.isEmpty }
+    var isEmpty: Bool { deleted.isEmpty && skipped.isEmpty && pendingRemovalFailures.isEmpty }
 }
 
 /// The pure sweep decision: `(candidates, now) -> [TrashSweepAction]`.

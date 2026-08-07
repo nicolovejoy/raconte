@@ -12,6 +12,7 @@ import Foundation
 ///       captures/<ULID>/…      capture machine territory
 ///       journals.json          journals registry (M3 T1)
 ///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
+///       trash-pending/<name>/  staged-removal holding pen (#25)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
@@ -22,6 +23,13 @@ enum AppContainer {
     /// `DirectorySnapshot.gather` regardless of what it's called.
     static let journalCoversDirectoryName = "journals"
     static let journalCoverFileName = "cover.jpg"
+    /// Where a capture directory waits between its atomic rename out of `captures/` and its
+    /// actual removal (#25). A sibling of `captures/`, never inside it, for the reason this
+    /// type's header already gives: a stray child of `captures/` is walked by
+    /// `DirectorySnapshot.gather` and handed to the recovery planner. A staged directory
+    /// still holds `final/recording.m4a`, so being unreachable by that walk is what keeps
+    /// the quarantine rule from adopting it forever.
+    static let trashPendingDirectoryName = "trash-pending"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -56,6 +64,14 @@ enum AppContainer {
             .appendingPathComponent(journalCoversDirectoryName, isDirectory: true)
             .appendingPathComponent(journalID, isDirectory: true)
             .appendingPathComponent(journalCoverFileName)
+    }
+
+    static func trashPendingRoot(containerRoot: URL) -> URL {
+        containerRoot.appendingPathComponent(trashPendingDirectoryName, isDirectory: true)
+    }
+
+    static func trashPendingURL(containerRoot: URL, name: String) -> URL {
+        trashPendingRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
     }
 
     /// The container root inferred from a captures root — the inverse of

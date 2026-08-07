@@ -744,7 +744,7 @@ enum EntryMetadataError: Error, Equatable {
     /// There is no `captures/<id>/` to write into. `write` creates intermediate
     /// directories, so without this an edit could *recreate* a capture directory that a
     /// staged removal had just moved away — resurrecting a deleted entry from a restore
-    /// tap that lost a race (#25, and T6 §6's A2.3).
+    /// tap that lost a race (#25, and T6 §4.6's A2.3).
     case captureMissing
 }
 ```

@@ -128,6 +128,35 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
 
+    // MARK: captureMissing (#25 step 3)
+
+    /// RED. `update`'s read-modify-write creates intermediate directories today (via
+    /// `write`'s `createDirectory`), so an edit against a capture that has been staged
+    /// away can resurrect it. The guard refuses instead.
+    func testUpdateOnAMissingCaptureDirectoryThrowsRatherThanCreatingIt() async throws {
+        try FileManager.default.removeItem(at: captureDirectory)
+        do {
+            _ = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+            XCTFail("expected captureMissing")
+        } catch {
+            guard case .captureMissing = (error as? EntryMetadataError) else {
+                return XCTFail("expected EntryMetadataError.captureMissing, got \(error)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path))
+    }
+
+    /// GUARD. The capture directory exists but `entry.json` does not — the normal
+    /// first-write path, since every capture starts without a sidecar. **Mutation:**
+    /// make the guard require `entry.json`'s existence rather than the directory's ->
+    /// must fail, because getting this wrong breaks journal filing on the capture path.
+    func testUpdateStillWritesWhenTheDirectoryExistsWithNoSidecar() async throws {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
+        let updated = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
+    }
+
     // MARK: The default is a semantic, not a value
 
     func testNilOriginalDateIsNotMaterializedOnDisk() async throws {

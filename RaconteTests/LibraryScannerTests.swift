@@ -271,6 +271,47 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertFalse(item.isTrashed, "unknown trash state reads as visible")
     }
 
+    // MARK: issue #25 — a trashed capture is trash, whatever else the directory holds
+
+    /// RED (#25 step 3). A directory holding only `entry.json` with `trashedAt` set —
+    /// the mirror-image outcome of the #25 walk, where the tombstone survived a
+    /// half-destroyed delete and the audio did not. Today this is skipped as
+    /// `noDurableContent` and is invisible in both the library *and* the Trash view.
+    func testTrashedCaptureWithNothingDurableIsStillListed() async throws {
+        try writeMetadata(EntryMetadata(trashedAt: Date(timeIntervalSince1970: 99)), id: idA)
+
+        let all = await scanner().scan(filter: EntryListFilter(trash: .all))
+        XCTAssertEqual(all.items.map(\.captureID), [idA])
+        XCTAssertTrue(all.skipped.isEmpty)
+
+        let trashed = await scanner().scan(filter: EntryListFilter(trash: .trashedOnly))
+        XCTAssertEqual(trashed.items.map(\.captureID), [idA])
+    }
+
+    /// GUARD (#25 step 3). Same fixture as above, through the default (excludeTrashed)
+    /// scope. **Mutation:** emit the row unconditionally without the trash filter
+    /// applying (e.g. `result.items = items` instead of `filter.apply(to: items)`) ->
+    /// must fail. Pins that the rule changes trash membership only, never live
+    /// visibility.
+    func testTrashedCaptureWithNothingDurableIsNeverInTheLiveList() async throws {
+        try writeMetadata(EntryMetadata(trashedAt: Date(timeIntervalSince1970: 99)), id: idA)
+
+        let live = await scanner().scan(filter: EntryListFilter(trash: .excludeTrashed))
+        XCTAssertTrue(live.items.isEmpty)
+    }
+
+    /// GUARD (#25 step 3). A directory with an undecodable `entry.json` and nothing else
+    /// durable: still skipped, still `noDurableContent`. **Mutation:** treat an
+    /// unreadable sidecar as trashed in the metadata-read catch block -> must fail. This
+    /// is owner answer 5's "never fabricate an answer from a failed read."
+    func testUnreadableSidecarWithNothingDurableIsStillSkipped() async throws {
+        _ = try writeRawMetadata(#"{"journalID":5}"#, id: idA)
+
+        let result = await scanner().scan(filter: EntryListFilter(trash: .all))
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertEqual(result.skipped, [SkippedCapture(captureID: idA, reason: .noDurableContent)])
+    }
+
     func testTrashedEntryIsHiddenByDefaultAndFoundByTheTrashScope() async throws {
         try writeSegment(idA)
         try write(manifest(idA), id: idA)

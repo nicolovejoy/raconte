@@ -16,6 +16,9 @@ final class LibraryScreenModel {
     nonisolated let capturesRoot: URL
     private let scanner: LibraryScanner
     private let sweeper: TrashSweeper
+    /// Backs both permanent-delete paths this model owns (Delete Now). The 30-day sweep
+    /// has its own, built the same way, inside `TrashSweeper` (#25).
+    private let remover: StagedRemover
     /// Not private (M3 T5): `CaptureScreenModel` uses **these** instances rather than
     /// building its own pair over the same files. Two `EntryMetadataStore` actors do not
     /// serialize with each other, so a backdate written from the detail screen and a
@@ -82,7 +85,8 @@ final class LibraryScreenModel {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
         self.scanner = LibraryScanner(capturesRoot: capturesRoot, containerRoot: containerRoot)
-        self.sweeper = TrashSweeper(capturesRoot: capturesRoot)
+        self.sweeper = TrashSweeper(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        self.remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
         self.journalStore = JournalStore(containerRoot: containerRoot)
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
         self.journalCoverStore = JournalCoverStore(containerRoot: containerRoot)
@@ -311,22 +315,24 @@ final class LibraryScreenModel {
     /// trusting the row the button was drawn from. The row is a snapshot of a scan that
     /// may be seconds old and, on a synced device later, may describe a restore that has
     /// since landed. The only thing that may cost a recording is what is on disk now.
+    ///
+    /// **The rename is the deletion.** `stage` moves the directory out of every scanned
+    /// tree in one atomic step (#25); the purge that follows only reclaims bytes. So this
+    /// returns `true` once the rename lands even if the purge fails — the entry is gone
+    /// from the library and cannot come back, and a purge failure retries at the next
+    /// launch. The alert on `false` now means exactly one thing: the entry is still there.
     @discardableResult
     func deleteEntryPermanently(_ captureID: String) async -> Bool {
         guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
               metadata.isTrashed else { return false }
-        let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        do {
-            try FileManager.default.removeItem(at: dir)
-        } catch {
-            // The removal walk is not atomic — a failure may still have changed the
-            // directory (even deleted the sidecar), so the list must be re-read from
-            // whatever is actually on disk now.
-            await rescan()
-            return false
-        }
+        let remover = self.remover
+        let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
+            do { _ = try remover.stage(captureID: captureID) } catch { return false }
+            _ = remover.purge()
+            return true
+        }.value
         await rescan()
-        return true
+        return staged
     }
 
     /// The 30-day sweep. Called once per launch, after the first scan has published, so

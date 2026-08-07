@@ -56,6 +56,23 @@ final class TrashSweepTests: XCTestCase {
                        .skip(.withinRetention(daysRemaining: TrashPolicy.retentionDays + 1)))
     }
 
+    // MARK: issue #25 step 3 — the sweep decision layer needs no change
+
+    /// GUARD. `decide`'s signature is `(SidecarState, Date) -> Disposition` — no
+    /// manifest, no segments, no `.m4a`, no transcript ever reach it. This pins §0.3.11's
+    /// third bullet: the sweep already decides on the tombstone alone, so step 3 does not
+    /// touch this file. **Mutation (structural):** add a `CaptureSnapshot` parameter to
+    /// `decide` and gate on `holdsIrreplaceableArtifacts` -> this test and the five
+    /// existing `decide` tests above must fail (they call the two-argument form).
+    func testSweepDecidesOnTheTombstoneAloneWhateverElseTheDirectoryHolds() {
+        let expired = EntryMetadata(trashedAt: daysAgo(31))
+        XCTAssertEqual(TrashSweep.decide(.present(expired), now: now), .delete)
+
+        let fresh = EntryMetadata(trashedAt: daysAgo(1))
+        XCTAssertEqual(TrashSweep.decide(.present(fresh), now: now),
+                       .skip(.withinRetention(daysRemaining: 29)))
+    }
+
     // MARK: - Retention math
 
     func testDaysRemainingRoundsUpSoTheLastDayIsNotZero() {

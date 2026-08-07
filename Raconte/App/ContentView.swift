@@ -36,8 +36,20 @@ struct ContentView: View {
                 .navigationDestination(for: LibraryDestination.self) { destination in
                     switch destination {
                     case .entry(let captureID):
+                        // The `else` is not decoration (issue #32): a destination builder
+                        // that returns nothing still pushes, so an unresolvable id used to
+                        // land the owner on a blank page with no way to tell what went
+                        // wrong. `item` is scope-independent now, which leaves only the
+                        // honest cases — a capture that is genuinely gone.
                         if let item = library.item(captureID) {
                             EntryDetailView(model: library, item: item)
+                        } else {
+                            ContentUnavailableView(
+                                "Entry Unavailable",
+                                systemImage: "questionmark.folder",
+                                description: Text("This entry is no longer in the library. "
+                                                  + "It may have been permanently deleted."))
+                            .accessibilityIdentifier("entry.unavailable")
                         }
                     case .trash:
                         TrashView(model: library)

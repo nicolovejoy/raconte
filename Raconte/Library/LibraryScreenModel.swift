@@ -193,11 +193,19 @@ final class LibraryScreenModel {
         await rescan()
     }
 
-    /// The current row for `captureID`, if the last scan still includes it — `nil` after
-    /// an edit that moves it out of the active journal filter. Callers (the detail screen)
-    /// must keep their own last-known copy rather than treating `nil` as "gone".
+    /// The current row for `captureID`, from the last scan — **independent of
+    /// `journalScope`** (issue #32). `nil` means the capture is in none of the three
+    /// lists: never scanned, or permanently deleted.
+    ///
+    /// Scope-independence is the whole point. This resolves a pushed navigation
+    /// destination, and the ids that get pushed do not come from `items` alone: the
+    /// capture screen's recents strip is built from `allEntries`, so a recent filed in
+    /// another journal used to resolve nil and push a blank page, as did an entry moved
+    /// out of the active filter while its detail screen was open.
     func item(_ captureID: String) -> EntryListItem? {
-        items.first { $0.captureID == captureID } ?? trashed.first { $0.captureID == captureID }
+        items.first { $0.captureID == captureID }
+            ?? allEntries.first { $0.captureID == captureID }
+            ?? trashed.first { $0.captureID == captureID }
     }
 
     // MARK: - Entry edits (detail screen)

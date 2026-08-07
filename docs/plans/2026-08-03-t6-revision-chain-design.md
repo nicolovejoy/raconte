@@ -41,8 +41,10 @@ Restated because every decision below is downstream of one of them.
    stateless, and reads through static seams by construction, and
    `LibraryScreenModel.swift:74-78` states in its own words that *"scans overlap"* —
    `rescan()` is called from thirteen sites. Any write reachable from a scan is a write
-   racing an unknown number of copies of itself, plus `TrashSweeper`'s `removeItem` on the
-   whole capture directory (`TrashSweeper.swift:80`).
+   racing an unknown number of copies of itself, plus `TrashSweeper`'s atomic rename of
+   the whole capture directory into `trash-pending/` via `StagedRemover.stage`
+   (`TrashSweeper.swift:89`, `StagedRemoval.swift:39-61`) — the purge that actually
+   deletes the bytes runs later, outside every scanned tree.
 
 ---
 
@@ -549,12 +551,14 @@ and where they went:
 | stale-draft close "on next scan" | same explicit calls, serialized by the actor |
 
 All three skip any capture whose sidecar reports `trashedAt != nil`. Without that,
-`TrashSweeper.run()` — a detached task fired right after a scan, doing
-`FileManager.removeItem(at: dir)` on the whole capture directory (`TrashSweeper.swift:80`) —
-races a concurrent revision write that **recreates the tree**, leaving a directory holding
-one canonical revision, no `entry.json` (so no `trashedAt`), and no audio →
-`holdsIrreplaceableArtifacts` true → permanent quarantine → the entry reappears in the
-library as live. The owner's deletion undone by an editor buffer (A2.3).
+`TrashSweeper.run()` — a detached task fired right after a scan, staging the whole capture
+directory out of `captures/` via `StagedRemover.stage`'s atomic `rename(2)` into
+`trash-pending/` (`TrashSweeper.swift:89`, `StagedRemoval.swift:39-61`) — races a concurrent
+revision write that **recreates the tree** after the rename has already vacated
+`captures/<id>/`, leaving a directory holding one canonical revision, no `entry.json` (so no
+`trashedAt`), and no audio → `holdsIrreplaceableArtifacts` true → permanent quarantine → the
+entry reappears in the library as live. The owner's deletion undone by an editor buffer
+(A2.3).
 
 Nothing else writes into `transcript/` except `LiveTranscriptWriter`, which owns `live.jsonl`
 alone.
@@ -565,7 +569,8 @@ durable-content gate and lists a capture whose sidecar reports `trashedAt != nil
 regardless of what else the directory holds, so a half-destroyed trashed capture no longer
 reads as live. `EntryMetadataStore.update` also now refuses to write when
 `captures/<id>/` is absent (`EntryMetadataError.captureMissing`), closing the ordinary
-restore-after-stage ordering this section flags in owner answer 5's write-side rule.
+restore-after-stage ordering flagged by the write-side rule in §0.3.11 of
+`docs/plans/2026-08-05-staged-removal-build-prompts.md`.
 **T6 still owes the writer-side skip described above** — the head rebuild, promotion, and
 stale-draft close paths must each skip a capture whose sidecar reports `trashedAt != nil`
 before writing into `transcript/`. Neither of the #25 fixes reaches A2.3: that failure
@@ -787,9 +792,11 @@ Justification, two independent reasons (rev 1 had three; the third was wrong —
    on edits that changed no text.
 
 **Struck (C5):** rev 1's third reason claimed the trash sweep treats `transcript/` specially.
-It does not — `TrashSweeper.apply` removes the entire capture directory
-(`TrashSweeper.swift:80`); only recovery's quarantine distinguishes `transcript/`. The
-conclusion stands on reasons 1–2. Consequence worth stating plainly: **`entry-log.jsonl` is
+It does not — `TrashSweeper.apply` stages the entire capture directory into `trash-pending/`
+via an atomic rename (`StagedRemover.stage`, `TrashSweeper.swift:89`,
+`StagedRemoval.swift:39-61`), and the later purge removes it whole; only recovery's
+quarantine distinguishes `transcript/`. The conclusion stands on reasons 1–2. Consequence
+worth stating plainly: **`entry-log.jsonl` is
 deleted with the entry it audits**, so it can never answer "why was this trashed" after the
 30-day sweep. If that question matters, the answer is a container-level log, which this design
 does not propose.

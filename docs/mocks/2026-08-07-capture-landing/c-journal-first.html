@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raconte mock C — journal first</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+html,body{background:#000;color:#e8e8e8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+button{font-family:inherit;cursor:pointer}
+.mockhead{max-width:1040px;margin:0 auto;padding:22px 16px 6px}
+.mockhead h1{font-size:17px;font-weight:650}
+.mockhead h1 span{color:#8f8f96;font-weight:400}
+.mockhead p{font-size:13px;color:#9a9aa2;margin-top:6px;line-height:1.55;max-width:700px}
+.jump{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.jump button{background:#161619;border:1px solid #303036;color:#c8c8cf;font-size:12px;padding:6px 13px;border-radius:15px}
+.jump button.on{background:#33333b;color:#fff;border-color:#5a5a64}
+.stage{display:flex;gap:28px;justify-content:center;align-items:flex-start;padding:18px 16px 60px;flex-wrap:wrap}
+.phone{width:390px;height:844px;background:#0d0d0d;border:1px solid #2b2b2f;border-radius:46px;overflow:hidden;position:relative;flex:none;box-shadow:0 24px 70px rgba(0,0,0,.65)}
+.notes{width:320px;font-size:13px;color:#a5a5ad;line-height:1.6;padding-top:6px}
+.notes h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#6f6f77;margin:16px 0 5px}
+.notes b{color:#d8d8de;font-weight:600}
+.notes ul{padding-left:16px}
+.notes li{margin:3px 0}
+
+.statusbar{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 8px;font-size:14px;font-weight:600;color:#fff;z-index:30;pointer-events:none}
+.statusbar .live{display:none;color:#ff6a5e;font-size:11px;font-weight:700;letter-spacing:.05em}
+body.recording .statusbar .live{display:block}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;padding-top:52px}
+.screen.on{display:flex}
+.linkish{background:none;border:none;color:#9a9ac2;font-size:12px;padding:0}
+
+.cover{width:40px;height:40px;border-radius:9px;flex:none}
+.cover.lg{width:56px;height:56px;border-radius:13px}
+.cover.sm{width:30px;height:30px;border-radius:7px}
+.cov-1987{background:linear-gradient(135deg,#7a5c33,#3d2c14)}
+.cov-field{background:linear-gradient(135deg,#2e6e63,#173733)}
+.cov-bigsur{background:linear-gradient(135deg,#43567e,#22293f)}
+
+/* ---- shelf ---- */
+#scr-shelf h1{font-size:28px;font-weight:700;letter-spacing:-.02em;margin:8px 22px 0}
+#scr-shelf .body{flex:1;overflow-y:auto;padding:14px 18px 30px}
+.jcard{display:flex;align-items:center;gap:14px;width:100%;padding:14px;margin-bottom:10px;background:#131316;border:1px solid #222227;border-radius:18px;color:#fff;text-align:left}
+.jcard:active{background:#1a1a1f}
+.jcard .jc-name{font-size:18px;font-weight:650;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+.jcard .jc-sub{font-size:12px;color:#8c8c94;margin-top:2px}
+.jcard .jc-chev{margin-left:auto;color:#5c5c66;font-size:18px}
+.tag{font-size:10px;font-weight:700;letter-spacing:.04em;border-radius:6px;padding:2px 6px}
+.tag.mv{color:#9a9284;border:1px solid #3d3728;background:#1c1911}
+.tag.lock{color:#c98a8a;border:1px solid #3d2424;background:#1c1111}
+.allentries{display:flex;align-items:center;gap:10px;width:100%;padding:13px 14px;margin-top:8px;background:none;border:1px solid #1d1d22;border-radius:16px;color:#9a9aa2;font-size:14px;text-align:left}
+.newj{display:flex;align-items:center;gap:10px;width:100%;padding:13px 14px;margin-top:10px;background:none;border:1px dashed #2e2e35;border-radius:16px;color:#9a9ac2;font-size:14px;text-align:left}
+.buildstamp{margin:26px auto 8px;font-size:10px;color:rgba(255,255,255,.32);text-align:center}
+
+/* ---- journal home ---- */
+#scr-jhome .jh-nav{display:flex;justify-content:space-between;align-items:center;margin:4px 22px 0}
+#scr-jhome .body{flex:1;overflow-y:auto;padding-bottom:120px}
+.jh-head{display:flex;align-items:center;gap:14px;margin:14px 22px 0}
+.jh-head h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+.jh-head .jh-sub{font-size:13px;color:#8c8c94;margin-top:2px}
+.jh-setup{display:flex;gap:8px;margin:14px 22px 0;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:7px;border:1px solid #2a2a30;border-radius:14px;background:#121214;color:#a9a9b1;font-size:12px;padding:6px 11px}
+.chip .dot{width:7px;height:7px;border-radius:4px;background:#3a3a40}
+.chip.on .dot{background:#30d158}
+.yearhead{font-size:13px;font-weight:700;color:#77777f;margin:20px 22px 6px}
+.erow{display:flex;flex-direction:column;gap:3px;padding:11px 22px;border-bottom:1px solid #17171a;width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none;color:inherit}
+.erow .e1{display:flex;align-items:center;gap:6px;font-size:14px}
+.erow .edate{font-weight:650;color:#eee}
+.erow .emark{font-size:11px;color:#77777f}
+.erow .edur{margin-left:auto;font-size:12px;color:#8c8c94;font-variant-numeric:tabular-nums}
+.erow .esnip{font-family:Georgia,'Times New Roman',serif;font-size:15px;line-height:1.45;color:#c4c4cb;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.erow.hot{background:#191914;border-left:3px solid #c9b25c;padding-left:19px}
+.jh-recbar{position:absolute;left:0;right:0;bottom:0;padding:12px 20px 26px;background:linear-gradient(to top,#0d0d0d 72%,rgba(13,13,13,0));display:flex;justify-content:center;z-index:20}
+.jh-recbtn{display:flex;align-items:center;gap:10px;background:#1c1416;border:1.5px solid #572e2b;border-radius:22px;color:#fff;font-size:16px;font-weight:650;padding:16px 28px}
+.jh-recbtn .core{width:22px;height:22px;border-radius:50%;background:#ff453a}
+
+/* ---- capture (scoped) ---- */
+#scr-capture .cap-nav{display:flex;justify-content:flex-start;margin:4px 22px 0}
+#scr-capture .body{flex:1;overflow-y:auto;display:flex;flex-direction:column;padding-bottom:170px}
+.cap-context{display:flex;align-items:center;gap:10px;margin:10px 22px 0}
+.cap-context .cc-name{font-size:17px;font-weight:650}
+.cap-context .cc-sub{font-size:12px;color:#8c8c94}
+.setup{margin:16px 18px 0;display:flex;flex-direction:column;gap:10px}
+.setuprow{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:#121214;border:1px solid #1f1f23;border-radius:14px}
+.setuprow .lbl{font-size:14px;color:#c9c9d0}
+.setuprow .hint{font-size:11px;color:#77777f;margin-top:2px}
+.pill{font-size:13px;color:#e8d9b8;background:#26211596;border:1px solid #4a3d22;padding:4px 10px;border-radius:10px}
+.toggle{width:46px;height:28px;border-radius:14px;background:#2e2e33;border:none;position:relative;flex:none}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:24px;height:24px;border-radius:12px;background:#f4f4f4;transition:left .15s}
+.toggle.on{background:#30d158}
+.toggle.on::after{left:20px}
+.centerzone{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:34px}
+.elapsed{font-size:40px;font-weight:250;font-variant-numeric:tabular-nums;color:#fff}
+.phasetext{font-size:13px;color:#8c8c94;min-height:17px}
+.meter{display:flex;gap:3px;align-items:center;height:22px}
+.meter i{width:3px;height:4px;background:#3a3a40;border-radius:2px;transition:height .12s}
+body.recording .meter i{background:#ff6a5e}
+.recbtn{width:86px;height:86px;border-radius:50%;border:3px solid #38383e;background:#131315;display:flex;align-items:center;justify-content:center}
+.recbtn .core{width:62px;height:62px;border-radius:50%;background:#ff453a}
+.transcript{display:none;flex:1;margin:16px 22px 0;overflow-y:auto;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.65;color:#d9d9de}
+.transcript p{margin-bottom:.7em}
+.transcript .vtag{font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:10px;font-weight:700;letter-spacing:.06em;color:#8f8f9a;background:#1c1c21;border-radius:6px;padding:2px 6px;margin-right:7px;vertical-align:2px}
+.rectime{display:none;text-align:center;font-size:28px;font-weight:250;font-variant-numeric:tabular-nums;margin-top:12px}
+.intbanner{display:none;margin:12px 18px 0;padding:11px 14px;border:1px solid #5a4a1e;background:#241d0d;border-radius:14px;font-size:13px;color:#e4c977}
+body.rec-on .setup,body.rec-on .centerzone{display:none}
+body.rec-on .transcript{display:block}
+body.rec-on .rectime{display:block}
+body.interrupted .intbanner{display:block}
+
+.thumbbar{position:absolute;left:0;right:0;bottom:0;padding:12px 16px 26px;display:none;gap:12px;align-items:center;justify-content:center;background:linear-gradient(to top,#0d0d0d 72%,rgba(13,13,13,0));z-index:20}
+body.rec-on .thumbbar{display:flex}
+.marker{flex:1;height:76px;border-radius:20px;border:1.5px solid #3d3d45;background:#17171a;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.marker .big{font-size:24px;font-weight:650}
+.marker .sub{font-size:10px;color:#8c8c94;letter-spacing:.03em}
+.marker.flash{animation:flash .35s}
+@keyframes flash{0%{background:#3a3a30;border-color:#c9b25c}100%{background:#17171a}}
+.marker:disabled{opacity:.4}
+.stopbtn{width:76px;height:76px;border-radius:50%;border:3px solid #38383e;background:#131315;display:flex;align-items:center;justify-content:center;flex:none}
+.stopbtn .sq{width:30px;height:30px;border-radius:8px;background:#ff453a}
+.stopbtn.resume{border-color:#6b5a22}
+.stopbtn .resumelbl{display:none;font-size:13px;font-weight:700;color:#e4c977}
+.stopbtn.resume .sq{display:none}
+.stopbtn.resume .resumelbl{display:block}
+.simint{position:absolute;right:20px;bottom:118px;z-index:21;background:none;border:none;color:#5c5c66;font-size:11px;display:none}
+body.rec-on .simint{display:block}
+
+/* detail */
+#scr-detail .body{flex:1;overflow-y:auto;padding:6px 22px 30px}
+#scr-detail .dnav{display:flex;justify-content:space-between;margin:4px 22px 0;font-size:14px;color:#9a9ac2}
+#scr-detail h1{font-size:24px;font-weight:700;margin-top:8px}
+.drow{display:flex;justify-content:space-between;font-size:14px;padding:11px 0;border-bottom:1px solid #1b1b1f}
+.drow .k{color:#8c8c94}
+.dtranscript{font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.65;color:#d9d9de;margin-top:18px}
+
+/* sheets */
+.sheetveil{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;z-index:50}
+.sheetveil.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#161619;border-radius:24px 24px 0 0;padding:10px 16px 30px;z-index:51;transform:translateY(102%);transition:transform .22s ease-out}
+.sheet.on{transform:none}
+.sheet .grab{width:38px;height:5px;border-radius:3px;background:#3a3a42;margin:2px auto 12px}
+.sheet h3{font-size:15px;font-weight:650;margin:2px 6px 10px}
+.jrow{display:flex;align-items:center;gap:12px;width:100%;padding:10px;border-radius:14px;background:none;border:none;color:#fff;text-align:left}
+.jrow:active{background:#202024}
+.jrow .jname{font-size:16px;font-weight:600}
+.jrow .jsub{font-size:12px;color:#8c8c94;margin-top:1px}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:13px 8px;border-bottom:1px solid #222228}
+.srow:last-child{border-bottom:none}
+.srow .k{font-size:14px;color:#c9c9d0}
+.srow .khint{font-size:11px;color:#77777f;margin-top:2px;max-width:200px}
+.seg{display:flex;background:#101013;border:1px solid #2a2a30;border-radius:11px;overflow:hidden}
+.seg button{background:none;border:none;color:#8c8c94;font-size:12px;font-weight:600;padding:7px 11px}
+.seg button.on{background:#2e2e36;color:#fff}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:34px;background:#26262c;border:1px solid #3d3d45;color:#eaeaea;font-size:13px;padding:10px 18px;border-radius:20px;display:none;z-index:60;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast.on{display:block}
+</style>
+</head>
+<body>
+
+<header class="mockhead">
+  <h1>Mock C — journal first <span>· you enter a journal; everything happens inside it</span></h1>
+  <p>The physical metaphor: pick a journal off the shelf, open it, work in it. The home
+  screen is the shelf (which <em>is</em> the journal switcher — issue #18 becomes a whole
+  designed surface, not a menu). A journal's home holds its entries, its record button, and
+  its settings — including per-journal delete protection (#35) and the two-voices default.
+  There is no separate Library and no Recents: the journal's own entry list is both.
+  Capture is one level deeper and carries its journal in the breadcrumb.</p>
+  <div class="jump">
+    <button onclick="goShelf()" id="j-shelf">1 · Shelf</button>
+    <button onclick="goJHome('j1987')" id="j-jhome">2 · Journal home</button>
+    <button onclick="goCapture()" id="j-idle">3 · Capture idle</button>
+    <button onclick="goRec()" id="j-rec">4 · Recording</button>
+    <button onclick="goSaved()" id="j-saved">5 · Stopped</button>
+    <button onclick="goMoved()" id="j-moved">6 · After move-to-journal</button>
+  </div>
+</header>
+
+<div class="stage">
+<div class="phone">
+  <div class="statusbar"><span>9:41</span><span class="live">● REC</span><span>◀ ▲ ▶</span></div>
+
+  <!-- ================= SHELF ================= -->
+  <div class="screen on" id="scr-shelf">
+    <h1>Journals</h1>
+    <div class="body">
+      <div id="shelfcards"></div>
+      <button class="allentries" onclick="toast('One flat timeline across journals — search lives here too')">
+        ≔ &nbsp;All entries <span style="margin-left:auto;color:#5c5c66">44 ›</span></button>
+      <button class="allentries" onclick="toast('Trash screen not mocked')">
+        ⌫ &nbsp;Trash <span style="margin-left:auto;color:#5c5c66">2 ›</span></button>
+      <button class="newj" onclick="toast('New-journal flow not mocked')">＋ New journal</button>
+      <div class="buildstamp">Raconte · mock C</div>
+    </div>
+  </div>
+
+  <!-- ================= JOURNAL HOME ================= -->
+  <div class="screen" id="scr-jhome">
+    <div class="jh-nav">
+      <button class="linkish" onclick="goShelf()">‹ Journals</button>
+      <button class="linkish" onclick="openSettings()">Settings</button>
+    </div>
+    <div class="body">
+      <div class="jh-head">
+        <div class="cover lg" id="jh-cover"></div>
+        <div>
+          <h1 id="jh-name"></h1>
+          <div class="jh-sub" id="jh-sub"></div>
+        </div>
+      </div>
+      <div class="jh-setup" id="jh-chips"></div>
+      <div id="jh-list"></div>
+    </div>
+    <div class="jh-recbar">
+      <button class="jh-recbtn" onclick="goCapture()"><span class="core"></span>Record</button>
+    </div>
+  </div>
+
+  <!-- ================= CAPTURE (scoped) ================= -->
+  <div class="screen" id="scr-capture">
+    <div class="cap-nav"><button class="linkish" id="cap-back" onclick="goJHome(cur)">‹ 1987 Journal</button></div>
+    <div class="body">
+      <div class="cap-context">
+        <div class="cover" id="cap-cover"></div>
+        <div>
+          <div class="cc-name" id="cap-name"></div>
+          <div class="cc-sub">new entry</div>
+        </div>
+      </div>
+
+      <div class="setup">
+        <div class="setuprow">
+          <div>
+            <div class="lbl">Backdate</div>
+            <div class="hint" id="bd-hint">carried from your last entry in this journal</div>
+          </div>
+          <span class="pill" id="bd-pill" style="display:none"></span>
+          <button class="toggle" id="bd-toggle" onclick="toggleBackdate()"></button>
+        </div>
+        <div class="setuprow">
+          <div>
+            <div class="lbl">Two voices</div>
+            <div class="hint">this journal's default · change it in Settings</div>
+          </div>
+          <button class="toggle" id="mv-toggle" onclick="toggleMV()"></button>
+        </div>
+      </div>
+
+      <div class="centerzone">
+        <div class="elapsed">0:00</div>
+        <div class="phasetext">ready</div>
+        <div class="meter" id="meter-idle"></div>
+        <button class="recbtn" onclick="goRec()" aria-label="Record"><div class="core"></div></button>
+      </div>
+
+      <div class="rectime" id="rectime">0:00</div>
+      <div class="intbanner">Interrupted — another app took the microphone. The recording
+        is safe; resume when it's back.</div>
+      <div class="transcript" id="transcript"></div>
+    </div>
+
+    <button class="simint" onclick="toggleInterrupt()">⚡ simulate interruption</button>
+    <div class="thumbbar">
+      <button class="marker" id="voicebtn" onclick="tapVoice()">
+        <span class="big" id="voice-big">BN</span>
+        <span class="sub" id="voice-sub">Big Nico · tap to switch</span>
+      </button>
+      <button class="stopbtn" id="stopbtn" onclick="stopOrResume()">
+        <div class="sq"></div><span class="resumelbl">Resume</span>
+      </button>
+      <button class="marker" id="parabtn" onclick="tapPara()">
+        <span class="big">¶</span>
+        <span class="sub">Paragraph</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= DETAIL (mini) ================= -->
+  <div class="screen" id="scr-detail">
+    <div class="dnav"><button class="linkish" onclick="goJHome(cur)">‹ Back</button><span></span></div>
+    <div class="body">
+      <h1>May 1987</h1>
+      <div class="drow"><span class="k">Entry date</span><span>May 1987 <span style="color:#77777f">(backdated)</span></span></div>
+      <div class="drow"><span class="k">Recorded</span><span>Aug 7, 2026 · 9:41 PM</span></div>
+      <div class="drow"><span class="k">Journal</span>
+        <button class="linkish" style="font-size:14px;font-weight:600" onclick="openMove()">1987 Journal ▸</button></div>
+      <div class="dtranscript">
+        <p><span style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#8f8f9a;background:#1c1c21;border-radius:6px;padding:2px 6px;margin-right:7px;font-family:-apple-system,sans-serif">LN</span>Today we rode down to the creek after school and the water was higher than I have ever seen it.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- sheets -->
+  <div class="sheetveil" id="veil" onclick="closeSheets()"></div>
+  <div class="sheet" id="settings">
+    <div class="grab"></div>
+    <h3 id="set-title">Journal settings</h3>
+    <div class="srow">
+      <div><div class="k">Two voices by default</div>
+        <div class="khint">new entries here open with the BN/LN switch on</div></div>
+      <button class="toggle on" id="set-mv" onclick="this.classList.toggle('on')"></button>
+    </div>
+    <div class="srow">
+      <div><div class="k">Deleting entries</div>
+        <div class="khint">Locked: entries in this journal can never be permanently deleted</div></div>
+      <div class="seg" id="set-del">
+        <button onclick="segPick(this)">Easy</button>
+        <button onclick="segPick(this)">Confirm</button>
+        <button class="on" onclick="segPick(this)">Locked</button>
+      </div>
+    </div>
+    <div class="srow">
+      <div><div class="k">Cover photo</div></div>
+      <button class="linkish" style="font-size:13px" onclick="toast('Cover picker not mocked')">Change ›</button>
+    </div>
+    <div class="srow">
+      <div><div class="k">Rename</div></div>
+      <button class="linkish" style="font-size:13px" onclick="toast('Rename not mocked')">“1987 Journal” ›</button>
+    </div>
+  </div>
+  <div class="sheet" id="movesheet">
+    <div class="grab"></div>
+    <h3>Move to journal</h3>
+    <div id="moverows"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<aside class="notes">
+  <h2>What this variant claims</h2>
+  <ul>
+    <li><b>Journal focus is a place,</b> not a setting. You are always “in” exactly the
+      journal whose pages you're looking at; there is nothing to keep in sync because
+      there's only one journal on screen at a time.</li>
+    <li><b>One switcher, and it's the shelf.</b> #18 stops being a menu problem: journals
+      are large designed cards with cover, range, count, and their two-voices / lock tags.</li>
+    <li><b>#35 gets a natural home:</b> per-journal Settings (jump pill 2 → Settings) carries
+      the Easy / Confirm / Locked delete friction and the two-voices default.</li>
+    <li><b>Recents dissolves.</b> After a capture you land back on the journal's own list
+      with the new entry highlighted on top — the list <em>is</em> the receipt.</li>
+    <li><b>Move-to-journal = the entry walks to another shelf slot</b> and you follow it:
+      landing is the destination journal's home (jump pill 6).</li>
+  </ul>
+  <h2>Marker reachability</h2>
+  <ul>
+    <li>Same fixed thumb bar as A and B: voice · stop · ¶ glued to the bottom edge,
+      nothing scrolls out from under your thumb.</li>
+  </ul>
+  <h2>Costs this variant pays (honest)</h2>
+  <ul>
+    <li><b>Present-day quick capture is two taps deeper</b> (shelf → journal → record)
+      unless the app reopens on the last journal home — mocked here: “Shelf” is where you
+      start only on first launch.</li>
+    <li>Cross-journal browsing/search needs the separate “All entries” surface; the flat
+      one-timeline view stops being the default (user-journeys §6 wants it back at
+      reread time).</li>
+    <li>Interruption/resume, per-journal backdate carry, and two-voices gating behave
+      exactly as shipped.</li>
+  </ul>
+</aside>
+</div>
+
+<script>
+const journals = {
+  j1987:  {name:"1987 Journal", cover:"cov-1987",  range:"Feb – Nov 1987", count:23, mv:true,  del:"Locked",  carried:"May 1987"},
+  field:  {name:"Field Notes",  cover:"cov-field", range:"2026",           count:9,  mv:false, del:"Easy",    carried:null},
+  bigsur: {name:"Big Sur 1998", cover:"cov-bigsur",range:"Mar – Jul 1998", count:12, mv:true,  del:"Confirm", carried:"Mar 14, 1998"},
+};
+const entries = {
+  j1987: [
+    {y:1987, d:"May 1987", bd:true, dur:"2:47", s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."},
+    {y:1987, d:"Apr 12, 1987", bd:true, dur:"4:03", s:"Mr. Halloran kept me after class again, not for trouble this time but to ask about the science fair."},
+    {y:1987, d:"Feb 2, 1987", bd:true, dur:"3:15", s:"Snow day. Dad let me help with the wood splitter which mom does not know about."},
+  ],
+  field: [
+    {y:2026, d:"Aug 6, 2026", bd:false, dur:"1:12", s:"Note to self about the garden fence — the north post is rotting at the base."},
+    {y:2026, d:"Aug 2, 2026", bd:false, dur:"2:36", s:"Thinking about Saturday's session with the physical journals, what order to read them in."},
+  ],
+  bigsur: [
+    {y:1998, d:"Jul 4, 1998", bd:true, dur:"5:21", s:"Fireworks over the water from the ridge, we could see three towns' displays at once."},
+    {y:1998, d:"Mar 14, 1998", bd:true, dur:"3:58", s:"First night at the campground, the tent leaked and nobody cared."},
+  ],
+};
+
+let cur = "j1987";
+let bdOn = true, mvOverride = null;
+let voice = "BN", markers = 0, secs = 0, timer = null, interrupted = false;
+let freshEntry = false;   // highlight top row on the journal home after a capture / move
+
+const $ = id => document.getElementById(id);
+const mvOn = () => mvOverride !== null ? mvOverride : journals[cur].mv;
+
+function renderShelf(){
+  $("shelfcards").innerHTML = Object.entries(journals).map(([k,j]) =>
+    `<button class="jcard" onclick="goJHome('${k}')">
+      <div class="cover lg ${j.cover}"></div>
+      <div><div class="jc-name">${j.name}
+          ${j.mv ? '<span class="tag mv">two voices</span>' : ''}
+          ${j.del === "Locked" ? '<span class="tag lock">locked</span>' : ''}</div>
+        <div class="jc-sub">${j.range} · ${j.count} entries</div></div>
+      <span class="jc-chev">›</span>
+    </button>`).join("");
+}
+function renderJHome(){
+  const j = journals[cur];
+  $("jh-cover").className = "cover lg " + j.cover;
+  $("jh-name").textContent = j.name;
+  $("jh-sub").textContent = j.range + " · " + j.count + " entries";
+  $("jh-chips").innerHTML =
+    `<span class="chip${j.mv ? " on" : ""}"><span class="dot"></span>two voices</span>
+     <span class="chip">deleting: ${j.del}</span>`;
+  let html = "", year = null;
+  (entries[cur]||[]).forEach((e,i) => {
+    if (e.y !== year){ year = e.y; html += `<div class="yearhead">${year}</div>`; }
+    const hot = freshEntry && i === 0;
+    html += `<button class="erow${hot ? " hot" : ""}" onclick="openDetail()">
+      <div class="e1"><span class="edate">${e.d}</span>${e.bd?'<span class="emark">⟲</span>':''}
+        <span class="edur">${e.dur}</span></div>
+      <div class="esnip">${e.s}</div></button>`;
+  });
+  $("jh-list").innerHTML = html;
+  $("cap-back").textContent = "‹ " + j.name;
+  $("cap-cover").className = "cover " + j.cover;
+  $("cap-name").textContent = j.name;
+  if (j.carried){ bdOn = true; $("bd-pill").style.display=""; $("bd-pill").textContent = j.carried;
+    $("bd-hint").textContent = "carried from your last entry in this journal";
+  } else { bdOn = false; $("bd-pill").style.display="none";
+    $("bd-hint").textContent = "off — entry dates itself to today"; }
+  $("bd-toggle").className = "toggle" + (bdOn ? " on" : "");
+  $("mv-toggle").className = "toggle" + (mvOn() ? " on" : "");
+  $("voicebtn").style.display = mvOn() ? "" : "none";
+}
+
+function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
+function pill(id){ document.querySelectorAll(".jump button").forEach(b=>b.classList.remove("on")); $(id).classList.add("on"); }
+function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
+function resetRec(){ stopTimer(); secs=0; markers=0; voice="BN"; interrupted=false;
+  document.body.classList.remove("rec-on","recording","interrupted");
+  $("stopbtn").classList.remove("resume"); }
+
+function goShelf(){ resetRec(); freshEntry=false; renderShelf(); show("scr-shelf"); pill("j-shelf"); }
+function goJHome(k){ resetRec(); cur = k; mvOverride = null; renderJHome(); show("scr-jhome"); pill("j-jhome"); }
+function goCapture(){ resetRec(); freshEntry=false; renderJHome(); show("scr-capture"); pill("j-idle"); }
+function goRec(){
+  resetRec(); renderJHome();
+  document.body.classList.add("rec-on","recording");
+  $("transcript").innerHTML = "";
+  $("voice-big").textContent = "BN"; $("voice-sub").textContent = "Big Nico · tap to switch";
+  show("scr-capture"); pill("j-rec");
+  feedLines(); tick();
+  timer = setInterval(tick, 1000);
+}
+function tick(){
+  if (!interrupted) secs++;
+  $("rectime").textContent = Math.floor(secs/60) + ":" + String(secs%60).padStart(2,"0");
+  document.querySelectorAll("#meter-idle i").forEach(b => b.style.height = (4+Math.random()*16)+"px");
+}
+const lines = [
+  ["BN","Reading from May of eighty-seven. The handwriting gets small here…"],
+  ["LN","Today we rode down to the creek after school and the water was higher than I have ever seen it."],
+  ["LN","Kevin said his brother saw a car go into the ditch by the Hendersons'."],
+];
+let lineIdx = 0;
+function feedLines(){
+  lineIdx = 0;
+  const step = () => {
+    if (!document.body.classList.contains("rec-on") || lineIdx >= lines.length) return;
+    const [v, txt] = lines[lineIdx++];
+    const vt = mvOn() ? `<span class="vtag">${v}</span>` : "";
+    $("transcript").insertAdjacentHTML("beforeend", `<p>${vt}${txt}</p>`);
+    setTimeout(step, 2100);
+  };
+  setTimeout(step, 700);
+}
+function tapVoice(){
+  if (interrupted) return;
+  voice = voice === "BN" ? "LN" : "BN";
+  $("voice-big").textContent = voice;
+  $("voice-sub").textContent = (voice === "BN" ? "Big Nico" : "Little Nico") + " · tap to switch";
+  $("voicebtn").classList.remove("flash"); void $("voicebtn").offsetWidth; $("voicebtn").classList.add("flash");
+  markers++;
+}
+function tapPara(){
+  if (interrupted) return;
+  $("parabtn").classList.remove("flash"); void $("parabtn").offsetWidth; $("parabtn").classList.add("flash");
+  markers++;
+}
+function toggleInterrupt(){
+  interrupted = !interrupted;
+  document.body.classList.toggle("interrupted", interrupted);
+  document.body.classList.toggle("recording", !interrupted);
+  $("stopbtn").classList.toggle("resume", interrupted);
+  $("voicebtn").disabled = interrupted;
+  $("parabtn").disabled = interrupted;
+}
+function stopOrResume(){
+  if (interrupted){ toggleInterrupt(); return; }
+  goSaved();
+}
+/* stop → land straight back on the journal home, new entry highlighted on top */
+function goSaved(){
+  resetRec();
+  freshEntry = true;
+  renderJHome(); show("scr-jhome"); pill("j-saved");
+  toast("Saved — May 1987, " + (markers || 6) + " markers");
+}
+function openDetail(){ resetRec(); freshEntry=false; show("scr-detail"); }
+
+/* move-to-journal → follow the entry to the destination journal's home */
+function goMoved(){
+  entries.field.unshift({y:1987, d:"May 1987", bd:true, dur:"2:47",
+    s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."});
+  cur = "field"; mvOverride = null; freshEntry = true;
+  renderJHome(); show("scr-jhome"); pill("j-moved");
+  toast("Moved to Field Notes");
+  entries.field.shift();
+}
+function openMove(){
+  const rows = Object.entries(journals).filter(([k]) => k !== "j1987").map(([k,j]) =>
+    `<button class="jrow" onclick="closeSheets();goMoved()">
+      <div class="cover sm ${j.cover}"></div>
+      <div><div class="jname">${j.name}</div><div class="jsub">${j.range} · ${j.count} entries</div></div>
+    </button>`).join("");
+  $("moverows").innerHTML = rows;
+  $("veil").classList.add("on"); $("movesheet").classList.add("on");
+}
+function openSettings(){
+  $("set-title").textContent = journals[cur].name + " — settings";
+  $("veil").classList.add("on"); $("settings").classList.add("on");
+}
+function segPick(btn){
+  btn.parentElement.querySelectorAll("button").forEach(b=>b.classList.remove("on"));
+  btn.classList.add("on");
+  journals[cur].del = btn.textContent;
+  renderShelf();
+}
+function closeSheets(){ $("veil").classList.remove("on"); $("settings").classList.remove("on"); $("movesheet").classList.remove("on"); renderJHome(); }
+
+function toggleBackdate(){ bdOn = !bdOn; $("bd-toggle").classList.toggle("on", bdOn);
+  $("bd-pill").style.display = bdOn && journals[cur].carried ? "" : "none"; }
+function toggleMV(){ if (document.body.classList.contains("rec-on")) return;
+  mvOverride = !mvOn(); $("mv-toggle").classList.toggle("on", mvOn());
+  $("voicebtn").style.display = mvOn() ? "" : "none"; }
+
+let toastTimer = null;
+function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("on"), 2600); }
+
+for (let i=0;i<24;i++) $("meter-idle").insertAdjacentHTML("beforeend","<i></i>");
+renderShelf(); renderJHome(); goShelf();
+</script>
+</body>
+</html>

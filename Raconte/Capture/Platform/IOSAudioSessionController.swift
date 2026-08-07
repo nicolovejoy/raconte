@@ -33,6 +33,12 @@ final class IOSAudioSessionController: AudioSessionController, @unchecked Sendab
                                 mode: .spokenAudio,
                                 options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
         try? session.setPreferredIOBufferDuration(0.02)
+        // iOS suppresses haptics and system sounds while a recording session is active
+        // unless the app opts in here. Without this, the capture screen's structure-marker
+        // buttons (T6 §14 design §5) update on disk and in the UI but never buzz — the felt
+        // confirmation is silently dropped. Accepted trade-off: the haptic motor's buzz can
+        // faintly bleed into the mic. Non-critical: never block capture on this failing.
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true)
     }
 

@@ -992,6 +992,11 @@ struct MarkerControlsRow: View {
     let model: CaptureScreenModel
     let markers: MarkerControlsModel
 
+    /// One player per row instance, reused across every marker tap for the capture's
+    /// lifetime — the CHHapticEngine it lazily owns is worth keeping warm rather than
+    /// spinning up per tap.
+    @State private var haptics = MarkerHapticsPlayer()
+
     /// The voice the capture is currently in. A multi-voice capture opens with a frame-0
     /// `bn` marker, so nil — the window before that opener lands — shows "BN", which is
     /// the truth rather than a placeholder (plan §0.3.12).
@@ -1035,14 +1040,20 @@ struct MarkerControlsRow: View {
             // light mode (smoke feedback 2026-08-02) — same rule as the setup fields.
             .environment(\.colorScheme, .dark)
             // The owner is reading a page, not watching the screen: confirmation has to
-            // be felt (design §5). Trigger is `markerCount`, which counts what reached
+            // be felt (design §5). Watching `markerCount`, which counts what reached
             // disk — a failed append is felt as the absence of a buzz.
             //
-            // The CONDITION variant, not a bare trigger: `markerCount` resets to 0 at
-            // capture teardown (the coordinator is respawned per capture), and a bare
-            // trigger fires on any change — a phantom buzz on Done (plan §0.3.4).
-            .sensoryFeedback(.impact, trigger: model.coordinator.markerCount) { old, new in
-                new > old
+            // The `old, new` guard, not a bare "any change" trigger: `markerCount` resets
+            // to 0 at capture teardown (the coordinator is respawned per capture), and an
+            // unguarded trigger fires on that reset too — a phantom buzz on Done
+            // (plan §0.3.4). Firing only on an *increase* is what keeps teardown silent.
+            //
+            // CoreHaptics via `MarkerHapticsPlayer`, not `.sensoryFeedback(.impact, …)`:
+            // device feedback (2026-08-07) was "a weak single dot" — the dash-dot pattern
+            // (`MarkerHaptic`) needs a real duration on the first beat, which
+            // `.sensoryFeedback`/`UIImpactFeedbackGenerator` cannot express.
+            .onChange(of: model.coordinator.markerCount) { old, new in
+                if new > old { haptics.play() }
             }
         }
     }

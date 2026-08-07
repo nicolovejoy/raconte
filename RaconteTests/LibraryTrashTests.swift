@@ -308,6 +308,28 @@ final class LibraryTrashTests: XCTestCase {
         XCTAssertEqual(staged.count, 1, "the staged directory must survive a failed purge")
     }
 
+    // MARK: issue #25 step 3 — restore against a vanished directory
+
+    /// RED. Trash an entry, then stage it away directly (simulating a permanent delete
+    /// that raced the restore tap, or a pre-fix half-destroyed directory a fresh stage
+    /// swept up). `restoreEntry` must report failure and must not recreate
+    /// `captures/<id>/` — that would be exactly the resurrection vector §0.3.6 names.
+    func testRestoreOfAnEntryWhoseDirectoryVanishedReportsFailure() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        _ = try remover.stage(captureID: idA)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path))
+
+        let restored = await model.restoreEntry(idA)
+
+        XCTAssertFalse(restored)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                       "restore must not recreate the capture directory")
+    }
+
     // MARK: - Sweep
 
     func testSweepRemovesExpiredEntriesAndRepublishesTheLists() async throws {

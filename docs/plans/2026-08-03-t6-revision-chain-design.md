@@ -559,6 +559,20 @@ library as live. The owner's deletion undone by an editor buffer (A2.3).
 Nothing else writes into `transcript/` except `LiveTranscriptWriter`, which owns `live.jsonl`
 alone.
 
+**Update (#25 staged removal, step 3, landed early):** the read-side half of this rule
+shipped ahead of T6. `LibraryScanner.build` now reads `entry.json` before the
+durable-content gate and lists a capture whose sidecar reports `trashedAt != nil`
+regardless of what else the directory holds, so a half-destroyed trashed capture no longer
+reads as live. `EntryMetadataStore.update` also now refuses to write when
+`captures/<id>/` is absent (`EntryMetadataError.captureMissing`), closing the ordinary
+restore-after-stage ordering this section flags in owner answer 5's write-side rule.
+**T6 still owes the writer-side skip described above** — the head rebuild, promotion, and
+stale-draft close paths must each skip a capture whose sidecar reports `trashedAt != nil`
+before writing into `transcript/`. Neither of the #25 fixes reaches A2.3: that failure
+leaves no `entry.json` behind to read (a canonical revision reappears with the sidecar
+gone), so a read-side rule has nothing to consult and this write-side skip is still
+load-bearing.
+
 ### 4.7 Decoder rules
 
 Hand-written `init(from:)` on `TranscriptRevision`, `TranscriptSpan`, `TranscriptHead`,

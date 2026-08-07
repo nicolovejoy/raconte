@@ -4,6 +4,16 @@ enum EntryMetadataError: Error, Equatable {
     /// `entry.json` exists and could not be read or decoded. Distinct from absent, which
     /// is not an error at all — see `EntryMetadataStore.read`.
     case unreadable(String)
+    /// There is no `captures/<id>/` to write into. `write` creates intermediate
+    /// directories, so without this an edit could *recreate* a capture directory that a
+    /// staged removal had just moved away — resurrecting a deleted entry from a restore
+    /// tap that lost a race (#25, and T6 §6's A2.3).
+    ///
+    /// This closes the ordinary ordering — a restore tapped after the stage — not a true
+    /// race between this guard and the write that follows it: `update` still reads then
+    /// writes in two steps, so a stage landing in between is not covered. §0.3.12 records
+    /// why the fuller (actor-serialized) answer was rejected for now.
+    case captureMissing
 }
 
 /// Reads and writes `captures/<id>/entry.json`.
@@ -47,6 +57,12 @@ actor EntryMetadataStore {
     @discardableResult
     func update(captureID: String,
                 _ mutate: @Sendable (inout EntryMetadata) -> Void) throws -> EntryMetadata {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw EntryMetadataError.captureMissing
+        }
         var metadata = try read(captureID: captureID)
         mutate(&metadata)
         try write(metadata, captureID: captureID)

@@ -86,12 +86,21 @@ struct LibraryScanner: Sendable {
         var items: [EntryListItem] = []
 
         for capture in snapshot.captures {
-            guard holdsSomethingToShow(capture) else {
+            let (metadata, metadataDegradation) = Self.metadata(for: capture)
+            // A tombstone outranks the durable-content gate (#25). An entry the owner deleted
+            // must stay reachable in the Trash view — to restore or to delete now — whatever
+            // state its files are in, including the half-destroyed directories a pre-staging
+            // permanent delete could leave behind. An UNREADABLE sidecar is not a tombstone and
+            // is not the absence of one: it falls through to the gate exactly as before, because
+            // answering "trashed" or "live" from a read that failed is the one thing
+            // `SidecarState`'s three answers exist to prevent.
+            guard metadata.isTrashed || holdsSomethingToShow(capture) else {
                 result.skipped.append(SkippedCapture(captureID: capture.captureID,
                                                     reason: .noDurableContent))
                 continue
             }
-            items.append(item(for: capture, registry: registry))
+            items.append(item(for: capture, metadata: metadata,
+                              metadataDegradation: metadataDegradation, registry: registry))
         }
 
         result.items = filter.apply(to: items)
@@ -106,22 +115,27 @@ struct LibraryScanner: Sendable {
         return PlayableSourceSelector.frameTotal(of: PlayableSourceSelector.rawSegments(capture)) > 0
     }
 
-    static func item(for capture: CaptureSnapshot, registry: JournalRegistry) -> EntryListItem {
-        var degradations: EntryDegradation = []
+    /// Reads `entry.json` alone, ahead of everything else `item(for:)` computes — split
+    /// out so `build` can gate on trash state before deciding whether the capture even
+    /// gets a row (#25). An unreadable sidecar shows the defaults *and says so* — it has
+    /// not adopted them, and nothing may write those defaults back over the file.
+    static func metadata(for capture: CaptureSnapshot) -> (EntryMetadata, EntryDegradation) {
+        do {
+            let metadata = try EntryMetadataStore.read(
+                url: SegmentLayout.entryMetadataURL(captureDirectory: capture.directory))
+            return (metadata, [])
+        } catch {
+            return (.defaults, [.metadataUnreadable])
+        }
+    }
+
+    static func item(for capture: CaptureSnapshot, metadata: EntryMetadata,
+                     metadataDegradation: EntryDegradation, registry: JournalRegistry) -> EntryListItem {
+        var degradations: EntryDegradation = metadataDegradation
         if capture.manifestCorrupt {
             degradations.insert(.manifestCorrupt)
         } else if capture.manifest == nil {
             degradations.insert(.manifestAbsent)
-        }
-
-        // User metadata. An unreadable sidecar shows the defaults *and says so* — it has
-        // not adopted them, and nothing may write those defaults back over the file.
-        var metadata = EntryMetadata.defaults
-        do {
-            metadata = try EntryMetadataStore.read(
-                url: SegmentLayout.entryMetadataURL(captureDirectory: capture.directory))
-        } catch {
-            degradations.insert(.metadataUnreadable)
         }
 
         let journal = metadata.journalID.flatMap(registry.journal(id:))

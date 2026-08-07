@@ -300,6 +300,41 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertTrue(unreadable.degradations.contains(.transcriptUnreadable))
     }
 
+    // MARK: Row lookup (issue #32)
+
+    /// `item` is journal-scope-independent. The capture screen's recents strip is built
+    /// from `allEntries`, so tapping a recent filed in another journal pushes a captureID
+    /// the filtered `items` does not contain — a lookup that only searched `items` handed
+    /// the navigation destination a nil and pushed a blank page.
+    func testItemFindsAnEntryOutsideTheActiveJournalScope() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Trip")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+        try writeCapture(idB, capturedAt: 2_000, journalID: "J2")
+
+        let model = model()
+        await model.selectJournalScope(.journal("J1"))
+        XCTAssertEqual(model.items.map(\.captureID), [idA], "the list still follows the filter")
+
+        XCTAssertEqual(model.item(idB)?.captureID, idB, "the lookup does not")
+        XCTAssertEqual(model.item(idB)?.journal?.name, "Trip")
+    }
+
+    /// The other two answers the lookup owes: an in-scope row, and a trashed one (which is
+    /// in neither `items` nor `allEntries`). `nil` means the capture exists nowhere.
+    func testItemFindsInScopeAndTrashedEntriesAndNilsAnUnknownID() async throws {
+        try writeJournals([journal("J1", "1987")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+        try writeCapture(idB, capturedAt: 2_000, journalID: "J1")
+
+        let model = model()
+        await model.selectJournalScope(.journal("J1"))
+        await model.trashEntry(idB)
+
+        XCTAssertEqual(model.item(idA)?.captureID, idA)
+        XCTAssertEqual(model.item(idB)?.captureID, idB)
+        XCTAssertNil(model.item(idC))
+    }
+
     // MARK: Edits
 
     func testMoveEntryRewritesTheSidecarAndTheList() async throws {

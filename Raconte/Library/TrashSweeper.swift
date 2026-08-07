@@ -18,21 +18,28 @@ import Foundation
 /// for exactly this.
 struct TrashSweeper: Sendable {
     let capturesRoot: URL
+    let containerRoot: URL
     /// Injected so the retention boundary is testable without waiting a month.
     var now: @Sendable () -> Date = { Date() }
 
-    init(capturesRoot: URL, now: @escaping @Sendable () -> Date = { Date() }) {
+    init(capturesRoot: URL, containerRoot: URL? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         self.capturesRoot = capturesRoot
+        self.containerRoot = containerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
         self.now = now
     }
 
     func run() async -> TrashSweepResult {
         let capturesRoot = self.capturesRoot
+        let containerRoot = self.containerRoot
         let now = self.now
         return await Task.detached(priority: .utility) {
+            let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
             let candidates = Self.gather(capturesRoot: capturesRoot)
-            return Self.apply(TrashSweep.plan(candidates, now: now()),
-                              capturesRoot: capturesRoot)
+            var result = Self.apply(TrashSweep.plan(candidates, now: now()), remover: remover)
+            // The launch-time safety net (owner answer 3): purge whatever this run just
+            // staged, plus anything a previous launch staged and never got to reclaim.
+            result.pendingRemovalFailures = remover.purge().failed
+            return result
         }.value
     }
 
@@ -68,16 +75,18 @@ struct TrashSweeper: Sendable {
 
     // MARK: - Apply
 
-    static func apply(_ actions: [TrashSweepAction], capturesRoot: URL) -> TrashSweepResult {
+    /// `deleted` is staged (#25), not necessarily unlinked yet — from the library's point
+    /// of view the entry is gone the moment the rename lands, and `run()`'s trailing
+    /// `purge()` only reclaims the bytes.
+    static func apply(_ actions: [TrashSweepAction], remover: StagedRemover) -> TrashSweepResult {
         var result = TrashSweepResult()
         for action in actions {
             switch action {
             case .skip(let skipped):
                 result.skipped.append(skipped)
             case .deleteCaptureDirectory(let id):
-                let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
                 do {
-                    try FileManager.default.removeItem(at: dir)
+                    _ = try remover.stage(captureID: id)
                     result.deleted.append(id)
                 } catch {
                     result.skipped.append(SkippedSweep(

@@ -226,36 +226,86 @@ final class LibraryTrashTests: XCTestCase {
     /// `try?`, so a failed delete (permissions, a locked file, anything) still returned
     /// `true` — the caller believes the entry is gone while it sits untouched on disk.
     ///
-    /// Sealing the capture directory itself (0o555, no write) blocks unlinking anything
-    /// inside it — `entry.json` included — so the failure is clean: nothing on disk
-    /// changes. (Sealing `capturesRoot` instead was tried first and is worse than
-    /// useless as a fixture: `FileManager.removeItem`'s recursive walk can still delete
-    /// every *child* of the capture directory, `entry.json` included, before failing on
-    /// the final `rmdir` against the sealed parent — so the sidecar is destroyed even
-    /// though the directory survives and the call reports failure. That is a second,
-    /// real hazard — a failed permanent-delete can silently erase the sidecar while
-    /// leaving an orphaned, unfiled directory behind — filed as a follow-up rather than
-    /// fixed here, since a real fix needs staged/atomic removal, not a bigger catch
-    /// block.)
-    func testDeleteNowReturnsFalseWhenRemovalFails() async throws {
+    /// **Staged removal (#25) has landed, and this fixture was rewritten because of it.**
+    /// Sealing the capture directory itself no longer reliably blocks anything — see
+    /// `testDeleteNowSucceedsWhenTheStagedPurgeFails` below, where an unwritable *child*
+    /// of the capture directory still lets the top-level `rename` through, since moving a
+    /// directory doesn't touch its contents' permissions. The fixture that actually blocks
+    /// the delete now is a sealed `capturesRoot`: `rename(2)` needs write permission on the
+    /// SOURCE's parent to remove its directory entry, and that parent is `capturesRoot`,
+    /// not the capture directory. (Measured directly against this filesystem with a
+    /// standalone POSIX `rename()` probe before this test was written, not assumed.) This
+    /// is exactly the inversion the original comment on this test predicted and named
+    /// staged removal as the fix for.
+    func testDeleteNowReturnsFalseWhenStagingFails() async throws {
         try writeCapture(idA, capturedAt: 1_000)
         let model = model()
         await model.trashEntry(idA)
 
-        let dir = captureDir(idA)
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: capturesRoot.path)
         defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: capturesRoot.path)
         }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: capturesRoot.path),
+                      "running as root — permissions cannot be made to bite")
 
         let deleted = await model.deleteEntryPermanently(idA)
 
         XCTAssertFalse(deleted)
+        let dir = captureDir(idA)
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path),
-                      "the directory must survive a failed removal")
+                      "the directory must survive a failed stage")
         XCTAssertNotNil(try metadata(idA).trashedAt,
                         "a failed permanent delete must not resurrect the entry")
         XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+    }
+
+    // MARK: issue #25 — Delete Now stages, it does not walk
+
+    /// GUARD — pins owner answer 3 (purge immediately after staging). **Mutation:**
+    /// delete the `purge()` call from `deleteEntryPermanently` -> this must fail: the
+    /// staged directory is left behind in `trash-pending/`.
+    func testDeleteNowLeavesNothingStaged() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let deleted = await model.deleteEntryPermanently(idA)
+
+        XCTAssertTrue(deleted)
+        let stagingRoot = AppContainer.trashPendingRoot(containerRoot: containerRoot)
+        let staged = (try? FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)) ?? []
+        XCTAssertTrue(staged.isEmpty, "the purge that follows staging must have run")
+    }
+
+    /// RED — owner answer 1. Sealing `segments/` (inside the capture, not the capture
+    /// directory's own mode, and not `trash-pending/` itself) leaves the top-level
+    /// `rename` untouched: moving a directory to a new parent only needs write on the
+    /// directory being moved and on both parent directories, never on its contents
+    /// (measured directly, not assumed). So the stage succeeds and only the purge that
+    /// follows fails.
+    func testDeleteNowSucceedsWhenTheStagedPurgeFails() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let segments = SegmentLayout.segmentsDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: segments.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: segments.path)
+        }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: segments.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let deleted = await model.deleteEntryPermanently(idA)
+
+        XCTAssertTrue(deleted, "the rename landed — the entry is gone from the library regardless of the purge")
+        XCTAssertFalse(model.items.map(\.captureID).contains(idA))
+        XCTAssertFalse(model.trashed.map(\.captureID).contains(idA))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        let stagingRoot = AppContainer.trashPendingRoot(containerRoot: containerRoot)
+        let staged = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+        XCTAssertEqual(staged.count, 1, "the staged directory must survive a failed purge")
     }
 
     // MARK: - Sweep

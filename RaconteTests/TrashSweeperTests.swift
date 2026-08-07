@@ -178,4 +178,93 @@ final class TrashSweeperTests: XCTestCase {
         XCTAssertTrue(second.isEmpty)
         XCTAssertFalse(exists("A"))
     }
+
+    // MARK: issue #25 — Delete Now stages, it does not walk
+
+    private var stagingRoot: URL { AppContainer.trashPendingRoot(containerRoot: containerRoot) }
+
+    /// RED until `apply` stages instead of walking. Sealing `final/` — a subdirectory
+    /// *inside* the capture, not `trash-pending/` itself and not the capture directory's
+    /// own mode (measured directly: moving a directory to a new parent needs write on the
+    /// directory being moved and on both parents, but never on its contents) — leaves the
+    /// top-level `rename` untouched. So the run stages the capture out of `captures/` and
+    /// into `trash-pending/`, and only the purge that follows fails — "staged, not
+    /// walked," end to end.
+    func testExpiredCaptureIsStagedNotWalked() async throws {
+        let dir = try writeCapture("A", trashedAt: daysAgo(31))
+        let final = SegmentLayout.finalDirectory(captureDirectory: dir)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: final.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: final.path)
+        }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: final.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let result = await sweeper().run()
+
+        XCTAssertFalse(exists("A"), "the capture must be out of captures/ — staged, not walked")
+        let staged = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+        XCTAssertEqual(staged.count, 1)
+        XCTAssertEqual(result.pendingRemovalFailures.count, 1)
+    }
+
+    /// GUARD — pins owner answer 3 (`run()` purges immediately after staging).
+    /// **Mutation:** delete the `purge()` fold-in from `run()` -> this must fail with a
+    /// leftover staged directory.
+    func testSweepPurgesWhatItStagedInTheSameRun() async throws {
+        try writeCapture("A", trashedAt: daysAgo(31))
+
+        let result = await sweeper().run()
+
+        XCTAssertEqual(result.deleted, ["A"])
+        XCTAssertFalse(exists("A"))
+        XCTAssertTrue(result.pendingRemovalFailures.isEmpty)
+        let staged = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+        XCTAssertEqual(staged, [], "trash-pending/ must be empty once the same run's purge has completed")
+    }
+
+    /// Owner answer 3's safety net: a directory a previous, crashed launch staged but
+    /// never purged is cleared by the very next sweep, even when nothing is newly
+    /// expired.
+    func testSweepPurgesAStagingDirectoryLeftByAPreviousLaunch() async throws {
+        let dir = try writeCapture("A", trashedAt: daysAgo(31))
+        let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        _ = try remover.stage(captureID: "A")
+        XCTAssertFalse(exists("A"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path).count, 1)
+        _ = dir // silence unused-variable warning; the directory now lives under trash-pending/
+
+        try writeCapture("B", trashedAt: daysAgo(3))
+
+        let result = await sweeper().run()
+
+        XCTAssertEqual(result.deleted, [], "B is within retention; A is already gone from captures/")
+        let stagedAfter = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+        XCTAssertTrue(stagedAfter.isEmpty)
+    }
+
+    /// RED. The #25 assertion for the sweep path — the one the issue itself doesn't
+    /// name. Sealing `capturesRoot` blocks the stage's `rename` at its source, so the
+    /// sidecar is never touched: no mid-walk destruction is even possible now.
+    func testSweepOverAnUnwritableCapturesRootLosesNoSidecar() async throws {
+        try writeCapture("A", trashedAt: daysAgo(31))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: capturesRoot.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: capturesRoot.path)
+        }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: capturesRoot.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let result = await sweeper().run()
+
+        XCTAssertTrue(exists("A"), "a failed stage must leave the capture exactly where it was")
+        XCTAssertTrue(result.deleted.isEmpty)
+        guard case .deleteFailed = result.skipped.first?.reason else {
+            XCTFail("expected .deleteFailed, got \(String(describing: result.skipped.first))")
+            return
+        }
+        XCTAssertNotNil(try EntryMetadataStore.read(
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir("A"))).trashedAt)
+    }
 }

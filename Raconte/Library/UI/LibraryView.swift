@@ -139,8 +139,10 @@ struct LibraryView: View {
     /// sweep *keeps* declining to remove is one that will sit in the trash forever.
     @ViewBuilder
     private var sweepNote: some View {
-        if let sweep = model.lastSweep, !sweep.skipped.isEmpty {
-            Text("Trash sweep: \(sweep.deleted.count) erased, \(sweep.skipped.count) skipped.")
+        if let sweep = model.lastSweep, !sweep.skipped.isEmpty || !sweep.pendingRemovalFailures.isEmpty {
+            let pending = sweep.pendingRemovalFailures.count
+            Text("Trash sweep: \(sweep.deleted.count) erased, \(sweep.skipped.count) skipped."
+                + (pending > 0 ? ", \(pending) pending" : ""))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)

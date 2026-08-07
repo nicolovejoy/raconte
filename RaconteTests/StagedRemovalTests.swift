@@ -216,6 +216,29 @@ final class StagedRemovalTests: XCTestCase {
     // MARK: - 1.12 — backup exclusion
 
     func testStagingRootIsExcludedFromBackup() throws {
+        // Probe the actual capability first: on GitHub Actions macOS runners, backupd is
+        // unreachable over XPC — "_CSBackupIsItemExcluded_Remote(): XPC error for
+        // connection com.apple.backupd.sandbox.xpc: Connection invalid" (observed
+        // 2026-08-07) — so isExcludedFromBackup can neither be set nor read back there,
+        // independent of what StagedRemover does. Measure the environment rather than
+        // assume it, so any future sandbox with the same limitation is covered too.
+        let probeDir = containerRoot.appendingPathComponent("backup-probe-\(UUID().uuidString)",
+                                                              isDirectory: true)
+        try FileManager.default.createDirectory(at: probeDir, withIntermediateDirectories: true)
+        var probeURL = probeDir
+        var probeValues = URLResourceValues()
+        probeValues.isExcludedFromBackup = true
+        var probeSetSucceeded = true
+        do {
+            try probeURL.setResourceValues(probeValues)
+        } catch {
+            probeSetSucceeded = false
+        }
+        let probeReadBack = try? probeURL.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        try XCTSkipIf(!probeSetSucceeded || probeReadBack?.isExcludedFromBackup != true,
+                      "backupd unreachable in this environment — the backup-exclusion flag "
+                      + "cannot be measured (seen on GitHub Actions runners)")
+
         try writeCapture("idA", trashedAt: now)
         _ = try remover().stage(captureID: "idA")
 

@@ -6,9 +6,13 @@ import Foundation
 /// decision 2). Consumed by T7 promotion and re-applied by T8 retranscription.
 enum MarkerSnapping {
 
-    /// ±window around the raw tap frame. One named constant; a guess until a real
-    /// page is read (design §10) — tune here, nowhere else.
-    static let snapWindowSeconds: Double = 1.5
+    /// ±window around the raw tap frame. One named constant — tune here, nowhere else.
+    /// Tuned from device sessions 2026-08-07/08: taps trail the true boundary by
+    /// 0.18–0.37 s and never lead, so 1.5 s (the original guess) was ~4× oversized —
+    /// and since rule 2 ranks gaps by *size* first, an oversized window lets a long
+    /// pause far from the tap steal the snap from the correct small gap beside it.
+    /// 0.75 s is 2× the worst observed lag.
+    static let snapWindowSeconds: Double = 0.75
 
     static func windowFrames(sampleRate: Double) -> Int64 {
         guard sampleRate.isFinite, sampleRate > 0 else { return 0 }

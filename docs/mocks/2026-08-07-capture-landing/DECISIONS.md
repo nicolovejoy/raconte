@@ -117,6 +117,28 @@ design + B's post-stop receipt + the fixed marker thumb bar.**
   journal tag), no play/delete affordances, below the record button, gone while
   recording.
 
+## Addendum 2026-08-08: the recommendation, in three stylistic treatments
+
+Owner asked to see the recommended IA rendered three ways — clean and minimal, tiny
+rounding on square corners, no serif, subtle, French-pharmacy register. Three more mocks,
+identical DOM/JS (the full recommendation: global focus bar, switcher sheet with designed
+rows + journal settings for #35, post-stop receipt, fixed marker thumb bar) — only the
+treatment differs:
+
+- `d-comptoir.html` — warm chalk paper, ink text, one muted sage accent, hairline
+  structure. Breaks the pinned near-black capture rule (deliberately on the table).
+- `e-encre.html` — ink monochrome on near-black; the only pigments are record red and a
+  pale sage for confirmation/selection; primary buttons invert to ink. The treatment
+  that keeps the shipped capture-screen rule.
+- `f-croix.html` — clinical white with pharmacy-cross green doing all interactive work;
+  uppercase micro-labels everywhere (the packaging register); a 2 px green band under
+  the status bar as the single decorative move.
+
+Shared across all three: 2 px corners (including square-knobbed toggles), 1 px
+hairlines, no fills-for-decoration, no serif anywhere (the serif snippet/transcript
+style from the current app is dropped in these), and the record control as a red circle
+inside a square button — the one round thing, on purpose.
+
 ## What the mocks deliberately do not settle
 
 - Visual polish (type scale, exact colors, motion) — these are IA mocks in the app's

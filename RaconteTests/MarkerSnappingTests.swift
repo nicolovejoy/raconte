@@ -3,8 +3,10 @@ import XCTest
 
 /// T6 §14 step 6: pure gap-snapping of raw marker frames (design §6, plan §0.3.7).
 ///
-/// Every fixture is literal frame numbers on a 48 kHz axis, so the ±1.5 s window is
-/// exactly 72 000 frames and each expected value can be checked by hand.
+/// Every fixture is literal frame numbers on a 48 kHz axis with an explicit
+/// 72 000-frame (±1.5 s) test window, so each expected value can be checked by hand.
+/// The production constant is pinned separately in
+/// `testWindowConstantConvertsToFrames`.
 final class MarkerSnappingTests: XCTestCase {
 
     /// `MarkerSnapping.windowFrames(sampleRate: 48_000)`, written out so the fixtures
@@ -234,9 +236,9 @@ final class MarkerSnappingTests: XCTestCase {
     }
 
     func testWindowConstantConvertsToFrames() {
-        XCTAssertEqual(MarkerSnapping.snapWindowSeconds, 1.5)
-        XCTAssertEqual(MarkerSnapping.windowFrames(sampleRate: 48_000), 72_000)
-        XCTAssertEqual(MarkerSnapping.windowFrames(sampleRate: 16_000), 24_000)
+        XCTAssertEqual(MarkerSnapping.snapWindowSeconds, 0.75)
+        XCTAssertEqual(MarkerSnapping.windowFrames(sampleRate: 48_000), 36_000)
+        XCTAssertEqual(MarkerSnapping.windowFrames(sampleRate: 16_000), 12_000)
     }
 
     /// Snapping is kind-agnostic: a kind written by a newer build snaps exactly as a

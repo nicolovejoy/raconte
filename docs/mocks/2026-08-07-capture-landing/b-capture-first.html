@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raconte mock B — capture first, file after</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+html,body{background:#000;color:#e8e8e8;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+button{font-family:inherit;cursor:pointer}
+.mockhead{max-width:1040px;margin:0 auto;padding:22px 16px 6px}
+.mockhead h1{font-size:17px;font-weight:650}
+.mockhead h1 span{color:#8f8f96;font-weight:400}
+.mockhead p{font-size:13px;color:#9a9aa2;margin-top:6px;line-height:1.55;max-width:700px}
+.jump{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.jump button{background:#161619;border:1px solid #303036;color:#c8c8cf;font-size:12px;padding:6px 13px;border-radius:15px}
+.jump button.on{background:#33333b;color:#fff;border-color:#5a5a64}
+.stage{display:flex;gap:28px;justify-content:center;align-items:flex-start;padding:18px 16px 60px;flex-wrap:wrap}
+.phone{width:390px;height:844px;background:#0d0d0d;border:1px solid #2b2b2f;border-radius:46px;overflow:hidden;position:relative;flex:none;box-shadow:0 24px 70px rgba(0,0,0,.65)}
+.notes{width:320px;font-size:13px;color:#a5a5ad;line-height:1.6;padding-top:6px}
+.notes h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#6f6f77;margin:16px 0 5px}
+.notes b{color:#d8d8de;font-weight:600}
+.notes ul{padding-left:16px}
+.notes li{margin:3px 0}
+
+.statusbar{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 8px;font-size:14px;font-weight:600;color:#fff;z-index:30;pointer-events:none}
+.statusbar .live{display:none;color:#ff6a5e;font-size:11px;font-weight:700;letter-spacing:.05em}
+body.recording .statusbar .live{display:block}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;padding-top:52px}
+.screen.on{display:flex}
+
+.cover{width:40px;height:40px;border-radius:9px;flex:none}
+.cover.sm{width:30px;height:30px;border-radius:7px}
+.cov-1987{background:linear-gradient(135deg,#7a5c33,#3d2c14)}
+.cov-field{background:linear-gradient(135deg,#2e6e63,#173733)}
+.cov-bigsur{background:linear-gradient(135deg,#43567e,#22293f)}
+
+/* ---- capture screen: no journal anything ---- */
+#scr-capture .body{flex:1;overflow-y:auto;display:flex;flex-direction:column;padding-bottom:170px}
+.cap-top{display:flex;justify-content:space-between;align-items:center;margin:8px 22px 0}
+.cap-top .apptitle{font-size:15px;font-weight:650;color:#b9b9c0;letter-spacing:.01em}
+.linkish{background:none;border:none;color:#9a9ac2;font-size:12px;padding:0}
+.centerzone{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:64px}
+.elapsed{font-size:44px;font-weight:250;font-variant-numeric:tabular-nums;color:#fff}
+.phasetext{font-size:13px;color:#8c8c94;min-height:17px}
+.meter{display:flex;gap:3px;align-items:center;height:22px}
+.meter i{width:3px;height:4px;background:#3a3a40;border-radius:2px;transition:height .12s}
+body.recording .meter i{background:#ff6a5e}
+.recbtn{width:96px;height:96px;border-radius:50%;border:3px solid #38383e;background:#131315;display:flex;align-items:center;justify-content:center}
+.recbtn .core{width:70px;height:70px;border-radius:50%;background:#ff453a}
+.mvchip{display:flex;align-items:center;gap:8px;border:1px solid #2a2a30;border-radius:16px;background:#121214;color:#c9c9d0;font-size:13px;padding:8px 14px}
+.mvchip .dot{width:8px;height:8px;border-radius:4px;background:#3a3a40}
+.mvchip.on .dot{background:#30d158}
+.mvchip:disabled{opacity:.45}
+.mvhint{font-size:11px;color:#6f6f77;margin-top:-4px}
+
+/* inbox (Recents redefined) */
+.inbox{margin:56px 18px 0}
+.inbox .rhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.inbox .rtitle{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:#77777f}
+.inrow{display:flex;flex-direction:column;gap:3px;padding:10px 2px;border-bottom:1px solid #1b1b1f;width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none;color:inherit}
+.inrow .m1{display:flex;align-items:center;gap:8px;font-size:12px;color:#9a9aa2}
+.inrow .m1 b{color:#d6d6dc;font-weight:600}
+.inrow .m1 .dur{margin-left:auto;font-variant-numeric:tabular-nums}
+.badge{font-size:10px;font-weight:700;letter-spacing:.04em;border-radius:6px;padding:2px 7px}
+.badge.filed{color:#8fb99a;background:#14231a;border:1px solid #23402c}
+.badge.unfiled{color:#e2c162;background:#241d0d;border:1px solid #4a3d22}
+.inrow .snip{font-family:Georgia,'Times New Roman',serif;font-size:14px;color:#c4c4cb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inrow.hot{background:#191914;margin:0 -8px;padding:10px;border-radius:12px}
+.buildstamp{margin:26px auto 8px;font-size:10px;color:rgba(255,255,255,.32)}
+
+/* recording state */
+.transcript{display:none;flex:1;margin:18px 22px 0;overflow-y:auto;font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.65;color:#d9d9de}
+.transcript p{margin-bottom:.7em}
+.transcript .vtag{font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:10px;font-weight:700;letter-spacing:.06em;color:#8f8f9a;background:#1c1c21;border-radius:6px;padding:2px 6px;margin-right:7px;vertical-align:2px}
+.rectime{display:none;text-align:center;font-size:28px;font-weight:250;font-variant-numeric:tabular-nums;margin-top:10px}
+.intbanner{display:none;margin:12px 18px 0;padding:11px 14px;border:1px solid #5a4a1e;background:#241d0d;border-radius:14px;font-size:13px;color:#e4c977}
+body.rec-on .centerzone,body.rec-on .inbox,body.rec-on .buildstamp,body.rec-on .cap-top .mvchip{display:none}
+body.rec-on .transcript{display:block}
+body.rec-on .rectime{display:block}
+body.interrupted .intbanner{display:block}
+
+/* thumb bar */
+.thumbbar{position:absolute;left:0;right:0;bottom:0;padding:12px 16px 26px;display:none;gap:12px;align-items:center;justify-content:center;background:linear-gradient(to top,#0d0d0d 72%,rgba(13,13,13,0));z-index:20}
+body.rec-on .thumbbar{display:flex}
+.marker{flex:1;height:76px;border-radius:20px;border:1.5px solid #3d3d45;background:#17171a;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px}
+.marker .big{font-size:24px;font-weight:650}
+.marker .sub{font-size:10px;color:#8c8c94;letter-spacing:.03em}
+.marker.flash{animation:flash .35s}
+@keyframes flash{0%{background:#3a3a30;border-color:#c9b25c}100%{background:#17171a}}
+.marker:disabled{opacity:.4}
+.stopbtn{width:76px;height:76px;border-radius:50%;border:3px solid #38383e;background:#131315;display:flex;align-items:center;justify-content:center;flex:none}
+.stopbtn .sq{width:30px;height:30px;border-radius:8px;background:#ff453a}
+.stopbtn.resume{border-color:#6b5a22}
+.stopbtn .resumelbl{display:none;font-size:13px;font-weight:700;color:#e4c977}
+.stopbtn.resume .sq{display:none}
+.stopbtn.resume .resumelbl{display:block}
+.simint{position:absolute;right:20px;bottom:118px;z-index:21;background:none;border:none;color:#5c5c66;font-size:11px;display:none}
+body.rec-on .simint{display:block}
+
+/* ---- filing card (the heart of B) ---- */
+#scr-filing .body{flex:1;overflow-y:auto;padding:10px 18px 30px}
+.filecard{margin-top:14px;background:#121214;border:1px solid #232327;border-radius:20px;padding:18px 16px}
+.filecard h2{font-size:19px;font-weight:650}
+.filecard .fsub{font-size:13px;color:#8c8c94;margin-top:3px}
+.fpreview{font-family:Georgia,'Times New Roman',serif;font-size:14px;color:#b9b9c0;margin-top:12px;padding:10px 12px;background:#0f0f11;border-radius:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.frow{display:flex;align-items:center;gap:11px;padding:13px 4px;border-bottom:1px solid #1e1e22;width:100%;background:none;border-left:none;border-right:none;border-top:none;color:#fff;text-align:left}
+.frow:last-of-type{border-bottom:none}
+.frow .k{font-size:12px;color:#8c8c94;width:64px;flex:none}
+.frow .v{font-size:15px;font-weight:600}
+.frow .vsub{font-size:11px;color:#77777f;margin-top:1px}
+.frow .chev{margin-left:auto;color:#6e6e76}
+.factions{display:flex;gap:10px;margin-top:18px}
+.btn{border-radius:14px;padding:13px 16px;font-size:15px;font-weight:600;border:1px solid #3d3d45;background:#1a1a1e;color:#fff}
+.btn.primary{background:#2e4230;border-color:#3f5c42;flex:1}
+.btn.quiet{background:none;border-color:#2a2a30;color:#9a9aa2}
+
+/* receipt */
+.receipt{display:none;margin:22px 18px 0;padding:20px 18px;background:#121214;border:1px solid #22301f;border-radius:18px;text-align:center}
+body.saved-on .receipt{display:block}
+body.saved-on .centerzone{display:none}
+.receipt .check{font-size:30px;color:#63d77b}
+.receipt h3{font-size:17px;font-weight:650;margin-top:6px}
+.receipt .rsub{font-size:13px;color:#8c8c94;margin-top:4px}
+.receipt .ractions{display:flex;gap:10px;justify-content:center;margin-top:16px}
+
+/* ---- library ---- */
+#scr-library .lib-top{display:flex;align-items:baseline;justify-content:space-between;margin:8px 22px 0}
+#scr-library h1{font-size:28px;font-weight:700;letter-spacing:-.02em}
+#scr-library .body{flex:1;overflow-y:auto;padding-bottom:30px}
+.chiprow{display:flex;gap:8px;overflow-x:auto;padding:12px 22px 4px}
+.chip{display:flex;align-items:center;gap:7px;border:1px solid #2a2a30;border-radius:18px;background:#121214;color:#c9c9d0;font-size:13px;padding:6px 12px;white-space:nowrap;flex:none}
+.chip.on{background:#2b3040;border-color:#4a5470;color:#fff;font-weight:600}
+.chip .csub{font-size:10px;color:#77777f}
+.chip.unf{border-color:#4a3d22;color:#e2c162}
+.yearhead{font-size:13px;font-weight:700;color:#77777f;margin:20px 22px 6px}
+.erow{display:flex;flex-direction:column;gap:3px;padding:11px 22px;border-bottom:1px solid #17171a;width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none;color:inherit}
+.erow .e1{display:flex;align-items:center;gap:6px;font-size:14px}
+.erow .edate{font-weight:650;color:#eee}
+.erow .emark{font-size:11px;color:#77777f}
+.erow .edur{margin-left:auto;font-size:12px;color:#8c8c94;font-variant-numeric:tabular-nums}
+.erow .esnip{font-family:Georgia,'Times New Roman',serif;font-size:15px;line-height:1.45;color:#c4c4cb;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.erow.hot{background:#191914;border-left:3px solid #c9b25c;padding-left:19px}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:34px;background:#26262c;border:1px solid #3d3d45;color:#eaeaea;font-size:13px;padding:10px 18px;border-radius:20px;display:none;z-index:40;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.toast.on{display:block}
+
+/* detail */
+#scr-detail .body{flex:1;overflow-y:auto;padding:6px 22px 30px}
+#scr-detail .dnav{display:flex;justify-content:space-between;margin:4px 22px 0;font-size:14px;color:#9a9ac2}
+#scr-detail h1{font-size:24px;font-weight:700;margin-top:8px}
+.drow{display:flex;justify-content:space-between;font-size:14px;padding:11px 0;border-bottom:1px solid #1b1b1f}
+.drow .k{color:#8c8c94}
+.dtranscript{font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.65;color:#d9d9de;margin-top:18px}
+
+/* sheets */
+.sheetveil{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;z-index:50}
+.sheetveil.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#161619;border-radius:24px 24px 0 0;padding:10px 16px 30px;z-index:51;transform:translateY(102%);transition:transform .22s ease-out}
+.sheet.on{transform:none}
+.sheet .grab{width:38px;height:5px;border-radius:3px;background:#3a3a42;margin:2px auto 12px}
+.sheet h3{font-size:15px;font-weight:650;margin:2px 6px 10px}
+.jrow{display:flex;align-items:center;gap:12px;width:100%;padding:10px;border-radius:14px;background:none;border:none;color:#fff;text-align:left}
+.jrow:active{background:#202024}
+.jrow .jname{font-size:16px;font-weight:600}
+.jrow .jsub{font-size:12px;color:#8c8c94;margin-top:1px}
+.jrow .jcheck{margin-left:auto;color:#63d77b;font-size:16px;visibility:hidden}
+.jrow.cur .jcheck{visibility:visible}
+</style>
+</head>
+<body>
+
+<header class="mockhead">
+  <h1>Mock B — capture first, file after <span>· the capture screen knows nothing about journals</span></h1>
+  <p>Recording is the sacred act; everything else waits. The capture screen has no journal
+  picker and no backdate — you open the app and the record button is the whole story.
+  Filing (journal <em>and</em> backdate) happens on a card that appears when you stop,
+  pre-filled from your last filing so a paper-reading sitting is one confirmation tap per
+  entry. Recents becomes an <b>inbox</b>: it exists to show filing state, and “Unfiled” is
+  a loud badge, not a lost entry.</p>
+  <div class="jump">
+    <button onclick="goIdle()" id="j-idle">1 · Capture idle</button>
+    <button onclick="goRec()" id="j-rec">2 · Recording</button>
+    <button onclick="goFiling()" id="j-filing">3 · Stopped → filing card</button>
+    <button onclick="goLibrary()" id="j-lib">4 · Library</button>
+    <button onclick="goMoved()" id="j-moved">5 · After move-to-journal</button>
+  </div>
+</header>
+
+<div class="stage">
+<div class="phone">
+  <div class="statusbar"><span>9:41</span><span class="live">● REC</span><span>◀ ▲ ▶</span></div>
+
+  <!-- ================= CAPTURE ================= -->
+  <div class="screen on" id="scr-capture">
+    <div class="cap-top">
+      <span class="apptitle">Raconte</span>
+      <button class="linkish" onclick="goLibrary()">Library</button>
+    </div>
+
+    <div class="body">
+      <div class="receipt">
+        <div class="check">✓</div>
+        <h3 id="rc-title">Filed to 1987 Journal</h3>
+        <div class="rsub" id="rc-sub">2:47 · May 1987 · 6 markers</div>
+        <div class="ractions">
+          <button class="btn" onclick="openDetail()">Open entry</button>
+          <button class="btn primary" onclick="goIdle()">Record another</button>
+        </div>
+      </div>
+
+      <div class="centerzone">
+        <div class="elapsed">0:00</div>
+        <div class="phasetext">ready</div>
+        <div class="meter" id="meter-idle"></div>
+        <button class="recbtn" onclick="goRec()" aria-label="Record"><div class="core"></div></button>
+        <button class="mvchip" id="mvchip" onclick="toggleMV()">
+          <span class="dot"></span><span id="mvlbl">Two voices</span>
+        </button>
+        <div class="mvhint">carries over from your last capture · locked once recording</div>
+      </div>
+
+      <div class="rectime" id="rectime">0:00</div>
+      <div class="intbanner">Interrupted — another app took the microphone. The recording
+        is safe; resume when it's back.</div>
+      <div class="transcript" id="transcript"></div>
+
+      <div class="inbox">
+        <div class="rhead">
+          <span class="rtitle">Recent captures</span>
+          <button class="linkish" onclick="goLibrary()">See all →</button>
+        </div>
+        <div id="inboxrows"></div>
+      </div>
+      <div class="buildstamp">Raconte · mock B</div>
+    </div>
+
+    <button class="simint" onclick="toggleInterrupt()">⚡ simulate interruption</button>
+    <div class="thumbbar">
+      <button class="marker" id="voicebtn" onclick="tapVoice()">
+        <span class="big" id="voice-big">BN</span>
+        <span class="sub" id="voice-sub">Big Nico · tap to switch</span>
+      </button>
+      <button class="stopbtn" id="stopbtn" onclick="stopOrResume()">
+        <div class="sq"></div><span class="resumelbl">Resume</span>
+      </button>
+      <button class="marker" id="parabtn" onclick="tapPara()">
+        <span class="big">¶</span>
+        <span class="sub">Paragraph</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= FILING CARD ================= -->
+  <div class="screen" id="scr-filing">
+    <div class="body">
+      <div class="filecard">
+        <h2>File this entry</h2>
+        <div class="fsub" id="f-dur">2:47 recorded just now</div>
+        <div class="fpreview">Today we rode down to the creek after school and the water
+          was higher than I have ever seen it…</div>
+
+        <div style="margin-top:14px">
+          <button class="frow" onclick="openJPick()">
+            <span class="k">Journal</span>
+            <div class="cover sm" id="f-cover"></div>
+            <div><div class="v" id="f-jname"></div>
+              <div class="vsub">pre-filled from your last filing</div></div>
+            <span class="chev">›</span>
+          </button>
+          <button class="frow" onclick="toast('Date picker not mocked — precision day / month / year')">
+            <span class="k">Date</span>
+            <div><div class="v" id="f-date"></div>
+              <div class="vsub" id="f-datesub">carried from your last entry in this journal</div></div>
+            <span class="chev">›</span>
+          </button>
+        </div>
+
+        <div class="factions">
+          <button class="btn quiet" onclick="fileLater()">Later</button>
+          <button class="btn primary" onclick="fileNow()">File to <span id="f-btn-jname"></span></button>
+        </div>
+      </div>
+      <p style="font-size:12px;color:#6f6f77;line-height:1.5;margin:14px 6px">
+        “Later” leaves the entry <b style="color:#e2c162">Unfiled</b> — it stays loud in the
+        inbox until it's filed. Nothing is ever lost, only unfiled.</p>
+    </div>
+  </div>
+
+  <!-- ================= LIBRARY ================= -->
+  <div class="screen" id="scr-library">
+    <div class="lib-top">
+      <h1>Library</h1>
+      <button class="linkish" onclick="void 0">Trash</button>
+    </div>
+    <div class="chiprow" id="chiprow"></div>
+    <div class="body" id="lib-body"></div>
+    <div style="padding:10px 22px 26px">
+      <button class="linkish" onclick="goIdle()">← Capture</button>
+    </div>
+  </div>
+
+  <!-- ================= DETAIL (mini) ================= -->
+  <div class="screen" id="scr-detail">
+    <div class="dnav"><button class="linkish" onclick="goLibrary()">‹ Back</button><span></span></div>
+    <div class="body">
+      <h1>May 1987</h1>
+      <div class="drow"><span class="k">Entry date</span><span>May 1987 <span style="color:#77777f">(backdated)</span></span></div>
+      <div class="drow"><span class="k">Recorded</span><span>Aug 7, 2026 · 9:41 PM</span></div>
+      <div class="drow"><span class="k">Journal</span>
+        <button class="linkish" style="font-size:14px;font-weight:600" onclick="openMove()">1987 Journal ▸</button></div>
+      <div class="dtranscript">
+        <p>Reading from May of eighty-seven. The handwriting gets small here, like I was
+        trying to hide the words even from myself…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- sheets -->
+  <div class="sheetveil" id="veil" onclick="closeSheets()"></div>
+  <div class="sheet" id="jpick">
+    <div class="grab"></div>
+    <h3 id="jpick-title">Journal</h3>
+    <div id="jpickrows"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<aside class="notes">
+  <h2>What this variant claims</h2>
+  <ul>
+    <li><b>There is no journal focus.</b> Capture is context-free; the library's chips are
+      the only scope, and that's fine because they no longer compete with a second
+      switcher upstream.</li>
+    <li><b>Filing is a moment, not a mode.</b> The stop→file card carries journal and
+      backdate together, pre-filled from the last filing — a sitting is record, stop,
+      tap “File to 1987 Journal”, repeat.</li>
+    <li><b>Recents is an inbox.</b> Its one job is filing state: green = filed,
+      amber = Unfiled. “Later” is allowed and visible forever after.</li>
+    <li><b>Move-to-journal lands in the destination list</b> (jump pill 5) — same fix as
+      the other variants, expressed through library chips.</li>
+  </ul>
+  <h2>Marker reachability</h2>
+  <ul>
+    <li>Identical fixed thumb bar to A: voice · stop · ¶ glued to the bottom edge.</li>
+  </ul>
+  <h2>Costs this variant pays (honest)</h2>
+  <ul>
+    <li><b>Two voices can't be journal-derived</b> — the journal isn't known at record
+      time. It becomes a capture-level chip carried from the <em>last capture</em>, not per
+      journal. A real divergence from the shipped per-journal carry-over.</li>
+    <li><b>Backdate moves to after the take.</b> A kill mid-recording means an entry with
+      no backdate yet (user-journeys §8's open question becomes the normal case —
+      recovery lands it Unfiled+undated in the inbox, which at least makes it loud).</li>
+    <li>Interruption/resume unchanged: markers visible but disabled, stop becomes Resume.</li>
+  </ul>
+</aside>
+</div>
+
+<script>
+const journals = {
+  j1987:  {name:"1987 Journal", cover:"cov-1987",  range:"Feb – Nov 1987", count:23, carried:"May 1987"},
+  field:  {name:"Field Notes",  cover:"cov-field", range:"2026",           count:9,  carried:null},
+  bigsur: {name:"Big Sur 1998", cover:"cov-bigsur",range:"Mar – Jul 1998", count:12, carried:"Mar 14, 1998"},
+};
+const entries = {
+  j1987: [
+    {y:1987, d:"May 1987", bd:true, dur:"2:47", s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."},
+    {y:1987, d:"Apr 12, 1987", bd:true, dur:"4:03", s:"Mr. Halloran kept me after class again, not for trouble this time but to ask about the science fair."},
+  ],
+  field: [
+    {y:2026, d:"Aug 6, 2026", bd:false, dur:"1:12", s:"Note to self about the garden fence — the north post is rotting at the base."},
+  ],
+  bigsur: [
+    {y:1998, d:"Jul 4, 1998", bd:true, dur:"5:21", s:"Fireworks over the water from the ridge, we could see three towns' displays at once."},
+  ],
+};
+// inbox rows: filing-state receipts, newest first
+let inbox = [
+  {d:"9:41 PM", dur:"2:47", state:"j1987", s:"Today we rode down to the creek after school and the water was higher…"},
+  {d:"9:22 PM", dur:"4:03", state:"j1987", s:"Mr. Halloran kept me after class again, not for trouble this time…"},
+  {d:"Yesterday", dur:"1:12", state:null, s:"Note to self about the garden fence — the north post is rotting at the base."},
+];
+
+let mv = true;               // carried from last capture, global (B's honest cost)
+let fileTo = "j1987";        // filing-card selection, pre-filled from last filing
+let libScope = "all";
+let voice = "BN", markers = 0, secs = 0, timer = null, interrupted = false;
+let movedTo = null;
+
+const $ = id => document.getElementById(id);
+
+function renderIdle(){
+  $("mvchip").classList.toggle("on", mv);
+  $("mvlbl").textContent = mv ? "Two voices" : "One voice";
+  const rows = inbox.map((e,i) => {
+    const badge = e.state
+      ? `<span class="badge filed">${journals[e.state].name}</span>`
+      : `<span class="badge unfiled">Unfiled</span>`;
+    return `<button class="inrow${e.hot ? " hot" : ""}" onclick="openDetail()">
+      <div class="m1"><b>${e.d}</b>${badge}<span class="dur">${e.dur}</span></div>
+      <div class="snip">${e.s}</div></button>`;
+  });
+  $("inboxrows").innerHTML = rows.join("");
+}
+function renderLibrary(){
+  const chips = [`<button class="chip${libScope==="all"?" on":""}" onclick="setScope('all')">All</button>`,
+    `<button class="chip unf${libScope==="unfiled"?" on":""}" onclick="setScope('unfiled')">Unfiled · 1</button>`];
+  for (const [k,j] of Object.entries(journals)){
+    chips.push(`<button class="chip${libScope===k?" on":""}" onclick="setScope('${k}')">
+      <div class="cover sm ${j.cover}" style="width:22px;height:22px"></div>${j.name}
+      <span class="csub">${j.range}</span></button>`);
+  }
+  $("chiprow").innerHTML = chips.join("");
+  const keys = libScope === "all" ? Object.keys(entries) : (libScope === "unfiled" ? [] : [libScope]);
+  let html = "";
+  if (libScope === "unfiled"){
+    html = `<div class="yearhead">Unfiled</div>
+      <button class="erow" onclick="openDetail()">
+        <div class="e1"><span class="edate">Yesterday</span><span class="edur">1:12</span></div>
+        <div class="esnip">Note to self about the garden fence — the north post is rotting at the base.</div>
+      </button>`;
+  } else {
+    for (const k of keys){
+      let year = null;
+      entries[k].forEach((e,i) => {
+        if (e.y !== year){ year = e.y; html += `<div class="yearhead">${year}</div>`; }
+        const hot = movedTo === k && i === 0;
+        html += `<button class="erow${hot?" hot":""}" onclick="openDetail()">
+          <div class="e1"><span class="edate">${e.d}</span>${e.bd?'<span class="emark">⟲</span>':''}
+            <span class="edur">${e.dur}</span></div>
+          <div class="esnip">${e.s}</div></button>`;
+      });
+    }
+  }
+  $("lib-body").innerHTML = html;
+}
+function setScope(k){ libScope = k; renderLibrary(); }
+
+/* screens */
+function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
+function pill(id){ document.querySelectorAll(".jump button").forEach(b=>b.classList.remove("on")); $(id).classList.add("on"); }
+function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
+function resetRec(){ stopTimer(); secs=0; markers=0; voice="BN"; interrupted=false;
+  document.body.classList.remove("rec-on","recording","interrupted","saved-on");
+  $("stopbtn").classList.remove("resume"); }
+
+function goIdle(){ resetRec(); movedTo=null; renderIdle(); show("scr-capture"); pill("j-idle"); }
+function goRec(){
+  resetRec(); renderIdle();
+  document.body.classList.add("rec-on","recording");
+  $("transcript").innerHTML = "";
+  $("voice-big").textContent = "BN"; $("voice-sub").textContent = "Big Nico · tap to switch";
+  $("voicebtn").style.display = mv ? "" : "none";
+  show("scr-capture"); pill("j-rec");
+  feedLines(); tick();
+  timer = setInterval(tick, 1000);
+}
+function tick(){
+  if (!interrupted) secs++;
+  $("rectime").textContent = Math.floor(secs/60) + ":" + String(secs%60).padStart(2,"0");
+  document.querySelectorAll("#meter-idle i").forEach(b => b.style.height = (4+Math.random()*16)+"px");
+}
+const lines = [
+  ["BN","Reading from May of eighty-seven. The handwriting gets small here…"],
+  ["LN","Today we rode down to the creek after school and the water was higher than I have ever seen it."],
+  ["LN","Kevin said his brother saw a car go into the ditch by the Hendersons'."],
+];
+let lineIdx = 0;
+function feedLines(){
+  lineIdx = 0;
+  const step = () => {
+    if (!document.body.classList.contains("rec-on") || lineIdx >= lines.length) return;
+    const [v, txt] = lines[lineIdx++];
+    const vt = mv ? `<span class="vtag">${v}</span>` : "";
+    $("transcript").insertAdjacentHTML("beforeend", `<p>${vt}${txt}</p>`);
+    setTimeout(step, 2100);
+  };
+  setTimeout(step, 700);
+}
+function tapVoice(){
+  if (interrupted) return;
+  voice = voice === "BN" ? "LN" : "BN";
+  $("voice-big").textContent = voice;
+  $("voice-sub").textContent = (voice === "BN" ? "Big Nico" : "Little Nico") + " · tap to switch";
+  $("voicebtn").classList.remove("flash"); void $("voicebtn").offsetWidth; $("voicebtn").classList.add("flash");
+  markers++;
+}
+function tapPara(){
+  if (interrupted) return;
+  $("parabtn").classList.remove("flash"); void $("parabtn").offsetWidth; $("parabtn").classList.add("flash");
+  markers++;
+}
+function toggleInterrupt(){
+  interrupted = !interrupted;
+  document.body.classList.toggle("interrupted", interrupted);
+  document.body.classList.toggle("recording", !interrupted);
+  $("stopbtn").classList.toggle("resume", interrupted);
+  $("voicebtn").disabled = interrupted;
+  $("parabtn").disabled = interrupted;
+}
+function stopOrResume(){
+  if (interrupted){ toggleInterrupt(); return; }
+  goFiling();
+}
+function toggleMV(){ if (document.body.classList.contains("rec-on")) return;
+  mv = !mv; renderIdle(); }
+
+/* filing */
+function goFiling(){
+  const dur = secs ? Math.floor(secs/60)+":"+String(secs%60).padStart(2,"0") : "2:47";
+  resetRec();
+  $("f-dur").textContent = dur + " recorded just now";
+  renderFilingRow();
+  show("scr-filing"); pill("j-filing");
+}
+function renderFilingRow(){
+  const j = journals[fileTo];
+  $("f-cover").className = "cover sm " + j.cover;
+  $("f-jname").textContent = j.name;
+  $("f-btn-jname").textContent = j.name;
+  if (j.carried){ $("f-date").textContent = j.carried;
+    $("f-datesub").textContent = "carried from your last entry in this journal";
+  } else { $("f-date").textContent = "Today";
+    $("f-datesub").textContent = "no backdate — dates itself to today"; }
+}
+function openJPick(){
+  $("jpick-title").textContent = "Journal";
+  const rows = Object.entries(journals).map(([k,j]) =>
+    `<button class="jrow${k===fileTo?" cur":""}" onclick="fileTo='${k}';renderFilingRow();closeSheets()">
+      <div class="cover sm ${j.cover}"></div>
+      <div><div class="jname">${j.name}</div><div class="jsub">${j.range} · ${j.count} entries</div></div>
+      <span class="jcheck">✓</span></button>`).join("");
+  $("jpickrows").innerHTML = rows;
+  $("veil").classList.add("on"); $("jpick").classList.add("on");
+}
+function fileNow(){
+  const j = journals[fileTo];
+  inbox = [{d:"just now", dur:"2:47", state:fileTo, s:lines[1][1], hot:true}, ...inbox.slice(0,2)];
+  resetRec(); renderIdle();
+  document.body.classList.add("saved-on");
+  $("rc-title").textContent = "Filed to " + j.name;
+  $("rc-sub").textContent = "2:47" + (j.carried ? " · " + j.carried : "") + (markers ? " · "+markers+" markers" : " · 6 markers");
+  show("scr-capture"); pill("j-filing");
+  inbox[0].hot = false;
+}
+function fileLater(){
+  inbox = [{d:"just now", dur:"2:47", state:null, s:lines[1][1], hot:true}, ...inbox.slice(0,2)];
+  goIdle();
+  toast("Left unfiled — it stays in the inbox");
+  inbox[0].hot = false;
+}
+
+function goLibrary(){ resetRec(); renderLibrary(); show("scr-library"); pill("j-lib"); }
+function openDetail(){ resetRec(); show("scr-detail"); }
+
+/* move-to-journal → land in destination-scoped library */
+function goMoved(){
+  movedTo = "bigsur";
+  entries.bigsur.unshift({y:1987, d:"May 1987", bd:true, dur:"2:47",
+    s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."});
+  libScope = "bigsur";
+  renderLibrary(); show("scr-library"); pill("j-moved");
+  toast("Moved to Big Sur 1998");
+  entries.bigsur.shift();
+}
+function openMove(){
+  $("jpick-title").textContent = "Move to journal";
+  const rows = Object.entries(journals).filter(([k]) => k !== "j1987").map(([k,j]) =>
+    `<button class="jrow" onclick="closeSheets();goMoved()">
+      <div class="cover sm ${j.cover}"></div>
+      <div><div class="jname">${j.name}</div><div class="jsub">${j.range} · ${j.count} entries</div></div>
+    </button>`).join("");
+  $("jpickrows").innerHTML = rows;
+  $("veil").classList.add("on"); $("jpick").classList.add("on");
+}
+function closeSheets(){ $("veil").classList.remove("on"); $("jpick").classList.remove("on"); }
+
+let toastTimer = null;
+function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("on"), 2600); }
+
+for (let i=0;i<24;i++) $("meter-idle").insertAdjacentHTML("beforeend","<i></i>");
+goIdle();
+</script>
+</body>
+</html>

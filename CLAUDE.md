@@ -43,14 +43,30 @@ authoritative resume point, NOT this summary.
 - Process: SendMessage-resume of a task's original implementer works well for fix rounds
   (context intact, no re-brief); Gate A's reviewer wrote throwaway probe TESTS to confirm
   findings empirically before reporting — worth demanding in future gate prompts.
+- **Post-handoff continuation (same evening): GATE A CLOSED, FORMAT FROZEN.** Fix wave
+  `94edf7bf` (all 8 findings, each reproduced before fixing — real trap, real EISDIR,
+  real resurrection), re-review verdicted all ADDRESSED (reviewer re-ran suite itself),
+  freeze APPROVED with one new finding N1 (C1's dedupe dropped duplicate file numbers
+  from `revisionFiles` → permanent cache defeat, probe-confirmed) — fixed `6ca5ab2f`
+  (dedupedFiles bucket, differential trust-path test), scoped re-review ADDRESSED.
+  **Branch `t6/revision-chain` at `6ca5ab2f`, 849 unit tests green, PUSHED to origin.**
+  Gate rulings written into design **§15** (`b9dd2774` on main): duplicate-id rule,
+  persistHead silent-no-op ruling + its throw-on-unreadable-sidecar edge, all as-built
+  format deltas. Task 4 deliberately NOT dispatched — clean boundary for next session.
 
-**Next steps:**
-1. **Resume the SDD loop from the ledger**: Gate A fix-wave report → scoped re-review →
-   freeze verdict → Tasks 4 (promotion), 5 (splice+draft), 6 (merge) → Gate B whole-branch
-   review → PR. Plan doc has full briefs; ledger has parked minors.
-2. **After Gate A passes: write the T7 editor-UI plan** (separate doc — needs the frozen
-   format; carries #37 word-correction, audit log §7, parked rendering minors, #39
-   visibility hook).
+**Next steps (next session — an Opus agent can start directly from these):**
+1. **Resume the SDD loop at Task 4.** Everything needed is on disk:
+   ledger `.superpowers/sdd/2026-08-08-revision-chain-implementation-plan/progress.md`
+   (authoritative state incl. parked minors M1-M5 for Gate B), plan
+   `docs/plans/2026-08-08-revision-chain-implementation-plan.md`, Task 4 brief already
+   extracted at `.superpowers/sdd/2026-08-08-revision-chain-implementation-plan/task-4-brief.md`,
+   code maps `docs/plans/2026-08-08-revision-chain-code-maps.md`, design + §15 amendments
+   `docs/plans/2026-08-03-t6-revision-chain-design.md`. Worktree `/Users/nico/src/raconte-t6`
+   (branch `t6/revision-chain`, base `d0c18d2c`, HEAD `6ca5ab2f`, 849 tests).
+   Sequence: Task 4 (promotion) → 5 (splice+draft) → 6 (merge) → Gate B whole-branch
+   review → PR (auto-mode blocks `gh pr merge`; end at an open PR for Nico).
+2. **After Gate B: write the T7 editor-UI plan** (separate doc — carries #37
+   word-correction, audit log §7, parked rendering minors, #39 visibility hook).
 3. Owner Saturday marker session items still stand (real two-voice page, dash-dot haptic
   verify) if not already done.
 4. Design session (owner asked): capture-landing mocks A/B/C on

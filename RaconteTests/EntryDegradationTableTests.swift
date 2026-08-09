@@ -10,9 +10,9 @@ import XCTest
 /// the author to `reasonTable` a few lines below it.
 final class EntryDegradationTableTests: XCTestCase {
 
-    /// Six flags, bits 0…5. Adding one fails here first.
+    /// Seven flags, bits 0…6. Adding one fails here first.
     func testEveryDeclaredFlagIsAccountedFor() {
-        XCTAssertEqual(EntryDegradation.allDeclared.rawValue, (1 << 6) - 1,
+        XCTAssertEqual(EntryDegradation.allDeclared.rawValue, (1 << 7) - 1,
                        "a flag was added or renumbered — update allDeclared and reasonTable")
     }
 
@@ -58,6 +58,7 @@ final class EntryDegradationTableTests: XCTestCase {
                         "entry settings unreadable",
                         "journal not found",
                         "transcript unreadable",
-                        "transcript may be incomplete"])
+                        "transcript may be incomplete",
+                        "transcript revision unreadable"])
     }
 }

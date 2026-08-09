@@ -66,7 +66,13 @@ authoritative resume point, NOT this summary.
    Sequence: Task 4 (promotion) → 5 (splice+draft) → 6 (merge) → Gate B whole-branch
    review → PR (auto-mode blocks `gh pr merge`; end at an open PR for Nico).
 2. **After Gate B: write the T7 editor-UI plan** (separate doc — carries #37
-   word-correction, audit log §7, parked rendering minors, #39 visibility hook).
+   word-correction, audit log §7, parked rendering minors, #39 visibility hook, and NEW:
+   owner may prefer keyboard-first editing on iPad/Mac — see capture-landing decisions).
+3. **Design follow-ups (owner decided 2026-08-08 evening — see
+   `docs/plans/2026-08-08-capture-landing-decisions.md`):** IA approved (A + C-rows +
+   B-receipt + thumb bar); owed next: LN/BN font mock (serif-vs-sans, dark, icon-blue
+   accent), palette pass connected to app-icon blue, capture-interface iteration (later),
+   #27 Mail-model swipe gated by #35 journal lock ("not too much later").
 3. Owner Saturday marker session items still stand (real two-voice page, dash-dot haptic
   verify) if not already done.
 4. Design session (owner asked): capture-landing mocks A/B/C on

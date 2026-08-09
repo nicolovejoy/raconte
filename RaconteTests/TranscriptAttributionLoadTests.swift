@@ -126,12 +126,24 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertEqual(transcript.text, "hello there", "the transcript itself is untouched")
     }
 
+    /// The split is attributable to the marker, not to the transcript's own shape: one
+    /// `TranscriptRecord` carrying two timed runs, so without the `.paragraph` tap the
+    /// pieces would stay one paragraph (§6's "record text used verbatim when a group
+    /// holds every piece of its record" rule) — the same-record boundary is not a
+    /// boundary the marker log did not create.
     func testParagraphOnlyMarkersProduceUnlabeledParagraphs() async throws {
         try writeManifest(idA)
-        try writeLiveTranscript(idA, [
-            ("first paragraph", 0, 20_000),
-            ("second paragraph", 40_000, 60_000),
-        ])
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(TranscriptRecord(
+            seq: 0, text: "first paragraph second paragraph",
+            captureFrameStart: 0, captureFrameEnd: 60_000,
+            runs: [
+                TranscriptRun(text: "first paragraph", captureFrameStart: 0, captureFrameEnd: 20_000),
+                TranscriptRun(text: "second paragraph", captureFrameStart: 40_000, captureFrameEnd: 60_000),
+            ],
+            generator: "SpeechTranscriber", locale: "en_US"))
+        try writer.close()
         try writeMarkers(idA, [
             StructureMarker(seq: 0, frame: 30_000, kind: .paragraph),
         ])
@@ -172,12 +184,17 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertEqual(transcript.text, "hello there", "the scan's own job is unaffected")
     }
 
-    // MARK: - Sample rate comes off the manifest, not a constant
+    // MARK: - Window size (the mechanism `AttributionMode.compute(sampleRate:)` drives)
 
-    /// Direct loader call (brief step 2): the manifest read that supplies the real
-    /// sample rate lives in `LibraryScreenModel`, so this exercises `AttributionMode`
-    /// straight, with two window sizes chosen to disagree on where a tap snaps.
-    func testSampleRateComesFromTheManifest() throws {
+    /// Not a manifest test — a direct `AttributionMode.compute(sampleRate:)` call, to pin
+    /// down the *mechanism* `testSampleRateComesFromTheManifest` below depends on: two
+    /// window sizes that disagree on where a tap snaps, chosen by hand against
+    /// `MarkerSnapping.snap`'s rule order (rule 1's gap intersection vs. rule 4's
+    /// raw-frame fallback). The narrow window's outcome is asserted on the property the
+    /// window size actually changes — `hasApproximateBoundary` — not just a count, so a
+    /// change that shuffled paragraph counts for an unrelated reason would not pass this
+    /// by accident.
+    func testWiderSnapWindowFindsAGapTheNarrowerWindowMisses() throws {
         try writeLiveTranscript(idA, [
             ("hello there", 0, 50_000),
             ("world", 90_000, 100_000),
@@ -193,8 +210,52 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         let narrowParagraphs = try XCTUnwrap(narrow.paragraphs)
         XCTAssertEqual(wideParagraphs.count, 2,
                        "the wider 48kHz window reaches the nearby gap and finds the voice boundary")
+        XCTAssertFalse(wideParagraphs.contains { $0.hasApproximateBoundary },
+                       "the gap was found, so the cut is exact")
+
         XCTAssertEqual(narrowParagraphs.count, 1,
                        "the narrower 16kHz window misses the gap and the tap lands mid-run")
-        XCTAssertNotEqual(wideParagraphs, narrowParagraphs)
+        XCTAssertTrue(try XCTUnwrap(narrowParagraphs.first).hasApproximateBoundary,
+                      "nothing in the window means the raw tap frame is kept, and marked approximate")
+    }
+
+    /// The requirement itself: `Manifest.format.sampleRate`, not a constant, is what
+    /// reaches `MarkerSnapping.windowFrames`. Same discriminating fixture as the window
+    /// test above, but driven end-to-end through `model.transcript(for:)` off a manifest
+    /// written at 16kHz — the fixture where 48kHz's window finds the gap (2 paragraphs)
+    /// and 16kHz's doesn't (1, approximate). If the loader ever fell back to a literal
+    /// 48_000 here, this would still see 2 paragraphs and fail.
+    func testSampleRateComesFromTheManifest() async throws {
+        try writeManifest(idA, sampleRate: 16_000)
+        try writeLiveTranscript(idA, [
+            ("hello there", 0, 50_000),
+            ("world", 90_000, 100_000),
+        ])
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 20_000, kind: .voice, voice: "bn")])
+
+        let transcript = await model().transcript(for: idA)
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs)
+        XCTAssertEqual(paragraphs.count, 1, "16kHz off the manifest gives the narrow window's outcome")
+        XCTAssertTrue(try XCTUnwrap(paragraphs.first).hasApproximateBoundary)
+    }
+
+    /// `manifestFacts`' 48kHz fallback (no manifest, or one that fails to decode) — the
+    /// same discriminating fixture, so a broken fallback (e.g. 0 or a tiny default) would
+    /// show up as the narrow-window outcome instead of the wide one.
+    func testMissingManifestFallsBackTo48kHzForTheSnapWindow() async throws {
+        // No writeManifest(idA) call: `transcript/` is created directly, same as a
+        // capture whose manifest write never landed.
+        try writeLiveTranscript(idA, [
+            ("hello there", 0, 50_000),
+            ("world", 90_000, 100_000),
+        ])
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 20_000, kind: .voice, voice: "bn")])
+
+        let transcript = await model().transcript(for: idA)
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs)
+        XCTAssertEqual(paragraphs.count, 2, "the 48kHz fallback finds the gap, same as an explicit 48kHz manifest")
+        XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary })
     }
 }

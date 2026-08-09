@@ -1256,18 +1256,29 @@ sections it names**:
    foreign build's anchor kind was destroyed on re-encode while its frames were kept.
    `.unknown` answers like `.none` for usable-bounds (`hasUsableBounds` is the one
    predicate). Absent key still decodes `.none`.
-3. **Duplicate revision `id` across two canonical files is a defined state, not a trap**:
-   the chain dedupes at decode (lowest local file number wins). It is the expected T9
-   sync shape (§2.2: same revision written at each device's next free `n`); revisions
-   are immutable, so any winner carries identical bytes. The build's first reading
-   crashed (`Dictionary(uniqueKeysWithValues:)`) — probe-confirmed at the gate.
+3. **Duplicate revision `id` across two canonical files is a defined state, not a trap**
+   (rule, per the gate's freeze paperwork; belongs beside §4.5a): *two canonical files
+   carrying the same revision `id` are one revision. The lowest file number is its
+   canonical location; the others are ignored, counted in `revisionFiles`, and not an
+   error. Same id with different bytes is a violation of immutability upstream and is
+   not detected here.* It is the expected T9 sync shape (§2.2: the same revision written
+   at each device's next free `n`); revisions are immutable, so any winner carries
+   identical bytes, and file numbers never feed derivation — only the head's
+   device-local `fileNumber` pointer — so all devices derive identical answers. The
+   build's first reading crashed (`Dictionary(uniqueKeysWithValues:)`) — probe-confirmed
+   at the gate; its second reading dropped the duplicate from `revisionFiles`, silently
+   defeating the scan cache forever (also probe-confirmed).
 4. **`append` requires `captures/<id>/` to exist** (`.captureMissing`, mirroring
    `EntryMetadataStore`) — §4.6's write-side trash skip was insufficient as specified:
    after `StagedRemover.stage` renames the capture away, there is no sidecar to consult
    and the sidecar read defaults to not-trashed; a bare mkdir-and-write resurrects the
    entry (A2.3, probe-confirmed). Existence-check-before-mkdir is the load-bearing rule;
    the sidecar `trashedAt` check remains for the directory-present case. `persistHead`
-   carries the same guards (silent no-op — pending gate ruling on no-op vs throw).
+   carries the same guards; the gate ruled **silent no-op is correct** (the head is a
+   pure cache — a skipped persist costs a rebuild, never correctness; add a
+   `PersistOutcome` return only when a caller actually consumes it). One edge for T6c
+   callers: the sidecar guard makes `persistHead` throw on an *unreadable* (not absent)
+   `entry.json`, where it previously wrote; `append` swallows this.
 5. **Head trust condition narrowed** (amends §4.3): a persisted head is trusted only if
    its `revisionFiles` matches the listing AND `unreadableFiles` is empty AND
    `listingUnreadable` is false. A head cached during damage is never trusted, so §4.8's

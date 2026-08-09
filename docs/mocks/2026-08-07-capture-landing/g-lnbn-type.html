@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raconte — LN/BN transcript type: serif vs sans (icon-blue palette)</title>
+<style>
+/* ===== PALETTE — derived from the app icon =====
+   Sampled from Raconte/Assets.xcassets/AppIcon.appiconset/icon-1024.png:
+     field  #092343  hsv(213.5, 87%, 26%)  — 88% of icon pixels
+     mark   #efdfc6  hsv( 37,   17%, 94%)  — the face/waves/wordmark cream
+   The accent ramp holds the icon's hue (213.5) and re-cuts S/V so it is legible on
+   near-black; the ink is the icon's cream, pulled down a little. Navy + cream is the
+   icon's own pairing, so nothing here is invented. Page stays near-black: the capture
+   screen pins it, and this palette must survive that rule.                          */
+:root{
+  --icon-navy:#092343; --icon-cream:#efdfc6;
+
+  --page:#000000; --paper:#0b0e13; --card:#12161d; --card2:#181d26;
+  --ink:#e7dfd1; --sub:#9a9488; --faint:#6b675e;
+  --line:#1c222c; --line2:#262e3a;
+
+  --accent:#568acc;      /* h213.5 s58 v80 — links, selection, playhead */
+  --accent-hi:#81b0eb;   /* h213.5 s45 v92 — pressed / emphasis        */
+  --accent-dim:#224673;  /* h213.5 s70 v45 — accent hairlines          */
+  --accent-bg:#0d1b2b;   /* h213.5 s70 v17 — accent wash               */
+  --accent-ink:#071019;  /* text on an accent fill                     */
+
+  --rec:#e0442f;
+  --warnbg:#1d180c; --warnline:#4a3d1e; --warntx:#cfae56;
+
+  /* the two candidate faces — same point size on both sides, deliberately */
+  --serif:ui-serif,"New York",Georgia,"Times New Roman",serif;
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;
+}
+
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+html,body{background:var(--page);color:var(--ink);font-family:var(--sans)}
+button{font-family:inherit;cursor:pointer;color:inherit}
+
+.mockhead{max-width:1180px;margin:0 auto;padding:22px 16px 6px}
+.mockhead h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.mockhead h1 span{color:var(--sub);font-weight:400}
+.mockhead p{font-size:13px;color:var(--sub);margin-top:6px;line-height:1.55;max-width:760px}
+.controls{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.ctlrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ctlrow .lbl{font-size:9.5px;text-transform:uppercase;letter-spacing:.16em;color:var(--faint);width:78px;flex:none}
+.ctlrow button{background:var(--card);border:1px solid var(--line2);color:var(--sub);font-size:12px;padding:6px 12px;border-radius:2px}
+.ctlrow button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+
+.stage{display:flex;gap:26px;justify-content:center;align-items:flex-start;padding:18px 16px 24px;flex-wrap:wrap}
+.col{width:390px;flex:none}
+.col .caphead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px}
+.col .capname{font-size:13px;font-weight:600}
+.col .capface{font-size:10.5px;color:var(--faint);letter-spacing:.04em}
+.phone{width:390px;height:844px;background:var(--paper);border:1px solid var(--line2);border-radius:8px;overflow:hidden;position:relative;box-shadow:0 24px 70px rgba(0,0,0,.7)}
+
+.notesrow{max-width:1180px;margin:0 auto;padding:6px 16px 70px;display:flex;gap:32px;flex-wrap:wrap}
+.notes{flex:1;min-width:300px;font-size:13px;color:var(--sub);line-height:1.6}
+.notes h2{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--faint);margin:16px 0 5px}
+.notes b{color:var(--ink);font-weight:600}
+.notes ul{padding-left:16px}
+.notes li{margin:4px 0}
+.swatches{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.sw{font-size:9.5px;color:var(--faint);letter-spacing:.04em;text-align:center}
+.sw i{display:block;width:52px;height:34px;border-radius:2px;border:1px solid var(--line2);margin-bottom:4px}
+
+/* ---------- phone chrome ---------- */
+.statusbar{position:absolute;top:0;left:0;right:0;height:46px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 24px 6px;font-size:12px;font-weight:600;z-index:30;pointer-events:none;font-variant-numeric:tabular-nums}
+.statusbar .live{display:none;color:var(--rec);font-size:10px;font-weight:700;letter-spacing:.12em}
+body.live-on .statusbar .live{display:block}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;padding-top:46px}
+.screen.on{display:flex}
+.microlabel{font-size:9.5px;text-transform:uppercase;letter-spacing:.16em;color:var(--faint)}
+.navrow{display:flex;align-items:center;gap:6px;margin:8px 20px 0;font-size:13px;color:var(--accent);
+  background:none;border:none;padding:0;align-self:flex-start}
+.navrow .chev{font-size:15px;line-height:1}
+
+/* ---------- entry detail ---------- */
+.entryhead{margin:14px 20px 0}
+.entryhead h1{font-size:24px;font-weight:650;letter-spacing:-.02em}
+.entryhead .meta{font-size:11px;color:var(--faint);margin-top:3px;font-variant-numeric:tabular-nums}
+.player{display:flex;align-items:center;gap:11px;margin:14px 20px 0;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:2px}
+.player .play{width:30px;height:30px;border-radius:2px;border:1px solid var(--accent-dim);background:var(--accent-bg);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}
+.player .track{flex:1;height:2px;background:var(--line2);position:relative}
+.player .track i{position:absolute;left:0;top:0;bottom:0;width:34%;background:var(--accent)}
+.player .t{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums;flex:none}
+
+.tsechead{display:flex;align-items:baseline;justify-content:space-between;margin:22px 20px 8px}
+.tsechead .voices{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.script{flex:1;overflow-y:auto;padding:0 20px 40px;scrollbar-width:none}
+.script::-webkit-scrollbar,.livescript::-webkit-scrollbar{display:none}
+.livescript{scrollbar-width:none}
+.script p{margin-bottom:16px}
+
+/* the type axis — set on the phone, inherited by the prose */
+.phone[data-face="serif"] .script,.phone[data-face="serif"] .livescript{font-family:var(--serif)}
+.phone[data-face="sans"]  .script,.phone[data-face="sans"]  .livescript{font-family:var(--sans)}
+.script,.livescript{font-size:17px;line-height:1.58;color:var(--ink)}
+.phone[data-face="sans"] .script,.phone[data-face="sans"] .livescript{font-size:16px;line-height:1.55}
+
+/* BN italic — shipped rule: the whole paragraph, prefix included */
+p.v-bn{font-style:italic}
+body.noitalic p.v-bn{font-style:normal}
+
+/* prefix treatment A: shipped — inline, semibold, secondary, in the prose face */
+.pfx{font-weight:600;color:var(--sub)}
+/* prefix treatment B: letterspaced micro-cap label, always sans, no colon */
+body.pfx-cap .pfx{font-family:var(--sans);font-weight:700;font-size:10px;letter-spacing:.16em;
+  color:var(--accent);font-style:normal;vertical-align:.12em;margin-right:8px}
+body.pfx-cap .pfx .colon{display:none}
+
+/* ---------- live capture ---------- */
+.recmeta{margin:12px 20px 0;display:flex;gap:6px;flex-wrap:wrap}
+.recmeta .chip{border:1px solid var(--line2);border-radius:2px;padding:3px 8px;background:var(--card);color:var(--sub);font-size:11px;font-variant-numeric:tabular-nums}
+.recmeta .chip.hot{border-color:var(--accent-dim);background:var(--accent-bg);color:var(--accent)}
+.livescript{flex:1;overflow-y:auto;margin:14px 0 0;padding:0 20px 190px}
+.livescript p{margin-bottom:14px}
+.livescript .volatile{color:var(--faint)}
+.thumbbar{position:absolute;left:0;right:0;bottom:0;padding:12px 16px 24px;display:flex;gap:10px;align-items:center;justify-content:center;background:linear-gradient(to top,var(--paper) 74%,transparent);z-index:20}
+.marker{flex:1;height:72px;border-radius:2px;border:1px solid var(--line2);background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.marker .big{font-size:21px;font-weight:600}
+.marker .sub{font-size:9px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase}
+.marker.armed{border-color:var(--accent-dim);background:var(--accent-bg)}
+.marker.armed .big{color:var(--accent)}
+.stopbtn{width:72px;height:72px;border-radius:2px;border:1px solid var(--line2);background:var(--card);display:flex;align-items:center;justify-content:center;flex:none}
+.stopbtn .sq{width:24px;height:24px;border-radius:1px;background:var(--rec)}
+</style>
+</head>
+<body class="scn-mixed">
+
+<div class="mockhead">
+  <h1>LN / BN transcript type <span>— serif vs sans, dark, icon-blue palette</span></h1>
+  <p>
+    Owed from the 2026-08-08 capture-landing decisions (item 3: "show me a mock of LN/BN
+    back and forth in the font of choice", and item 2: re-cut the accent off the app
+    icon's blue). Same content, same point-size intent, same palette on both phones —
+    the only difference is the transcript face. Everything renders the shipped rules:
+    inline voice prefix, semibold and secondary, concatenated onto the prose; the whole
+    BN paragraph italic; unattributed paragraphs get no prefix and are never italic.
+  </p>
+  <div class="controls">
+    <div class="ctlrow">
+      <span class="lbl">Content</span>
+      <button data-scn="mixed" class="on">Mixed page</button>
+      <button data-scn="turns">Short turns</button>
+      <button data-scn="long">Long passage</button>
+      <button data-scn="live">Live while recording</button>
+    </div>
+    <div class="ctlrow">
+      <span class="lbl">Prefix</span>
+      <button data-pfx="inline" class="on">Inline semibold (shipped)</button>
+      <button data-pfx="cap">Micro-cap sans label</button>
+    </div>
+    <div class="ctlrow">
+      <span class="lbl">BN italic</span>
+      <button data-ital="on" class="on">On (shipped)</button>
+      <button data-ital="off">Off</button>
+    </div>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="col">
+    <div class="caphead"><span class="capname">Serif</span><span class="capface">ui-serif · New York — what ships today</span></div>
+    <div class="phone" id="p-serif" data-face="serif"></div>
+  </div>
+  <div class="col">
+    <div class="caphead"><span class="capname">Sans</span><span class="capface">ui-sans-serif · SF Pro Text</span></div>
+    <div class="phone" id="p-sans" data-face="sans"></div>
+  </div>
+</div>
+
+<div class="notesrow">
+  <div class="notes">
+    <h2>What each control asks</h2>
+    <ul>
+      <li><b>Mixed page</b> — the normal case: one unattributed opener (before the first
+        voice marker) then alternating LN/BN of ordinary length. Read a full screen of it
+        on each side. This is the only question that matters; the rest are tie-breakers.</li>
+      <li><b>Short turns</b> — five one-line exchanges. Serif at 17 pt gets a lot of
+        vertical air per turn; the prefix repeats fast enough to become texture.</li>
+      <li><b>Long passage</b> — one long BN paragraph. This is where BN-italic is
+        actually tested: a whole screen of italic is the load, not two lines of it.</li>
+      <li><b>Live while recording</b> — the same prose in the near-black capture screen
+        with the thumb bar, so the face is judged where it is read at arm's length.</li>
+      <li><b>Prefix</b> — shipped is the prose face, semibold, secondary. The alternative
+        keeps the prefix inline but sets it as a letterspaced sans micro-cap in the
+        accent, so it reads as a label rather than as a word in the sentence.</li>
+      <li><b>BN italic off</b> — what the page looks like if the print-vs-cursive signal
+        moves entirely onto the prefix.</li>
+    </ul>
+
+    <h2>Known bias in the comparison</h2>
+    <ul>
+      <li>New York has a smaller x-height than SF at the same point size, so the sans
+        side is set one point smaller (16 vs 17) to match apparent size. If you want the
+        literal same-point comparison, that is a one-line change.</li>
+      <li>SF italic is an oblique. As the print-vs-cursive stand-in it is weaker than New
+        York's true italic — check this on <b>Long passage</b> before deciding, because
+        it is the strongest argument the serif has.</li>
+    </ul>
+  </div>
+
+  <div class="notes">
+    <h2>Palette — derived, not picked</h2>
+    <p>Sampled from <b>Raconte/Assets.xcassets/AppIcon.appiconset/icon-1024.png</b>:
+      the field is <b>#092343</b> (hsv 213.5°/87%/26%, 88% of the icon's pixels) and the
+      face, waves and wordmark are <b>#efdfc6</b>. The accent ramp holds hue 213.5 and
+      re-cuts saturation and value so it survives on near-black; the ink is the icon's
+      cream pulled down. Navy plus cream is the icon's own pairing, so this replaces
+      Encre's sage with something the app already owns.</p>
+    <div class="swatches">
+      <span class="sw"><i style="background:#092343"></i>#092343<br>icon field</span>
+      <span class="sw"><i style="background:#efdfc6"></i>#efdfc6<br>icon mark</span>
+      <span class="sw"><i style="background:#568acc"></i>#568acc<br>accent</span>
+      <span class="sw"><i style="background:#81b0eb"></i>#81b0eb<br>accent hi</span>
+      <span class="sw"><i style="background:#224673"></i>#224673<br>accent dim</span>
+      <span class="sw"><i style="background:#0d1b2b"></i>#0d1b2b<br>accent wash</span>
+      <span class="sw"><i style="background:#e7dfd1"></i>#e7dfd1<br>ink</span>
+      <span class="sw"><i style="background:#0b0e13"></i>#0b0e13<br>paper</span>
+    </div>
+
+    <h2>One fact worth weighing</h2>
+    <p>The app icon's wordmark is <b>set in a serif</b> — letterspaced lowercase, cream on
+      navy. Picking sans for the transcript would make the reading surface disagree with
+      the mark. That is not decisive; it is a cost.</p>
+
+    <h2>Not settled here</h2>
+    <ul>
+      <li>A per-voice typeface (the real answer to print-vs-cursive) — deferred to T7 by
+        the shipped comment on <b>TranscriptAttribution.isItalic</b>.</li>
+      <li>The <b>hasApproximateBoundary</b> affordance — still deliberately invisible.</li>
+      <li>Editing type (T7 keyboard-first on iPad/Mac) — this is the reading face only.</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+/* Both phones render from one template so the content is provably identical.
+   Voice model mirrors the shipped one: voice ids are opaque strings, the display
+   name is the id uppercased, and only "bn" is italic. */
+const displayName = v => v.toUpperCase();
+const isItalic = v => v === "bn";
+
+const SCENES = {
+  mixed: [
+    {v:null, t:"Big Sur book, second half. Starting at the top of the left-hand page, the one with the bridge on it."},
+    {v:"bn", t:"We got to the coast road late, after four, and the fog was already coming up the canyons behind us. I made him stop at the pullout above Rocky Creek so I could draw the bridge, which I did badly, and which is on the facing page."},
+    {v:"ln", t:"The drawing is not bad. She had about eleven minutes of light and she is being hard on herself, as usual."},
+    {v:"bn", t:"The cabin has two beds, a wood stove that draws poorly, and a window over the sink that looks straight west. There is a jar of somebody else's beach glass on the sill. I moved it once and moved it back."},
+    {v:"ln", t:"Woke at five. Sea lions somewhere south, or something that sounds like them. Made coffee on the stove and read forty pages standing up, because the chairs here are worse than standing."},
+    {v:"bn", t:"Long day. We walked down to the beach at Andrew Molera and there was nobody at all, which I did not expect in July. Ate the sandwiches sitting on the driftwood and neither of us said anything for a while, which was the best part."}
+  ],
+  turns: [
+    {v:"bn", t:"Did you bring the tide table."},
+    {v:"ln", t:"No."},
+    {v:"bn", t:"Then we are guessing."},
+    {v:"ln", t:"We have always been guessing."},
+    {v:"bn", t:"Fair."},
+    {v:"ln", t:"Low water is around four, I think. I am not going to write that down as a fact."},
+    {v:"bn", t:"You just did."},
+    {v:"ln", t:"I wrote it down as a guess."},
+    {v:"bn", t:"Same page, same ink."}
+  ],
+  long: [
+    {v:"bn", t:"I want to get the whole day down before it goes. We left the cabin at seven with the fog still sitting on the water and drove south past the lighthouse turn-off, and for about two miles the road was completely white — you could see the guardrail and nothing past it, and then it broke all at once the way it does and there was the whole coast underneath us, absolutely clear, with the shadow of the fog bank still lying out on the water like a second shoreline. We pulled over. Neither of us had a camera that would do anything with it. I made a note to draw it later and I have not drawn it and I am not going to; some things you take one look at and that is the whole transaction."},
+    {v:"ln", t:"For the record, we sat at that pullout for fifty minutes. I know because the radio hour changed twice. She says she is not going to draw it, which is what she says every time, and there are four drawings of exactly this in the back of the 1984 book. I have looked."},
+    {v:"bn", t:"Later, the same day. The store at the bottom of the hill had no bread and a great deal of candle. We bought candles. The woman behind the counter asked how long we were staying and when I said ten days she said, in a completely level voice, that ten days is either too long or not nearly long enough, and went back to her ledger. I have been thinking about it since."}
+  ],
+  live: [
+    {v:"bn", t:"The cabin has two beds, a wood stove that draws poorly, and a window over the sink that looks straight west."},
+    {v:"ln", t:"Woke at five. Sea lions somewhere south, or something that sounds like them."},
+    {v:"bn", t:"Long day. We walked down to the beach at Andrew Molera and there was nobody at all, which I did not expect in July."},
+    {v:"ln", t:"Ate the sandwiches sitting on the driftwood and neither of us", volatile:" said anything for a"}
+  ]
+};
+
+/* One paragraph, rendered by the shipped rule: inline prefix concatenated onto the
+   prose, whole paragraph italic when the voice is bn, no prefix when unattributed. */
+function para(p){
+  const cls = p.v ? (isItalic(p.v) ? "v-" + p.v : "") : "";
+  const pfx = p.v ? `<span class="pfx">${displayName(p.v)}<span class="colon">:</span> </span>` : "";
+  const vol = p.volatile ? `<span class="volatile">${p.volatile}</span>` : "";
+  return `<p class="${cls}">${pfx}${p.t}${vol}</p>`;
+}
+
+function entryScreen(scene){
+  return `
+  <div class="statusbar"><span>9:41</span><span>▮▮▮</span></div>
+  <div class="screen on">
+    <button class="navrow"><span class="chev">‹</span> 1987 Journal</button>
+    <div class="entryhead">
+      <h1>July 14, 1987</h1>
+      <div class="meta">Big Sur · 6:12 · recorded 2026-08-09 · 9 markers</div>
+    </div>
+    <div class="player">
+      <span class="play">▶</span>
+      <span class="track"><i></i></span>
+      <span class="t">2:07 / 6:12</span>
+    </div>
+    <div class="tsechead"><span class="microlabel">Transcript</span><span class="voices">LN · BN</span></div>
+    <div class="script">${scene.map(para).join("")}</div>
+  </div>`;
+}
+
+function liveScreen(scene){
+  return `
+  <div class="statusbar"><span>9:41</span><span class="live">● RECORDING</span><span>▮▮▮</span></div>
+  <div class="screen on">
+    <div class="recmeta">
+      <span class="chip">1987 Journal</span>
+      <span class="chip">July 1987</span>
+      <span class="chip hot">Voice · LN</span>
+      <span class="chip">4:38</span>
+    </div>
+    <div class="livescript">${scene.map(para).join("")}</div>
+    <div class="thumbbar">
+      <button class="marker armed"><span class="big">LN</span><span class="sub">Voice</span></button>
+      <button class="stopbtn"><span class="sq"></span></button>
+      <button class="marker"><span class="big">¶</span><span class="sub">Paragraph</span></button>
+    </div>
+  </div>`;
+}
+
+function render(){
+  const key = document.body.className.match(/scn-(\w+)/)[1];
+  const scene = SCENES[key];
+  const html = key === "live" ? liveScreen(scene) : entryScreen(scene);
+  document.getElementById("p-serif").innerHTML = html;
+  document.getElementById("p-sans").innerHTML = html;
+  document.body.classList.toggle("live-on", key === "live");
+}
+
+function wire(attr, apply){
+  document.querySelectorAll(`[${attr}]`).forEach(b => b.addEventListener("click", () => {
+    b.parentElement.querySelectorAll("button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    apply(b.getAttribute(attr));
+  }));
+}
+
+wire("data-scn", v => {
+  document.body.className = document.body.className.replace(/scn-\w+/, "scn-" + v);
+  render();
+});
+wire("data-pfx", v => document.body.classList.toggle("pfx-cap", v === "cap"));
+wire("data-ital", v => document.body.classList.toggle("noitalic", v === "off"));
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raconte — recommendation, treatment 2b · Encre bleu (icon palette)</title>
+<style>
+/* ===== THEME ===== */
+/* Encre, re-cut off the app icon (owner decision 2026-08-08 item 2: "slightly
+   different color palette, connected to the blue of the app icon"). Sampled from
+   Raconte/Assets.xcassets/AppIcon.appiconset/icon-1024.png — field #092343
+   (hsv 213.5/87/26, 88% of pixels), mark #efdfc6. The accent ramp holds hue 213.5
+   and re-cuts S/V for legibility on near-black; ink is the icon cream pulled down.
+   The sage that was doing confirmation/selection work is gone. Page stays near-black. */
+:root{
+  --page:#000000; --paper:#0b0e13; --card:#12161d; --card2:#181d26;
+  --ink:#e7dfd1; --sub:#9a9488; --faint:#6b675e;
+  --line:#1c222c; --line2:#262e3a;
+  --accent:#568acc; --accent-ink:#071019; --rec:#e0442f;
+  --hot:#0d1b2b; --hotline:#224673;
+  --warnbg:#1d180c; --warnline:#4a3d1e; --warntx:#cfae56;
+  --tagtx:#8a887e; --tagline:#2b333f;
+  --toastbg:#e7dfd1; --toasttx:#0b0e13;
+  --veil:rgba(0,0,0,.6);
+  --btn-tt:none; --btn-ls:0; --btn-fs:13px;
+}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.jump button.on{background:#e7dfd1;color:#0b0e13;border-color:#e7dfd1}
+.cover{border-color:rgba(255,255,255,.12)}
+.phone{box-shadow:0 24px 70px rgba(0,0,0,.7)}
+/* ===== END THEME ===== */
+
+*{margin:0;padding:0;box-sizing:border-box;-webkit-font-smoothing:antialiased}
+html,body{background:var(--page);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Helvetica,Arial,sans-serif}
+button{font-family:inherit;cursor:pointer;color:inherit}
+.mockhead{max-width:1040px;margin:0 auto;padding:22px 16px 6px}
+.mockhead h1{font-size:16px;font-weight:600;letter-spacing:-.01em}
+.mockhead h1 span{color:var(--sub);font-weight:400}
+.mockhead p{font-size:13px;color:var(--sub);margin-top:6px;line-height:1.55;max-width:700px}
+.jump{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.jump button{background:var(--card);border:1px solid var(--line2);color:var(--sub);font-size:12px;padding:6px 12px;border-radius:2px}
+.stage{display:flex;gap:28px;justify-content:center;align-items:flex-start;padding:18px 16px 60px;flex-wrap:wrap}
+.phone{width:390px;height:844px;background:var(--paper);border:1px solid var(--line2);border-radius:8px;overflow:hidden;position:relative;flex:none;box-shadow:0 14px 44px rgba(30,28,22,.14)}
+.notes{width:320px;font-size:13px;color:var(--sub);line-height:1.6;padding-top:6px}
+.notes h2{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--faint);margin:16px 0 5px}
+.notes b{color:var(--ink);font-weight:600}
+.notes ul{padding-left:16px}
+.notes li{margin:3px 0}
+
+.statusbar{position:absolute;top:0;left:0;right:0;height:46px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 24px 6px;font-size:12px;font-weight:600;color:var(--ink);z-index:30;pointer-events:none;font-variant-numeric:tabular-nums}
+.statusbar .live{display:none;color:var(--rec);font-size:10px;font-weight:700;letter-spacing:.12em}
+body.recording .statusbar .live{display:block}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;padding-top:46px}
+.screen.on{display:flex}
+.linkish{background:none;border:none;color:var(--accent);font-size:12px;padding:0}
+
+.microlabel{font-size:9.5px;text-transform:uppercase;letter-spacing:.16em;color:var(--faint)}
+.cover{width:36px;height:36px;border-radius:2px;flex:none;border:1px solid rgba(0,0,0,.08)}
+.cover.lg{width:44px;height:44px}
+.cover.sm{width:26px;height:26px}
+.cov-1987{background:#a8916f}
+.cov-field{background:#6f9187}
+.cov-bigsur{background:#7d8aa6}
+
+/* ---- shared focus bar ---- */
+.fb-caption{margin:14px 20px 6px}
+.focusbar{display:flex;align-items:center;gap:11px;margin:0 20px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:2px;width:calc(100% - 40px);text-align:left}
+.focusbar:active{background:var(--card2)}
+.focusbar .fb-text{flex:1;min-width:0}
+.focusbar .fb-name{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.focusbar .fb-sub{font-size:11px;color:var(--faint);margin-top:1px;font-variant-numeric:tabular-nums}
+.focusbar .fb-chev{color:var(--faint);font-size:11px}
+
+/* ---- capture ---- */
+#scr-capture .body{flex:1;overflow-y:auto;display:flex;flex-direction:column;padding-bottom:170px}
+.setup{margin:12px 20px 0;border:1px solid var(--line);border-radius:2px;background:var(--card)}
+.setuprow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 12px}
+.setuprow + .setuprow{border-top:1px solid var(--line)}
+.setuprow .lbl{font-size:13px;font-weight:500}
+.setuprow .hint{font-size:11px;color:var(--faint);margin-top:2px}
+.pill{font-size:12px;color:var(--ink);background:var(--card2);border:1px solid var(--line2);padding:3px 8px;border-radius:2px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.toggle{width:40px;height:22px;border-radius:2px;background:var(--card2);border:1px solid var(--line2);position:relative;flex:none}
+.toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:1px;background:var(--faint);transition:left .15s,background .15s}
+.toggle.on{background:var(--accent);border-color:var(--accent)}
+.toggle.on::after{left:20px;background:var(--accent-ink)}
+.centerzone{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:30px}
+.elapsed{font-size:34px;font-weight:300;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.phasetext{font-size:11px;color:var(--faint);min-height:14px;text-transform:uppercase;letter-spacing:.14em}
+.meter{display:flex;gap:3px;align-items:center;height:20px}
+.meter i{width:2px;height:3px;background:var(--line2);transition:height .12s}
+body.recording .meter i{background:var(--rec)}
+.recbtn{width:76px;height:76px;border-radius:3px;border:1px solid var(--line2);background:var(--card);display:flex;align-items:center;justify-content:center}
+.recbtn .core{width:44px;height:44px;border-radius:50%;background:var(--rec)}
+.recents{margin:28px 20px 0}
+.recents .rhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.mini{display:flex;flex-direction:column;gap:2px;padding:9px 0;border-bottom:1px solid var(--line);width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none}
+.mini .m1{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.mini .m1 b{color:var(--ink);font-weight:600;font-size:12px}
+.mini .snip{font-size:13px;color:var(--sub);line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.buildstamp{margin:26px auto 8px;font-size:9px;color:var(--faint);letter-spacing:.08em}
+
+.recmeta{display:none;margin:12px 20px 0}
+.recmeta .chips{display:flex;gap:6px;flex-wrap:wrap}
+.recmeta .chip{border:1px solid var(--line2);border-radius:2px;padding:3px 8px;background:var(--card);color:var(--sub);font-size:11px;font-variant-numeric:tabular-nums}
+.transcript{display:none;flex:1;margin:14px 20px 0;overflow-y:auto;font-size:15px;line-height:1.6;color:var(--ink)}
+.transcript p{margin-bottom:.7em}
+.vtag{font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--tagtx);border:1px solid var(--tagline);border-radius:2px;padding:1px 5px;margin-right:7px;vertical-align:2px}
+.intbanner{display:none;margin:12px 20px 0;padding:10px 12px;border:1px solid var(--warnline);background:var(--warnbg);border-radius:2px;font-size:12px;color:var(--warntx)}
+body.rec-on .setup,body.rec-on .recents,body.rec-on .buildstamp{display:none}
+body.rec-on .recmeta{display:block}
+body.rec-on .transcript{display:block}
+body.rec-on .centerzone{display:none}
+body.interrupted .intbanner{display:block}
+
+/* thumb bar */
+.thumbbar{position:absolute;left:0;right:0;bottom:0;padding:12px 16px 24px;display:none;gap:10px;align-items:center;justify-content:center;background:linear-gradient(to top,var(--paper) 74%,transparent);z-index:20}
+body.rec-on .thumbbar{display:flex}
+.marker{flex:1;height:72px;border-radius:2px;border:1px solid var(--line2);background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.marker .big{font-size:21px;font-weight:600}
+.marker .sub{font-size:9px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase}
+.marker:active{background:var(--card2)}
+.marker.flash{animation:flash .3s}
+@keyframes flash{0%{border-color:var(--accent);background:var(--hot)}100%{background:var(--card)}}
+.marker:disabled{opacity:.4}
+.stopbtn{width:72px;height:72px;border-radius:2px;border:1px solid var(--line2);background:var(--card);display:flex;align-items:center;justify-content:center;flex:none}
+.stopbtn .sq{width:24px;height:24px;border-radius:1px;background:var(--rec)}
+.stopbtn.resume{border-color:var(--warnline)}
+.stopbtn .resumelbl{display:none;font-size:11px;font-weight:700;color:var(--warntx);text-transform:uppercase;letter-spacing:.1em}
+.stopbtn.resume .sq{display:none}
+.stopbtn.resume .resumelbl{display:block}
+.simint{position:absolute;right:20px;bottom:112px;z-index:21;background:none;border:none;color:var(--faint);font-size:10px;display:none}
+body.rec-on .simint{display:block}
+
+/* receipt */
+.receipt{display:none;margin:20px 20px 0;padding:18px 16px;background:var(--card);border:1px solid var(--line);border-radius:2px;text-align:center}
+body.saved-on .receipt{display:block}
+body.saved-on .centerzone,body.saved-on .setup{display:none}
+.receipt .check{font-size:20px;color:var(--accent)}
+.receipt h3{font-size:15px;font-weight:600;margin-top:6px}
+.receipt .rsub{font-size:12px;color:var(--sub);margin-top:4px;font-variant-numeric:tabular-nums}
+.receipt .ractions{display:flex;gap:8px;justify-content:center;margin-top:14px}
+.btn{border-radius:2px;padding:10px 14px;font-size:var(--btn-fs);font-weight:600;border:1px solid var(--line2);background:var(--card);text-transform:var(--btn-tt);letter-spacing:var(--btn-ls)}
+
+/* library */
+#scr-library .lib-top{display:flex;align-items:baseline;justify-content:space-between;margin:10px 20px 0}
+#scr-library h1{font-size:22px;font-weight:650;letter-spacing:-.02em}
+#scr-library .body{flex:1;overflow-y:auto;padding-bottom:30px}
+.yearhead{margin:20px 20px 4px}
+.erow{display:flex;flex-direction:column;gap:2px;padding:10px 20px;border-bottom:1px solid var(--line);width:100%;text-align:left;background:none;border-left:none;border-right:none;border-top:none}
+.erow .e1{display:flex;align-items:center;gap:6px;font-size:13px}
+.erow .edate{font-weight:600}
+.erow .emark{font-size:10px;color:var(--faint)}
+.erow .edur{margin-left:auto;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.erow .esnip{font-size:13px;line-height:1.5;color:var(--sub);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.erow.hot{background:var(--hot);border-left:2px solid var(--accent);padding-left:18px}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:30px;background:var(--toastbg);color:var(--toasttx);font-size:12px;padding:9px 16px;border-radius:2px;display:none;z-index:60}
+.toast.on{display:block}
+
+/* detail */
+#scr-detail .body{flex:1;overflow-y:auto;padding:6px 20px 30px}
+#scr-detail .dnav{display:flex;justify-content:space-between;margin:6px 20px 0;font-size:13px}
+#scr-detail h1{font-size:21px;font-weight:650;margin-top:10px}
+.drow{display:flex;justify-content:space-between;font-size:13px;padding:11px 0;border-bottom:1px solid var(--line)}
+.drow .k{color:var(--faint)}
+.dtranscript{font-size:15px;line-height:1.6;margin-top:18px}
+.dtranscript p{margin-bottom:.7em}
+
+/* sheets */
+.sheetveil{position:absolute;inset:0;background:var(--veil);display:none;z-index:50}
+.sheetveil.on{display:block}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line2);border-radius:2px 2px 0 0;padding:14px 16px 28px;z-index:51;transform:translateY(102%);transition:transform .2s ease-out}
+.sheet.on{transform:none}
+.sheet h3{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--faint);margin:0 4px 10px;font-weight:600}
+.jrow{display:flex;align-items:center;gap:11px;width:100%;padding:10px 6px;background:none;border:none;text-align:left;border-bottom:1px solid var(--line)}
+.jrow:last-of-type{border-bottom:none}
+.jrow .jname{font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
+.jrow .jsub{font-size:11px;color:var(--faint);margin-top:1px;font-variant-numeric:tabular-nums}
+.jrow .jcheck{margin-left:auto;color:var(--accent);font-size:14px;visibility:hidden}
+.jrow.cur .jcheck{visibility:visible}
+.tag{font-size:8.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--tagtx);border:1px solid var(--tagline);border-radius:2px;padding:1px 5px}
+.sheetfoot{display:flex;justify-content:space-between;margin-top:12px;padding:0 4px}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 6px;border-bottom:1px solid var(--line)}
+.srow:last-of-type{border-bottom:none}
+.srow .k{font-size:13px;font-weight:500}
+.srow .khint{font-size:11px;color:var(--faint);margin-top:2px;max-width:200px}
+.seg{display:flex;border:1px solid var(--line2);border-radius:2px;overflow:hidden}
+.seg button{background:var(--card);border:none;color:var(--sub);font-size:11px;font-weight:600;padding:7px 10px}
+.seg button + button{border-left:1px solid var(--line2)}
+.seg button.on{background:var(--accent);color:var(--accent-ink)}
+</style>
+</head>
+<body>
+
+<header class="mockhead">
+  <h1>Recommendation · treatment 2b — Encre bleu <span>· the icon’s navy-and-cream, near-black kept</span></h1>
+  <!-- THEME-DESC-START -->
+  <p>Treatment 2 (Encre) with the palette re-cut off the app icon, per the 2026-08-08
+  decision: "slightly different color palette, connected to the blue of the app icon."
+  Sampled from <code>Raconte/Assets.xcassets/AppIcon.appiconset/icon-1024.png</code> —
+  field <b>#092343</b> (hsv 213.5&deg;/87%/26%, 88% of the icon&rsquo;s pixels), mark
+  <b>#efdfc6</b>. The accent ramp holds hue 213.5 and re-cuts saturation and value so it
+  stays legible on near-black; ink is the icon cream pulled down. The sage that carried
+  confirmation and selection is gone, primary actions are now the blue rather than
+  inverted ink, and the page is still near-black &mdash; the pinned capture rule survives.
+  Structure, copy and behaviour are byte-identical to <code>e-encre.html</code>: only the
+  theme block differs, so anything you dislike here is the palette, not the layout.</p>
+  <!-- THEME-DESC-END -->
+  <div class="jump">
+    <button onclick="goIdle()" id="j-idle">1 · Capture idle</button>
+    <button onclick="goRec()" id="j-rec">2 · Recording</button>
+    <button onclick="goSaved()" id="j-saved">3 · Stopped</button>
+    <button onclick="goIdle();openSwitcher()" id="j-switch">4 · Switcher + settings</button>
+    <button onclick="goLibrary()" id="j-lib">5 · Library</button>
+    <button onclick="goMoved()" id="j-moved">6 · After move-to-journal</button>
+  </div>
+</header>
+
+<div class="stage">
+<div class="phone">
+  <div class="statusbar"><span>9:41</span><span class="live">● REC</span><span>◂ ▴ ▸</span></div>
+
+  <!-- ================= CAPTURE ================= -->
+  <div class="screen on" id="scr-capture">
+    <div class="fb-caption microlabel">Recording into</div>
+    <button class="focusbar" onclick="openSwitcher()">
+      <div class="cover" id="cap-cover"></div>
+      <div class="fb-text">
+        <div class="fb-name" id="cap-jname"></div>
+        <div class="fb-sub" id="cap-jsub"></div>
+      </div>
+      <div class="fb-chev">▾</div>
+    </button>
+
+    <div class="body">
+      <div class="setup">
+        <div class="setuprow">
+          <div>
+            <div class="lbl">Backdate</div>
+            <div class="hint" id="bd-hint">carried from your last entry in this journal</div>
+          </div>
+          <span class="pill" id="bd-pill" style="display:none"></span>
+          <button class="toggle" id="bd-toggle" onclick="toggleBackdate()"></button>
+        </div>
+        <div class="setuprow">
+          <div>
+            <div class="lbl">Two voices</div>
+            <div class="hint">carries over per journal · locked once recording</div>
+          </div>
+          <button class="toggle" id="mv-toggle" onclick="toggleMV()"></button>
+        </div>
+      </div>
+
+      <div class="receipt">
+        <div class="check">✓</div>
+        <h3 id="rc-title">Saved to 1987 Journal</h3>
+        <div class="rsub" id="rc-sub">2:47 · May 1987 · 6 markers</div>
+        <div class="ractions">
+          <button class="btn" onclick="openDetail()">Open entry</button>
+          <button class="btn primary" onclick="goIdle()">Record another</button>
+        </div>
+      </div>
+
+      <div class="centerzone">
+        <div class="elapsed">0:00</div>
+        <div class="phasetext">ready</div>
+        <div class="meter" id="meter-idle"></div>
+        <button class="recbtn" onclick="goRec()" aria-label="Record"><div class="core"></div></button>
+      </div>
+
+      <div class="recmeta">
+        <div class="chips">
+          <span class="chip" id="rm-time">● 0:00</span>
+          <span class="chip" id="rm-bd" style="display:none"></span>
+          <span class="chip" id="rm-mv" style="display:none">two voices</span>
+        </div>
+      </div>
+      <div class="intbanner">Interrupted — another app took the microphone. The recording
+        is safe; resume when it's back.</div>
+      <div class="transcript" id="transcript"></div>
+
+      <div class="recents" id="recents">
+        <div class="rhead">
+          <span class="microlabel">Recent</span>
+          <button class="linkish" onclick="goLibrary()">See all</button>
+        </div>
+        <div id="recentrows"></div>
+      </div>
+      <div class="buildstamp">RACONTE · TREATMENT 2B</div>
+    </div>
+
+    <button class="simint" onclick="toggleInterrupt()">⚡ simulate interruption</button>
+    <div class="thumbbar">
+      <button class="marker" id="voicebtn" onclick="tapVoice()">
+        <span class="big" id="voice-big">BN</span>
+        <span class="sub" id="voice-sub">Big Nico · switch</span>
+      </button>
+      <button class="stopbtn" id="stopbtn" onclick="stopOrResume()">
+        <div class="sq"></div><span class="resumelbl">Resume</span>
+      </button>
+      <button class="marker" id="parabtn" onclick="tapPara()">
+        <span class="big">¶</span>
+        <span class="sub">Paragraph</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ================= LIBRARY ================= -->
+  <div class="screen" id="scr-library">
+    <div class="lib-top">
+      <h1>Library</h1>
+      <button class="linkish" onclick="void 0">Trash</button>
+    </div>
+    <div class="fb-caption microlabel">Browsing</div>
+    <button class="focusbar" onclick="openSwitcher()">
+      <div class="cover" id="lib-cover"></div>
+      <div class="fb-text">
+        <div class="fb-name" id="lib-jname"></div>
+        <div class="fb-sub" id="lib-jsub"></div>
+      </div>
+      <div class="fb-chev">▾</div>
+    </button>
+    <div class="body" id="lib-body"></div>
+    <div style="padding:10px 20px 24px">
+      <button class="linkish" onclick="goIdle()">← Capture</button>
+    </div>
+  </div>
+
+  <!-- ================= DETAIL ================= -->
+  <div class="screen" id="scr-detail">
+    <div class="dnav"><button class="linkish" onclick="goSaved()">‹ Back</button><span></span></div>
+    <div class="body">
+      <h1>May 1987</h1>
+      <div class="drow"><span class="k">Entry date</span><span>May 1987 · backdated</span></div>
+      <div class="drow"><span class="k">Recorded</span><span>Aug 7, 2026 · 9:41 PM</span></div>
+      <div class="drow"><span class="k">Journal</span>
+        <button class="linkish" style="font-size:13px;font-weight:600" onclick="openMove()">1987 Journal ▾</button></div>
+      <div class="dtranscript">
+        <p><span class="vtag">BN</span>Reading from May of eighty-seven. The handwriting gets small here, like I was trying to hide the words even from myself…</p>
+        <p><span class="vtag">LN</span>Today we rode down to the creek after school and the water was higher than I have ever seen it.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SHEETS ================= -->
+  <div class="sheetveil" id="veil" onclick="closeSheets()"></div>
+  <div class="sheet" id="switcher">
+    <h3>Journals</h3>
+    <div id="switchrows"></div>
+    <div class="sheetfoot">
+      <button class="linkish" onclick="openSettings()">Journal settings</button>
+      <button class="linkish" onclick="toast('New-journal flow not mocked')">＋ New journal</button>
+    </div>
+  </div>
+  <div class="sheet" id="settings">
+    <h3 id="set-title">1987 Journal — Settings</h3>
+    <div class="srow">
+      <div><div class="k">Two voices by default</div>
+        <div class="khint">new entries here open with the BN/LN switch on</div></div>
+      <button class="toggle on" onclick="this.classList.toggle('on')"></button>
+    </div>
+    <div class="srow">
+      <div><div class="k">Deleting entries</div>
+        <div class="khint">Locked — entries here can never be permanently deleted</div></div>
+      <div class="seg" id="set-del">
+        <button onclick="segPick(this)">Easy</button>
+        <button onclick="segPick(this)">Confirm</button>
+        <button class="on" onclick="segPick(this)">Locked</button>
+      </div>
+    </div>
+    <div class="srow">
+      <div class="k">Cover photo</div>
+      <button class="linkish" style="font-size:12px" onclick="toast('Cover picker not mocked')">Change</button>
+    </div>
+    <div class="srow">
+      <div class="k">Rename</div>
+      <button class="linkish" style="font-size:12px" onclick="toast('Rename not mocked')" id="set-rename"></button>
+    </div>
+  </div>
+  <div class="sheet" id="movesheet">
+    <h3>Move to journal</h3>
+    <div id="moverows"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<aside class="notes">
+  <h2>Same IA in all three treatments</h2>
+  <ul>
+    <li><b>Global focus:</b> the bar under the title is the one switcher, identical on
+      Capture ("Recording into") and Library ("Browsing").</li>
+    <li><b>Switcher sheet</b> carries C's designed rows (cover, name, range, count,
+      two-voices / locked tags) and opens the current journal's Settings — where #35's
+      Easy / Confirm / Locked control lives.</li>
+    <li><b>B's receipt</b> after stop; move-to-journal lands in the destination list
+      with the row marked (pill 6).</li>
+    <li><b>Fixed thumb bar</b> while recording: voice · stop · ¶, nothing scrolls.</li>
+    <li>Interruption (⚡), two-voices lock, per-journal backdate carry — all as shipped.</li>
+  </ul>
+  <!-- THEME-NOTES-START -->
+  <h2>This treatment</h2>
+  <ul>
+    <li>Same discipline as Encre: warm gray does hierarchy, color does meaning. The only
+      pigments are the record red and the icon blue.</li>
+    <li>The blue is <b>derived</b>, not chosen: hue 213.5&deg; comes straight off the icon
+      field, and only saturation and value are re-cut so it reads on near-black.</li>
+    <li>Ink is the icon&rsquo;s cream rather than a neutral gray, so the screen is the
+      icon&rsquo;s own navy-and-cream pairing at low key.</li>
+    <li>Keeps the owner rule that the capture screen pins near-black &mdash; this is still
+      the treatment that changes the least on-device behavior.</li>
+    <li>Changed from Encre: primary buttons now take the blue fill instead of inverting to
+      ink. If you preferred the inverted-ink primary, that is a one-line revert.</li>
+    <li>Same 2&nbsp;px corners, square toggles, hairline structure as the other treatments.</li>
+  </ul>
+  <!-- THEME-NOTES-END -->
+</aside>
+</div>
+
+<script>
+const journals = {
+  j1987:  {name:"1987 Journal", cover:"cov-1987",  range:"Feb – Nov 1987", count:23, mv:true,  del:"Locked",  carried:"May 1987"},
+  field:  {name:"Field Notes",  cover:"cov-field", range:"2026",           count:9,  mv:false, del:"Easy",    carried:null},
+  bigsur: {name:"Big Sur 1998", cover:"cov-bigsur",range:"Mar – Jul 1998", count:12, mv:true,  del:"Confirm", carried:"Mar 14, 1998"},
+};
+const entries = {
+  j1987: [
+    {y:1987, d:"May 1987", bd:true, dur:"2:47", s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."},
+    {y:1987, d:"Apr 12, 1987", bd:true, dur:"4:03", s:"Mr. Halloran kept me after class again, not for trouble this time but to ask about the science fair."},
+    {y:1987, d:"Feb 2, 1987", bd:true, dur:"3:15", s:"Snow day. Dad let me help with the wood splitter which mom does not know about."},
+  ],
+  field: [
+    {y:2026, d:"Aug 6, 2026", bd:false, dur:"1:12", s:"Note to self about the garden fence — the north post is rotting at the base."},
+    {y:2026, d:"Aug 2, 2026", bd:false, dur:"2:36", s:"Thinking about Saturday's session with the physical journals, what order to read them in."},
+  ],
+  bigsur: [
+    {y:1998, d:"Jul 4, 1998", bd:true, dur:"5:21", s:"Fireworks over the water from the ridge, we could see three towns' displays at once."},
+    {y:1998, d:"Mar 14, 1998", bd:true, dur:"3:58", s:"First night at the campground, the tent leaked and nobody cared."},
+  ],
+};
+
+let focus = "j1987";
+let bdOn = true, mvOverride = null;
+let voice = "BN", markers = 0, secs = 0, timer = null, interrupted = false;
+let movedTo = null;
+
+const $ = id => document.getElementById(id);
+const mvOn = () => mvOverride !== null ? mvOverride : journals[focus].mv;
+
+function renderFocus(){
+  const j = journals[focus];
+  for (const p of ["cap","lib"]){
+    $(p+"-cover").className = "cover " + j.cover;
+    $(p+"-jname").textContent = j.name;
+    $(p+"-jsub").textContent = j.range + " · " + j.count + " entries";
+  }
+  if (j.carried){ bdOn = true; $("bd-pill").style.display=""; $("bd-pill").textContent = j.carried;
+    $("bd-hint").textContent = "carried from your last entry in this journal";
+  } else { bdOn = false; $("bd-pill").style.display="none";
+    $("bd-hint").textContent = "off — entry dates itself to today";
+  }
+  $("bd-toggle").className = "toggle" + (bdOn ? " on" : "");
+  $("mv-toggle").className = "toggle" + (mvOn() ? " on" : "");
+  $("voicebtn").style.display = mvOn() ? "" : "none";
+  $("set-title").textContent = j.name + " — Settings";
+  $("set-rename").textContent = "“" + j.name + "”";
+  document.querySelectorAll("#set-del button").forEach(b =>
+    b.classList.toggle("on", b.textContent === j.del));
+  renderRecents(); renderLibrary();
+}
+function renderRecents(){
+  const all = Object.entries(entries).flatMap(([k,v]) => v.map(e => ({...e, j:k})));
+  $("recentrows").innerHTML = all.slice(0,3).map(e =>
+    `<button class="mini" onclick="openDetail()">
+      <div class="m1"><b>${e.d}</b><span>${journals[e.j].name} · ${e.dur}</span></div>
+      <div class="snip">${e.s}</div></button>`).join("");
+}
+function renderLibrary(){
+  const list = entries[focus] || [];
+  let html = "", year = null;
+  list.forEach((e,i) => {
+    if (e.y !== year){ year = e.y; html += `<div class="yearhead microlabel">${year}</div>`; }
+    const hot = movedTo === focus && i === 0;
+    html += `<button class="erow${hot ? " hot" : ""}" onclick="openDetail()">
+      <div class="e1"><span class="edate">${e.d}</span>${e.bd ? '<span class="emark">⟲</span>':''}
+        <span class="edur">${e.dur}</span></div>
+      <div class="esnip">${e.s}</div></button>`;
+  });
+  $("lib-body").innerHTML = html;
+}
+
+function show(id){ document.querySelectorAll(".screen").forEach(s=>s.classList.remove("on")); $(id).classList.add("on"); }
+function pill(id){ document.querySelectorAll(".jump button").forEach(b=>b.classList.remove("on")); $(id).classList.add("on"); }
+function stopTimer(){ if (timer){ clearInterval(timer); timer = null; } }
+function resetRec(){ stopTimer(); secs=0; markers=0; voice="BN"; interrupted=false;
+  document.body.classList.remove("rec-on","recording","interrupted","saved-on");
+  $("stopbtn").classList.remove("resume"); }
+
+function goIdle(){ resetRec(); closeSheets(); movedTo=null; renderFocus(); show("scr-capture"); pill("j-idle"); }
+function goRec(){
+  resetRec(); closeSheets(); renderFocus();
+  document.body.classList.add("rec-on","recording");
+  $("transcript").innerHTML = "";
+  $("rm-bd").style.display = bdOn ? "" : "none";
+  $("rm-bd").textContent = bdOn ? ("backdate " + (journals[focus].carried || "set")) : "";
+  $("rm-mv").style.display = mvOn() ? "" : "none";
+  $("voice-big").textContent = "BN"; $("voice-sub").textContent = "Big Nico · switch";
+  show("scr-capture"); pill("j-rec");
+  feedLines(); tick();
+  timer = setInterval(tick, 1000);
+}
+function tick(){
+  if (!interrupted) secs++;
+  $("rm-time").textContent = "● " + Math.floor(secs/60) + ":" + String(secs%60).padStart(2,"0");
+  document.querySelectorAll("#meter-idle i").forEach(b => b.style.height = (3+Math.random()*14)+"px");
+}
+const lines = [
+  ["BN","Reading from May of eighty-seven. The handwriting gets small here…"],
+  ["LN","Today we rode down to the creek after school and the water was higher than I have ever seen it."],
+  ["LN","Kevin said his brother saw a car go into the ditch by the Hendersons'."],
+];
+let lineIdx = 0;
+function feedLines(){
+  lineIdx = 0;
+  const step = () => {
+    if (!document.body.classList.contains("rec-on") || lineIdx >= lines.length) return;
+    const [v, txt] = lines[lineIdx++];
+    const vt = mvOn() ? `<span class="vtag">${v}</span>` : "";
+    $("transcript").insertAdjacentHTML("beforeend", `<p>${vt}${txt}</p>`);
+    setTimeout(step, 2100);
+  };
+  setTimeout(step, 700);
+}
+function tapVoice(){
+  if (interrupted) return;
+  voice = voice === "BN" ? "LN" : "BN";
+  $("voice-big").textContent = voice;
+  $("voice-sub").textContent = (voice === "BN" ? "Big Nico" : "Little Nico") + " · switch";
+  $("voicebtn").classList.remove("flash"); void $("voicebtn").offsetWidth; $("voicebtn").classList.add("flash");
+  markers++;
+}
+function tapPara(){
+  if (interrupted) return;
+  $("parabtn").classList.remove("flash"); void $("parabtn").offsetWidth; $("parabtn").classList.add("flash");
+  markers++;
+}
+function toggleInterrupt(){
+  interrupted = !interrupted;
+  document.body.classList.toggle("interrupted", interrupted);
+  document.body.classList.toggle("recording", !interrupted);
+  $("stopbtn").classList.toggle("resume", interrupted);
+  $("voicebtn").disabled = interrupted;
+  $("parabtn").disabled = interrupted;
+}
+function stopOrResume(){
+  if (interrupted){ toggleInterrupt(); return; }
+  goSaved();
+}
+function goSaved(){
+  const j = journals[focus];
+  const dur = Math.floor(secs/60) + ":" + String(secs%60).padStart(2,"0");
+  resetRec(); closeSheets(); renderFocus();
+  document.body.classList.add("saved-on");
+  $("rc-title").textContent = "Saved to " + j.name;
+  $("rc-sub").textContent = (secs ? dur : "2:47") + (bdOn && j.carried ? " · " + j.carried : "")
+    + (markers ? " · " + markers + " markers" : " · 6 markers");
+  show("scr-capture"); pill("j-saved");
+}
+function goLibrary(){ resetRec(); closeSheets(); renderFocus(); show("scr-library"); pill("j-lib"); }
+function openDetail(){ resetRec(); closeSheets(); show("scr-detail"); }
+
+function goMoved(){
+  movedTo = "field";
+  entries.field.unshift({y:1987, d:"May 1987", bd:true, dur:"2:47",
+    s:"Today we rode down to the creek after school and the water was higher than I have ever seen it."});
+  focus = "field"; mvOverride = null;
+  renderFocus(); closeSheets(); show("scr-library"); pill("j-moved");
+  toast("Moved to Field Notes");
+  entries.field.shift();
+}
+function openMove(){
+  $("moverows").innerHTML = Object.entries(journals).filter(([k]) => k !== focus)
+    .map(([k,j]) => `<button class="jrow" onclick="closeSheets();goMoved()">
+      <div class="cover sm ${j.cover}"></div>
+      <div><div class="jname">${j.name}</div><div class="jsub">${j.range} · ${j.count} entries</div></div>
+    </button>`).join("");
+  $("veil").classList.add("on"); $("movesheet").classList.add("on");
+}
+
+function openSwitcher(){
+  $("switchrows").innerHTML = Object.entries(journals).map(([k,j]) =>
+    `<button class="jrow${k===focus ? " cur" : ""}" onclick="pickJournal('${k}')">
+      <div class="cover sm ${j.cover}"></div>
+      <div><div class="jname">${j.name}
+          ${j.mv ? '<span class="tag">two voices</span>' : ''}
+          ${j.del === "Locked" ? '<span class="tag">locked</span>' : ''}</div>
+        <div class="jsub">${j.range} · ${j.count} entries</div></div>
+      <span class="jcheck">✓</span>
+    </button>`).join("");
+  $("veil").classList.add("on"); $("switcher").classList.add("on");
+}
+function openSettings(){
+  $("switcher").classList.remove("on");
+  $("settings").classList.add("on");
+}
+function segPick(btn){
+  btn.parentElement.querySelectorAll("button").forEach(b=>b.classList.remove("on"));
+  btn.classList.add("on");
+  journals[focus].del = btn.textContent;
+}
+function pickJournal(k){ focus = k; mvOverride = null; closeSheets(); renderFocus(); }
+function closeSheets(){ ["veil","switcher","settings","movesheet"].forEach(i => $(i).classList.remove("on")); }
+
+function toggleBackdate(){ bdOn = !bdOn; $("bd-toggle").classList.toggle("on", bdOn);
+  $("bd-pill").style.display = bdOn && journals[focus].carried ? "" : "none"; }
+function toggleMV(){ if (document.body.classList.contains("rec-on")) return;
+  mvOverride = !mvOn(); $("mv-toggle").classList.toggle("on", mvOn());
+  $("voicebtn").style.display = mvOn() ? "" : "none"; }
+
+let toastTimer = null;
+function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("on"), 2600); }
+
+for (let i=0;i<26;i++) $("meter-idle").insertAdjacentHTML("beforeend","<i></i>");
+goIdle();
+</script>
+</body>
+</html>

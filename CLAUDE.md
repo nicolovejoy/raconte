@@ -1,5 +1,58 @@
 # CLAUDE.md
 
+## Session 2026-08-09 midday (laptop — PR #45 MERGED; flake fixed; T7 plan drafted; photo-snapshot design approved; LN/BN type ruled)
+
+Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main.
+
+- **PR #45 merged** (`bf0042d5`), CI green on the merged tree. t6 worktree, both
+  `t6/revision-chain` branches, and the SDD ledger dir all deleted.
+- **Flake pair closed (`a140b7f8`, test-only).** The REAL race was the sibling:
+  `lastError` is assigned strictly after the `retryCount` disk write in
+  `handleReacquireResult`, previously masked by an incidental 150 ms sleep — now waits
+  on the actual signal (deterministically reproduced via a probe sleep, reverted).
+  `testRapidRecordDoneCyclesProduceTenSeparateEntries` has NO logic race (it polls
+  `finalizeQueue`, whose append shares its trigger's MainActor continuation); its
+  budget was just tight for real store I/O — widened 5→15 s with the investigation
+  in a comment. 771 green pre-merge.
+- **T7 editor-UI plan drafted** (`docs/plans/2026-08-09-t7-editor-ui-plan.md`, Opus,
+  written against PR #45 pre-merge — re-verify file:line cites): 9 tasks + 2 gates,
+  **12 numbered owner questions, 3 blocking** (what ends an edit given §2.5 has no
+  discard; flattened vs per-paragraph editing; marker-correction storage shape).
+  Scope find: **the editor's first save would silently drop BN/LN voice rendering**
+  (`EntryTranscript.swift:120` gates paragraphs on `.machineLive`) — span
+  re-attribution is now required Task 5, not "deferred to T7" hand-waving. Also:
+  no revision identity on the read path (Task 2's `EntryChainSnapshot`), no
+  per-capture `closeStaleDrafts`, no `apply(merge:)` glue, §7.2 write bypass still open.
+- **Photo-snapshot design approved + committed**
+  (`docs/plans/2026-08-09-photo-snapshot-design.md`): photo is HUMAN REFERENCE ONLY
+  (owner ruling — no OCR ever); one per entry, retake replaces; capture-time snap +
+  detail-view attach; `page.jpg` in the capture dir with a `PagePhotoRef` in
+  entry.json (three-answer read), ImageIO re-encode strips EXIF;
+  `holdsIrreplaceableArtifacts` must include it; provenance flag + batch-snap queue
+  (photograph 5 pages, read them in one at a time) deferred-not-precluded.
+- **LN/BN type + palette RULED** (addendum in
+  `docs/plans/2026-08-08-capture-landing-decisions.md`; mocks `g-lnbn-type.html` /
+  `h-encre-bleu.html` cherry-picked to main, branch `design/lnbn-font-mock` pushed):
+  serif (New York) confirmed; prefix = letterspaced accent micro-label but
+  **lowercase `ln`/`bn`**; BN italic stays; icon-blue palette adopted (hue 213.5°
+  off the icon's #092343); **no dip-switch-style toggles** — traditional switches.
+  "Good enough", no further type iteration. Capture-landing is now fully specced:
+  IA + type + palette all locked.
+- Housekeeping: stray untracked `.playwright-mcp/` + `g-mixed.png` in repo root
+  (mock-viewing leftovers) — Nico's to delete or keep.
+
+**Next steps:**
+1. **Nico: answer the T7 plan's 12 owner questions** (3 blocking, listed in the doc)
+   → then re-verify the plan's file:line cites against merged main and run the SDD
+   loop for T7 (editor v1 → Gate A → attribution/markers/audit → Gate B).
+2. **Capture-landing implementation plan** — everything is locked now (IA A+C-rows+
+   B-receipt+thumb-bar, serif, lowercase ln/bn accent labels, icon-blue, traditional
+   switches); carries #27 Mail-swipe gated by #35 journal-lock friction.
+3. **Photo-snapshot implementation plan** (design approved; sequenced after T7
+   unless owner resequences).
+4. #38 contextual-string biasing (verify SDK surface; pairs with T8 design);
+   #44 needs a device live.jsonl pull.
+
 ## Session 2026-08-08 overnight → 08-09 (laptop — T6 CHAIN FINISHED: Tasks 4-6 + Gate B, PR #45 open; 849 → 930 tests)
 
 Resumed the SDD loop at Task 4 per the ledger and ran it to the end: Tasks 4-6 built

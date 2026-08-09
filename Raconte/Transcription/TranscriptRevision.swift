@@ -269,34 +269,45 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
 /// every revision file on every read.
 struct TranscriptHead: Codable, Sendable, Equatable {
     var current: TranscriptHeadSummary?
-    var revisionFiles: [Int]
+    var revisionFiles: [Int]       // every canonical-<n> filename seen, readable or not
     var unreadableFiles: [Int]     // what makes head validation a fixed point (F6)
     var revisionCount: Int
+    /// True when `transcript/` itself could not be listed at build time — as opposed
+    /// to a specific `canonical-<n>.json` failing to decode, which is what
+    /// `unreadableFiles` tracks. Additive (T6b, after the format froze at Gate A):
+    /// absent on a pre-existing `head.json` decodes to `false`, the only value such a
+    /// head could have meant.
+    var listingUnreadable: Bool
 
     init(current: TranscriptHeadSummary?,
          revisionFiles: [Int],
          unreadableFiles: [Int],
-         revisionCount: Int) {
+         revisionCount: Int,
+         listingUnreadable: Bool = false) {
         self.current = current
         self.revisionFiles = revisionFiles
         self.unreadableFiles = unreadableFiles
         self.revisionCount = revisionCount
+        self.listingUnreadable = listingUnreadable
     }
 
     private enum CodingKeys: String, CodingKey {
-        case current, revisionFiles, unreadableFiles, revisionCount
+        case current, revisionFiles, unreadableFiles, revisionCount, listingUnreadable
     }
 
-    /// `current` is the one lenient field — a brand-new capture with no revisions yet
-    /// has no current summary, and that must decode to `nil`, not throw. The three
-    /// bookkeeping arrays/count are identity for a head file: a head record missing
-    /// them is not a valid fixed point and must fail loudly.
+    /// `current` and `listingUnreadable` are the lenient fields — a brand-new capture
+    /// with no revisions yet has no current summary, and a head written before
+    /// `listingUnreadable` existed has no opinion on it; both must decode to their safe
+    /// default rather than throw. The three original bookkeeping arrays/count are
+    /// identity for a head file: a head record missing them is not a valid fixed point
+    /// and must fail loudly.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         current = (try? container.decodeIfPresent(TranscriptHeadSummary.self, forKey: .current)) ?? nil
         revisionFiles = try container.decode([Int].self, forKey: .revisionFiles)
         unreadableFiles = try container.decode([Int].self, forKey: .unreadableFiles)
         revisionCount = try container.decode(Int.self, forKey: .revisionCount)
+        listingUnreadable = (try? container.decodeIfPresent(Bool.self, forKey: .listingUnreadable)) ?? false
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -305,6 +316,7 @@ struct TranscriptHead: Codable, Sendable, Equatable {
         try container.encode(revisionFiles, forKey: .revisionFiles)
         try container.encode(unreadableFiles, forKey: .unreadableFiles)
         try container.encode(revisionCount, forKey: .revisionCount)
+        try container.encode(listingUnreadable, forKey: .listingUnreadable)
     }
 }
 

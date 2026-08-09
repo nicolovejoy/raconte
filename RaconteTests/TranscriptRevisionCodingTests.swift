@@ -43,7 +43,8 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         TranscriptHead(current: fullHeadSummary(),
                        revisionFiles: [1, 2, 3],
                        unreadableFiles: [],
-                       revisionCount: 3)
+                       revisionCount: 3,
+                       listingUnreadable: true)
     }
 
     private func fullDraft() -> TranscriptDraft {
@@ -176,6 +177,17 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         """.data(using: .utf8)!
         let head = try CaptureCoding.decoder().decode(TranscriptHead.self, from: json)
         XCTAssertNil(head.current)
+    }
+
+    /// T6b (finding 2, post Gate-A additive field): a `head.json` written before
+    /// `listingUnreadable` existed has no opinion on it — must decode to `false`, the
+    /// only value such a head could have meant, not throw.
+    func testHeadMissingListingUnreadableDecodesFalse() throws {
+        let json = """
+        {"revisionFiles":[1],"unreadableFiles":[],"revisionCount":1}
+        """.data(using: .utf8)!
+        let head = try CaptureCoding.decoder().decode(TranscriptHead.self, from: json)
+        XCTAssertFalse(head.listingUnreadable)
     }
 
     // MARK: - 1.3 Unknown-enum rule (F10)

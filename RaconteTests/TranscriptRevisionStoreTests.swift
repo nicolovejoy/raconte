@@ -423,6 +423,38 @@ final class TranscriptRevisionStoreTests: XCTestCase {
                        "duplicate id across files dedupes to exactly one revision instance")
     }
 
+    /// Gate A finding N1: the C1 dedupe must not make the deduped file vanish from
+    /// `revisionFiles` — it WAS seen by the listing, it just isn't part of the chain.
+    /// Dropping it from `revisionFiles` means a persisted head can never again match
+    /// the store's own listing (which always reports it), permanently defeating the
+    /// O(1) trust path for this capture. Reconstructs the reviewer's exact probe: two
+    /// files, same id, persist, then prove the trust path actually engages on the next
+    /// call by corrupting the deduped file's bytes and confirming it's never decoded.
+    func testDedupedDuplicateFileStaysInRevisionFilesAndTrustPathStillEngages() async throws {
+        let duplicate = revision("DUP")
+        try writeRawCanonical(0, try validJSON(for: duplicate))
+        try writeRawCanonical(1, try validJSON(for: duplicate))
+
+        try await store().persistHead(captureID: captureID)
+
+        let persisted = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(persisted?.revisionFiles, [0, 1], "the deduped file WAS seen by the listing")
+        XCTAssertEqual(persisted?.unreadableFiles, [],
+                       "a duplicate id is not an unreadable file — routing it there would trip I1")
+
+        // Corrupt the DEDUPED file's bytes (file 1, dropped from the chain but not from
+        // revisionFiles). listing() still reports {0,1} — the file SET is unchanged —
+        // so the trust condition should hold and this corruption must never be decoded.
+        let dedupedURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 1)
+        try Data("{ not valid json at all, corrupted after persisting".utf8).write(to: dedupedURL)
+
+        let second = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(second, persisted,
+                       "trust path: identical value served — the corruption was never opened")
+        XCTAssertEqual(second?.unreadableFiles, [],
+                       "a real rebuild would have added file 1 to unreadableFiles once corrupted")
+    }
+
     // MARK: - 3.6 THE read-path test
 
     /// The single most important test in T6 (design §10): every static read — listing,

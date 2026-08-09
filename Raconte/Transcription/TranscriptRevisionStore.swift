@@ -102,24 +102,34 @@ actor TranscriptRevisionStore {
     /// Same read as `loadChain`, but keeping each revision's file number — needed to
     /// build a `TranscriptHeadSummary.fileNumber` and `TranscriptHead.revisionFiles`,
     /// neither of which `TranscriptRevision` itself carries. `nil` ⇔ `listing == .absent`.
+    ///
+    /// `dedupedFiles` (Gate A finding N1) is the third bucket a duplicate-id file falls
+    /// into: it decoded fine — it is NOT unreadable — but it was dropped from `numbered`
+    /// because another file already claimed its id (C1). It still counts as "seen" for
+    /// `TranscriptHead.revisionFiles`' own contract ("every canonical-<n> filename seen,
+    /// readable or not"); routing it into `unreadableFiles` instead would trip the I1
+    /// trust condition and reproduce C1's exact symptom (a head that can never be
+    /// trusted again, because `unreadableFiles` would never be empty).
     private nonisolated static func rawLoad(
         captureDirectory: URL
     ) -> (numbered: [(file: Int, revision: TranscriptRevision)], unreadableFiles: [Int],
-          listingUnreadable: Bool)? {
+          dedupedFiles: [Int], listingUnreadable: Bool)? {
         switch listing(captureDirectory: captureDirectory) {
         case .absent:
             return nil
         case .unreadable:
-            return (numbered: [], unreadableFiles: [], listingUnreadable: true)
+            return (numbered: [], unreadableFiles: [], dedupedFiles: [], listingUnreadable: true)
         case .present(let files):
             var numbered: [(file: Int, revision: TranscriptRevision)] = []
             var unreadableFiles: [Int] = []
+            var dedupedFiles: [Int] = []
             // Gate A finding C1: two canonical files can carry the same revision id (a
             // sync duplicate, or a hand-corrupted tree). `files` is ascending, so the
             // first file we see for a given id is always its lowest file number — keep
-            // that one and silently drop any later file sharing the same id, rather
-            // than let it flow into a chain (or a Dictionary keyed by id) with two
-            // entries for one identity.
+            // that one and silently drop any later file sharing the same id from the
+            // chain (or a Dictionary keyed by id), rather than let it produce two
+            // entries for one identity. The file number itself is NOT dropped — see
+            // `dedupedFiles` above.
             var seenIDs: Set<String> = []
             let decoder = CaptureCoding.decoder()
             for file in files {
@@ -130,10 +140,14 @@ actor TranscriptRevisionStore {
                     unreadableFiles.append(file)
                     continue
                 }
-                guard seenIDs.insert(revision.id).inserted else { continue }
+                guard seenIDs.insert(revision.id).inserted else {
+                    dedupedFiles.append(file)
+                    continue
+                }
                 numbered.append((file: file, revision: revision))
             }
-            return (numbered: numbered, unreadableFiles: unreadableFiles, listingUnreadable: false)
+            return (numbered: numbered, unreadableFiles: unreadableFiles,
+                    dedupedFiles: dedupedFiles, listingUnreadable: false)
         }
     }
 
@@ -153,7 +167,11 @@ actor TranscriptRevisionStore {
         // future code path that builds this map from non-deduped input.
         let fileNumberByID = Dictionary(raw.numbered.map { ($0.revision.id, $0.file) },
                                         uniquingKeysWith: min)
-        let revisionFiles = (raw.numbered.map(\.file) + raw.unreadableFiles).sorted()
+        // N1: a deduped (duplicate-id) file WAS seen — it belongs in revisionFiles per
+        // that field's own contract — but must NOT land in unreadableFiles (it decoded
+        // fine) or the I1 trust condition would never be satisfiable again for this
+        // capture.
+        let revisionFiles = (raw.numbered.map(\.file) + raw.unreadableFiles + raw.dedupedFiles).sorted()
 
         let summary: TranscriptHeadSummary? = TranscriptChain.current(ordered).flatMap { revision in
             guard let fileNumber = fileNumberByID[revision.id] else { return nil }
@@ -230,6 +248,13 @@ actor TranscriptRevisionStore {
     /// creating anything under a vanished capture) or when the sidecar reports
     /// `trashedAt != nil`. A capture with NO sidecar at all (mid-finalize, legitimate)
     /// is neither of those and stays fully persistable.
+    ///
+    /// Behavior note (Gate A close-out ruling): the I3 sidecar guard means this method
+    /// now `throws` on an UNREADABLE (present-but-undecodable) `entry.json` — a case
+    /// that, before I3, would have been ignored and the head written anyway. `append`
+    /// already swallows any `persistHead` failure (C1-trigger), so this is invisible
+    /// through that path; a future caller invoking `persistHead` directly (e.g. T6c)
+    /// will see the throw and must decide how to handle a damaged sidecar itself.
     func persistHead(captureID: String) throws {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
 

@@ -116,6 +116,35 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
         XCTAssertEqual(spans.map(\.anchor), [.exact, .inherited])
     }
 
+    /// Gate B finding C1: `AttributedString` runs partition their result's text, so
+    /// adjacent runs carry their own boundary whitespace (`"hello"` / `" there"` over
+    /// `"hello there"`). `TranscriptChain.plainText` re-joins spans with a single
+    /// separator (`TranscriptText.join`) — a span text that ALSO carries that
+    /// whitespace doubles it. Frames are untouched by the trim; only `text` changes.
+    func testRunsWithBoundaryWhitespaceAreTrimmedInTheSpanText() {
+        let committed = [result("hello there", 0, 20_000, runs: [
+            TranscriptRun(text: "hello", captureFrameStart: 0, captureFrameEnd: 10_000),
+            TranscriptRun(text: " there", captureFrameStart: 10_000, captureFrameEnd: 20_000),
+        ])]
+        let spans = TranscriptRevisionStore.spans(fromCommitted: committed)
+        XCTAssertEqual(spans, [
+            TranscriptSpan(text: "hello", anchor: .exact, frameStart: 0, frameEnd: 10_000),
+            TranscriptSpan(text: "there", anchor: .exact, frameStart: 10_000, frameEnd: 20_000),
+        ])
+    }
+
+    /// A run that is ENTIRELY boundary whitespace (a bare separator run some analyzer
+    /// output can carry) must be dropped, not kept as an empty-text span.
+    func testWhitespaceOnlyRunIsDroppedEntirely() {
+        let committed = [result("hello there", 0, 20_000, runs: [
+            TranscriptRun(text: "hello", captureFrameStart: 0, captureFrameEnd: 9_000),
+            TranscriptRun(text: " ", captureFrameStart: 9_000, captureFrameEnd: 10_000),
+            TranscriptRun(text: "there", captureFrameStart: 10_000, captureFrameEnd: 20_000),
+        ])]
+        let spans = TranscriptRevisionStore.spans(fromCommitted: committed)
+        XCTAssertEqual(spans.map(\.text), ["hello", "there"])
+    }
+
     func testSpansNeverCarryASourceRevisionID() {
         let committed = [result("hello", 0, 4_800, runs: [
             TranscriptRun(text: "hello", captureFrameStart: 0, captureFrameEnd: 4_800),
@@ -126,10 +155,19 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
 
     // MARK: - 4.2 Display-identity test (F16)
 
+    /// Gate B finding C1: `runs` carry their OWN boundary whitespace — `AttributedString`
+    /// runs partition the result text, so `"hello there"` splits into runs `"hello"` /
+    /// `" there"`, exactly as `SpeechAnalyzerEngine.runs(of:)` builds them on device.
+    /// The first record here reproduces that shape; the second stays runless (no
+    /// `runs:` argument) so the runless path — which must stay correct — is still
+    /// covered by the same test.
     func testPromotedRevisionPlainTextMatchesConsolidatedCommittedTextByteForByte() async throws {
         try writeFinalAudio()
         try writeLiveTranscript([
-            record("hello there", 0, 20_000),
+            record("hello there", 0, 20_000, runs: [
+                TranscriptRun(text: "hello", captureFrameStart: 0, captureFrameEnd: 10_000),
+                TranscriptRun(text: " there", captureFrameStart: 10_000, captureFrameEnd: 20_000),
+            ]),
             record("general kenobi", 40_000, 60_000),
         ])
 
@@ -211,6 +249,11 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
 
     // MARK: - 4.4 Provenance tests
 
+    /// Mutation check (B1): if the copy were hardcoded to `nil` instead of reading the
+    /// manifest's ref, this test — which asserts the exact non-nil value — fails.
+    /// Verified by hand: swapping `coverageFrames: ref?.coverageFrames` for
+    /// `coverageFrames: nil` in `promoteIfNeeded` makes this test fail (asserts 4_800,
+    /// got nil) — see the task report for the transcript of that run.
     func testCoverageFramesAndSkippedRangesAreCopiedFromTheManifestRef() async throws {
         try writeFinalAudio()
         try writeLiveTranscript([record("hello", 0, 4_800)])
@@ -226,18 +269,6 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
         let revision = try XCTUnwrap(chain?.revisions.first)
         XCTAssertEqual(revision.coverageFrames, 4_800)
         XCTAssertEqual(revision.skippedRanges, [FrameRange(start: 9_600, end: 14_400)])
-    }
-
-    /// Mutation check (B1): if the copy were hardcoded to `nil` instead of reading the
-    /// manifest's ref, this test — which asserts the exact non-nil value — fails.
-    /// Verified by hand: swapping `coverageFrames: ref?.coverageFrames` for
-    /// `coverageFrames: nil` in `promoteIfNeeded` makes
-    /// `testCoverageFramesAndSkippedRangesAreCopiedFromTheManifestRef` fail (asserts
-    /// 4_800, got nil) — see the task report for the transcript of that run.
-    func testMutationCheckMarker_coverageFramesHardcodeWouldFailTheProvenanceTest() {
-        // Intentionally empty: this documents the manual mutation check performed for
-        // B1, run by editing TranscriptRevisionStore.swift and re-running the test
-        // above (see the task report).
     }
 
     func testCoverageFramesNilWhenManifestHasNoTranscriptRef() async throws {

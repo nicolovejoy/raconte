@@ -46,6 +46,13 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
         try writer.close()
     }
 
+    private func writeLiveTranscriptRecords(_ records: [TranscriptRecord]) throws {
+        let writer = LiveTranscriptWriter(captureDirectory: captureDirectory)
+        try writer.open()
+        for record in records { try writer.append(record) }
+        try writer.close()
+    }
+
     @discardableResult
     private func writeRawCanonical(_ n: Int, _ revision: TranscriptRevision) throws -> URL {
         let dir = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)
@@ -139,9 +146,23 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
 
     // MARK: - Detection boundary (C3): SpokenDateDetection sees identical text pre/post promotion
 
+    /// Gate B finding C1: the record's runs carry their own boundary whitespace
+    /// (`AttributedString` partitions the result text) — the shape
+    /// `SpeechAnalyzerEngine.runs(of:)` actually produces on device, e.g. `"recorded"` /
+    /// `" on march third nineteen ninety eight"`. Before the trim fix, promotion's
+    /// re-join would double that boundary space and `before`/`after` would disagree.
     func testSpokenDateDetectionInputTextIsIdenticalBeforeAndAfterPromotion() async throws {
         try writeFinalAudio()
-        try writeLiveTranscript([("recorded on march third nineteen ninety eight", 0, 20_000)])
+        try writeLiveTranscriptRecords([
+            TranscriptRecord(seq: 0, text: "recorded on march third nineteen ninety eight",
+                             captureFrameStart: 0, captureFrameEnd: 20_000,
+                             runs: [
+                                 TranscriptRun(text: "recorded", captureFrameStart: 0, captureFrameEnd: 8_000),
+                                 TranscriptRun(text: " on march third nineteen ninety eight",
+                                              captureFrameStart: 8_000, captureFrameEnd: 20_000),
+                             ],
+                             generator: "SpeechTranscriber", locale: "en_US"),
+        ])
 
         let before = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil)
         let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)

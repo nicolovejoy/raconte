@@ -227,16 +227,56 @@ struct EntryDetailView: View {
 
     // MARK: - Transcript
 
+    /// The transcript section's rendering decision, factored out of the view (T7 plan
+    /// step 3) so it's unit-testable without a snapshot harness: SwiftUI body rendering
+    /// isn't otherwise reachable from `RaconteTests`. `transcriptSection` below is a
+    /// thin `switch` over this with no logic of its own.
+    enum TranscriptDisplay: Equatable {
+        case absent
+        case unreadable
+        case empty
+        case plain(String)
+        case attributed([TranscriptAttribution.Paragraph])
+    }
+
+    /// Pure: no I/O, no `Environment`, no `@State` reads. Paragraphs win over plain text
+    /// whenever they exist — the loader already collapses "markers with no transcript"
+    /// to `paragraphs == nil` (hazard 4), so a non-empty `paragraphs` here always means
+    /// there is something to show.
+    static func transcriptDisplay(_ transcript: EntryTranscript) -> TranscriptDisplay {
+        switch transcript.state {
+        case .absent:
+            return .absent
+        case .unreadable:
+            return .unreadable
+        case .present:
+            if let paragraphs = transcript.paragraphs, !paragraphs.isEmpty {
+                return .attributed(paragraphs)
+            }
+            if let text = transcript.text, !text.isEmpty {
+                return .plain(text)
+            }
+            return .empty
+        }
+    }
+
     /// Absent / unreadable / present-but-empty are three distinct, calm answers — issue
     /// #11's rule, one layer up from the log reader that first drew this line. A short
     /// tail is a fourth: the text is real and there may simply be less of it than was
     /// spoken, which the library row already marks and this screen used not to.
+    ///
+    /// Voice-attributed paragraphs (T7 plan step 3): a plain text label above the prose
+    /// — no per-voice typeface (design §10 defers print-vs-cursive rendering; a text
+    /// label is the cheap, legible, accessible v1) and no affordance for
+    /// `hasApproximateBoundary` (requirement 4's explicit v1 decision — an approximate
+    /// cut renders exactly like a precise one; the flag exists so T7 can add a badge
+    /// later without re-deriving anything).
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
                 .font(.headline)
 
-            switch transcript.state {
+            switch Self.transcriptDisplay(transcript) {
             case .absent:
                 Text("This entry was not transcribed.")
                     .foregroundStyle(.secondary)
@@ -245,17 +285,34 @@ struct EntryDetailView: View {
                 Text("The transcript could not be read.")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("detail.transcript.unreadable")
-            case .present:
-                if let text = transcript.text, !text.isEmpty {
-                    Text(text)
-                        .font(.system(.body, design: .serif))
-                        .textSelection(.enabled)
-                        .accessibilityIdentifier("detail.transcript.text")
-                } else {
-                    Text("No speech was transcribed.")
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("detail.transcript.empty")
+            case .empty:
+                Text("No speech was transcribed.")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("detail.transcript.empty")
+            case .plain(let text):
+                Text(text)
+                    .font(.system(.body, design: .serif))
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("detail.transcript.text")
+            case .attributed(let paragraphs):
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let voice = paragraph.voice {
+                                Text(TranscriptAttribution.displayName(forVoice: voice))
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .tracking(0.5)
+                                    .accessibilityIdentifier("detail.transcript.voice.\(index)")
+                            }
+                            Text(paragraph.text)
+                                .font(.system(.body, design: .serif))
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier("detail.transcript.paragraph.\(index)")
+                        }
+                    }
                 }
+                .accessibilityIdentifier("detail.transcript.text")
             }
 
             if transcript.isTruncated {

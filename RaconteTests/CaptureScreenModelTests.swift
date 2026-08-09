@@ -99,6 +99,22 @@ final class CaptureScreenModelTests: XCTestCase {
 
     /// Doc test 22 (rapid start/stop cycles): every cycle must land as its own
     /// finalized entry — none merged, none dropped, no stuck non-idle state after.
+    ///
+    /// Investigated as a suspected #4/#22/08-07-family flake ("cycle 4 never
+    /// committed", 733/734 in a full-suite CI run). Unlike that family, this loop
+    /// already polls the correct terminal signal (`finalizeQueue`, not `phase`), and
+    /// `finalizeQueue.append` runs in the SAME MainActor continuation as its own
+    /// trigger (`completeCapture()` has no `await` before the append) — there is no
+    /// competing task that can observe a "done" marker before this one lands, unlike
+    /// the confirmed race in `testFailedResumeDiskWriteReturnsToInterruptedNotRecording`
+    /// below. Reproduction attempts (24-spinner CPU load, a full 771-test suite run
+    /// under that load, and reading every intermediate await in the `.done` →
+    /// `.tailDrained` → `drainAndFinish` chain) found no wrong-value read — only that
+    /// each cycle pays a real, unavoidable ~300ms `flushInterval` sleep plus real
+    /// `SegmentStore` disk I/O (this test uses the real store, not a fake), so the
+    /// per-cycle budget genuinely has less headroom than the family's microsecond-
+    /// scale races. Widened from the default 5s accordingly — a right-sized bound for
+    /// confirmed-non-racy real I/O, not a blind timeout bump.
     func testRapidRecordDoneCyclesProduceTenSeparateEntries() async throws {
         let recorder = ModelFakeRecorder()
         let encoder = FakeAudioEncoder()
@@ -114,10 +130,10 @@ final class CaptureScreenModelTests: XCTestCase {
             await model.record()
             recorder.feed(frames: 100)
             await model.done()
-            await waitUntil({ live.finalizeQueue.isEmpty == false },
+            await waitUntil({ live.finalizeQueue.isEmpty == false }, timeout: 15,
                             "cycle \(cycle) never committed")
             model.handleFinalizeQueue()   // the view's onChange relay
-            await waitUntil({ model.library.items.count == cycle && model.coordinator !== live },
+            await waitUntil({ model.library.items.count == cycle && model.coordinator !== live }, timeout: 15,
                             "cycle \(cycle) did not finalize + respawn")
         }
 

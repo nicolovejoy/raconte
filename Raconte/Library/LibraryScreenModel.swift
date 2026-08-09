@@ -357,25 +357,42 @@ final class LibraryScreenModel {
     ///
     /// `expectedRecords` is read from the manifest here rather than taken from the row:
     /// the detail screen can outlive the row (a reassignment can move it out of scope).
+    ///
+    /// Always asks for attribution (`AttributionMode.compute`) — this is the detail
+    /// screen's one path, the only consumer that renders paragraphs, unlike
+    /// `LibraryScanner.transcriptSummary`'s `.skip` default (hazard 1).
     nonisolated func transcript(for captureID: String) async -> EntryTranscript {
         let capturesRoot = self.capturesRoot
         return await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
                                                            captureID: captureID)
+            let facts = Self.manifestFacts(captureDirectory: directory)
             return EntryTranscriptLoader.load(
                 captureDirectory: directory,
-                expectedRecords: Self.committedRecords(captureDirectory: directory))
+                expectedRecords: facts.committedRecords,
+                attribution: .compute(sampleRate: facts.sampleRate))
         }.value
     }
 
-    /// `TranscriptRef.committedRecords` off the manifest, or nil when there is no
-    /// manifest, no ref, or the manifest did not decode — all three mean "we cannot say
-    /// whether the tail is short", which is exactly `Completeness.unknown`.
-    private nonisolated static func committedRecords(captureDirectory: URL) -> Int? {
+    /// The two manifest facts the transcript read needs, off one decode.
+    private struct ManifestFacts {
+        /// `TranscriptRef.committedRecords`, or nil when there is no manifest, no ref,
+        /// or the manifest did not decode — all three mean "we cannot say whether the
+        /// tail is short", which is exactly `Completeness.unknown`.
+        var committedRecords: Int?
+        /// `Manifest.format.sampleRate`, or a 48kHz fallback when the manifest is
+        /// missing or undecodable. The rate only scales the marker snap window, and a
+        /// missing manifest already means a capture that never closed cleanly — the
+        /// fallback costs nothing this path wasn't already degrading past.
+        var sampleRate: Double
+    }
+
+    private nonisolated static func manifestFacts(captureDirectory: URL) -> ManifestFacts {
         let url = SegmentLayout.manifestURL(captureDirectory: captureDirectory)
         guard let data = try? Data(contentsOf: url),
               let manifest = try? CaptureCoding.decoder().decode(Manifest.self, from: data)
-        else { return nil }
-        return manifest.transcript?.committedRecords
+        else { return ManifestFacts(committedRecords: nil, sampleRate: 48_000) }
+        return ManifestFacts(committedRecords: manifest.transcript?.committedRecords,
+                             sampleRate: Double(manifest.format.sampleRate))
     }
 }

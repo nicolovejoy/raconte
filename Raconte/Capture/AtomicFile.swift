@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 enum AtomicFileError: Error, Equatable {
     /// A POSIX call failed. `operation` names the syscall; `code` is errno.
@@ -52,6 +55,42 @@ enum AtomicFile {
         // pay for anyway (see fsync threat model above). A failure here does NOT mean the
         // write was lost — it landed — so don't surface it as a `replace` failure. All
         // pre-rename errors above still throw.
+        try? fsyncDirectory(path: dirPath)
+    }
+
+    /// Create-once: stages `data` at `url.part`, fsyncs, then renames with
+    /// `RENAME_EXCL` so an existing target fails with `EEXIST` instead of being
+    /// silently replaced (design §4.5b). Unlike `replace`, this never overwrites.
+    static func createExclusively(at url: URL, writing data: Data) throws {
+        let partURL = SegmentLayout.partURL(for: url)
+        let partPath = partURL.path
+        let finalPath = url.path
+        let dirPath = url.deletingLastPathComponent().path
+
+        let fd = open(partPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+        guard fd >= 0 else { throw AtomicFileError.posix(operation: "open", code: errno) }
+
+        do {
+            try writeAll(fd: fd, data: data)
+            guard fsync(fd) == 0 else { throw AtomicFileError.posix(operation: "fsync", code: errno) }
+        } catch {
+            close(fd)
+            throw error
+        }
+        guard close(fd) == 0 else { throw AtomicFileError.posix(operation: "close", code: errno) }
+
+        guard renamex_np(partPath, finalPath, UInt32(RENAME_EXCL)) == 0 else {
+            let code = errno
+            if code == EEXIST {
+                // A losing create must not strand its .part; a real IO error leaves it
+                // as evidence, matching replace()'s behaviour on other failures.
+                unlink(partPath)
+            }
+            throw AtomicFileError.posix(operation: "renamex_np", code: code)
+        }
+
+        // Same rationale as replace(): the rename already succeeded, so this only
+        // hardens the rename entry's power-loss durability, which we don't pay for.
         try? fsyncDirectory(path: dirPath)
     }
 

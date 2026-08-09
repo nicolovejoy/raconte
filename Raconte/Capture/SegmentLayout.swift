@@ -12,6 +12,9 @@ enum SegmentLayout {
     static let liveTranscriptFileName = "live.jsonl"
     static let markerLogFileName = "markers.jsonl"
     static let canonicalTranscriptPrefix = "canonical-"
+    static let transcriptHeadFileName = "head.json"
+    static let transcriptDraftFileName = "draft.json"
+    static let entryLogFileName = "entry-log.jsonl"
     static let finalRecordingName = "recording.m4a"
     static let partExtension = "part"
     static let pcmExtension = "pcm"
@@ -124,6 +127,27 @@ enum SegmentLayout {
     static func canonicalTranscriptURL(captureDirectory: URL, revision: Int) -> URL {
         transcriptDirectory(captureDirectory: captureDirectory)
             .appendingPathComponent("\(canonicalTranscriptPrefix)\(revision).json")
+    }
+
+    /// T6 §4.1: the current revision-chain head pointer. Lives in `transcript/` so
+    /// issue #8's guard already covers it with zero changes.
+    static func transcriptHeadURL(captureDirectory: URL) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent(transcriptHeadFileName)
+    }
+
+    /// T6 §4.1: the in-progress edit draft, if any. Lives in `transcript/` alongside
+    /// `head.json` and the `canonical-<n>.json` revisions.
+    static func transcriptDraftURL(captureDirectory: URL) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent(transcriptDraftFileName)
+    }
+
+    /// T7's audit log. A sibling of `entry.json`, NOT inside `transcript/` — the
+    /// audit log records edits to user-owned metadata, not to the derived transcript,
+    /// so it belongs beside the file it audits rather than beside the revisions.
+    static func entryLogURL(captureDirectory: URL) -> URL {
+        captureDirectory.appendingPathComponent(entryLogFileName)
     }
 
     /// Inverse of `canonicalTranscriptURL`'s file name, for the recovery scan.

@@ -88,6 +88,15 @@ enum TranscriptAttribution {
         voice.uppercased()
     }
 
+    /// Whether a voice's paragraphs render in italic. Owner decision (2026-08-08):
+    /// italic-for-BN stands in for the print-vs-cursive distinction his physical
+    /// journals use, until a per-voice typeface (deferred to T7) can do better. Display
+    /// layer only — voice ids stay opaque strings elsewhere, and `nil` (unattributed
+    /// paragraphs) is not italic.
+    static func isItalic(voice: String?) -> Bool {
+        voice == "bn"
+    }
+
     // MARK: - Pieces
 
     private static func pieces(from records: [TranscriptResult]) -> [Piece] {

@@ -31,3 +31,23 @@ that branch is the companion). Decisions, verbatim intent:
 Housekeeping note: `design/capture-landing-mocks` accidentally carries committed
 `.build/` Xcode cache junk — clean before merging anything from it (cherry-pick the
 `docs/mocks/` files rather than merging the branch).
+
+## Addendum 2026-08-09: type + palette RULED (item 3 closed, item 2 closed)
+
+Owner reviewed `docs/mocks/2026-08-07-capture-landing/g-lnbn-type.html` and
+`h-encre-bleu.html` ("love the mocks") and locked:
+
+1. **Serif (New York) for the transcript reading surface** — the mock's
+   recommendation stands (SF italic is an oblique; the icon wordmark is a serif;
+   serif is what already ships in `EntryDetailView`).
+2. **Voice prefix: letterspaced accent micro-label, LOWERCASE** — `ln` / `bn`,
+   not `LN:`/`BN:`. The label treatment from the mock, case changed.
+3. **BN italic stays** (print-vs-cursive signal keeps both carriers: label + face).
+4. **Icon-blue palette adopted** (h-encre-bleu: hue 213.5° held from the icon's
+   #092343, accent #568acc ramp, ink = icon cream pulled down).
+5. **Control styling: no dip-switch-style toggles.** Owner dislikes the mock's
+   switch treatment "in many places" — use a more traditional switch control.
+   Ruled "good enough"; no further mock iteration on this.
+
+These close the type/palette questions; capture-landing implementation can be
+planned against IA (above) + this addendum.

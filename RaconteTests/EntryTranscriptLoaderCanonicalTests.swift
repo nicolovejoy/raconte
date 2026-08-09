@@ -61,6 +61,13 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
                            spans: [TranscriptSpan(text: text, anchor: .none)])
     }
 
+    private func writeMarkers(_ markers: [StructureMarker]) throws {
+        let writer = MarkerLogWriter(captureDirectory: captureDirectory)
+        try writer.open()
+        for marker in markers { try writer.append(marker) }
+        try writer.close()
+    }
+
     // MARK: - Canonical present
 
     func testCanonicalPresentSuppliesTextOverLiveJSONL() async throws {
@@ -143,5 +150,97 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
 
         XCTAssertEqual(before.text, after.text,
                        "SpokenDateDetection reads transcript.text — promotion must not change it")
+    }
+
+    // MARK: - Review finding 1: truncation/unreadability must survive the canonical branch
+
+    /// A capture killed mid-write has a short `live.jsonl`; the launch pass promotes
+    /// exactly that short log into revision zero. The canonical branch must still
+    /// surface `.transcriptTruncated` — losing it would silently hide the one signal
+    /// this codebase is most careful never to drop.
+    func testCanonicalBranchStillSurfacesTranscriptTruncated() async throws {
+        try writeFinalAudio()
+        try writeLiveTranscript([("only one record made it", 0, 20_000)])
+        let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
+        guard case .promoted = outcome else { return XCTFail("fixture setup failed: \(outcome)") }
+
+        // expectedRecords: 2 — the manifest's TranscriptRef.committedRecords says two
+        // records were committed before the clean close; only one landed on disk.
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: 2)
+
+        XCTAssertEqual(transcript.state, .present, "the canonical branch still supplies text")
+        XCTAssertTrue(transcript.degradations.contains(.transcriptTruncated),
+                      "truncation must not be silently lost once promotion takes over")
+    }
+
+    /// Symmetric case: the promoted revision itself is fine, but the `live.jsonl` that
+    /// produced it can no longer be read (e.g. permissions damage after the fact). The
+    /// promoted text is only as good as the log it came from, so this must surface too.
+    func testCanonicalBranchStillSurfacesTranscriptUnreadable() async throws {
+        try writeFinalAudio()
+        try writeLiveTranscript([("hello there", 0, 20_000)])
+        let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
+        guard case .promoted = outcome else { return XCTFail("fixture setup failed: \(outcome)") }
+
+        let logURL = SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: logURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: logURL.path) }
+        try XCTSkipIf(FileManager.default.isReadableFile(atPath: logURL.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil)
+
+        XCTAssertEqual(transcript.state, .present, "the canonical revision itself is still readable")
+        XCTAssertTrue(transcript.degradations.contains(.transcriptUnreadable),
+                      "the source log being unreadable must surface even though `current` decoded fine")
+    }
+
+    // MARK: - Review finding 2: paragraphs must not silently mix sources
+
+    /// The brief's ".compute mode... add the test proving it" — the case that was
+    /// previously untested at the loader level: a machine-live current revision with a
+    /// marker log present must still attribute paragraphs normally.
+    func testComputeModeAttributesParagraphsWhenCurrentRevisionIsMachineLive() async throws {
+        try writeFinalAudio()
+        try writeLiveTranscript([("intro words", 0, 20_000), ("reply words", 40_000, 60_000)])
+        let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
+        guard case .promoted = outcome else { return XCTFail("fixture setup failed: \(outcome)") }
+        try writeMarkers([
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil,
+                                                     attribution: .compute(sampleRate: 48_000))
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs)
+        XCTAssertEqual(paragraphs.map(\.text), ["intro words", "reply words"])
+        XCTAssertEqual(transcript.text, "intro words reply words")
+    }
+
+    /// A human revision (T6d/T6e onward) has diverged from `live.jsonl` by definition.
+    /// `paragraphs` must be nil rather than attributing markers.jsonl over post-edit
+    /// text — otherwise a marked-up entry would silently show stale pre-edit words
+    /// under a voice label.
+    func testComputeModeReturnsNilParagraphsWhenCurrentRevisionIsNotMachineLive() async throws {
+        try writeFinalAudio()
+        try writeLiveTranscript([("intro words", 0, 20_000), ("reply words", 40_000, 60_000)])
+        let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
+        guard case .promoted = outcome else { return XCTFail("fixture setup failed: \(outcome)") }
+        try writeMarkers([
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+        // A divergent human edit on top — the shape T6d/T6e will produce.
+        try writeRawCanonical(1, TranscriptRevision(
+            id: "EDITED", source: .userEdit, createdAt: Date(timeIntervalSince1970: 1_700_000_100),
+            spans: [TranscriptSpan(text: "a completely rewritten paragraph", anchor: .none)]))
+
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil,
+                                                     attribution: .compute(sampleRate: 48_000))
+
+        XCTAssertEqual(transcript.text, "a completely rewritten paragraph")
+        XCTAssertNil(transcript.paragraphs,
+                    "markers.jsonl attribution must not be shown over text it never produced")
     }
 }

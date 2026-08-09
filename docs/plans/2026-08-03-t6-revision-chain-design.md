@@ -1311,7 +1311,12 @@ the Gate A freeze holds.
     permanently into revision zero. As built: each run's text is trimmed, whitespace-only
     runs are dropped (frames untouched; `TranscriptText.join` re-supplies the single
     separator). F16/C3 tests are fixtured with whitespace-carrying runs so the
-    non-degenerate path is pinned.
+    non-degenerate path is pinned. Known residual (probe-characterized at the gate,
+    unobserved on device): a run pair the analyzer splits *without* intervening
+    whitespace (e.g. `don't` → `don`/`'t`) still gains a separator on join. If device
+    data ever shows this shape, the fix is a promotion-time guard — compare
+    `join(trimmedRunTexts)` against `result.text` and fall back to the runless
+    single-span shape for that result — making F16 hold unconditionally by construction.
 11. **§3.3's "adjacent `exact` spans are never merged" holds only across an intact,
     unedited separator.** When the user deletes the boundary space, the format cannot
     represent adjacency-without-separator (`join` always inserts one), so the two spans

@@ -734,6 +734,18 @@ actor TranscriptRevisionStore {
     /// revision they are about to be written into, and `TranscriptSpan`'s own doc
     /// comment defers "never write a redundant equal id" enforcement to whichever of
     /// T6c/T6e constructs spans first — this is that constructor.
+    ///
+    /// Gate B finding C1: `AttributedString` runs PARTITION their result's text, so
+    /// `SpeechAnalyzerEngine.runs(of:)` builds run text straight off `text[run.range]`
+    /// — a run's text carries its own boundary whitespace (`"hello there"` splits into
+    /// `"hello"` / `" there"`, not `"hello"` / `"there"`). `TranscriptChain.plainText`
+    /// re-joins span texts with `TranscriptText.join`'s single separator, so a span
+    /// text that ALSO carries that boundary space doubles it on every run boundary —
+    /// reproduced by the reviewer at both the promotion and the loader level. Each
+    /// run's text is trimmed here before it becomes a span, and a run that trims to
+    /// nothing (a bare separator run) is dropped entirely rather than kept as an
+    /// empty-text span. Frames are untouched by the trim — only `text` changes; `join`
+    /// alone is responsible for supplying the separator back.
     nonisolated static func spans(fromCommitted committed: [TranscriptResult]) -> [TranscriptSpan] {
         committed.flatMap { result -> [TranscriptSpan] in
             guard !result.runs.isEmpty else {
@@ -741,13 +753,15 @@ actor TranscriptRevisionStore {
                                        frameStart: result.range.start, frameEnd: result.range.end,
                                        confidence: result.confidence, sourceRevisionID: nil)]
             }
-            return result.runs.map { run in
+            return result.runs.compactMap { run -> TranscriptSpan? in
+                let trimmed = run.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
                 if let start = run.captureFrameStart, let end = run.captureFrameEnd {
-                    return TranscriptSpan(text: run.text, anchor: .exact,
+                    return TranscriptSpan(text: trimmed, anchor: .exact,
                                           frameStart: start, frameEnd: end,
                                           confidence: run.confidence, sourceRevisionID: nil)
                 }
-                return TranscriptSpan(text: run.text, anchor: .none,
+                return TranscriptSpan(text: trimmed, anchor: .none,
                                       frameStart: nil, frameEnd: nil,
                                       confidence: run.confidence, sourceRevisionID: nil)
             }

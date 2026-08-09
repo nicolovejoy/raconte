@@ -375,4 +375,184 @@ actor TranscriptRevisionStore {
         if case .posix(_, let code) = error { return code == EEXIST }
         return false
     }
+
+    // MARK: - Promotion (T6c, design §5.1/§5.2)
+
+    /// What `promoteIfNeeded` decided, or why it declined to write anything.
+    enum PromotionOutcome: Sendable, Equatable {
+        case promoted(revisionID: String)
+        case skippedAlreadyPromoted, skippedTrashed, skippedNoAudio, skippedNoLog
+        case failed(String)
+    }
+
+    /// Promote `transcript/live.jsonl` into revision zero of the canonical chain, once.
+    ///
+    /// Skip order matches the brief exactly, cheapest/safest check first:
+    /// 1. The capture directory itself is missing — mirrors `append`'s C2 guard. A
+    ///    missing sidecar reads identically to "not trashed" through
+    ///    `EntryMetadataStore.read`, so a vanished (staged-away) capture would
+    ///    otherwise look promotable; there is no dedicated outcome for this case, so it
+    ///    folds into `.skippedTrashed` — the same "never gain new files" rule.
+    /// 2. `trashedAt != nil` → `.skippedTrashed`.
+    /// 3. Any canonical file already listed (readable or not) → `.skippedAlreadyPromoted`
+    ///    — promotion runs at most once per capture, by construction of `append`'s own
+    ///    `n = max(present) + 1` allocation, but this check keeps a re-run cheap (no
+    ///    log read at all) rather than relying on `append` to no-op.
+    /// 4. No `final/recording.m4a` → `.skippedNoAudio` — nothing durable to derive from.
+    /// 5. `live.jsonl` absent → `.skippedNoLog` — an honest "nothing was ever
+    ///    transcribed", not an error.
+    /// 6. `live.jsonl` present but unreadable → `.failed` — never promote a log we
+    ///    cannot fully read; a partial promotion here would be worse than none.
+    @discardableResult
+    func promoteIfNeeded(captureID: String, now: Date = Date()) async -> PromotionOutcome {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+
+        var isCaptureDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
+              isCaptureDirectory.boolValue else {
+            return .skippedTrashed
+        }
+
+        let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        let metadata: EntryMetadata
+        do {
+            metadata = try EntryMetadataStore.read(url: sidecarURL)
+        } catch {
+            return .failed("sidecar unreadable: \(error)")
+        }
+        if metadata.isTrashed { return .skippedTrashed }
+
+        switch Self.listing(captureDirectory: captureDirectory) {
+        case .absent:
+            break
+        case .present(let files):
+            if !files.isEmpty { return .skippedAlreadyPromoted }
+        case .unreadable(let reason):
+            return .failed(reason)
+        }
+
+        let audioURL = SegmentLayout.finalRecordingURL(captureDirectory: captureDirectory)
+        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+            return .skippedNoAudio
+        }
+
+        let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+        switch loaded.source {
+        case .absent:
+            return .skippedNoLog
+        case .unreadable(let reason):
+            return .failed("live.jsonl unreadable: \(reason)")
+        case .present:
+            break
+        }
+
+        let consolidator = LiveTranscriptReader.consolidate(loaded.records)
+        let spans = Self.spans(fromCommitted: consolidator.committed)
+        // Generator/locale come from the RAW records, not the consolidated
+        // `TranscriptResult`s — `TranscriptResult(_ record:)` deliberately does not
+        // carry them (they are per-record on disk, revision-wide here), so the last
+        // record decided is the only place left to read them from.
+        let lastRecord = loaded.records.last
+        let ref = Self.readManifest(captureDirectory: captureDirectory)?.transcript
+
+        let revision = TranscriptRevision(
+            id: ULID.make(now: now),
+            source: .machineLive,
+            createdAt: now,
+            spans: spans,
+            parentID: nil,
+            basedOnMachineID: nil,
+            generator: lastRecord?.generator,
+            locale: lastRecord?.locale,
+            // nil when the manifest carries no `TranscriptRef` (locked decision 3): a
+            // launch-recovered capture never got a clean-close ref written, and a
+            // fabricated coverage number here would claim more than is actually known.
+            coverageFrames: ref?.coverageFrames,
+            skippedRanges: ref?.skippedRanges,
+            deviceID: DeviceIdentity.stable(),
+            closedBy: nil)
+
+        do {
+            try append(revision, captureID: captureID)
+            return .promoted(revisionID: revision.id)
+        } catch {
+            return .failed("\(error)")
+        }
+    }
+
+    /// One-shot pass over every capture directory (design §5.1). Each capture is
+    /// independent — one bad directory (unreadable sidecar, corrupt manifest) reports
+    /// its own `.failed` entry rather than aborting the rest of the corpus.
+    func promoteCorpus() async -> [String: PromotionOutcome] {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
+            return [:]
+        }
+        var outcomes: [String: PromotionOutcome] = [:]
+        for id in ids.sorted() {
+            outcomes[id] = await promoteIfNeeded(captureID: id)
+        }
+        return outcomes
+    }
+
+    private nonisolated static func readManifest(captureDirectory: URL) -> Manifest? {
+        let url = SegmentLayout.manifestURL(captureDirectory: captureDirectory)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(Manifest.self, from: data)
+    }
+
+    /// Pure mapping from a consolidated committed-result list to canonical spans
+    /// (design §5.2). No I/O — testable without the actor.
+    ///
+    /// A committed result WITH runs becomes one span per run: a run carries its own
+    /// frame bounds, so `.exact` anchoring iff BOTH `captureFrameStart`/`captureFrameEnd`
+    /// are present, else `.none` (never a partial bound — the `TranscriptSpan`
+    /// invariant is "frameStart nil iff anchor has no usable bounds", not "whichever
+    /// half happened to survive").
+    ///
+    /// A RUNLESS result (legal — `TranscriptResult.runs`'s own doc comment: the
+    /// transcriber need not attribute any) becomes exactly ONE span for the whole
+    /// result, anchored `.inherited` off the result's own frame range — the bounds are
+    /// real, just result- rather than run-granularity (code-maps finding C1).
+    ///
+    /// Every span's `sourceRevisionID` is left `nil`: these spans originate IN the
+    /// revision they are about to be written into, and `TranscriptSpan`'s own doc
+    /// comment defers "never write a redundant equal id" enforcement to whichever of
+    /// T6c/T6e constructs spans first — this is that constructor.
+    nonisolated static func spans(fromCommitted committed: [TranscriptResult]) -> [TranscriptSpan] {
+        committed.flatMap { result -> [TranscriptSpan] in
+            guard !result.runs.isEmpty else {
+                return [TranscriptSpan(text: result.text, anchor: .inherited,
+                                       frameStart: result.range.start, frameEnd: result.range.end,
+                                       confidence: result.confidence, sourceRevisionID: nil)]
+            }
+            return result.runs.map { run in
+                if let start = run.captureFrameStart, let end = run.captureFrameEnd {
+                    return TranscriptSpan(text: run.text, anchor: .exact,
+                                          frameStart: start, frameEnd: end,
+                                          confidence: run.confidence, sourceRevisionID: nil)
+                }
+                return TranscriptSpan(text: run.text, anchor: .none,
+                                      frameStart: nil, frameEnd: nil,
+                                      confidence: run.confidence, sourceRevisionID: nil)
+            }
+        }
+    }
+}
+
+/// A per-install stable id, minted once and cached in `UserDefaults` (design §5.2's
+/// `TranscriptRevision.deviceID`). Not a preference — nothing else in the app reads or
+/// writes this key — so a bare `UserDefaults.standard` read/write needs no seam of its
+/// own the way `CurrentJournal` needed `JournalPreferenceStore` for testability; no
+/// test asserts on the exact id, only that it is stable and non-empty.
+enum DeviceIdentity {
+    private static let defaultsKey = "raconte.deviceID"
+
+    static func stable(defaults: UserDefaults = .standard) -> String {
+        if let existing = defaults.string(forKey: defaultsKey), !existing.isEmpty {
+            return existing
+        }
+        let minted = ULID.make()
+        defaults.set(minted, forKey: defaultsKey)
+        return minted
+    }
 }

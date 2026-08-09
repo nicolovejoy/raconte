@@ -65,34 +65,69 @@ enum EntryTranscriptLoader {
     ///
     /// Synchronous and nonisolated: it touches disk, so callers on the main actor must
     /// reach it through an `async` hop (`LibraryScreenModel.transcript(for:)`).
+    ///
+    /// T6c preference: a promoted revision chain, when it has a readable current
+    /// revision, supplies the display text — read-path-never-writes (design §4.8), so
+    /// this never mutates `transcript/`, it only changes which text comes back.
+    /// Attribution (`.compute` mode) is UNCHANGED for v1: it still renders from
+    /// `live.jsonl`'s committed records + `markers.jsonl`, exactly as before promotion
+    /// existed. Canonical text and `live.jsonl`'s committed text are display-identical
+    /// by construction at promotion time (same `TranscriptText.join`), so the
+    /// paragraphs stay consistent with whichever text is shown. Three answers all the
+    /// way down: no attached canonical revision (absent `transcript/`, or every file in
+    /// it unreadable) falls through to today's `live.jsonl` path unchanged.
     static func load(captureDirectory: URL, expectedRecords: Int?,
                      attribution: AttributionMode = .skip) -> EntryTranscript {
         let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+
+        func paragraphs(for committed: [TranscriptResult]) -> [TranscriptAttribution.Paragraph]? {
+            guard case .compute(let sampleRate) = attribution else { return nil }
+            return attributedParagraphs(captureDirectory: captureDirectory,
+                                        committed: committed, sampleRate: sampleRate)
+        }
+
+        let canonicalLoad = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)
+        var canonicalDegradation: EntryDegradation = []
+        if let canonicalLoad, !canonicalLoad.unreadableFiles.isEmpty {
+            canonicalDegradation.insert(.revisionUnreadable)
+        }
+        if let canonicalLoad,
+           let current = TranscriptChain.current(TranscriptChain.ordered(canonicalLoad.revisions)) {
+            let committed: [TranscriptResult]
+            if case .present = loaded.source {
+                committed = LiveTranscriptReader.consolidate(loaded.records).committed
+            } else {
+                committed = []
+            }
+            return EntryTranscript(state: .present,
+                                   text: TranscriptChain.plainText(current),
+                                   degradations: canonicalDegradation,
+                                   paragraphs: paragraphs(for: committed))
+        }
+        // No attached canonical revision to show (absent transcript/, or every file in
+        // it unreadable/empty) — fall through, carrying any degradation forward so an
+        // owner still learns "revision unreadable" over the live.jsonl fallback text.
+
         switch loaded.source {
         case .absent:
-            return EntryTranscript(state: .absent, text: nil, degradations: [])
+            return EntryTranscript(state: .absent, text: nil, degradations: canonicalDegradation)
         case .unreadable:
             // Not "no transcript". The log is there and we failed at it.
-            return EntryTranscript(state: .unreadable, text: nil,
-                                   degradations: [.transcriptUnreadable])
+            var degradations = canonicalDegradation
+            degradations.insert(.transcriptUnreadable)
+            return EntryTranscript(state: .unreadable, text: nil, degradations: degradations)
         case .present:
-            var degradations: EntryDegradation = []
+            var degradations = canonicalDegradation
             if case .truncated = LiveTranscriptReader.completeness(lines: loaded.completeLines,
                                                                    expected: expectedRecords) {
                 degradations.insert(.transcriptTruncated)
             }
             let consolidator = LiveTranscriptReader.consolidate(loaded.records)
-            var paragraphs: [TranscriptAttribution.Paragraph]?
-            if case .compute(let sampleRate) = attribution {
-                paragraphs = attributedParagraphs(captureDirectory: captureDirectory,
-                                                  committed: consolidator.committed,
-                                                  sampleRate: sampleRate)
-            }
             return EntryTranscript(
                 state: .present,
                 text: consolidator.committedText,
                 degradations: degradations,
-                paragraphs: paragraphs)
+                paragraphs: paragraphs(for: consolidator.committed))
         }
     }
 

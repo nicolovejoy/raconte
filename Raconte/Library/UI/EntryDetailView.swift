@@ -91,6 +91,9 @@ struct EntryDetailView: View {
     /// entry used to do both synchronously while the screen was on screen.
     private func refresh() async {
         if let latest = model.item(captureID) { item = latest }
+        // T6c: promote before reading, so an entry opened for the first time since
+        // finalize shows canonical text rather than waiting for the next corpus pass.
+        await model.promoteIfNeeded(captureID)
         transcript = await model.transcript(for: captureID)
         if playback == nil {
             playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,

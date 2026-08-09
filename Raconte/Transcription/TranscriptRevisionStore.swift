@@ -34,6 +34,16 @@ enum TranscriptRevisionStoreError: Error, Equatable {
     case captureMissing
 }
 
+/// The two numbers §2.5 invents for the draft lifecycle, injectable so tests don't wait
+/// on a real clock. `sessionEndSeconds` is the disk-observable definition of "the editor
+/// went away" (`now - lastWriteAt`, checked by `closeStaleDrafts`); `hourCapSeconds` caps
+/// how long one draft may keep accumulating edits before `closeDraft` forces it closed
+/// regardless of the reason the caller asked for.
+struct DraftPolicy: Sendable {
+    var sessionEndSeconds: TimeInterval = 90
+    var hourCapSeconds: TimeInterval = 3600
+}
+
 /// Owns the on-disk revision chain for one capture: create-once append, a validated
 /// (never-trusted) head cache, and the pure `TranscriptChain` derivation over whatever
 /// is actually readable.
@@ -54,9 +64,11 @@ enum TranscriptRevisionStoreError: Error, Equatable {
 /// carrying write, never a read and never head persistence alone.
 actor TranscriptRevisionStore {
     nonisolated let capturesRoot: URL
+    private let policy: DraftPolicy
 
-    init(capturesRoot: URL) {
+    init(capturesRoot: URL, policy: DraftPolicy = DraftPolicy()) {
         self.capturesRoot = capturesRoot
+        self.policy = policy
     }
 
     // MARK: - Listing
@@ -374,6 +386,168 @@ actor TranscriptRevisionStore {
     private func isEEXIST(_ error: AtomicFileError) -> Bool {
         if case .posix(_, let code) = error { return code == EEXIST }
         return false
+    }
+
+    // MARK: - Draft lifecycle (T6d, design §2.5)
+
+    /// Best-effort read of `draft.json`, or `nil` if it's absent or doesn't decode.
+    /// Mirrors `readPersistedHead`: an undecodable draft is treated the same as no
+    /// draft rather than as an error — there is nothing safe to close or overwrite.
+    private nonisolated static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
+        let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(TranscriptDraft.self, from: data)
+    }
+
+    /// §6.4's propagation rule, captured once at draft-open time (the parent revision
+    /// is immutable, so this can never go stale between then and `closeDraft`): a draft
+    /// opened against a machine revision carries that revision's own id; opened against
+    /// a human revision (or no revision at all) carries that revision's own
+    /// `basedOnMachineID` (nil if there is none).
+    private nonisolated static func basedOnMachineID(forDraftOpenedAgainst parent: TranscriptRevision?) -> String? {
+        guard let parent else { return nil }
+        return parent.source.isHumanLineage ? parent.basedOnMachineID : parent.id
+    }
+
+    /// Guards common to every draft-lifecycle write: the capture directory must exist
+    /// (mirrors `append`'s C2 guard — never risk resurrecting a staged-away capture),
+    /// and the sidecar must not report `trashedAt != nil`.
+    private func guardWritable(captureDirectory: URL) throws {
+        var isCaptureDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
+              isCaptureDirectory.boolValue else {
+            throw TranscriptRevisionStoreError.captureMissing
+        }
+        let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        let metadata = try EntryMetadataStore.read(url: sidecarURL)
+        if metadata.isTrashed {
+            throw TranscriptRevisionStoreError.trashedCapture
+        }
+    }
+
+    /// Writes `transcript/draft.json` via `AtomicFile.replace`. `transcript/` is created
+    /// lazily here — ONLY when `text` differs from current's `plainText` (A2b: a
+    /// content-carrying write, never a bare open) — unless the directory already exists,
+    /// in which case a draft matching current is still recorded (harmless: `closeDraft`
+    /// treats a draft equal to current as "close to nothing" regardless of when it was
+    /// written).
+    func writeDraft(captureID: String, text: String, now: Date) throws {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try guardWritable(captureDirectory: captureDirectory)
+
+        let ordered = Self.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        let current = TranscriptChain.current(ordered)
+        let currentText = current.map(TranscriptChain.plainText) ?? ""
+
+        let transcriptDirectory = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)
+        let transcriptDirectoryExists = FileManager.default.fileExists(atPath: transcriptDirectory.path)
+        guard text != currentText || transcriptDirectoryExists else {
+            return
+        }
+
+        try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
+
+        let existing = Self.readDraft(captureDirectory: captureDirectory)
+        let draft = TranscriptDraft(
+            captureID: captureID,
+            parentID: existing?.parentID ?? current?.id,
+            basedOnMachineID: existing?.basedOnMachineID ?? Self.basedOnMachineID(forDraftOpenedAgainst: current),
+            openedAt: existing?.openedAt ?? now,
+            lastWriteAt: now,
+            text: text)
+
+        let data = try CaptureCoding.encoder().encode(draft)
+        try AtomicFile.replace(at: SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory),
+                               writing: data)
+    }
+
+    /// Closes the draft per §2.5.
+    ///
+    /// `text == CURRENT's plainText` (read fresh, not `draft.parentID`'s revision — the
+    /// F7 crash-duplicate rule) deletes the draft and mints nothing: if a prior close
+    /// already durably minted the revision and only crashed before deleting the draft
+    /// file, current now equals `draft.text` and this call is a safe no-op retry.
+    ///
+    /// Otherwise mints a `userEdit` revision via `TranscriptSplice`, diffed against the
+    /// revision named by `draft.parentID` (a synthetic empty revision stands in when
+    /// there is none — a root draft with nothing to inherit from). `parentID` and
+    /// `basedOnMachineID` on the new revision are copied straight from the draft's own
+    /// fields, snapshotted at open time per §6.4. `closedBy` records why — except the
+    /// hour cap overrides whatever `reason` the caller passed, since §2.5 defines it as
+    /// a hard 60-minute ceiling on one draft's lifetime, not an optional trigger.
+    @discardableResult
+    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) throws -> String? {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try guardWritable(captureDirectory: captureDirectory)
+
+        guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
+            return nil
+        }
+        let draftURL = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
+
+        let ordered = Self.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        let currentRevision = TranscriptChain.current(ordered)
+        let currentText = currentRevision.map(TranscriptChain.plainText) ?? ""
+
+        if draft.text == currentText {
+            try FileManager.default.removeItem(at: draftURL)
+            return nil
+        }
+
+        let parentForSplice = draft.parentID.flatMap { pid in ordered.first { $0.id == pid } }
+            ?? TranscriptRevision(id: draft.parentID ?? "", source: .userEdit,
+                                  createdAt: draft.openedAt, spans: [])
+
+        var spans = TranscriptSplice.spans(parent: parentForSplice, editedText: draft.text)
+        let newID = ULID.make(now: now)
+        // The caller-side half of the sourceRevisionID omit-when-equal economy
+        // (TranscriptSpan.swift:150-156, Task 1 ledger note): TranscriptSplice can't
+        // know the id its output will be minted under, so it always writes an explicit
+        // resolved id for borrowed frames; now that the id is known, drop it back to
+        // nil wherever it happens to equal the revision the span is about to live in.
+        for index in spans.indices where spans[index].sourceRevisionID == newID {
+            spans[index].sourceRevisionID = nil
+        }
+
+        let effectiveReason: DraftCloseReason =
+            now.timeIntervalSince(draft.openedAt) > policy.hourCapSeconds ? .hourCap : reason
+
+        let revision = TranscriptRevision(id: newID, source: .userEdit, createdAt: now, spans: spans,
+                                          parentID: draft.parentID, basedOnMachineID: draft.basedOnMachineID,
+                                          deviceID: DeviceIdentity.stable(), closedBy: effectiveReason)
+
+        try append(revision, captureID: captureID)
+        try FileManager.default.removeItem(at: draftURL)
+        return revision.id
+    }
+
+    /// Stale-draft pass for launch + entry-open (rule 9, §4.6 — NEVER the scan): closes
+    /// every capture's draft whose `lastWriteAt` is older than `policy.sessionEndSeconds`
+    /// with reason `.recovered`. Skips a capture with no draft, a fresh draft, or
+    /// `trashedAt != nil`; one bad capture's failure never aborts the rest of the pass.
+    func closeStaleDrafts(now: Date) async {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
+            return
+        }
+        for id in ids.sorted() {
+            let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            var isCaptureDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
+                  isCaptureDirectory.boolValue else {
+                continue
+            }
+            let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+            guard let metadata = try? EntryMetadataStore.read(url: sidecarURL), !metadata.isTrashed else {
+                continue
+            }
+            guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
+                continue
+            }
+            guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
+                continue
+            }
+            _ = try? closeDraft(captureID: id, reason: .recovered, now: now)
+        }
     }
 
     // MARK: - Promotion (T6c, design §5.1/§5.2)

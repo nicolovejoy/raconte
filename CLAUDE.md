@@ -1,5 +1,60 @@
 # CLAUDE.md
 
+## Session 2026-08-08 (laptop — voice-attributed rendering shipped same-day; 742 → 771 tests)
+
+The planned "Saturday" marker session happened a day early and turned into a full build
+day: owner smoked, we shipped what the smoke asked for, he smoked again — three
+build-smoke round-trips in one sitting. All on main, phone carries `2f73221b`.
+
+- **`snapWindowSeconds` tuned 1.5 → 0.75 (`54d4c8c8`) from real device data.** Two
+  sessions, 12 markers: taps trail the true boundary by 0.18–0.37 s and **never lead**.
+  Every snap was exact; the 1.5 s guess was ~4× oversized and actively risky (rule 2
+  ranks gaps by *size* first, so a distant long pause can steal a tap from the correct
+  60 ms gap beside it). Then the evening's real two-voice entries showed the window
+  barely matters: **all six voice taps landed inside actual inter-utterance silences** —
+  rule 0, exact, snapping never engaged. Reading rhythm puts the tap in the pause.
+- **T6 §14 step 7 (voice-attributed rendering) built and merged (`8f5c4cb0`)** —
+  subagent-driven per `docs/plans/2026-08-08-voice-attributed-rendering-plan.md` (Opus
+  plan, Sonnet implementers, Opus task reviews, one fix round, Opus final whole-branch
+  review that independently re-ran the suite). `TranscriptAttribution` pure core (one
+  voice per paragraph; break at every ¶ AND every voice switch — owner decision; nearer-
+  edge cut inside a run, never mid-word; whole-record join rule keeps no-marker entries
+  byte-identical), loader wiring (`EntryTranscript.paragraphs`, scanner never reads
+  markers — asserted; unreadable marker log → NO voices, never "single voice"), thin
+  detail-view switch over a tested `transcriptDisplay` function. The one fix round:
+  a test named for the manifest→sampleRate contract never read a manifest (hardcoding
+  the fallback passed everything) — now mutation-verified.
+- **Owner smoke, all pass:** improv entry renders BN/LN correctly; then real entries.
+  Feedback shipped same-session (`2f73221b`): labels inline (`BN: text`, semibold
+  secondary prefix via Text concatenation) instead of a caption line, **BN italic / LN
+  regular** (`TranscriptAttribution.isItalic`, display-layer only, ids stay opaque).
+- **Filed #37** (typed-word correction for out-of-vocab words — Swahili; edit-time first,
+  capture-time is the expensive option) and **#38** (spoken "LN" transcribes as "ellen"
+  every time — real fix is SpeechAnalyzer contextual-string biasing, which would also
+  serve #37; T8 retranscription must re-apply any biasing or it undoes the fix).
+- UX note for the design session: **multi-voice toggle state isn't visible until
+  recording starts** — owner wants it before tapping record.
+- Residual minors from the reviews are parked in the T7 section of the rendering plan
+  doc's history (trim vs "byte-identical" docs claim; cross-paragraph text selection
+  lost with per-paragraph Text; symmetric `hasApproximateBoundary` unpinned by tests).
+- Process notes: a shared-checkout implementer left HEAD on its feature branch — check
+  `git branch --show-current` before merging. macOS test host can die with "Early
+  unexpected exit… before establishing connection" when a dialog pops and gets the
+  wrong click — retry before diagnosing. Wireless install: device showed `unavailable`
+  until `devicectl device info details` opened the tunnel; first install attempt after
+  reconnect failed transiently (retry succeeded).
+
+**Next steps:**
+1. **T7 editor UI** (whole-revision accept v1) + audit log — now also carrying #37
+   edit-time word correction and the parked rendering minors.
+2. Design session (owner asked): review the three capture-landing mock variants already
+   on `origin/design/capture-landing-mocks` (A/B/C + DECISIONS.md, covers #18/#35/#27/
+   #17), plus ¶-button fold and the multi-voice-state-visibility note.
+3. **#38 contextual-string biasing** (verify SDK surface first) — pairs with T8
+   retranscribe design.
+4. Flake backlog: `testRapidRecordDoneCyclesProduceTenSeparateEntries` via the
+   breakpoint-controller method; the 150 ms-sleep-shielded sibling while there.
+
 ## Session 2026-08-07 overnight+morning (laptop — #25 shipped, smoke 5–7 pass, marker haptics; 708 → 742 tests)
 
 Overnight run on Sonnet/Opus subagents (owner low on Fable tokens), then live smoke

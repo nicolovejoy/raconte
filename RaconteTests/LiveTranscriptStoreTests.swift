@@ -282,4 +282,55 @@ final class LiveTranscriptStoreTests: XCTestCase {
         XCTAssertFalse(capture.transcriptPresent)
         XCTAssertNil(capture.liveTranscriptByteSize)
     }
+
+    // MARK: T6a — SegmentLayout head/draft/entry-log paths
+
+    func testHeadAndDraftURLsLandInTranscriptDirectory() {
+        let head = SegmentLayout.transcriptHeadURL(captureDirectory: captureDir)
+        let draft = SegmentLayout.transcriptDraftURL(captureDirectory: captureDir)
+        let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: captureDir)
+
+        XCTAssertEqual(head, transcriptDir.appendingPathComponent("head.json"))
+        XCTAssertEqual(draft, transcriptDir.appendingPathComponent("draft.json"))
+    }
+
+    func testEntryLogURLLandsBesideEntryMetadataNotInTranscriptDirectory() {
+        let entryLog = SegmentLayout.entryLogURL(captureDirectory: captureDir)
+
+        XCTAssertEqual(entryLog, captureDir.appendingPathComponent("entry-log.jsonl"))
+        XCTAssertEqual(entryLog.deletingLastPathComponent(),
+                       SegmentLayout.entryMetadataURL(captureDirectory: captureDir).deletingLastPathComponent())
+    }
+
+    func testCanonicalRevisionNeverMistakesHeadOrDraftForARevision() {
+        XCTAssertNil(SegmentLayout.canonicalRevision(fromFileName: "head.json"))
+        XCTAssertNil(SegmentLayout.canonicalRevision(fromFileName: "draft.json"))
+    }
+
+    // MARK: T6a — transcriptDirUnreadable (three-answer listing)
+
+    /// A `transcript/` that is a *file*, not a directory, makes `contentsOfDirectory`
+    /// fail with something other than "no such file" — mirror
+    /// `LiveTranscriptReader.loadBytes`'s absent/unreadable split. Quarantine-never-
+    /// delete: an unreadable dir may hold irreplaceable transcripts, so both flags
+    /// must be true together.
+    func testUnreadableTranscriptDirectorySetsBothFlags() throws {
+        let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: captureDir)
+        try Data("not a directory".utf8).write(to: transcriptDir)
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+
+        XCTAssertTrue(capture.transcriptDirUnreadable)
+        XCTAssertTrue(capture.transcriptPresent)
+        XCTAssertTrue(capture.holdsIrreplaceableArtifacts)
+    }
+
+    func testAbsentTranscriptDirectoryLeavesBothFlagsFalse() throws {
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+
+        XCTAssertFalse(capture.transcriptDirUnreadable)
+        XCTAssertFalse(capture.transcriptPresent)
+    }
 }

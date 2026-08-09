@@ -80,4 +80,40 @@ final class AtomicFileTests: XCTestCase {
         XCTAssertEqual(try read(target), Data("FINAL".utf8))
         XCTAssertFalse(exists(part), ".part consumed by the successful rename")
     }
+
+    // MARK: createExclusively
+
+    func testCreateExclusivelyWritesFullContentWithNoStrayPart() throws {
+        let target = dir.appendingPathComponent("head.json")
+        let part = SegmentLayout.partURL(for: target)
+
+        try AtomicFile.createExclusively(at: target, writing: Data("A".utf8))
+
+        XCTAssertEqual(try read(target), Data("A".utf8))
+        XCTAssertFalse(exists(part), "no stray .part after a clean create")
+    }
+
+    func testCreateExclusivelyThrowsEEXISTAndLeavesExistingTargetUntouched() throws {
+        let target = dir.appendingPathComponent("head.json")
+        try AtomicFile.createExclusively(at: target, writing: Data("ORIGINAL".utf8))
+
+        XCTAssertThrowsError(
+            try AtomicFile.createExclusively(at: target, writing: Data("NEWDATA".utf8))
+        ) { error in
+            XCTAssertEqual(error as? AtomicFileError,
+                           .posix(operation: "renamex_np", code: EEXIST))
+        }
+
+        XCTAssertEqual(try read(target), Data("ORIGINAL".utf8), "existing target must be untouched")
+    }
+
+    func testCreateExclusivelyCleansUpPartAfterEEXIST() throws {
+        let target = dir.appendingPathComponent("head.json")
+        let part = SegmentLayout.partURL(for: target)
+        try AtomicFile.createExclusively(at: target, writing: Data("ORIGINAL".utf8))
+
+        _ = try? AtomicFile.createExclusively(at: target, writing: Data("NEWDATA".utf8))
+
+        XCTAssertFalse(exists(part), "the losing .part must be cleaned up, not stranded")
+    }
 }

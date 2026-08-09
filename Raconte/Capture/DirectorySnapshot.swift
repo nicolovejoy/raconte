@@ -25,6 +25,12 @@ struct CaptureSnapshot: Equatable {
     /// guard: derived text is cheap to re-derive *only while the audio survives*, so
     /// its presence is one more reason never to remove the tree.
     var transcriptPresent: Bool
+    /// True iff `transcript/` exists but could not be listed (e.g. it is a plain
+    /// file, or a permissions error) — distinct from "absent". Display/recovery
+    /// stat only, never an allocation input (design §4.5a): quarantine-never-delete
+    /// means an unreadable directory must still be treated as holding irreplaceable
+    /// artifacts, so this flag always implies `transcriptPresent == true`.
+    var transcriptDirUnreadable: Bool
     /// Byte size of `transcript/live.jsonl`, or nil if absent. A *stat*, deliberately
     /// — the scan must stay cheap, so it never parses the log. Whether the records
     /// inside are complete is the reader's problem, at the point of use.
@@ -44,6 +50,7 @@ struct CaptureSnapshot: Equatable {
          finalM4APresent: Bool = false,
          finalM4APartPresent: Bool = false,
          transcriptPresent: Bool = false,
+         transcriptDirUnreadable: Bool = false,
          liveTranscriptByteSize: Int? = nil,
          canonicalRevisions: [Int] = [],
          format: AudioFormatDescriptor) {
@@ -56,6 +63,7 @@ struct CaptureSnapshot: Equatable {
         self.finalM4APresent = finalM4APresent
         self.finalM4APartPresent = finalM4APartPresent
         self.transcriptPresent = transcriptPresent
+        self.transcriptDirUnreadable = transcriptDirUnreadable
         self.liveTranscriptByteSize = liveTranscriptByteSize
         self.canonicalRevisions = canonicalRevisions.sorted()
         self.format = format
@@ -200,7 +208,19 @@ extension DirectorySnapshot {
         // Transcript. Stats only — the log is never parsed here; the scan runs at
         // every launch over every capture and must stay cheap.
         let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: directory)
-        let transcriptNames = (try? fm.contentsOfDirectory(atPath: transcriptDir.path)) ?? []
+        var transcriptNames: [String] = []
+        var transcriptDirUnreadable = false
+        do {
+            transcriptNames = try fm.contentsOfDirectory(atPath: transcriptDir.path)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile
+                                             || error.code == .fileNoSuchFile {
+            // No transcript/ at all — current, pre-existing behaviour.
+        } catch {
+            // transcript/ exists but can't be listed (e.g. it's a plain file, or a
+            // permissions error). Quarantine-never-delete: treat it as present so
+            // holdsIrreplaceableArtifacts stays true.
+            transcriptDirUnreadable = true
+        }
         let liveURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
         let liveSize: Int? = fm.fileExists(atPath: liveURL.path) ? fileSize(liveURL) : nil
         let canonicalRevisions = transcriptNames.compactMap(SegmentLayout.canonicalRevision(fromFileName:))
@@ -213,7 +233,7 @@ extension DirectorySnapshot {
         // leaves behind on a crash, and precisely what T6 will be writing. A tree we
         // cannot interpret is the *most* dangerous one to delete, not the least.
         // An empty directory holds nothing, so it must not keep junk alive forever.
-        let transcriptPresent = !transcriptNames.isEmpty
+        let transcriptPresent = !transcriptNames.isEmpty || transcriptDirUnreadable
 
         // Format resolution: manifest → sidecar → default; always bytesPerFrame-filled.
         let resolved = manifest?.format ?? sidecarFormat ?? defaultFormat
@@ -226,6 +246,7 @@ extension DirectorySnapshot {
             segments: segments,
             finalM4APresent: finalM4APresent, finalM4APartPresent: finalM4APartPresent,
             transcriptPresent: transcriptPresent,
+            transcriptDirUnreadable: transcriptDirUnreadable,
             liveTranscriptByteSize: liveSize,
             canonicalRevisions: canonicalRevisions,
             format: format)

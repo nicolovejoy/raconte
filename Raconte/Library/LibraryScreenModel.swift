@@ -27,6 +27,10 @@ final class LibraryScreenModel {
     let journalStore: JournalStore
     let entryMetadataStore: EntryMetadataStore
     let journalCoverStore: JournalCoverStore
+    /// One `TranscriptRevisionStore` for the whole app (T6c), same reasoning as
+    /// `entryMetadataStore`: `CaptureScreenModel` reads THIS instance rather than
+    /// building its own over the same `capturesRoot`.
+    let revisionStore: TranscriptRevisionStore
 
     private(set) var items: [EntryListItem] = []
     /// The 3 most recently *captured* entries, across every journal, regardless of
@@ -81,6 +85,10 @@ final class LibraryScreenModel {
     /// previous filter's results. Same precedent as `CaptureScreenModel.finishing`.
     private var scanGeneration = 0
 
+    /// Guards `promoteCorpusOnce()` — the launch pass runs at most once per app launch
+    /// (per model instance), never on every `rescan()`.
+    private var corpusPromotionRan = false
+
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
@@ -90,6 +98,7 @@ final class LibraryScreenModel {
         self.journalStore = JournalStore(containerRoot: containerRoot)
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
         self.journalCoverStore = JournalCoverStore(containerRoot: containerRoot)
+        self.revisionStore = TranscriptRevisionStore(capturesRoot: capturesRoot)
     }
 
     /// Live composition root, matching `CaptureScreenModel.live()`'s captures root exactly
@@ -343,6 +352,29 @@ final class LibraryScreenModel {
         // Only rescan when the disk actually changed — a launch with nothing expired is
         // the normal case and must not pay for a second scan.
         if !result.deleted.isEmpty { await rescan() }
+    }
+
+    // MARK: - Revision promotion (T6c)
+
+    /// The launch pass: promote every capture's `live.jsonl` into revision zero, once.
+    /// Called fire-and-forget from `CaptureScreenModel.bootstrap()`, in the same spot
+    /// `sweepTrash()` is — after the first scan has published, and BEFORE the sweep, so
+    /// a corpus pass never contends with a purge over the same directories. Guarded so
+    /// a second `bootstrap()` (interruption resume, a second window) never re-walks the
+    /// whole corpus; `promoteIfNeeded` is also individually idempotent
+    /// (`.skippedAlreadyPromoted`), so this guard is a cost saver, not a correctness one.
+    func promoteCorpusOnce() async {
+        guard !corpusPromotionRan else { return }
+        corpusPromotionRan = true
+        _ = await revisionStore.promoteCorpus()
+    }
+
+    /// Thin passthrough for the entry-open call site (`EntryDetailView.refresh()`):
+    /// promote before reading, so a capture opened for the first time since finalize
+    /// shows canonical text rather than waiting for the next corpus pass.
+    @discardableResult
+    func promoteIfNeeded(_ captureID: String) async -> TranscriptRevisionStore.PromotionOutcome {
+        await revisionStore.promoteIfNeeded(captureID: captureID)
     }
 
     // MARK: - Transcript (detail screen)

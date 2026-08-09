@@ -93,16 +93,35 @@ enum EntryTranscriptLoader {
         }
         if let canonicalLoad,
            let current = TranscriptChain.current(TranscriptChain.ordered(canonicalLoad.revisions)) {
-            let committed: [TranscriptResult]
-            if case .present = loaded.source {
+            var degradations = canonicalDegradation
+            var committed: [TranscriptResult] = []
+            switch loaded.source {
+            case .absent:
+                break
+            case .unreadable:
+                // The promoted text is only as good as the log it came from — an
+                // unreadable `live.jsonl` must still be surfaced even though `current`
+                // itself decoded fine (review finding 1: this must never be silently
+                // lost just because the canonical branch took over).
+                degradations.insert(.transcriptUnreadable)
+            case .present:
+                if case .truncated = LiveTranscriptReader.completeness(lines: loaded.completeLines,
+                                                                       expected: expectedRecords) {
+                    degradations.insert(.transcriptTruncated)
+                }
                 committed = LiveTranscriptReader.consolidate(loaded.records).committed
-            } else {
-                committed = []
             }
+            // Paragraphs are attributed off `live.jsonl`'s committed records (T7 plan
+            // step 2, unchanged for v1) — trustworthy only when `current` IS that
+            // machine-live text. A human revision (T6d/T6e onward) has diverged from
+            // the log by definition; attributing markers.jsonl over post-edit text
+            // would silently render stale pre-edit words under a voice label (review
+            // finding 2). Re-attributing edited text is T7's job, not this loader's.
+            let attributed = current.source == .machineLive ? paragraphs(for: committed) : nil
             return EntryTranscript(state: .present,
                                    text: TranscriptChain.plainText(current),
-                                   degradations: canonicalDegradation,
-                                   paragraphs: paragraphs(for: committed))
+                                   degradations: degradations,
+                                   paragraphs: attributed)
         }
         // No attached canonical revision to show (absent transcript/, or every file in
         // it unreadable/empty) — fall through, carrying any degradation forward so an

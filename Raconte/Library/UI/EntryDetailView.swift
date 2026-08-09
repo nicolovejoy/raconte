@@ -91,10 +91,16 @@ struct EntryDetailView: View {
     /// entry used to do both synchronously while the screen was on screen.
     private func refresh() async {
         if let latest = model.item(captureID) { item = latest }
-        // T6c: promote before reading, so an entry opened for the first time since
-        // finalize shows canonical text rather than waiting for the next corpus pass.
-        await model.promoteIfNeeded(captureID)
         transcript = await model.transcript(for: captureID)
+        // T6c: promote AFTER the first read, not before — `promoteCorpus()` runs the
+        // whole corpus with no yield on the actor, so promoting first would make
+        // opening an entry during the launch pass block on the entire walk (review
+        // finding 3). The read above already shows the live.jsonl-fallback text
+        // immediately; only re-read (and only pay the promote cost) when this specific
+        // capture actually gets a fresh canonical revision out of it.
+        if case .promoted = await model.promoteIfNeeded(captureID) {
+            transcript = await model.transcript(for: captureID)
+        }
         if playback == nil {
             playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,
                                                   captureID: captureID)

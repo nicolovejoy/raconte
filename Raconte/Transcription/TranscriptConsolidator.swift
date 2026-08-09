@@ -110,7 +110,7 @@ struct TranscriptConsolidator: Sendable, Equatable {
     }
 
     /// What the transcriber stands behind. This is what gets persisted.
-    var committedText: String { Self.join(committed) }
+    var committedText: String { TranscriptText.join(committed.map(\.text)) }
 
     /// Committed text plus the live hypothesis — the capture screen's ghost text.
     /// Never persist this.
@@ -119,13 +119,8 @@ struct TranscriptConsolidator: Sendable, Equatable {
     /// committed renders a hypothesis that *precedes* committed text in the wrong
     /// place, which is visible on screen the moment results arrive out of order.
     var displayText: String {
-        Self.join((committed + provisional).sorted { $0.range.start < $1.range.start })
-    }
-
-    /// Joined with single spaces. Real spacing and punctuation are the canonical
-    /// transcript's problem (T6/T7), not the live overlay's.
-    private static func join(_ results: [TranscriptResult]) -> String {
-        results.map(\.text).filter { !$0.isEmpty }.joined(separator: " ")
+        let ordered = (committed + provisional).sorted { $0.range.start < $1.range.start }
+        return TranscriptText.join(ordered.map(\.text))
     }
 }
 

@@ -271,6 +271,13 @@ final class TranscriptAttributionTests: XCTestCase {
         XCTAssertEqual(TranscriptAttribution.displayName(forVoice: "x-third"), "X-THIRD")
     }
 
+    func testIsItalicIsTrueOnlyForBigNico() {
+        XCTAssertTrue(TranscriptAttribution.isItalic(voice: "bn"))
+        XCTAssertFalse(TranscriptAttribution.isItalic(voice: "ln"))
+        XCTAssertFalse(TranscriptAttribution.isItalic(voice: "x-third"))
+        XCTAssertFalse(TranscriptAttribution.isItalic(voice: nil))
+    }
+
     /// For fixtures whose breaks land exactly on record boundaries (never mid-record),
     /// every paragraph is composed of whole records — so rejoining paragraph texts with
     /// a single space reproduces `committedText` exactly, regardless of how many voice

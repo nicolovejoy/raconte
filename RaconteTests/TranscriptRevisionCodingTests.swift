@@ -213,12 +213,17 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         XCTAssertFalse(RevisionSource.machineRetranscribe.isHumanLineage)
     }
 
-    func testUnrecognizedAnchorDecodesToNone() throws {
+    /// Gate A finding I4: `SpanAnchor` now mirrors `RevisionSource`'s verbatim
+    /// round-trip — an unrecognized raw value decodes to `.unknown(raw)`, not `.none`,
+    /// so a foreign span's original anchor spelling survives a read-then-write pass
+    /// instead of being silently rewritten to `"none"`.
+    func testUnrecognizedAnchorDecodesToUnknownPreservingRawSpelling() throws {
         let json = """
         {"text":"hi","anchor":"wobbly"}
         """.data(using: .utf8)!
         let span = try CaptureCoding.decoder().decode(TranscriptSpan.self, from: json)
-        XCTAssertEqual(span.anchor, .none)
+        XCTAssertEqual(span.anchor, .unknown("wobbly"))
+        XCTAssertFalse(span.anchor.hasUsableBounds)
     }
 
     func testMissingAnchorKeyDecodesToNone() throws {
@@ -227,6 +232,47 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         """.data(using: .utf8)!
         let span = try CaptureCoding.decoder().decode(TranscriptSpan.self, from: json)
         XCTAssertEqual(span.anchor, .none)
+    }
+
+    /// I4's actual bug, reconstructed: a foreign span with an unrecognized anchor AND
+    /// frame bounds must keep BOTH on re-encode, not collapse to `.none`-with-frames.
+    func testUnknownAnchorRoundTripsVerbatimAndKeepsItsFrames() throws {
+        let json = """
+        {"text":"hi","anchor":"approximate","frameStart":100,"frameEnd":200}
+        """.data(using: .utf8)!
+        let span = try CaptureCoding.decoder().decode(TranscriptSpan.self, from: json)
+        XCTAssertEqual(span.anchor, .unknown("approximate"))
+        XCTAssertEqual(span.frameStart, 100)
+        XCTAssertEqual(span.frameEnd, 200)
+
+        let reencoded = try CaptureCoding.encoder().encode(span)
+        let reencodedJSON = String(data: reencoded, encoding: .utf8)!
+        XCTAssertTrue(reencodedJSON.contains("\"approximate\""),
+                      "an unknown anchor must re-encode its original spelling, not collapse to \"none\"")
+        XCTAssertTrue(reencodedJSON.contains("\"frameStart\" : 100"))
+    }
+
+    func testKnownAnchorsHaveUsableBoundsExceptNone() {
+        XCTAssertTrue(SpanAnchor.exact.hasUsableBounds)
+        XCTAssertTrue(SpanAnchor.inherited.hasUsableBounds)
+        XCTAssertFalse(SpanAnchor.none.hasUsableBounds)
+    }
+
+    // MARK: - Gate A finding I5: resolvedSourceRevisionID
+
+    func testResolvedSourceRevisionIDFallsBackToContainingRevisionWhenAbsent() {
+        let revision = TranscriptRevision(id: "R1", source: .machineLive,
+                                          createdAt: Date(timeIntervalSince1970: 0), spans: [])
+        let span = TranscriptSpan(text: "hi", anchor: .none)
+        XCTAssertNil(span.sourceRevisionID)
+        XCTAssertEqual(span.resolvedSourceRevisionID(in: revision), "R1")
+    }
+
+    func testResolvedSourceRevisionIDUsesExplicitValueWhenPresent() {
+        let revision = TranscriptRevision(id: "R1", source: .machineLive,
+                                          createdAt: Date(timeIntervalSince1970: 0), spans: [])
+        let span = TranscriptSpan(text: "hi", anchor: .none, sourceRevisionID: "R0")
+        XCTAssertEqual(span.resolvedSourceRevisionID(in: revision), "R0")
     }
 
     func testUnrecognizedClosedByDecodesToUnknown() throws {

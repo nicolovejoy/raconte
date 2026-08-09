@@ -1,5 +1,64 @@
 # CLAUDE.md
 
+## Session 2026-08-08 overnight → 08-09 (laptop — T6 CHAIN FINISHED: Tasks 4-6 + Gate B, PR #45 open; 849 → 930 tests)
+
+Resumed the SDD loop at Task 4 per the ledger and ran it to the end: Tasks 4-6 built
+(Sonnet implementers, Opus task reviews, fix rounds via SendMessage-resume), Gate B
+adversarial whole-branch review passed, **PR #45 open at `d4fe63f9` — merge is Nico's.**
+Branch `t6/revision-chain`, 930 unit tests (771 at branch base). Ledger + worktree kept
+for PR iteration; delete after merge.
+
+- **Task 4 (T6c promotion + loader)** `626c0219`+`cfa04f2b`: one fix round — canonical
+  branch dropped truncation/unreadable degradations; text-vs-paragraphs source split
+  (paragraphs now gated on `.machineLive`, re-attribution deferred to T7); entry-open
+  serialized behind the launch corpus walk (now reads transcript first, re-reads on
+  `.promoted`).
+- **Task 5 (T6d splice + drafts)** `ee9fafc9`..`3998bd5f`: two fix rounds. Worst finds:
+  splice didn't round-trip (deleting the space between two `.exact` spans was silently
+  reverted — emission rewritten around pendingSeparators; `join(spans)==editedText` now
+  asserted in the 200-case F18 property) and draft paths spliced against a degraded
+  chain (F5 reintroduced — now refuse on any unreadable revision).
+- **Task 6 (T6e merge minting)** `44d45586`: approved clean. Ruling: adopt is VERBATIM
+  (anchor preserved) — §6.3's ".exact" prose is descriptive, not an anchor rewrite.
+- **Gate B** (Opus, independent 930-green suite re-run, §10 audited row-by-row, probes):
+  one Critical — **promotion doubled whitespace at every run boundary** (AttributedString
+  runs partition the text and carry boundary whitespace; join re-inserts). F16/C3 tests
+  were both fixtured runless — the one path where the bug is invisible. Fixed `d4fe63f9`
+  (trim run text at promotion, re-fixtured RED-first). Verdict: Ready to merge.
+  **Gate lesson (now in memory): audit that fixtures exercise the NON-degenerate path** —
+  Gate A I2, T6d's vacuous lattice test, and this C1 all shared that shape.
+- **Paperwork:** design **§15b** (rulings 10-15: run-trim, forced-merge of adjacent
+  .exact on separator deletion, closeDraft diffs against draft.parentID not current,
+  adopt-verbatim, TranscriptDraft's 3 extra fields, degraded-chain refusal) on main
+  `54656196`+`2e40a9ca`. **Issues #40-44** carry every non-blocking finding (#40 scan-path
+  chain-decode cost, #41 T7 prerequisites incl. unwired closeStaleDrafts, #42 test
+  hygiene, #43 T9 durability nits, #44 no-whitespace run-split residual — needs device
+  live.jsonl data).
+- **Docs for humans (owner ask — PR was unreadable):** `docs/overview.md` — the whole
+  system as plain-words mental models with mermaid diagrams (revision chain = "tiny git
+  for one entry's transcript"); README rewritten to point at it; three stale
+  "UNVERIFIED" banners on shipped 2026-08-05 build docs retired. `5422ff69`.
+- /readup resync verified all 9 recently-touched open issues genuinely unshipped; Nico
+  deleted merged branch `fix/flake-store-write-precedence`.
+
+**Next steps:**
+1. **Nico: merge PR #45** (auto-mode can't). After merge: delete worktree
+   `/Users/nico/src/raconte-t6` + SDD ledger dir.
+2. **NEW — owner design discussion (asked 2026-08-09): journal-page photo snapshots.**
+   When reading an old handwritten journal, snap a photo of the page. The PAPER journal
+   is then the source of truth; the recording (him reading it) AND the photo are both
+   representations of it; edits must keep that model in mind. Slots into the entry
+   sidecar/capture-directory model + M3's photos table + the T6 provenance story —
+   design pass before building. Brainstorm first.
+3. **T7 editor-UI plan** (separate doc): whole-revision accept v1, marker correction,
+   audit log §7, #37 typed-word correction, keyboard-first iPad/Mac, #41 prerequisites
+   (wire closeStaleDrafts, merge caller guards, §6.3 adopt pin), #39 storage visibility,
+   #40 head-cache routing, parked rendering minors.
+4. Capture-landing design follow-ups (owed: LN/BN serif-vs-sans font mock, dark,
+   icon-blue accent; palette pass off the app icon; #27 Mail-swipe gated by #35).
+5. #38 contextual-string biasing (pairs with T8 retranscribe design); #44 needs a real
+   device live.jsonl pull; flake backlog (breakpoint-controller method).
+
 ## Session 2026-08-08 evening (laptop — T6a–e revision-chain build launched; 771 → 837 tests on branch, Gate A mid-fix)
 
 The "T7 next" label in the last handoff was wrong by one letter: three Explore code maps

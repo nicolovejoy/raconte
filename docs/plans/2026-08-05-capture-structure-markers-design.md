@@ -138,8 +138,10 @@ they collide with the journal text being read aloud.
 
 ## 6. Snapping
 
-Input: markers plus committed `TranscriptRun`s. Window: **±1.5 s** around the raw frame, a
-single named constant, to be tuned after a real page is read.
+Input: markers plus committed `TranscriptRun`s. Window: a single named constant around
+the raw frame (`MarkerSnapping.snapWindowSeconds`), started at ±1.5 s and tuned to
+**±0.75 s** on main after two device sessions — taps trail true boundaries by
+0.18–0.37 s, never lead.
 
 1. Collect inter-run gaps (run N end → run N+1 start) intersecting the window.
 2. Pick the **largest** gap; ties resolve to the one nearest the raw frame.
@@ -150,6 +152,35 @@ single named constant, to be tuned after a real page is read.
 `TranscriptRun.captureFrameStart`/`End` are **optional, not merely imprecise** — Apple
 documents that runs need carry no time range. Untimed runs cannot participate; fall back to
 the record-level `captureFrameStart`/`End`.
+
+### 6.1 Rendering
+
+`TranscriptAttribution.attribute(committed:snapped:)` (pure, no I/O) turns committed
+transcript results plus snapped markers into an ordered `[Paragraph]`, each carrying at
+most one voice — a voice switch is always a paragraph break (owner requirement 2), so
+there is never a case that needs more than one voice per paragraph.
+
+- **Piece rule.** The transcript is first split into pieces — one per timed
+  `TranscriptRun` where every run in a record has a time range, otherwise one piece for
+  the whole (untimed) record. Markers cut between pieces, never inside one.
+- **Nearer-edge cut.** A marker whose snapped frame still lands strictly inside a piece
+  (no run boundary close enough to snap to) cuts at that piece's nearer edge rather than
+  splitting the text — frames carry no character offset, so text is never torn
+  mid-word. Both paragraphs adjacent to a nearer-edge cut are marked
+  `hasApproximateBoundary`, along with any cut whose raw marker was already
+  `SnappedMarker.approximate` (§6, rule 4): the imprecision belongs to the cut, not to
+  one side of it.
+- **Paragraph break rule.** A new paragraph starts at every `.paragraph` marker and at
+  every `.voice` marker that actually changes the active voice — a re-tap of the same
+  voice is a no-op, not an empty paragraph.
+- **Whole-record text rule.** A paragraph whose pieces cover a record's *entire* text
+  reuses that record's `text` verbatim rather than rejoining its runs; this is what
+  keeps a no-marker entry (or a single-voice one) byte-identical to
+  `TranscriptConsolidator.committedText`, not merely close to it.
+- **v1 decision: `approximate` renders normally.** `hasApproximateBoundary` is carried
+  on the model and asserted in tests, but the v1 detail view does not style or flag it
+  — an approximate paragraph reads exactly like a precise one. Surfacing it is T7's
+  call (§9 item 7).
 
 ## 7. Failure modes
 
@@ -196,13 +227,14 @@ UI test: the voice controls appear and disappear with the toggle.
 4. `multiVoice` on the sidecar + per-journal carry-over.
 5. `CaptureView` controls.
 6. `MarkerSnapping` (pure).
-7. T7 consumes the voice attribute — deferred to T7, not this build.
+7. v1 rendering shipped (`TranscriptAttribution` + detail view); editing/mis-tap
+   correction and approximate-surfacing remain T7.
 
 ## 10. Open
 
-- The ±1.5 s tolerance is a guess until a real page is read.
-- T7 must render voice distinctly; the print/cursive instinct suggests a typeface change,
-  which SwiftUI makes cheap. T7's call, not this doc's.
+- Voice distinction shipped as an uppercased text label above each paragraph
+  (`TranscriptAttribution.displayName(forVoice:)`, e.g. "BN"/"LN"); a typeface change
+  (the print/cursive instinct) is still T7's call, not this doc's.
 
 ## Appendix — traps this codebase has already hit
 

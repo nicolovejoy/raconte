@@ -1258,20 +1258,43 @@ Do not commit. Report: diff, red output, green output, four mutation results.
 
 ---
 
-## Step 7 — deferred to T7 (recorded, not built)
+## Step 7 — shipped
 
-Nothing in this plan renders or edits the voice attribute. What T7 inherits:
+Built on `feat/voice-attributed-rendering` (2026-08-08), as a separate plan
+(`.superpowers/sdd/2026-08-08-voice-attributed-rendering-plan/`), not as part of this
+document's step numbering:
 
-- `MarkerLogReader.load(captureDirectory:)` — and its three answers. `.unreadable` ⇒
-  promotion assigns **no** voice attributes; never assume single-voice from a failed
-  read (design §7, the `journals.json` lesson).
-- `MarkerSnapping` + the `approximate` flag to surface, and mis-tap editing (there is
-  deliberately no capture-time undo — owner decision 6; T7 must handle mis-taps
-  regardless).
-- `EntryMetadata.multiVoice` / `EntryListItem.multiVoice` for rendering decisions;
-  voice rendering itself (typeface instinct: print vs cursive) is T7's call (design §10).
-- T8 retranscription re-applies markers to the new transcript via the same pure snap —
-  markers outlive any given transcript by construction.
+- `TranscriptAttribution.attribute(committed:snapped:)` — pure core, no I/O. Splits
+  committed transcript results into pieces (one per timed `TranscriptRun`, or one per
+  untimed record), cuts at marker positions with the nearer-edge rule when a marker
+  lands strictly inside a piece, and groups into `[Paragraph]` with one voice each — a
+  voice-change marker is always a paragraph break, so a `[Span]`-inside-`Paragraph`
+  model was rejected as unneeded. `hasApproximateBoundary` is marked on both paragraphs
+  adjacent to an approximate cut. The whole-record text rule keeps a no-marker entry
+  byte-identical to `TranscriptConsolidator.committedText`.
+- Loader wiring: `EntryTranscript.paragraphs` (`nil` = "render as today"),
+  `AttributionMode.skip` / `.compute(sampleRate:)` — the scanner always passes `.skip`
+  (a `markers.jsonl` read for data the list never shows is a cost paid for nothing);
+  only `LibraryScreenModel.transcript(for:)` asks for `.compute`, with the sample rate
+  from `Manifest.format.sampleRate` (48 kHz fallback). `MarkerLogReader.load`'s
+  `.unreadable` and `.absent` are both folded to `paragraphs == nil` — never inferred as
+  single-voice (design §7, the `journals.json` lesson).
+- Detail-view rendering: an uppercased voice-id label (`TranscriptAttribution
+  .displayName(forVoice:)`, e.g. "BN"/"LN") above each paragraph, a paragraph break at
+  every paragraph marker **and** every voice switch. v1 decision: `approximate` renders
+  identically to a precise boundary — no visual flag (design §6.1).
+
+**What remains for T7** (the original milestone, not this rendering slice):
+
+- Editing / mis-tap correction — there is deliberately no capture-time undo (owner
+  decision 6); nothing built here lets the owner move a paragraph break or reassign a
+  voice after the fact.
+- Surfacing `hasApproximateBoundary` to the reader (currently tracked on the model and
+  asserted in tests, invisible in the UI).
+- Typeface-per-voice (the print/cursive instinct) — still just a text label today
+  (design §10).
+- T8 retranscription re-applying markers to a new transcript via the same pure snap —
+  unaffected by this slice; markers still outlive any given transcript by construction.
 
 ## Verification checklist for the first machine with Xcode
 
@@ -1290,6 +1313,6 @@ Nothing in this plan renders or edits the voice attribute. What T7 inherits:
    the macOS destination at the first step-5 build; if it doesn't, fall back to an
    `#if os(iOS)` `UIImpactFeedbackGenerator` fired from the same `markerCount`
    observation and note the substitution in the commit.
-7. Device pass (owner, phone): record a real two-voice page — the ±1.5 s window
-   (design §10) gets tuned from that recording, in `MarkerSnapping.snapWindowSeconds`
-   only.
+7. **Done.** Device pass (owner, phone) recorded a real two-voice page; the window
+   tuned from that recording, ±1.5 s → **±0.75 s**, in `MarkerSnapping.snapWindowSeconds`
+   only (design §6, §10). Step 7 (rendering) shipped separately — see above.

@@ -206,6 +206,36 @@ final class TranscriptRevisionStoreTests: XCTestCase {
         XCTAssertEqual(head?.current?.id, "R0")
     }
 
+    /// THE O(1) trust-path test (design §4.3, finding 1): once `head.json`'s
+    /// `revisionFiles` matches the store's own (decode-free) listing, `validatedHead`
+    /// must trust the cache outright — it must not open or decode any revision body.
+    /// Proven by corrupting the bytes of a `canonical-<n>.json` *without* changing
+    /// which filenames exist: if the store were still decoding bodies, this corrupted
+    /// revision would show up in `unreadableFiles` and `current` would be lost. It does
+    /// not — the persisted (pre-corruption) values come back unchanged.
+    func testValidatedHeadTrustsPersistedHeadWithoutDecodingRevisionBodies() async throws {
+        try await store().append(revision("R0"), captureID: captureID)
+        try await store().append(revision("R1", parentID: "R0"), captureID: captureID)
+
+        let persistedBeforeCorruption = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(persistedBeforeCorruption?.current?.id, "R1")
+        XCTAssertEqual(persistedBeforeCorruption?.revisionFiles, [0, 1])
+        XCTAssertEqual(persistedBeforeCorruption?.unreadableFiles, [])
+
+        // Same filename, garbage bytes — the file SET the listing sees is unchanged.
+        let currentRevisionURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
+                                                                      revision: 1)
+        try Data("{ this is not a valid TranscriptRevision at all".utf8).write(to: currentRevisionURL)
+
+        let head = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(head?.current?.id, "R1",
+                       "trusted the cache — a decode of the corrupted body would have lost this")
+        XCTAssertEqual(head?.unreadableFiles, [],
+                       "a real decode of canonical-1.json would have added 1 here")
+        XCTAssertEqual(head, persistedBeforeCorruption,
+                       "the trust path must return exactly what was persisted, untouched")
+    }
+
     /// Fixed point (F6): an undecodable `canonical-1.json` must show up in
     /// `unreadableFiles`, and a second `validatedHead` call must return byte-for-byte
     /// the same value with zero writes to disk.

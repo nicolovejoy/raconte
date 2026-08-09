@@ -32,12 +32,18 @@ enum TranscriptRevisionStoreError: Error, Equatable {
 ///
 /// **Read path never writes.** `listing`, `loadChain`, and `validatedHead` are
 /// `nonisolated static` — no actor hop, and by construction no filesystem write: they
-/// only `contentsOfDirectory` and `Data(contentsOf:)`. `validatedHead` doesn't trust
-/// `head.json` at all; it recomputes from the readable chain every time, which is also
-/// what makes it a fixed point under repeated calls (F6) — there is nothing cached to
-/// go stale. Only `append` and `persistHead`, both actor-isolated instance methods, are
-/// allowed to write, and only `append` may create `transcript/` itself (A2b) — a
-/// content-carrying write, never a read and never head persistence alone.
+/// only `contentsOfDirectory` and `Data(contentsOf:)`. **`validatedHead` is `head.json`'s
+/// whole reason to exist (design §4.3): an O(1) scan cache, not a decorative one.** It
+/// reads the persisted head and compares its `revisionFiles` against the store's own
+/// three-answer listing — a directory read, no JSON decode of any revision body. Only
+/// on a mismatch, an absent/corrupt head, or an unreadable `transcript/` does it fall
+/// back to `rebuildHead`, which *does* decode every revision. `unreadableFiles` is what
+/// makes a rebuilt head a fixed point (F6): once persisted, its own `revisionFiles`
+/// (the full file-number set, readable or not) matches the directory listing again, so
+/// the *next* `validatedHead` call takes the trust path instead of rebuilding forever.
+/// Only `append` and `persistHead`, both actor-isolated instance methods, are allowed
+/// to write, and only `append` may create `transcript/` itself (A2b) — a content-
+/// carrying write, never a read and never head persistence alone.
 actor TranscriptRevisionStore {
     nonisolated let capturesRoot: URL
 
@@ -71,18 +77,18 @@ actor TranscriptRevisionStore {
     struct ChainLoad: Sendable, Equatable {
         var revisions: [TranscriptRevision]   // ordered (createdAt, id)
         var unreadableFiles: [Int]            // non-empty ⇒ entry is read-only (§4.8)
+        /// `transcript/` itself could not be listed — distinct from a specific
+        /// `canonical-<n>.json` failing to decode. `unreadableFiles` stays empty in
+        /// this case: there is no file number to name, and the array's domain is
+        /// real revision file numbers only, never a sentinel.
+        var listingUnreadable: Bool
     }
-
-    /// Sentinel used in `ChainLoad.unreadableFiles` (and `TranscriptHead.unreadableFiles`)
-    /// when `transcript/` itself could not be listed — as opposed to a specific
-    /// `canonical-<n>.json` failing to decode. There is no file number to name in that
-    /// case, so `-1` (never a real revision file number) stands in for "the directory".
-    static let directoryUnreadableSentinel = -1
 
     nonisolated static func loadChain(captureDirectory: URL) -> ChainLoad? {
         guard let raw = rawLoad(captureDirectory: captureDirectory) else { return nil }
         let ordered = TranscriptChain.ordered(raw.numbered.map(\.revision))
-        return ChainLoad(revisions: ordered, unreadableFiles: raw.unreadableFiles)
+        return ChainLoad(revisions: ordered, unreadableFiles: raw.unreadableFiles,
+                         listingUnreadable: raw.listingUnreadable)
     }
 
     /// Same read as `loadChain`, but keeping each revision's file number — needed to
@@ -90,12 +96,13 @@ actor TranscriptRevisionStore {
     /// neither of which `TranscriptRevision` itself carries. `nil` ⇔ `listing == .absent`.
     private nonisolated static func rawLoad(
         captureDirectory: URL
-    ) -> (numbered: [(file: Int, revision: TranscriptRevision)], unreadableFiles: [Int])? {
+    ) -> (numbered: [(file: Int, revision: TranscriptRevision)], unreadableFiles: [Int],
+          listingUnreadable: Bool)? {
         switch listing(captureDirectory: captureDirectory) {
         case .absent:
             return nil
         case .unreadable:
-            return (numbered: [], unreadableFiles: [directoryUnreadableSentinel])
+            return (numbered: [], unreadableFiles: [], listingUnreadable: true)
         case .present(let files):
             var numbered: [(file: Int, revision: TranscriptRevision)] = []
             var unreadableFiles: [Int] = []
@@ -110,16 +117,17 @@ actor TranscriptRevisionStore {
                 }
                 numbered.append((file: file, revision: revision))
             }
-            return (numbered: numbered, unreadableFiles: unreadableFiles)
+            return (numbered: numbered, unreadableFiles: unreadableFiles, listingUnreadable: false)
         }
     }
 
     // MARK: - Head
 
-    /// Builds the head content fresh from the readable chain — never reads
-    /// `head.json`. `nil` ⇔ `transcript/` is absent (no chain to summarize); a capture
-    /// with an unreadable `transcript/` still yields a head (empty chain, the directory
-    /// sentinel in `unreadableFiles`) rather than collapsing to "no chain".
+    /// Builds the head content fresh from the readable chain, decoding every revision
+    /// body — the expensive path, used only when `validatedHead` can't trust the
+    /// persisted cache. `nil` ⇔ `transcript/` is absent (no chain to summarize); a
+    /// capture with an unreadable `transcript/` still yields a head (empty chain,
+    /// `listingUnreadable == true`) rather than collapsing to "no chain".
     private nonisolated static func rebuildHead(captureDirectory: URL) -> TranscriptHead? {
         guard let raw = rawLoad(captureDirectory: captureDirectory) else { return nil }
         let ordered = TranscriptChain.ordered(raw.numbered.map(\.revision))
@@ -144,16 +152,42 @@ actor TranscriptRevisionStore {
         return TranscriptHead(current: summary,
                               revisionFiles: revisionFiles,
                               unreadableFiles: raw.unreadableFiles,
-                              revisionCount: ordered.count)
+                              revisionCount: ordered.count,
+                              listingUnreadable: raw.listingUnreadable)
     }
 
-    /// The scanner's read path: validated against the store's own listing, never
-    /// trusted. There is no cache to invalidate — this always recomputes from the
-    /// readable chain, which is what makes "validated" mean something and what makes
-    /// repeated calls a fixed point (F6) with zero writes, whatever `head.json` says or
-    /// whether it exists at all.
+    /// Best-effort read of the persisted `head.json`, or `nil` if it's absent or
+    /// doesn't decode. Never throws — an unreadable cache just means "don't trust it",
+    /// not an error.
+    private nonisolated static func readPersistedHead(captureDirectory: URL) -> TranscriptHead? {
+        let url = SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(TranscriptHead.self, from: data)
+    }
+
+    /// The scanner's read path — `head.json`'s entire purpose (design §4.3): an O(1)
+    /// cache, not a decorative one. When the store's own (cheap, decode-free) listing
+    /// has exactly the same file numbers the persisted head says it does, the cache is
+    /// trusted as-is — no revision body is opened or decoded. Only on a mismatch, an
+    /// absent/corrupt head, or an unreadable `transcript/` does this fall back to
+    /// `rebuildHead`, which decodes the whole chain. Never writes: a stale-but-still-
+    /// wrong head is left on disk for `persistHead` to fix, not patched inline here.
     nonisolated static func validatedHead(captureDirectory: URL) -> TranscriptHead? {
-        rebuildHead(captureDirectory: captureDirectory)
+        switch listing(captureDirectory: captureDirectory) {
+        case .absent:
+            return nil
+        case .unreadable:
+            // Nothing to compare a cache against, and rebuilding here is itself O(1)
+            // (an unreadable directory has no bodies to decode).
+            return rebuildHead(captureDirectory: captureDirectory)
+        case .present(let files):
+            if let persisted = readPersistedHead(captureDirectory: captureDirectory),
+               !persisted.listingUnreadable,
+               persisted.revisionFiles.sorted() == files.sorted() {
+                return persisted
+            }
+            return rebuildHead(captureDirectory: captureDirectory)
+        }
     }
 
     /// The only head writer. Recomputes and atomically replaces `head.json`. A no-op

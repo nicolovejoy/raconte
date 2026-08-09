@@ -1298,6 +1298,50 @@ sections it names**:
    launch-recovery path runs no `recordTranscriptRef`, so §5.1's launch-pass promotion
    copies `coverageFrames`/`skippedRanges` as honest-nil for recovered captures.
 
+### 15b. Gate B amendments (2026-08-09 — T6c/T6d/T6e as built)
+
+Tasks 4–6 landed per the same plan; the whole-branch gate forced these rulings. As with
+§15, this subsection supersedes the sections it names. None change an encoded shape —
+the Gate A freeze holds.
+
+10. **§5.2 run mapping trims boundary whitespace** (Gate B C1). AttributedString runs
+    *partition* the result text, so run texts carry their own boundary whitespace, and
+    §5.2's verbatim copy contradicted §4.2's "spans hold no boundary whitespace"
+    invariant — promotion doubled spacing at every run boundary (probe-confirmed), baked
+    permanently into revision zero. As built: each run's text is trimmed, whitespace-only
+    runs are dropped (frames untouched; `TranscriptText.join` re-supplies the single
+    separator). F16/C3 tests are fixtured with whitespace-carrying runs so the
+    non-degenerate path is pinned.
+11. **§3.3's "adjacent `exact` spans are never merged" holds only across an intact,
+    unedited separator.** When the user deletes the boundary space, the format cannot
+    represent adjacency-without-separator (`join` always inserts one), so the two spans
+    are combined into ONE `.inherited` span carrying the union bounds — a lattice-legal
+    degrade, not an exception to F18. Round-trip (`join(spans) == editedText`) is the
+    governing postcondition and is asserted inside the F18 generative property.
+12. **`closeDraft` diffs against `draft.parentID`'s revision, not `current`** (amends
+    §3.3's literal wording). The user edited the text they were shown — the parent's
+    flattened text; diffing against a machine revision that landed mid-draft would
+    attribute the machine's words to the human's keystrokes. The §2.5 no-op guard still
+    compares against **current** (F7), and a mid-draft machine revision stays detached
+    per §2.3 until accepted.
+13. **§6.3's "adopted machine spans carry `anchor: .exact`" is descriptive of the common
+    case, not an anchor rewrite.** Accept/revert adopt spans verbatim — text, frames,
+    AND anchor unmodified (§3.2's "together, unmodified"; §6.5's "restored"; §10's
+    "byte-identical"). Forcing `.exact` would fabricate anchors on §5.2's runless
+    `.inherited` promotion spans — the exact lie the lattice exists to prevent. One
+    as-built deviation from "byte-identical": a borrowed span's omitted
+    `sourceRevisionID` is made explicit via `resolvedSourceRevisionID(in:)` before
+    adoption (a nil copied into a different revision would misresolve to the new id).
+14. **`TranscriptDraft` carries three fields beyond §2.5's list**: `captureID` (strict —
+    the §13 self-identifying tripwire), plus `parentID` and `basedOnMachineID` (lenient
+    additive) — required by §6.4's snapshot-at-open rule. An existing draft's snapshot
+    is copied verbatim on every rewrite; only a brand-new draft samples `current`.
+15. **Draft writes refuse on a degraded chain** (§4.8/F5, write half): `writeDraft`,
+    `closeDraft`, and `closeStaleDrafts` throw (`.revisionUnreadable`/
+    `.transcriptDirUnreadable`) when any canonical file is undecodable or the listing is
+    unreadable — the draft stays on disk, nothing is minted. The read half (editor
+    refuses to open) is T7's.
+
 ## 13. Rev 2 changelog
 
 What changed and which finding forced it. Review 1 is `A*`/`B*`/`C*`; review 2 is `F*`.

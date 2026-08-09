@@ -40,28 +40,23 @@ final class TranscriptSpliceTests: XCTestCase {
     func testMidSpanEditDegradesBothSurvivingFragmentsToInheritedFullBounds() {
         let p = parent([exact("cabin", 10, 20)])
         // "cabin" -> "castin": delete "b", insert "st". The prefix "ca" and suffix
-        // "in" are FRAGMENTS of the touched span — both inherited, the parent's FULL
-        // [10,20] bounds, never a synthesized sub-range (F17). "st" itself is brand
-        // new text — it is NOT a third fragment of the old span; it gets the ordinary
-        // insertion treatment (a zero-length point at the nearest preceding output
-        // span's frameEnd), because a replacement is delete+insert (§3.3's locked
-        // diff decision), and only the deletion's flanking survivors are "the span,
-        // edited in part" — the inserted text was never part of that span at all.
+        // "in" are FRAGMENTS of the touched span — both would independently be
+        // .inherited with the parent's FULL [10,20] bounds, never a synthesized
+        // sub-range (F17). "st" itself is brand new text, anchored as an ordinary
+        // insertion (a zero-length point at the nearest preceding span's frameEnd) —
+        // but NONE of these three pieces may survive as separate array entries
+        // (Critical 1): `TranscriptText.join` inserts a synthetic space between every
+        // pair of array elements and nowhere else, so "ca"/"st"/"in" left as three
+        // spans would round-trip to "ca st in", not "castin". They fold into ONE
+        // combined span whose bounds are the union of the pieces involved — here that
+        // union is exactly the parent's own [10,20], since every piece's natural
+        // bounds already sit inside it.
         let result = TranscriptSplice.spans(parent: p, editedText: "castin")
         XCTAssertEqual(result, [
-            TranscriptSpan(text: "ca", anchor: .inherited, frameStart: 10, frameEnd: 20,
-                           sourceRevisionID: parentID),
-            TranscriptSpan(text: "st", anchor: .inherited, frameStart: 20, frameEnd: 20,
-                           sourceRevisionID: parentID),
-            TranscriptSpan(text: "in", anchor: .inherited, frameStart: 10, frameEnd: 20,
+            TranscriptSpan(text: "castin", anchor: .inherited, frameStart: 10, frameEnd: 20,
                            sourceRevisionID: parentID),
         ])
-        // "ca" and "in" never carry a sub-range of the parent's bounds — both are the
-        // SAME full [10,20], never a synthesized partial range.
-        XCTAssertEqual(result[0].frameStart, 10)
-        XCTAssertEqual(result[0].frameEnd, 20)
-        XCTAssertEqual(result[2].frameStart, 10)
-        XCTAssertEqual(result[2].frameEnd, 20)
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "castin")
     }
 
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
@@ -86,13 +81,68 @@ final class TranscriptSpliceTests: XCTestCase {
         let p = parent([exact("hello", 0, 10)])
         // The parent has only ONE span, so there is no synthetic join-separator
         // character in the source to absorb the space before "world" — the whole
-        // " world" (space included) is genuinely new text the user typed.
+        // " world" (space included) is genuinely new text the user typed, anchored as
+        // a zero-length point at "hello"'s frameEnd. It cannot survive as a SEPARATE
+        // array entry from "hello" (Critical 1: nothing separates them in the edited
+        // text, and `TranscriptText.join` would insert a phantom space there) — they
+        // fold into one span, and the previously-exact "hello" necessarily degrades to
+        // `.inherited` (the lattice only ever degrades) with the union of both pieces'
+        // bounds, which is still exactly [0,10] since the insertion's own point (10,10)
+        // sits inside it.
         let result = TranscriptSplice.spans(parent: p, editedText: "hello world")
         XCTAssertEqual(result, [
-            exact("hello", 0, 10, sourceRevisionID: parentID),
-            TranscriptSpan(text: " world", anchor: .inherited, frameStart: 10, frameEnd: 10,
+            TranscriptSpan(text: "hello world", anchor: .inherited, frameStart: 0, frameEnd: 10,
                            sourceRevisionID: parentID),
         ])
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello world")
+    }
+
+    // MARK: - Critical 1: round-trip fidelity (join(spans) == editedText)
+
+    func testDeletingTheSeparatorBetweenTwoExactSpansIsNeverSilentlyRestored() {
+        let p = parent([exact("hello", 0, 10), exact("world", 10, 20)])
+        let result = TranscriptSplice.spans(parent: p, editedText: "helloworld")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "helloworld")
+        XCTAssertFalse(result.contains { $0.anchor == .exact },
+                       "neither original .exact span may survive once forced together")
+    }
+
+    func testInsertingAnExtraSpaceIsNeverAmplifiedIntoThreeSpaces() {
+        let p = parent([exact("hello", 0, 10), exact("world", 10, 20)])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello  world")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello  world")
+    }
+
+    /// The F18 property test's own random fuzzing surfaced this: a span between two
+    /// others fully deleted while BOTH its flanking separators survive leaves the
+    /// SECOND separator with nothing following it (nothing was deleted after it, but
+    /// nothing else remains either) — a trailing gap that materializes onto the
+    /// previous span's text. `.exact` cannot survive gaining that literal space (its
+    /// text would no longer byte-match the parent span it descends from — F18) even
+    /// though the span's OWN characters were never touched.
+    func testTrailingMaterializedSeparatorDegradesExactToInheritedNotJustAppendsText() {
+        let p = parent([exact("d", 0, 1), TranscriptSpan(text: "d", anchor: .none)])
+        // "d d" -> "d " (the second "d" span entirely deleted, both its flanking
+        // separators — there is only one here, since this parent has just two spans —
+        // survive... concretely: delete the trailing "d", keep the space before it.
+        let result = TranscriptSplice.spans(parent: p, editedText: "d ")
+        XCTAssertEqual(result, [
+            TranscriptSpan(text: "d ", anchor: .inherited, frameStart: 0, frameEnd: 1, sourceRevisionID: parentID),
+        ])
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "d ")
+    }
+
+    /// Same hazard, leading side: a span at the very start is fully deleted while the
+    /// separator after it survives, leaving that separator with nothing preceding it.
+    func testLeadingMaterializedSeparatorDegradesExactToInheritedNotJustPrependsText() {
+        let p = parent([TranscriptSpan(text: "b", anchor: .none), exact("world", 0, 5)])
+        // "b world" -> " world" (the leading "b" deleted, the separator before
+        // "world" survives with nothing before it).
+        let result = TranscriptSplice.spans(parent: p, editedText: " world")
+        XCTAssertEqual(result, [
+            TranscriptSpan(text: " world", anchor: .inherited, frameStart: 0, frameEnd: 5, sourceRevisionID: parentID),
+        ])
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), " world")
     }
 
     func testAdjacentNoneSpansMerge() {
@@ -191,6 +241,14 @@ final class TranscriptSpliceTests: XCTestCase {
 
     // MARK: - F18 monotone-lattice property (scoped to userEdit splice output)
 
+    /// This test carries TWO asserted properties over the same 200 random cases:
+    /// F18's monotone lattice, and (Critical 1 fix) round-trip fidelity — every
+    /// output must satisfy `TranscriptText.join(spans) == editedText`, since that
+    /// equality is what makes the whole splice safe to write to disk and read back.
+    /// Before the Critical-1 fix this postcondition failed immediately (RED evidence
+    /// in the fix report): a deleted join-separator between two untouched `.exact`
+    /// spans left them as two array entries, which `TranscriptText.join` silently
+    /// reunites with a phantom space on the next read.
     func testMonotoneLatticeNoExactSpanHasTextDifferingFromItsParentSpan() {
         var rng = SystemRandomNumberGenerator()
         let alphabet = Array("abcde ")
@@ -201,6 +259,11 @@ final class TranscriptSpliceTests: XCTestCase {
             let editedText = Self.randomEdit(of: parentText, alphabet: alphabet, rng: &rng)
 
             let result = TranscriptSplice.spans(parent: p, editedText: editedText)
+
+            let joined = TranscriptText.join(result.map(\.text))
+            XCTAssertEqual(joined, editedText,
+                           "spliced output must round-trip through TranscriptText.join back to exactly what was typed")
+
             for span in result where span.anchor == .exact {
                 // Every .exact output span must be a byte-identical, UNSPLIT copy of
                 // some parent span's full text — never a sub-range or a modification.
@@ -208,29 +271,6 @@ final class TranscriptSpliceTests: XCTestCase {
                               "an .exact span in the output must match a parent .exact span verbatim")
             }
         }
-    }
-
-    /// Mutation check (F18): relaxing the partial-edit rule to KEEP `.exact` on a
-    /// touched fragment — instead of degrading to `.inherited` — was verified LIVE
-    /// against the real implementation (not simulated): changing the fragment
-    /// branch's anchor to `parentSpan.anchor == .exact ? .exact : .inherited` and
-    /// re-running `testMonotoneLatticeNoExactSpanHasTextDifferingFromItsParentSpan`
-    /// produced 29 failures across the 200 random cases before the change was
-    /// reverted. This test pins the same predicate permanently, so a future
-    /// regression of that kind is caught without repeating the manual probe.
-    func testMutationCheckKeepingExactOnATouchedSpanViolatesTheLatticeProperty() {
-        let p = parent([exact("cabin", 10, 20)])
-        // The real splice never produces this — proven by
-        // testMidSpanEditDegradesBothSurvivingFragmentsToInheritedFullBounds above,
-        // whose first fragment is .inherited, not .exact. A mutation that relaxed the
-        // degrade rule (kept .exact on the touched span's surviving "ca" prefix)
-        // would instead produce this:
-        let mutatedFragment = TranscriptSpan(text: "ca", anchor: .exact, frameStart: 10, frameEnd: 20)
-        let parentSpans = p.spans
-        let latticePropertyHolds = mutatedFragment.anchor != .exact
-            || parentSpans.contains { $0.anchor == .exact && $0.text == mutatedFragment.text }
-        XCTAssertFalse(latticePropertyHolds,
-                       "a mutated splice that kept .exact on a touched sub-range must be caught by the property")
     }
 
     // MARK: - Generative helpers

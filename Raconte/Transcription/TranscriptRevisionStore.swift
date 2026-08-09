@@ -425,6 +425,32 @@ actor TranscriptRevisionStore {
         }
     }
 
+    /// The readable chain a draft operation is allowed to see — REFUSES (Critical 2,
+    /// design §4.8/F5) when any part of the chain is damaged, rather than silently
+    /// treating an unreadable revision as absent. `loadChain`'s `?? []` convenience
+    /// discards exactly that distinction (`ChainLoad.unreadableFiles` /
+    /// `.listingUnreadable`); using it directly here would let `writeDraft` splice
+    /// against a chain missing its true tip and `closeDraft` mint a revision that
+    /// silently drops the undecodable revision's content from the text forever — the
+    /// worked example design §4.8 exists to prevent, now reachable through the draft
+    /// path (`closeStaleDrafts` in particular runs at launch with no editor in the loop
+    /// to enforce §4.8's "the editor refuses to open" half of that rule). `.absent`
+    /// (no `transcript/` yet) is not damage — an empty chain is a legitimate starting
+    /// point and returns `[]`.
+    private static func readableOrderedRevisions(captureDirectory: URL) throws -> [TranscriptRevision] {
+        guard let load = Self.loadChain(captureDirectory: captureDirectory) else {
+            return []
+        }
+        if load.listingUnreadable {
+            throw TranscriptRevisionStoreError.transcriptDirUnreadable(
+                "draft operation refused: transcript/ could not be listed")
+        }
+        if let firstUnreadable = load.unreadableFiles.first {
+            throw TranscriptRevisionStoreError.revisionUnreadable(file: firstUnreadable)
+        }
+        return load.revisions
+    }
+
     /// Writes `transcript/draft.json` via `AtomicFile.replace`. `transcript/` is created
     /// lazily here — ONLY when `text` differs from current's `plainText` (A2b: a
     /// content-carrying write, never a bare open) — unless the directory already exists,
@@ -435,7 +461,9 @@ actor TranscriptRevisionStore {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
-        let ordered = Self.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        // Critical 2: refuse rather than silently splice against a chain missing its
+        // true tip.
+        let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
         let current = TranscriptChain.current(ordered)
         let currentText = current.map(TranscriptChain.plainText) ?? ""
 
@@ -447,14 +475,25 @@ actor TranscriptRevisionStore {
 
         try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
 
-        let existing = Self.readDraft(captureDirectory: captureDirectory)
-        let draft = TranscriptDraft(
-            captureID: captureID,
-            parentID: existing?.parentID ?? current?.id,
-            basedOnMachineID: existing?.basedOnMachineID ?? Self.basedOnMachineID(forDraftOpenedAgainst: current),
-            openedAt: existing?.openedAt ?? now,
-            lastWriteAt: now,
-            text: text)
+        // Important 4: the three snapshot fields (parentID, basedOnMachineID,
+        // openedAt) are captured ATOMICALLY, all from the SAME source — either all
+        // three come from an already-open draft, or all three come fresh from
+        // `current`. Reading them field-by-field via independent `??` fallbacks let a
+        // draft opened with no revision yet (`parentID == nil`) silently pick up a
+        // machine revision's id on a LATER write once one got promoted mid-draft,
+        // while its `openedAt` stayed the original (stale) value — a
+        // `basedOnMachineID` claiming the owner saw a machine revision they never did
+        // (design line ~745: it must track what the owner actually saw).
+        let draft: TranscriptDraft
+        if let existing = Self.readDraft(captureDirectory: captureDirectory) {
+            draft = TranscriptDraft(captureID: captureID, parentID: existing.parentID,
+                                    basedOnMachineID: existing.basedOnMachineID,
+                                    openedAt: existing.openedAt, lastWriteAt: now, text: text)
+        } else {
+            draft = TranscriptDraft(captureID: captureID, parentID: current?.id,
+                                    basedOnMachineID: Self.basedOnMachineID(forDraftOpenedAgainst: current),
+                                    openedAt: now, lastWriteAt: now, text: text)
+        }
 
         let data = try CaptureCoding.encoder().encode(draft)
         try AtomicFile.replace(at: SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory),
@@ -485,7 +524,10 @@ actor TranscriptRevisionStore {
         }
         let draftURL = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
 
-        let ordered = Self.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        // Critical 2: refuse rather than silently splice against — or compare "current"
+        // to — a chain missing its true tip. The draft stays on disk untouched; nothing
+        // is minted.
+        let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
         let currentRevision = TranscriptChain.current(ordered)
         let currentText = currentRevision.map(TranscriptChain.plainText) ?? ""
 

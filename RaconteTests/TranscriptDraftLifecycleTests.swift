@@ -240,4 +240,92 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         // No draft ever written for this capture — the pass must not throw or crash.
         await store().closeStaleDrafts(now: baseTime)
     }
+
+    // MARK: - Critical 2: an unreadable revision refuses draft ops rather than
+    // collapsing into "no such revision" (F5)
+
+    @discardableResult
+    private func writeRawCanonical(_ n: Int, _ json: String) throws -> URL {
+        try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: n)
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    func testWriteDraftRefusesWhenChainHasAnUndecodableRevision() async throws {
+        try await store().append(revision("R0", text: "hello"), captureID: captureID)
+        // Corrupt a LATER file number so the chain has an undecodable revision above
+        // R0 — current must not silently fall back to R0's text.
+        try writeRawCanonical(1, "not valid json")
+
+        do {
+            try await store().writeDraft(captureID: captureID, text: "goodbye", now: baseTime)
+            XCTFail("expected a refusal, not a silent write against a degraded chain")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .revisionUnreadable(file: 1))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path),
+                       "a refused writeDraft must not create draft.json")
+    }
+
+    func testCloseDraftRefusesWhenChainHasAnUndecodableRevisionAndLeavesDraftInPlace() async throws {
+        let s = store()
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)
+        try await s.writeDraft(captureID: captureID, text: "hello world", now: baseTime.addingTimeInterval(1))
+        // Corrupt the chain AFTER the draft was opened (e.g. iCloud eviction between
+        // sessions) — closeDraft must refuse rather than mint a revision that silently
+        // drops R0's undecodable-sibling content forever.
+        try writeRawCanonical(1, "not valid json")
+
+        do {
+            _ = try await s.closeDraft(captureID: captureID, reason: .sessionEnd,
+                                       now: baseTime.addingTimeInterval(100))
+            XCTFail("expected a refusal, not a mint against a degraded chain")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .revisionUnreadable(file: 1))
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path),
+                     "the draft must survive a refused close — nothing was minted")
+        let ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        XCTAssertEqual(ordered.count, 1, "no revision must be minted while the chain is degraded")
+    }
+
+    func testCloseStaleDraftsSkipsACaptureWithAnUndecodableRevisionLeavingItsDraftInPlace() async throws {
+        let s = store(policy: DraftPolicy(sessionEndSeconds: 90, hourCapSeconds: 3600))
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)
+        try await s.writeDraft(captureID: captureID, text: "hello world", now: baseTime)
+        try writeRawCanonical(1, "not valid json")
+
+        await s.closeStaleDrafts(now: baseTime.addingTimeInterval(200))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path),
+                     "closeStaleDrafts must skip a capture with a degraded chain, not mint over it")
+    }
+
+    // MARK: - Important 4: the draft snapshot fields are captured atomically
+
+    func testWriteDraftDoesNotReparentAnOpenDraftOntoAMachineRevisionPromotedMidDraft() async throws {
+        let s = store()
+        // Open the draft with NO revision existing yet — parentID/basedOnMachineID
+        // are both nil at this point.
+        try await s.writeDraft(captureID: captureID, text: "first words", now: baseTime)
+        let openedDraft = try CaptureCoding.decoder().decode(TranscriptDraft.self,
+                                                              from: try Data(contentsOf: draftURL))
+        XCTAssertNil(openedDraft.parentID)
+        XCTAssertNil(openedDraft.basedOnMachineID)
+
+        // A machine revision arrives mid-draft (e.g. a delayed promotion pass).
+        try await s.append(revision("M0", text: "promoted machine text", source: .machineLive),
+                           captureID: captureID)
+
+        // Continue writing the SAME draft — it must stay parented on nothing (its own
+        // original open-time snapshot), not silently pick up M0.
+        try await s.writeDraft(captureID: captureID, text: "first words continued",
+                               now: baseTime.addingTimeInterval(5))
+        let continuedDraft = try CaptureCoding.decoder().decode(TranscriptDraft.self,
+                                                                 from: try Data(contentsOf: draftURL))
+        XCTAssertNil(continuedDraft.parentID,
+                    "an already-open draft must never be silently re-parented onto a revision that arrived after it opened")
+        XCTAssertNil(continuedDraft.basedOnMachineID)
+        XCTAssertEqual(continuedDraft.openedAt, baseTime, "openedAt must stay the ORIGINAL open time")
+    }
 }

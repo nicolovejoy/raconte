@@ -44,12 +44,44 @@ enum RevisionSource: Sendable, Equatable {
     }
 }
 
-/// How a span's frame bounds relate to the audio (design §4.2). Unrecognized raw
-/// values decode to `.none` rather than throwing — the same F10 leniency as
-/// `RevisionSource`, but here there is no case to preserve the raw spelling in,
-/// because `.none` is already the correct fallback: no anchor means no frame bounds.
-enum SpanAnchor: String, Sendable, Equatable {
+/// How a span's frame bounds relate to the audio (design §4.2). Mirrors
+/// `RevisionSource`'s `init(string:)`/`.string` pattern (F10, and Gate A finding I4): an
+/// unrecognized raw value round-trips verbatim as `.unknown(raw)` rather than being
+/// silently rewritten to `"none"` — a foreign span like `{"anchor":"approximate",
+/// "frameStart":100,...}` keeps both its original anchor spelling AND its frames on
+/// re-encode. Only an ABSENT key decodes to `.none` (see `TranscriptSpan.init(from:)`).
+enum SpanAnchor: Sendable, Equatable {
     case exact, inherited, none
+    case unknown(String)
+
+    init(string: String) {
+        switch string {
+        case "exact": self = .exact
+        case "inherited": self = .inherited
+        case "none": self = .none
+        default: self = .unknown(string)
+        }
+    }
+
+    var string: String {
+        switch self {
+        case .exact: return "exact"
+        case .inherited: return "inherited"
+        case .none: return "none"
+        case .unknown(let raw): return raw
+        }
+    }
+
+    /// Whether this anchor claims usable frame bounds at all. `.none` obviously
+    /// doesn't; an `.unknown` anchor answers the same way — frames under an anchoring
+    /// scheme this build doesn't understand aren't safe to interpret, generalizing the
+    /// "frameStart nil iff anchor == .none" invariant to "nil iff no usable bounds".
+    var hasUsableBounds: Bool {
+        switch self {
+        case .exact, .inherited: return true
+        case .none, .unknown: return false
+        }
+    }
 }
 
 /// Why a draft stopped accepting further writes (design §4.2). Unrecognized raw
@@ -61,8 +93,8 @@ enum DraftCloseReason: String, Sendable, Equatable {
 /// One attributed run of text within a `TranscriptRevision` (design §4.2).
 struct TranscriptSpan: Codable, Sendable, Equatable {
     var text: String               // strict
-    var anchor: SpanAnchor         // absent OR unknown raw ⇒ .none
-    var frameStart: Int64?         // nil iff anchor == .none
+    var anchor: SpanAnchor         // absent key ⇒ .none; unknown raw ⇒ .unknown(raw)
+    var frameStart: Int64?         // nil iff anchor.hasUsableBounds == false
     var frameEnd: Int64?
     var confidence: Double?        // key omitted entirely when nil
     var sourceRevisionID: String?  // key omitted when == containing revision's id
@@ -95,7 +127,7 @@ struct TranscriptSpan: Codable, Sendable, Equatable {
         text = try container.decode(String.self, forKey: .text)
 
         let rawAnchor = (try? container.decodeIfPresent(String.self, forKey: .anchor)) ?? nil
-        anchor = rawAnchor.flatMap(SpanAnchor.init(rawValue:)) ?? .none
+        anchor = rawAnchor.map(SpanAnchor.init(string:)) ?? .none
 
         frameStart = (try? container.decodeIfPresent(Int64.self, forKey: .frameStart)) ?? nil
         frameEnd = (try? container.decodeIfPresent(Int64.self, forKey: .frameEnd)) ?? nil
@@ -108,11 +140,22 @@ struct TranscriptSpan: Codable, Sendable, Equatable {
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(text, forKey: .text)
-        try container.encode(anchor.rawValue, forKey: .anchor)
+        try container.encode(anchor.string, forKey: .anchor)
         try container.encodeIfPresent(frameStart, forKey: .frameStart)
         try container.encodeIfPresent(frameEnd, forKey: .frameEnd)
         try container.encodeIfPresent(confidence, forKey: .confidence)
         try container.encodeIfPresent(sourceRevisionID, forKey: .sourceRevisionID)
+    }
+
+    /// The span's real attribution (design §9.5 economy, Gate A finding I5): encoding
+    /// omits `sourceRevisionID` when it equals the containing revision's own id — the
+    /// overwhelmingly common case, a span that originates where it lives — so a reader
+    /// must resolve an absent value back to that revision's id rather than reading
+    /// "absent" as "unattributed". The one reader for that rule, so every future
+    /// consumer agrees with it. Write-side enforcement (never writing a redundant equal
+    /// id) is deferred to whichever of T6c/T6e first constructs spans.
+    func resolvedSourceRevisionID(in revision: TranscriptRevision) -> String {
+        sourceRevisionID ?? revision.id
     }
 }
 

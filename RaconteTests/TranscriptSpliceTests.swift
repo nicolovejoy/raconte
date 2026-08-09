@@ -59,6 +59,29 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(TranscriptText.join(result.map(\.text)), "castin")
     }
 
+    /// F17, pinned where it actually bites: a lone fragment that survives as its OWN
+    /// array entry (an untouched separator keeps it apart from its neighbour) must
+    /// carry the parent's FULL bounds, never a synthesized sub-range. The prior
+    /// version of this row asserted only a UNION of a forced merge — `forcedMerge`
+    /// takes `min(start)`/`max(end)` (`TranscriptSplice.swift`), so a mutation that
+    /// synthesizes per-fragment sub-ranges and then unions them back can still land
+    /// on the correct total range and slip past a union-only assertion. This test
+    /// avoids that: "dog" is untouched, so "ca" is emitted alone, and its bounds must
+    /// be checked directly against the parent's, not reconstructed from a union.
+    func testLoneFragmentSurvivingBesideAnUntouchedSpanCarriesParentsFullBoundsNotASubRange() {
+        let p = parent([exact("cabin", 10, 20), exact("dog", 30, 40)])
+        // "cabin dog" -> "ca dog": deletes "bin" from the end of "cabin", keeps the
+        // separator and "dog" untouched.
+        let result = TranscriptSplice.spans(parent: p, editedText: "ca dog")
+        XCTAssertEqual(result, [
+            TranscriptSpan(text: "ca", anchor: .inherited, frameStart: 10, frameEnd: 20,
+                           sourceRevisionID: parentID),
+            exact("dog", 30, 40, sourceRevisionID: parentID),
+        ])
+        XCTAssertEqual(result[0].frameStart, 10, "the fragment's frameStart must be the PARENT's own, not synthesized")
+        XCTAssertEqual(result[0].frameEnd, 20, "the fragment's frameEnd must be the PARENT's own, not a sub-range")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

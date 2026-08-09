@@ -1,5 +1,15 @@
 {
   "enabledPlugins": {
     "vercel-plugin@vercel-vercel-plugin": false
+  },
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/bin/gc-read.sh *)",
+      "Bash(git fetch *)",
+      "Bash(~/.claude/bin/sync-claude-md.sh --check *)",
+      "mcp__github__issue_read",
+      "Bash(xcrun devicectl list devices *)",
+      "Bash(xcrun devicectl device info *)"
+    ]
   }
 }

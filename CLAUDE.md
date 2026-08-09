@@ -1,6 +1,62 @@
 # CLAUDE.md
 
-## Session 2026-08-08 (laptop — voice-attributed rendering shipped same-day; 742 → 771 tests)
+## Session 2026-08-08 evening (laptop — T6a–e revision-chain build launched; 771 → 837 tests on branch, Gate A mid-fix)
+
+The "T7 next" label in the last handoff was wrong by one letter: three Explore code maps
+proved **T6a–T6e (the revision chain itself) was entirely unbuilt** — recent "T6" commits
+were §14 markers, not §11's chain. So this session planned and launched the chain build.
+**Session ends with the Gate A fix wave still running in the background** — the SDD ledger
+at `.superpowers/sdd/2026-08-08-revision-chain-implementation-plan/progress.md` is the
+authoritative resume point, NOT this summary.
+
+- **Docs on main (`e14d7f8b`):** `docs/plans/2026-08-08-revision-chain-code-maps.md`
+  (citation authority — the T6 design doc's file:line cites drifted in ~9 places since
+  08-03; also: launch-recovery path writes no TranscriptRef so promotion B1 recurs there,
+  `markers.jsonl` contradicts §4.6's writer census, `EntryMetadata` now has six fields)
+  and `docs/plans/2026-08-08-revision-chain-implementation-plan.md` (6 tasks + 2 gates;
+  locked decisions incl. honest-nil coverage on launch promotion, Swift `difference(from:)`
+  for the T6d splice diff, `TranscriptChainListing` as a deliberate 4th three-answer copy).
+- **Build on branch `t6/revision-chain`** (worktree `/Users/nico/src/raconte-t6`, base
+  `d0c18d2c`), subagent-driven, one fix round in Task 3:
+  Task 1 `eb508165` types/decoders/TranscriptText.join; Task 2 `4102869e`
+  `AtomicFile.createExclusively` (RENAME_EXCL, mutation-verified) + three-answer
+  `transcriptDirUnreadable`; Task 3 `61c62aa4` TranscriptChain derivation +
+  TranscriptRevisionStore (review caught: validatedHead never read head.json — cache
+  defeated; `-1` sentinel in persisted arrays → additive `listingUnreadable`).
+- **Gate A (Opus adversarial, suite independently re-run 837 green): BLOCKED — correctly.**
+  Probe-confirmed C1: duplicate revision id across two canonical files TRAPS
+  (`Dictionary(uniqueKeysWithValues:)`) on the read path, reachable via append-throws-
+  after-durable-write retry; probe-confirmed C2: append into a staged-away capture
+  RESURRECTS it (sidecar-absent reads as not-trashed; §4.6's write-side skip was
+  implemented as a read-side rule). Plus I1 stale-head trust masks §4.8 self-healing,
+  I2 the F6 fixed-point test was vacuous (never persisted between calls), I3 persistHead
+  missing trash guard, I4 SpanAnchor lossy on unknown raw values (needs `.unknown(String)`
+  like RevisionSource), I5 absent-sourceRevisionID needs its one read-side resolver.
+  Wire format itself held. Fix wave dispatched (all 7 + C1-trigger); minors M1-M5 parked
+  in ledger for Gate B triage.
+- **Filed #39** (revision-chain storage visibility + growth alarm — owner ask; whole-text
+  revisions are priced at ~725 KB/30-min entry, §9.5/9.6).
+- **`.claude/settings.json` gained a read-only permission allowlist**
+  (/fewer-permission-prompts): gc-read.sh, git fetch, sync-claude-md --check,
+  devicectl list/info, mcp github issue_read. Deliberately NOT added: gc-write.sh,
+  xcodebuild, xcodegen, python3 (owner's call to opt in).
+- Process: SendMessage-resume of a task's original implementer works well for fix rounds
+  (context intact, no re-brief); Gate A's reviewer wrote throwaway probe TESTS to confirm
+  findings empirically before reporting — worth demanding in future gate prompts.
+
+**Next steps:**
+1. **Resume the SDD loop from the ledger**: Gate A fix-wave report → scoped re-review →
+   freeze verdict → Tasks 4 (promotion), 5 (splice+draft), 6 (merge) → Gate B whole-branch
+   review → PR. Plan doc has full briefs; ledger has parked minors.
+2. **After Gate A passes: write the T7 editor-UI plan** (separate doc — needs the frozen
+   format; carries #37 word-correction, audit log §7, parked rendering minors, #39
+   visibility hook).
+3. Owner Saturday marker session items still stand (real two-voice page, dash-dot haptic
+  verify) if not already done.
+4. Design session (owner asked): capture-landing mocks A/B/C on
+   `origin/design/capture-landing-mocks` (local branch is 5 behind — pull first),
+   ¶-button fold, multi-voice visibility.
+5. #38 contextual-string biasing; flake backlog (breakpoint-controller method).
 
 The planned "Saturday" marker session happened a day early and turned into a full build
 day: owner smoked, we shipped what the smoke asked for, he smoked again — three

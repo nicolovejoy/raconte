@@ -1238,6 +1238,55 @@ Original design direction (superseded):
 
 ---
 
+## 15. Build amendments (2026-08-08 — T6a/T6b as built, Gate A outcomes)
+
+The chain was built on branch `t6/revision-chain` per
+`2026-08-08-revision-chain-implementation-plan.md`, with
+`2026-08-08-revision-chain-code-maps.md` as the citation authority (this doc's file:line
+cites drifted after the §14 marker work and #25 landed). An adversarial format-freeze
+gate reviewed T6a–T6b and forced the following deltas — **this section supersedes the
+sections it names**:
+
+1. **`TranscriptHead.listingUnreadable: Bool`** (additive, lenient, default false) —
+   §4.3's shape gains a fourth field. A directory-level unreadable listing is recorded
+   here, never as a sentinel value in `revisionFiles`/`unreadableFiles` (those arrays
+   hold only real file numbers).
+2. **`SpanAnchor` gains `.unknown(String)`** with verbatim raw round-trip, mirroring
+   `RevisionSource` — §4.2/§4.7's "absent OR unknown ⇒ `.none`" was a lossy reader: a
+   foreign build's anchor kind was destroyed on re-encode while its frames were kept.
+   `.unknown` answers like `.none` for usable-bounds (`hasUsableBounds` is the one
+   predicate). Absent key still decodes `.none`.
+3. **Duplicate revision `id` across two canonical files is a defined state, not a trap**:
+   the chain dedupes at decode (lowest local file number wins). It is the expected T9
+   sync shape (§2.2: same revision written at each device's next free `n`); revisions
+   are immutable, so any winner carries identical bytes. The build's first reading
+   crashed (`Dictionary(uniqueKeysWithValues:)`) — probe-confirmed at the gate.
+4. **`append` requires `captures/<id>/` to exist** (`.captureMissing`, mirroring
+   `EntryMetadataStore`) — §4.6's write-side trash skip was insufficient as specified:
+   after `StagedRemover.stage` renames the capture away, there is no sidecar to consult
+   and the sidecar read defaults to not-trashed; a bare mkdir-and-write resurrects the
+   entry (A2.3, probe-confirmed). Existence-check-before-mkdir is the load-bearing rule;
+   the sidecar `trashedAt` check remains for the directory-present case. `persistHead`
+   carries the same guards (silent no-op — pending gate ruling on no-op vs throw).
+5. **Head trust condition narrowed** (amends §4.3): a persisted head is trusted only if
+   its `revisionFiles` matches the listing AND `unreadableFiles` is empty AND
+   `listingUnreadable` is false. A head cached during damage is never trusted, so §4.8's
+   self-healing holds for the scan cache too (damaged entries pay an in-memory,
+   write-free rebuild per read until healthy).
+6. **`append` never throws after the revision file is durable**: a `persistHead` failure
+   inside `append` is swallowed (the head is a rebuildable cache; a caller retrying a
+   thrown-but-durable append would mint a duplicate id — the non-sync trigger for #3).
+7. **`TranscriptSpan.resolvedSourceRevisionID(in:)`** is the single reader of §9.5's
+   omitted-key economy (absent ⇒ the containing revision's id). Write-side enforcement
+   lands with the T6c/T6e span assemblers.
+8. **§4.6's writer census, corrected**: `transcript/` writers are `LiveTranscriptWriter`
+   (`live.jsonl`), `MarkerLogWriter` (`markers.jsonl`, landed with §14 after this doc),
+   and `TranscriptRevisionStore` (canonical revisions, `head.json`, `draft.json`).
+9. Known-corrected facts for future readers: `EntryMetadata` has six fields
+   (`multiVoice` landed with §14 — §7.1's tripwire count must include it), and the
+   launch-recovery path runs no `recordTranscriptRef`, so §5.1's launch-pass promotion
+   copies `coverageFrames`/`skippedRanges` as honest-nil for recovered captures.
+
 ## 13. Rev 2 changelog
 
 What changed and which finding forced it. Review 1 is `A*`/`B*`/`C*`; review 2 is `F*`.

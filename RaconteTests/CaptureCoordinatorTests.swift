@@ -394,6 +394,18 @@ final class CaptureCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.phase, .interrupted,
                        "a resume whose disk write failed must not publish `recording`")
+
+        // `lastError` is assigned on the MainActor strictly AFTER the `retryCount`
+        // write's `await` returns (`handleReacquireResult`) — a separate, later step
+        // of the same transition, not the same synchronous continuation. A task
+        // polling the on-disk manifest directly (as above) can therefore observe
+        // `retryCount == 1` while `lastError` is still nil: the #4/#22/08-07 family
+        // shape, one hop later. This was previously masked only by the elapsed-clock
+        // sleep below being incidentally long enough to cover it (flake report
+        // 2026-08-07); wait for the actual signal instead of relying on that.
+        await waitUntil({ coordinator.lastError != nil },
+                        "resume failure never surfaced on lastError")
+
         let elapsed = coordinator.elapsed
         try? await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(coordinator.elapsed, elapsed, accuracy: 0.001,

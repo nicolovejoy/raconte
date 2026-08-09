@@ -44,6 +44,9 @@ final class CaptureScreenModel {
     private let journalStore: JournalStore
     private let entryMetadataStore: EntryMetadataStore
     private let currentJournal: CurrentJournal
+    /// The library's instance (T6c), not a second one over the same `capturesRoot` —
+    /// same reasoning as `entryMetadataStore` above.
+    private let revisionStore: TranscriptRevisionStore
 
     /// The registry, refreshed at bootstrap and on every create/rename. Not reloaded on
     /// every keystroke — the menu is the only reader, and it opens infrequently.
@@ -124,6 +127,7 @@ final class CaptureScreenModel {
         // a lost update with no failure mode that would ever show up in a test.
         self.journalStore = resolvedLibrary.journalStore
         self.entryMetadataStore = resolvedLibrary.entryMetadataStore
+        self.revisionStore = resolvedLibrary.revisionStore
         self.currentJournal = CurrentJournal(store: journalPreferenceStore)
         let spawn: @MainActor () -> CaptureCoordinator = {
             CaptureCoordinator(
@@ -218,6 +222,11 @@ final class CaptureScreenModel {
         // transcript first becomes available.
         for id in recoveredQueue { await detectSpokenDate(for: id) }
         await library.rescan()
+        // Fire-and-forget corpus promotion (T6c): the library is already on screen and
+        // showing today's `live.jsonl` text via the loader's fallback, so nothing here
+        // blocks bootstrap while a possibly-large corpus walk runs. Placed before the
+        // sweep in source order, matching the brief's wiring.
+        Task { await library.promoteCorpusOnce() }
         // Last, deliberately: the library is already on screen, and the sweep runs off
         // the main actor. Also strictly after the finalizer has drained, so it can never
         // remove a directory an encode is still writing into.
@@ -454,6 +463,10 @@ final class CaptureScreenModel {
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
         for id in transcribed { await recordTranscriptRef(for: id) }
+        // Between the ref write and spoken-date detection: promotion reads
+        // `manifest.transcript` for `coverageFrames`/`skippedRanges` provenance, so it
+        // must run AFTER the ref lands, not before.
+        for id in transcribed { await revisionStore.promoteIfNeeded(captureID: id) }
         for id in transcribed { await detectSpokenDate(for: id) }
         await library.rescan()
         coordinator = spawn()

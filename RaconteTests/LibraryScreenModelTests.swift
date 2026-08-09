@@ -387,4 +387,41 @@ final class LibraryScreenModelTests: XCTestCase {
             url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
         XCTAssertNil(persisted.originalDate)
     }
+
+    // MARK: - T6c: promoteIfNeeded / transcript(for:) ordering (review finding 3)
+
+    /// `EntryDetailView.refresh()` now reads `transcript(for:)` FIRST, and only
+    /// re-reads after a `.promoted` outcome — never awaits promotion before the first
+    /// read, so an entry opened during the launch corpus walk isn't blocked behind it.
+    /// This pins the same sequence at the model layer: a read before promotion must
+    /// already return real (live.jsonl) text, and `promoteIfNeeded` must report
+    /// `.promoted` so the caller knows to re-read for the canonical text.
+    func testTranscriptReadBeforePromotionAlreadyShowsLiveJSONLTextAndPromotionIsSeparatelyObservable() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)))
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(TranscriptRecord(seq: 0, text: "hello there",
+                                           captureFrameStart: 0, captureFrameEnd: 20_000,
+                                           generator: "SpeechTranscriber", locale: "en_US"))
+        try writer.close()
+
+        let model = model()
+
+        // Before promotion: the entry-open read must not block on it, and must already
+        // show real text off live.jsonl.
+        let before = await model.transcript(for: idA)
+        XCTAssertEqual(before.text, "hello there")
+
+        let outcome = await model.promoteIfNeeded(idA)
+        guard case .promoted = outcome else { return XCTFail("expected .promoted, got \(outcome)") }
+
+        // After: a caller that re-reads on `.promoted` sees the canonical text (display-
+        // identical here, but this is the seam `EntryDetailView.refresh()` now uses).
+        let after = await model.transcript(for: idA)
+        XCTAssertEqual(after.text, "hello there")
+    }
 }

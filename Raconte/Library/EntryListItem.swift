@@ -40,6 +40,10 @@ struct EntryDegradation: OptionSet, Sendable, Hashable {
     /// Fewer log lines than `TranscriptRef.committedRecords` — the app was killed and
     /// the tail is short. The snippet is still real, just possibly not the whole story.
     static let transcriptTruncated = EntryDegradation(rawValue: 1 << 5)
+    /// A promoted revision chain exists (`transcript/canonical-<n>.json`) and at least
+    /// one file in it failed to decode (T6c). The displayed text still comes from the
+    /// best readable revision — never hidden — but may not be the true head.
+    static let revisionUnreadable = EntryDegradation(rawValue: 1 << 6)
 
     /// Every flag declared above. **Add a new flag here and to `reasonTable`.**
     ///
@@ -50,7 +54,7 @@ struct EntryDegradation: OptionSet, Sendable, Hashable {
     /// out of every accessibility label.
     static let allDeclared: EntryDegradation = [
         .manifestAbsent, .manifestCorrupt, .metadataUnreadable,
-        .transcriptUnreadable, .journalUnresolved, .transcriptTruncated,
+        .transcriptUnreadable, .journalUnresolved, .transcriptTruncated, .revisionUnreadable,
     ]
 
     /// Calm, specific phrases for the library row's degraded marker — never "error" or
@@ -65,6 +69,7 @@ struct EntryDegradation: OptionSet, Sendable, Hashable {
         (.journalUnresolved, "journal not found"),
         (.transcriptUnreadable, "transcript unreadable"),
         (.transcriptTruncated, "transcript may be incomplete"),
+        (.revisionUnreadable, "transcript revision unreadable"),
     ]
 
     /// The reasons this value carries, in table order and de-duplicated (absent and

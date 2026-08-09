@@ -188,4 +188,60 @@ final class CaptureScreenModelTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(model.coordinator === coordinator)
     }
+
+    // MARK: - T6c: finalize wiring promotes revision zero
+
+    /// The finalize call-site wiring (design §5's brief, step 4.6): after a capture
+    /// finalizes with a real transcript, it must end up with exactly one canonical
+    /// revision whose `coverageFrames` is non-nil — non-nil specifically PROVES
+    /// promotion ran after `recordTranscriptRef` wrote `manifest.transcript`, not
+    /// before it (the mutation check below).
+    ///
+    /// Drives a real `LiveTranscriptionCoordinator` over a `ScriptedTranscriptionEngine`
+    /// (no models, no hardware — same fake `TranscriptionSessionTests` uses) so
+    /// `recordTranscriptRef` has a real `TranscriptRef` to write, exactly as it would
+    /// on device.
+    func testFinalizePromotesRevisionZeroWithNonNilCoverageAfterTranscriptRefIsRecorded() async throws {
+        let recorder = ModelFakeRecorder()
+        let engine = ScriptedTranscriptionEngine()
+        let transcription = LiveTranscriptionCoordinator(capturesRoot: root, makeEngine: { engine })
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder(),
+            makeSecondarySink: { [weak transcription] id in transcription?.begin(captureID: id) },
+            transcription: transcription)
+        await model.bootstrap()
+
+        await model.record()
+        model.handlePhase()   // the view's onChange(of: phase) relay — activates transcription
+        let captureID = try XCTUnwrap(model.coordinator.activeCaptureID)
+
+        await waitUntil({ engine.calls.contains(.start) }, "transcription engine never started")
+
+        recorder.feed(frames: 4_800)
+        engine.emit(TranscriptResult(text: "hello", range: FrameRange(start: 0, end: 4_800),
+                                     isVolatile: false, confidence: nil))
+
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: captureID)
+        await waitUntil({ !LiveTranscriptReader.load(captureDirectory: dir).records.isEmpty },
+                        "committed result never reached live.jsonl")
+
+        await model.done()
+        await waitUntil({ model.coordinator.finalizeQueue.isEmpty == false },
+                        "capture never committed to finalizeQueue")
+        model.handleFinalizeQueue()
+
+        await waitUntil({ model.library.items.contains { $0.captureID == captureID } },
+                        "library never refreshed after finalize")
+
+        let chain = TranscriptRevisionStore.loadChain(captureDirectory: dir)
+        XCTAssertEqual(chain?.revisions.count, 1, "exactly one canonical revision after finalize")
+        let revision = try XCTUnwrap(chain?.revisions.first)
+        XCTAssertEqual(revision.source, .machineLive)
+        XCTAssertNotNil(revision.coverageFrames,
+                        "coverageFrames must be copied from the manifest.transcript ref "
+                        + "recordTranscriptRef just wrote — proves promotion ran AFTER it")
+    }
 }

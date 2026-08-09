@@ -1,10 +1,9 @@
 # Capture-time structure markers — implementation plan (T6 §14)
 
-**Status: UNVERIFIED — pending local run.** Written 2026-08-05 on a machine that cannot
-build (no Xcode). Every signature and line number below was checked against the code maps
-(`2026-08-05-structure-markers-code-maps.md`, captured at commit `1f2a44b5`) and
-spot-checked against source, but **no command in this document has been executed**. The
-first machine with Xcode must treat every step's red/green run as the actual verification.
+**Status: EXECUTED — steps 1–6 shipped 2026-08-05 (PR #31, merged `6562c6f0`); step 7
+shipped 2026-08-08 via `2026-08-08-voice-attributed-rendering-plan.md` (merged `8f5c4cb0`),
+superseding the "deferred" note below.** Kept as the build record. (Original 2026-08-05
+caveat: written on a machine without Xcode, unverified at the time of writing.)
 
 Design of record: `2026-08-05-capture-structure-markers-design.md`. This plan implements
 its §9 steps 1–6; step 7 (T7 renders the voice attribute) is deferred to T7 by design.

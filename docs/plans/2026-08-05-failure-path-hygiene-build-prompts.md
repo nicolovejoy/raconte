@@ -1,10 +1,8 @@
 # Failure-path hygiene — build prompts (#23, #24)
 
-**Status: UNVERIFIED — pending local run.** Written 2026-08-05 on a machine without
-Xcode. Every line number, signature, and fixture name below was read against source at
-the current head of `plan/structure-markers`, but **no command in this document has been
-executed.** The first machine with Xcode must treat each step's
-red/green run as the actual verification.
+**Status: EXECUTED — shipped 2026-08-05 (issues #23 and #24 closed).** Kept as the build
+record. (Original 2026-08-05 caveat: written on a machine without Xcode, unverified at the
+time of writing.)
 
 Both steps close a filed issue when they land green: **step 1 fixes #24**, **step 2 fixes
 #23**. Neither depends on the other; either can land alone. They are grouped because they

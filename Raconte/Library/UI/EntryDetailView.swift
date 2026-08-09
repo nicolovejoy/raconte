@@ -265,12 +265,14 @@ struct EntryDetailView: View {
     /// tail is a fourth: the text is real and there may simply be less of it than was
     /// spoken, which the library row already marks and this screen used not to.
     ///
-    /// Voice-attributed paragraphs (T7 plan step 3): a plain text label above the prose
-    /// — no per-voice typeface (design §10 defers print-vs-cursive rendering; a text
-    /// label is the cheap, legible, accessible v1) and no affordance for
-    /// `hasApproximateBoundary` (requirement 4's explicit v1 decision — an approximate
-    /// cut renders exactly like a precise one; the flag exists so T7 can add a badge
-    /// later without re-deriving anything).
+    /// Voice-attributed paragraphs (T7 plan step 3, restyled per owner ask 2026-08-08):
+    /// the voice label is inline (`"BN: "` prefixed to the prose, one line) rather than
+    /// a separate caption line, and BN paragraphs render in italic
+    /// (`TranscriptAttribution.isItalic(voice:)`) as a stand-in for the
+    /// print-vs-cursive distinction his physical journals use — no per-voice typeface
+    /// yet. Still deferred: an affordance for `hasApproximateBoundary` (requirement 4's
+    /// explicit v1 decision — an approximate cut renders exactly like a precise one;
+    /// the flag exists so a later pass can add a badge without re-deriving anything).
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
@@ -297,19 +299,10 @@ struct EntryDetailView: View {
             case .attributed(let paragraphs):
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                        VStack(alignment: .leading, spacing: 4) {
-                            if let voice = paragraph.voice {
-                                Text(TranscriptAttribution.displayName(forVoice: voice))
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                    .tracking(0.5)
-                                    .accessibilityIdentifier("detail.transcript.voice.\(index)")
-                            }
-                            Text(paragraph.text)
-                                .font(.system(.body, design: .serif))
-                                .textSelection(.enabled)
-                                .accessibilityIdentifier("detail.transcript.paragraph.\(index)")
-                        }
+                        attributedParagraph(paragraph)
+                            .font(.system(.body, design: .serif))
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("detail.transcript.paragraph.\(index)")
                     }
                 }
                 .accessibilityIdentifier("detail.transcript.text")
@@ -323,6 +316,25 @@ struct EntryDetailView: View {
                     .accessibilityIdentifier("detail.transcript.truncated")
             }
         }
+    }
+
+    /// Builds one paragraph's `Text`: an inline, bold-secondary voice prefix
+    /// (`"BN: "`) concatenated onto the prose — SwiftUI `Text` concatenation is the
+    /// only way to mix styling within one line — then italicized as a whole when
+    /// `TranscriptAttribution.isItalic(voice:)` says so. Unattributed paragraphs
+    /// (`voice == nil`) get no prefix and are never italic.
+    private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph) -> Text {
+        let body = Text(paragraph.text)
+        let combined: Text
+        if let voice = paragraph.voice {
+            let label = Text("\(TranscriptAttribution.displayName(forVoice: voice)): ")
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+            combined = label + body
+        } else {
+            combined = body
+        }
+        return TranscriptAttribution.isItalic(voice: paragraph.voice) ? combined.italic() : combined
     }
 
     // MARK: - Trash

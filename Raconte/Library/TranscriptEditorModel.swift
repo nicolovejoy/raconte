@@ -142,6 +142,9 @@ final class TranscriptEditorModel {
     /// `draft.json` behind, and `hasUnsavedChanges` claimed work the owner never did.
     @ObservationIgnored private var lastKnownText = ""
 
+    /// Whether THIS editing session has already been closed — see `finishIfNeeded()`.
+    @ObservationIgnored private var hasFinished = false
+
     init(captureID: String,
          store: any TranscriptEditorStore,
          debounce: any EditorDebounce = TaskEditorDebounce(),
@@ -187,6 +190,7 @@ final class TranscriptEditorModel {
         // A re-open (navigating back into the editor on the same model) is a fresh session:
         // last time's notices must not outlive the thing they described.
         draftClosedBeneathSession = false
+        hasFinished = false
         let snapshot = await store.chainSnapshot(for: captureID)
 
         guard case .editable = snapshot.editability else {
@@ -314,6 +318,22 @@ final class TranscriptEditorModel {
             state = .failed(Self.saveFailureMessage(error))
             return false
         }
+    }
+
+    /// "Navigating away IS Done" (ruling Q1), made literal — the pop path, taken by system
+    /// Back and interactive swipe-back, which the Done button alone never covered.
+    ///
+    /// Idempotent so the Done button and the `onDisappear` that follows its `dismiss()` do not
+    /// double-close. The guard is per SESSION, not per model: `EntryDetailView` holds ONE
+    /// editor model in `@State` for the life of the screen, so `open()` clears it and every
+    /// later visit can save. A FAILED finish deliberately does not latch — the owner has left,
+    /// but the next attempt must still be able to try.
+    @discardableResult
+    func finishIfNeeded() async -> Bool {
+        guard !hasFinished else { return true }
+        let closed = await done()
+        hasFinished = closed
+        return closed
     }
 
     // MARK: - Draft closed beneath us

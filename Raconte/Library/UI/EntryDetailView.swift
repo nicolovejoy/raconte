@@ -73,6 +73,13 @@ struct EntryDetailView: View {
         .onChange(of: showingEditor) { _, shown in
             guard !shown else { return }
             Task {
+                // BEFORE the reload, not after: on Back the editor's own `onDisappear` starts
+                // its close concurrently, and a rescan that overtook it would re-render the
+                // PRE-edit transcript — the owner backs out and watches the edit vanish, with
+                // the stale-draft sweep no help (it will not touch a seconds-old draft).
+                // `finishIfNeeded()` is idempotent, so whichever path gets here first wins and
+                // the other is a no-op.
+                await editorModel.finishIfNeeded()
                 await model.rescan()
                 await refresh()
             }

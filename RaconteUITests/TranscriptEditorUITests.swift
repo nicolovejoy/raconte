@@ -41,13 +41,48 @@ final class TranscriptEditorUITests: XCTestCase {
         }
     }
 
-    func testEditTranscriptThenDoneShowsTheEditedTextOnTheDetailScreen() throws {
+    /// Review finding 2, view side: the editor is a pushed destination, so system Back is
+    /// always available — and it used to take neither the flush nor the close path. Typing and
+    /// then backing out inside the 2 s debounce window dropped the keystrokes entirely and
+    /// re-rendered the pre-edit transcript. Only reachable from a UI test: nothing in
+    /// `RaconteTests` can press a navigation bar's Back button.
+    func testBackingOutOfTheEditorKeepsTheEditAndShowsItOnTheDetailScreen() throws {
         let app = launchApp()
+        openSeededEntry(app)
 
+        let edit = app.buttons["detail.editButton"].firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        press(edit)
+
+        let textView = app.textViews["editor.text"].firstMatch
+        XCTAssertTrue(textView.waitForExistence(timeout: 15), "editor never appeared")
+        waitUntil(15, "editor never loaded the current text") {
+            textView.value as? String == "the machine heard these words"
+        }
+        press(textView)
+        textView.typeText(" — kept on the way out")
+
+        // Straight out via Back, well inside the 2 s window, with no Done anywhere.
+        let back = app.navigationBars["Edit transcript"].buttons.element(boundBy: 0)
+        XCTAssertTrue(back.waitForExistence(timeout: 10), "no Back button on the editor")
+        press(back)
+
+        waitUntil(25, "backing out dropped the edit") {
+            let current = app.staticTexts["detail.transcript.text"].firstMatch
+            return current.exists && current.label.contains("kept on the way out")
+        }
+    }
+
+    private func openSeededEntry(_ app: XCUIApplication) {
         let recentRow = app.descendants(matching: .any)
             .matching(identifier: "capture.recentRow").firstMatch
         XCTAssertTrue(recentRow.waitForExistence(timeout: 20), "seeded entry never appeared")
         press(recentRow)
+    }
+
+    func testEditTranscriptThenDoneShowsTheEditedTextOnTheDetailScreen() throws {
+        let app = launchApp()
+        openSeededEntry(app)
 
         let transcript = app.staticTexts["detail.transcript.text"].firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 15), "transcript never rendered")

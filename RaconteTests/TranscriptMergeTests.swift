@@ -301,16 +301,23 @@ final class TranscriptMergeTests: XCTestCase {
 
     /// `.unknown("x")` is machine lineage by `RevisionSource.isHumanLineage` (§15/T6a
     /// rule) — asserted explicitly so a future "tighten this" can't silently change
-    /// lineage law without breaking a test that names the intent.
-    func testAcceptAllowsMachineLiveMachineRetranscribeAndUnknownSourceAsMachine() throws {
+    /// lineage law without breaking a test that names the intent. Fix round 1, Minor 2:
+    /// pinned for all three entry points, not just `accept`.
+    func testAcceptDeclineAndRevertAllowMachineLiveMachineRetranscribeAndUnknownSourceAsMachine() throws {
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
         let sources: [RevisionSource] = [.machineLive, .machineRetranscribe, .unknown("x")]
         for source in sources {
             let machine = TranscriptRevision(id: "M-\(source.string)", source: source, createdAt: t0,
                                              spans: [exact("machine text", 0, 50)])
             XCTAssertNoThrow(try TranscriptMerge.accept(current: current, machine: machine,
-                                                        id: "MG-\(source.string)", createdAt: t0, deviceID: nil),
-                            "source \(source) must be treated as machine lineage")
+                                                        id: "MGA-\(source.string)", createdAt: t0, deviceID: nil),
+                            "accept: source \(source) must be treated as machine lineage")
+            XCTAssertNoThrow(try TranscriptMerge.decline(current: current, machine: machine,
+                                                         id: "MGD-\(source.string)", createdAt: t0, deviceID: nil),
+                            "decline: source \(source) must be treated as machine lineage")
+            XCTAssertNoThrow(try TranscriptMerge.revert(current: current, toMachine: machine,
+                                                        id: "MGR-\(source.string)", createdAt: t0, deviceID: nil),
+                            "revert: source \(source) must be treated as machine lineage")
         }
     }
 

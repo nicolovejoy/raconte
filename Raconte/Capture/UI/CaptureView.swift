@@ -222,15 +222,24 @@ final class CaptureScreenModel {
         // transcript first becomes available.
         for id in recoveredQueue { await detectSpokenDate(for: id) }
         await library.rescan()
-        // Fire-and-forget corpus promotion (T6c): the library is already on screen and
-        // showing today's `live.jsonl` text via the loader's fallback, so nothing here
-        // blocks bootstrap while a possibly-large corpus walk runs. Placed before the
-        // sweep in source order, matching the brief's wiring.
-        Task { await library.promoteCorpusOnce() }
-        // Fire-and-forget stale-draft recovery (T7 prereq #41), same shape and same
-        // reasoning as promotion above — after promotion, before the sweep, in source
-        // order.
-        Task { await library.closeStaleDraftsOnce() }
+        // Fire-and-forget corpus promotion (T6c) + stale-draft recovery (T7 prereq #41),
+        // ONE Task, sequential: the library is already on screen and showing today's
+        // `live.jsonl` text via the loader's fallback, so nothing here blocks bootstrap
+        // while a possibly-large corpus walk runs. Placed before the sweep.
+        //
+        // Deliberately one Task, not two independent ones (fix round 1, Minor 4): two
+        // separate unstructured Tasks give no guarantee that `closeStaleDraftsOnce()`'s
+        // per-capture work doesn't interleave ahead of `promoteCorpusOnce()`'s for the
+        // SAME capture — and that ordering is load-bearing (Important 1, review fix
+        // round 1): closing a capture's stale draft before it is promoted mints a
+        // `.userEdit` that permanently blocks the `.machineLive` baseline from ever
+        // entering that capture's chain, since `promoteIfNeeded` skips unconditionally
+        // once any canonical file exists. A single Task with sequential awaits removes
+        // the race instead of merely hoping two Tasks happen to run in source order.
+        Task {
+            await library.promoteCorpusOnce()
+            await library.closeStaleDraftsOnce()
+        }
         // Last, deliberately: the library is already on screen, and the sweep runs off
         // the main actor. Also strictly after the finalizer has drained, so it can never
         // remove a directory an encode is still writing into.

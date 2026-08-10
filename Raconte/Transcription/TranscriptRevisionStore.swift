@@ -399,6 +399,18 @@ actor TranscriptRevisionStore {
         return try? CaptureCoding.decoder().decode(TranscriptDraft.self, from: data)
     }
 
+    /// Cheap existence check for `draft.json` — no decode, no actor hop (T7 prereq #41,
+    /// fix round 1, Important 2). `LibraryScreenModel.hasDraft(_:)` uses this so
+    /// entry-open can skip the actor entirely for a draft-free capture, the
+    /// overwhelmingly common case, rather than queueing behind an in-flight corpus walk
+    /// that's holding the actor (the exact regression the T6c comment on
+    /// `EntryDetailView.refresh()`'s promote call already warns about).
+    nonisolated static func draftExists(capturesRoot: URL, captureID: String) -> Bool {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
     /// §6.4's propagation rule, captured once at draft-open time (the parent revision
     /// is immutable, so this can never go stale between then and `closeDraft`): a draft
     /// opened against a machine revision carries that revision's own id; opened against
@@ -586,9 +598,13 @@ actor TranscriptRevisionStore {
     ///
     /// Returns the minted revision id, or `nil` in every one of: no draft on disk, the
     /// draft is fresher than `policy.sessionEndSeconds`, the capture is missing or
-    /// trashed, or `closeDraft` itself threw (a degraded chain, §15b.15 — the draft
-    /// stays on disk untouched, nothing is minted, and there is no caller here to show
-    /// an error to).
+    /// trashed, `closeDraft` itself threw (a degraded chain, §15b.15 — the draft stays
+    /// on disk untouched, nothing is minted, and there is no caller here to show an
+    /// error to), OR `closeDraft`'s own §2.5 no-op (`draft.text == current`'s text —
+    /// `closeDraft`'s F7 crash-duplicate branch). That last case is the ONE `nil` that
+    /// does NOT leave `draft.json` in place: it deletes the (now-redundant) draft file
+    /// and mints nothing, same as every other `nil` in effect but different on disk. A
+    /// caller must not read `nil` as "draft.json still exists" (fix round 1, Minor 1).
     @discardableResult
     func closeStaleDraftIfNeeded(captureID: String, now: Date) async -> String? {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)

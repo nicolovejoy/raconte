@@ -94,6 +94,19 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         XCTAssertThrowsError(try CaptureCoding.decoder().decode(TranscriptSpan.self, from: json))
     }
 
+    /// T7 Task 3 fix round 2: `RevisionFileSize` moved off a synthesized `Codable` to
+    /// a hand-written one, matching this family's identity-strict convention for its
+    /// two fields today — pins that the switch didn't accidentally loosen anything.
+    func testRevisionFileSizeMissingByteSizeThrows() {
+        let json = "{\"file\":0}".data(using: .utf8)!
+        XCTAssertThrowsError(try CaptureCoding.decoder().decode(RevisionFileSize.self, from: json))
+    }
+
+    func testRevisionFileSizeMissingFileThrows() {
+        let json = "{\"byteSize\":42}".data(using: .utf8)!
+        XCTAssertThrowsError(try CaptureCoding.decoder().decode(RevisionFileSize.self, from: json))
+    }
+
     func testRevisionMissingIDThrows() {
         let json = """
         {"source":"machineLive","createdAt":"2023-11-14T22:13:20.000Z","spans":[]}

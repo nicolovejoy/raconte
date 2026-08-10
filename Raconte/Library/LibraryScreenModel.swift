@@ -95,6 +95,12 @@ final class LibraryScreenModel {
     /// corpus, not a correctness one.
     private var staleDraftsClosedRan = false
 
+    /// Guards `stampUnstampedHeadsOnce()` (T7 Task 3 fix round 2), same reasoning as
+    /// `corpusPromotionRan`: `stampUnstampedHeads` is itself a no-op per-capture once
+    /// a head is trustworthy, so this guard is a cost saver against a second
+    /// `bootstrap()` re-walking the whole corpus, not a correctness one.
+    private var headStampRan = false
+
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
@@ -381,6 +387,25 @@ final class LibraryScreenModel {
     @discardableResult
     func promoteIfNeeded(_ captureID: String) async -> TranscriptRevisionStore.PromotionOutcome {
         await revisionStore.promoteIfNeeded(captureID: captureID)
+    }
+
+    /// The launch pass (T7 Task 3 fix round 2, owner ruling): stamp every promoted
+    /// capture's `head.json` with the size fingerprint fix round 1's trust condition
+    /// requires — without this, Task 3's whole win reaches no entry that existed
+    /// before this fix shipped, since `persistHead`'s only other caller (`append`)
+    /// never runs again once a chain exists. Called fire-and-forget from
+    /// `CaptureScreenModel.bootstrap()`, same shape as `promoteCorpusOnce()`, placed
+    /// right after it and BEFORE `closeStaleDraftsOnce()` — a capture must be promoted
+    /// before its head is worth stamping (an unpromoted capture has no chain, so
+    /// `stampUnstampedHeads` skips it outright regardless of ordering here, but
+    /// stamping before promotion would just mean re-walking it a second time this
+    /// same launch once promotion lands). `stampUnstampedHeads` is itself per-capture
+    /// idempotent (a no-op once trustworthy), so this guard is a cost saver, not a
+    /// correctness one.
+    func stampUnstampedHeadsOnce() async {
+        guard !headStampRan else { return }
+        headStampRan = true
+        await revisionStore.stampUnstampedHeads()
     }
 
     /// The launch pass (T7 prereq #41): close every capture's stale draft (rule 9,

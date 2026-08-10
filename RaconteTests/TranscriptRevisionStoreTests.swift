@@ -280,6 +280,87 @@ final class TranscriptRevisionStoreTests: XCTestCase {
             "a sidecar-absent capture is not a trashed one and must stay persistable")
     }
 
+    // MARK: - Corpus head stamping (T7 Task 3 fix round 2)
+
+    /// **The sweep's whole point.** Every `head.json` on a real device today predates
+    /// `fileSizes` and is therefore untrusted forever (fix round 1's own ruling) —
+    /// `stampUnstampedHeads` is the ONLY thing that ever fixes that, since
+    /// `persistHead`'s one other caller (`append`) never runs again once a chain
+    /// exists. Fixture: a real, decodable revision with a hand-written UNSTAMPED head
+    /// (everything correct — `current`/`revisionFiles`/`unreadableFiles` — except
+    /// `fileSizes: []`, exactly what a pre-fix-round-1 head looks like). After the
+    /// sweep: (1) the sweep must have written real sizes, not left the head as it
+    /// found it, and (2) a SUBSEQUENT read must be served from that freshly-stamped
+    /// cache, proven with the same distinguishing-marker technique used throughout
+    /// this round — a marker planted into the sweep's own output survives a further
+    /// read only if that read trusts the cache rather than re-decoding.
+    func testStampUnstampedHeadsStampsAPreFixRoundOneHeadAndSubsequentReadsAreTrusted() async throws {
+        let healthy = revision("R0", text: "healthy revision text")
+        try writeRawCanonical(0, try validJSON(for: healthy))
+
+        let summary = TranscriptRevisionStore.headSummary(for: healthy, fileNumber: 0, isForked: false)
+        let unstamped = TranscriptHead(current: summary, revisionFiles: [0], unreadableFiles: [],
+                                       revisionCount: 1, listingUnreadable: false)  // fileSizes: [] (default)
+        try CaptureCoding.encoder().encode(unstamped)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory))
+
+        await store().stampUnstampedHeads()
+
+        let stampedData = try Data(contentsOf: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory))
+        var stamped = try CaptureCoding.decoder().decode(TranscriptHead.self, from: stampedData)
+        XCTAssertFalse(stamped.fileSizes.isEmpty, "the sweep must stamp real sizes, not leave the head as found")
+        XCTAssertEqual(stamped.current?.id, "R0")
+
+        // Plant a marker no real decode of R0's body could produce, leaving the sizes
+        // the sweep just wrote untouched.
+        stamped.current?.snippet = "MARKER FROM CACHE, NEVER DECODED"
+        try CaptureCoding.encoder().encode(stamped)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory))
+
+        let read = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(read?.current?.snippet, "MARKER FROM CACHE, NEVER DECODED",
+                       "a read after the sweep must be served from the cache the sweep just stamped")
+    }
+
+    /// **The sweep must be a no-op for an already-trustworthy head.** Rewriting
+    /// `head.json` for every capture on every launch would be churn on the owner's
+    /// real data and would defeat the point of caching at all. Proven via mtime, the
+    /// same technique the read-path-writes-nothing tests use.
+    func testStampUnstampedHeadsDoesNotRewriteAnAlreadyTrustworthyHead() async throws {
+        try await store().append(revision("R0"), captureID: captureID)
+
+        let before = try snapshotTree(transcriptDirectory)
+        await store().stampUnstampedHeads()
+        let after = try snapshotTree(transcriptDirectory)
+
+        XCTAssertEqual(before, after, "the sweep must not rewrite an already-trustworthy head")
+    }
+
+    /// The sweep is thin plumbing over `persistHead`, so its guards apply here too —
+    /// proven at the sweep's own entry point (not just `persistHead`'s, which is
+    /// already covered above) so the delegation itself is what's pinned.
+    func testStampUnstampedHeadsLeavesATrashedCaptureUntouched() async throws {
+        try await store().append(revision("R0"), captureID: captureID)
+        let headURL = SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory)
+        let headBeforeTrash = try Data(contentsOf: headURL)
+
+        var metadata = EntryMetadata.defaults
+        metadata.trashedAt = Date()
+        try EntryMetadataStore.write(metadata, url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+        // Force the head untrusted so a bug that skipped the trash guard would have
+        // something to stamp.
+        var unstamped = try CaptureCoding.decoder().decode(TranscriptHead.self, from: headBeforeTrash)
+        unstamped.fileSizes = []
+        try CaptureCoding.encoder().encode(unstamped).write(to: headURL)
+
+        await store().stampUnstampedHeads()
+
+        let headAfterSweep = try Data(contentsOf: headURL)
+        let afterHead = try CaptureCoding.decoder().decode(TranscriptHead.self, from: headAfterSweep)
+        XCTAssertTrue(afterHead.fileSizes.isEmpty,
+                     "the sweep must refuse to stamp a trashed capture's head, same as persistHead itself")
+    }
+
     // MARK: - 3.5 Head + read-only
 
     func testValidatedHeadOnAbsentHeadRebuildsMatchingDirectory() async throws {
@@ -496,10 +577,29 @@ final class TranscriptRevisionStoreTests: XCTestCase {
 
         try await store().persistHead(captureID: captureID)
 
-        let persisted = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
-        XCTAssertEqual(persisted?.revisionFiles, [0, 1], "the deduped file WAS seen by the listing")
-        XCTAssertEqual(persisted?.unreadableFiles, [],
+        guard var persisted = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory) else {
+            return XCTFail("persistHead must have written a head")
+        }
+        XCTAssertEqual(persisted.revisionFiles, [0, 1], "the deduped file WAS seen by the listing")
+        XCTAssertEqual(persisted.unreadableFiles, [],
                        "a duplicate id is not an unreadable file — routing it there would trip I1")
+
+        // Re-pin (fix round 2, property the rewrite above dropped): the trust path
+        // must actually be ABLE to engage for a capture that has a deduped file, not
+        // merely happen to return the right answer via a rebuild that would produce
+        // the same content anyway. Proven with the same distinguishing-marker
+        // technique as the non-deduped trust test above: plant a value in
+        // `current.snippet` no fresh decode of "DUP"'s real body could produce,
+        // leaving `revisionFiles`/`unreadableFiles`/`fileSizes` exactly as `persistHead`
+        // wrote them (nothing on disk actually changed) — if the store still decoded
+        // instead of trusting, the marker would be overwritten by the real snippet.
+        persisted.current?.snippet = "MARKER FROM CACHE, NEVER DECODED"
+        try CaptureCoding.encoder().encode(persisted)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory))
+
+        let trusted = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(trusted?.current?.snippet, "MARKER FROM CACHE, NEVER DECODED",
+                       "the trust path must be able to engage even for a capture with a deduped file")
 
         // Corrupt the DEDUPED file's bytes (file 1, dropped from the chain but not from
         // revisionFiles) with content of a DIFFERENT length — listing() still reports

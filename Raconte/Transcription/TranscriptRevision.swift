@@ -345,6 +345,41 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
 struct RevisionFileSize: Codable, Sendable, Equatable {
     var file: Int
     var byteSize: Int64
+
+    init(file: Int, byteSize: Int64) {
+        self.file = file
+        self.byteSize = byteSize
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file, byteSize
+    }
+
+    /// Hand-written (T7 Task 3 fix round 2), matching this wire-format family's
+    /// additive-lenient / identity-strict convention (`TranscriptHead`,
+    /// `TranscriptHeadSummary`, `TranscriptRevision`) even though both fields here are
+    /// identity-strict TODAY and a synthesized decoder would behave identically right
+    /// now. The reason is the family's own repeated lesson (§11: Swift's synthesized
+    /// decoder ignores property defaults, which would have silently erased every
+    /// `live.jsonl` record rather than erroring): `[RevisionFileSize]` decodes inside
+    /// `TranscriptHead.init(from:)`'s `fileSizes` field, itself wrapped in `try?` for
+    /// leniency (fix round 1). A synthesized decoder here means the NEXT additive
+    /// field added to this type is strict by default with no decision point — a
+    /// single array element failing to decode blanks the WHOLE `fileSizes` array back
+    /// to `[]`, which is the exact "every head permanently untrusted" bug fix round 1
+    /// just fixed, arriving again silently. A hand-written `init(from:)` forces that
+    /// decision to be made explicitly, in this one place, when it matters.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        file = try container.decode(Int.self, forKey: .file)
+        byteSize = try container.decode(Int64.self, forKey: .byteSize)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(file, forKey: .file)
+        try container.encode(byteSize, forKey: .byteSize)
+    }
 }
 
 /// `transcript/head.json` (design §4.2): the fast-path pointer at the tip of the

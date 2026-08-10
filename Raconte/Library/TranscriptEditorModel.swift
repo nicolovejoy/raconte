@@ -351,9 +351,13 @@ final class TranscriptEditorModel {
         let session = sessionID
         debounce.cancel()
         await noteDraftClosedBeneathSessionIfNeeded()
-        guard sessionID == session else { return true }
+        // NOT an early return on a token mismatch (re-review Minor). Returning `true` here
+        // without writing let `done()` go on to `closeDraft` and mint whatever stale
+        // `draft.json` was on disk instead of the text that is actually current — the exact
+        // opposite of the rule stated above, which the guards after the write already honour.
+        // So the write still happens; only the STATE writes below are skipped.
         guard hasUnsavedChanges else {
-            if case .failed = state { state = .editing }
+            if sessionID == session, case .failed = state { state = .editing }
             return true
         }
 

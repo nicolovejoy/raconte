@@ -593,6 +593,102 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(store.closeDraftCalls, [], "never close over a draft that never saved")
     }
 
+    // MARK: - Navigating away IS Done (review finding 2)
+
+    /// Ruling Q1: "Navigating away, backgrounding past the store's stale rules, and the Done
+    /// button are the same path." The editor is a `navigationDestination` push, so system Back
+    /// and interactive swipe-back are always available — and took neither path.
+    ///
+    /// The keystrokes here are still INSIDE the debounce window (the timer is never fired),
+    /// which is the losing case: on Back, the model's only strong reference is the detail
+    /// screen's `@State`, and the armed window holds `[weak self]`, so popping both screens
+    /// inside 2 s deallocated the model and the pending `writeDraft` simply never happened —
+    /// last keystrokes gone, no error, no trace.
+    func testFinishIfNeededFlushesPendingKeystrokesAndClosesExactlyOnce() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "typed, then backed out"
+        model.textChanged()
+        XCTAssertTrue(debounce.isArmed, "precondition: still inside the debounce window")
+
+        let first = await model.finishIfNeeded()
+        let second = await model.finishIfNeeded()
+
+        XCTAssertTrue(first)
+        XCTAssertTrue(second)
+        XCTAssertEqual(store.writeDraftCalls, ["typed, then backed out"],
+                       "the window's pending keystrokes must be written, not dropped")
+        XCTAssertEqual(store.closeDraftCalls, [.sessionEnd],
+                       "closed exactly once — the Done path and the pop path must not double-close")
+    }
+
+    /// The data-loss half, through the real store: back out inside the debounce window and the
+    /// edit must be a minted revision, not a lost one. Without this, `EntryDetailView`'s
+    /// `rescan()` + `refresh()` on dismissal re-renders the PRE-edit transcript, and the
+    /// stale-draft sweep will not touch a seconds-old draft (`sessionEndSeconds = 90`) — so
+    /// the owner backs out and watches their edit vanish.
+    func testBackingOutInsideTheDebounceWindowMintsTheEdit() async throws {
+        try await store().append(revision("R0", text: "the machine herd these words"),
+                                 captureID: captureID)
+
+        let debounce = ManualDebounce()
+        let model = editor(liveModel(), debounce: debounce)
+        await model.open()
+        model.text = "the machine heard these words"
+        model.textChanged()
+
+        await model.finishIfNeeded()            // what popping the editor must do
+
+        XCTAssertEqual(try canonicalFileCount(), 2)
+        let current = try XCTUnwrap(currentRevision())
+        XCTAssertEqual(TranscriptChain.plainText(current), "the machine heard these words")
+        XCTAssertEqual(current.source, .userEdit)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path))
+    }
+
+    /// The idempotence guard is per SESSION, not per model. `EntryDetailView` holds ONE editor
+    /// model in `@State` for the life of the screen, so a guard that never reset would make
+    /// every visit after the first silently refuse to save.
+    func testReopeningAllowsFinishingAgain() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+        model.text = "first visit"
+        model.textChanged()
+        await model.finishIfNeeded()
+        XCTAssertEqual(store.closeDraftCalls.count, 1, "precondition")
+
+        await model.open()
+        model.text = "second visit"
+        model.textChanged()
+        await model.finishIfNeeded()
+
+        XCTAssertEqual(store.writeDraftCalls, ["first visit", "second visit"])
+        XCTAssertEqual(store.closeDraftCalls.count, 2, "a second visit must be closeable too")
+    }
+
+    /// A finish that FAILED must not latch: the owner is gone, but the next attempt (a later
+    /// visit, or the Done button after a failed Back) has to be able to try again.
+    func testAFailedFinishDoesNotLatchAsFinished() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+        model.text = "an edit"
+        model.textChanged()
+        store.closeDraftError = TranscriptRevisionStoreError.revisionUnreadable(file: 3)
+
+        let failed = await model.finishIfNeeded()
+        store.closeDraftError = nil
+        let retried = await model.finishIfNeeded()
+
+        XCTAssertFalse(failed)
+        XCTAssertTrue(retried)
+        XCTAssertEqual(store.closeDraftCalls.count, 2, "a failed finish must stay retryable")
+    }
+
     // MARK: - 4.5 backgrounding
 
     /// `scenePhase` leaving `.active` calls `flush()`. What matters is the consequence: a

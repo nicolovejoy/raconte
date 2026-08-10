@@ -63,6 +63,15 @@ struct TranscriptEditorView: View {
             .accessibilityHidden(true)
         }
         .task { await model.open() }
+        // Ruling Q1: navigating away IS Done. This screen is a `navigationDestination` push,
+        // so system Back and interactive swipe-back are always available and neither routes
+        // through the Done button. Without this, popping inside the 2 s debounce window
+        // dropped the last keystrokes entirely — the armed window holds `[weak self]` and the
+        // model's only strong reference is the detail screen's `@State`. `finishIfNeeded()`
+        // is idempotent, so the `dismiss()` in `finish()` landing here next is a no-op.
+        .onDisappear {
+            Task { await model.finishIfNeeded() }
+        }
         // Leaving `.active` is one of the three flush triggers (§12.1), alongside the
         // debounce firing and Done. It is a flush, never a close: only `done()` and the
         // store's own stale/hour rules may close a draft.
@@ -157,7 +166,7 @@ struct TranscriptEditorView: View {
     /// was exactly a pop-first-write-later, which made the failure invisible on device.
     private func finish() {
         Task {
-            if await model.done() {
+            if await model.finishIfNeeded() {
                 dismiss()
             } else {
                 saveFailed = true

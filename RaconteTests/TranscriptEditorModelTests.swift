@@ -761,6 +761,145 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(store.closeDraftCalls.count, 2, "a failed finish must stay retryable")
     }
 
+    /// Gate A Critical 2: a lost update. `open()` cleared the finished flag BEFORE its own
+    /// `await`, while `finishIfNeeded()` assigned it AFTER its `await done()` — so a finish
+    /// belonging to session ONE could latch the flag for session TWO, and session two's edit
+    /// then never reached the store at all while `finishIfNeeded()` returned true.
+    ///
+    /// The interleaving is the ordinary one: Back, then Edit again while the close is still
+    /// running. `closeDraft` decodes the whole chain before `persistHead`, so its window grows
+    /// with chain size, and a one-word #37 correction is exactly the edit short enough never
+    /// to reach the debounce and be saved on the way past.
+    func testASessionOpenedWhileAFinishIsInFlightIsStillSaved() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "session one"
+        model.textChanged()
+
+        store.gateCloseDraft = true
+        let sessionOne = Task { await model.finishIfNeeded() }
+        await waitUntilCloseIsGated(store)
+
+        await model.open()                  // the owner taps Edit again, mid-close
+
+        store.releaseClose()
+        _ = await sessionOne.value          // session one completes and would latch the flag
+
+        model.text = "session two"
+        model.textChanged()
+        let sessionTwoSaved = await model.finishIfNeeded()
+
+        XCTAssertTrue(sessionTwoSaved)
+        XCTAssertEqual(store.writeDraftCalls, ["session one", "session two"],
+                       "session two's words must reach the store — reporting success while "
+                       + "saving nothing is the whole defect")
+        XCTAssertEqual(store.closeDraftCalls.count, 2, "session two must be closed too")
+    }
+
+    /// The same mechanism from the other side: two finishes racing WITHIN one session must
+    /// close once, not twice. The message on the sequential test claims this ("the Done path
+    /// and the pop path must not double-close") but sequential calls cannot show it — the
+    /// first has already latched the flag before the second is made.
+    func testTwoConcurrentFinishesInOneSessionCloseOnlyOnce() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+        model.text = "typed once"
+        model.textChanged()
+
+        store.gateCloseDraft = true
+        let viaOnDisappear = Task { await model.finishIfNeeded() }
+        await waitUntilCloseIsGated(store)
+        let viaDetailScreen = Task { await model.finishIfNeeded() }
+        store.releaseClose()
+
+        let first = await viaOnDisappear.value
+        let second = await viaDetailScreen.value
+
+        XCTAssertTrue(first)
+        XCTAssertTrue(second)
+        XCTAssertEqual(store.closeDraftCalls.count, 1,
+                       "the two exit paths race on device; they must not mint twice")
+    }
+
+    /// `open()` must disarm the previous session's window. The ledger carried this as
+    /// "unreachable today"; Gate A disproved that.
+    func testOpeningANewSessionDisarmsThePreviousSessionsWindow() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+        model.text = "session one"
+        model.textChanged()
+        XCTAssertTrue(debounce.isArmed, "precondition")
+
+        await model.open()
+
+        XCTAssertFalse(debounce.isArmed, "a new session must not inherit the old one's timer")
+    }
+
+    /// And the cancel race itself: a real `Task.sleep` can complete at the same instant
+    /// `cancel()` arrives, so cancellation alone cannot be the guarantee. A window armed by a
+    /// dead session must decline to do anything even if it does fire.
+    func testAWindowArmedByADeadSessionDoesNothingIfItStillFires() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+        model.text = "session one"
+        model.textChanged()
+        let staleWindow = debounce.capturePending()
+
+        await model.open()
+        model.text = "session two"
+        model.textChanged()
+
+        await staleWindow?()                // session one's timer fires late
+
+        XCTAssertEqual(store.writeDraftCalls, [],
+                       "a dead session's timer must not drive the live one")
+    }
+
+    /// Gate A Minor 4, paired with the loss path: `flush()` cancels the window on entry and
+    /// the failure branch never re-armed it, so a failed save sat there with unsaved changes
+    /// and retried nothing until the owner happened to type another character.
+    func testAFailedFlushKeepsRetryingWithoutMoreTyping() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "an edit"
+        model.textChanged()
+        store.writeDraftError = TranscriptRevisionStoreError.trashedCapture
+        await debounce.fire()
+
+        guard case .failed = model.state else { return XCTFail("expected .failed, got \(model.state)") }
+        XCTAssertTrue(model.hasUnsavedChanges)
+        XCTAssertTrue(debounce.isArmed, "a failed save must keep trying on its own")
+
+        store.writeDraftError = nil
+        await debounce.fire()
+
+        XCTAssertEqual(model.state, .editing)
+        XCTAssertFalse(model.hasUnsavedChanges)
+        XCTAssertEqual(store.writeDraftCalls, ["an edit", "an edit"])
+    }
+
+    /// Polls until the gated `closeDraft` has actually suspended. Everything here is
+    /// `@MainActor`, so yielding is what lets the finish task reach the gate.
+    private func waitUntilCloseIsGated(_ store: FakeEditorStore,
+                                       file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<10_000 {
+            if store.isCloseGated { return }
+            await Task.yield()
+        }
+        XCTFail("closeDraft never reached the gate", file: file, line: line)
+    }
+
     // MARK: - 4.5 backgrounding
 
     /// `scenePhase` leaving `.active` calls `flush()`. What matters is the consequence: a
@@ -879,6 +1018,12 @@ final class ManualDebounce: EditorDebounce {
         pending = nil
         await action?()
     }
+
+    /// Takes the armed action WITHOUT firing it, so a test can fire it later — after a
+    /// `cancel()` it would never have survived. That models the real cancel race: `Task.sleep`
+    /// completing at the same instant `cancel()` arrives, which no amount of cancelling can
+    /// rule out. What must save us there is the closure's own session check.
+    func capturePending() -> (@MainActor () async -> Void)? { pending }
 }
 
 /// A store the test drives directly, for the disagreements disk cannot express: a
@@ -890,6 +1035,20 @@ final class FakeEditorStore: TranscriptEditorStore {
     var draftOnDisk: TranscriptDraft?
     var writeDraftError: (any Error)?
     var closeDraftError: (any Error)?
+
+    /// Suspends the NEXT `closeDraft` until `releaseClose()`, so a test can hold a finish
+    /// mid-flight and start a second editing session underneath it — the interleaving Gate A
+    /// probed. Real `closeDraft` suspends for a genuinely long time (it decodes the whole
+    /// chain before `persistHead`), so this is not a contrived window.
+    var gateCloseDraft = false
+    private var closeGate: CheckedContinuation<Void, Never>?
+    var isCloseGated: Bool { closeGate != nil }
+
+    func releaseClose() {
+        let gate = closeGate
+        closeGate = nil
+        gate?.resume()
+    }
 
     /// ATTEMPTS, not successes — both are recorded before the configured error is thrown.
     /// Recording only what succeeded makes "did the retry reach the store at all?"
@@ -931,6 +1090,12 @@ final class FakeEditorStore: TranscriptEditorStore {
     @discardableResult
     func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
         closeDraftCalls.append(reason)
+        if gateCloseDraft {
+            gateCloseDraft = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                closeGate = continuation
+            }
+        }
         if let closeDraftError { throw closeDraftError }
         let hadDraft = draftOnDisk != nil
         draftOnDisk = nil

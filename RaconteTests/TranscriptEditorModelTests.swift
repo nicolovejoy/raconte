@@ -202,9 +202,48 @@ final class TranscriptEditorModelTests: XCTestCase {
     }
 
     /// Q5: a degraded chain refuses AND offers the un-edited machine transcript read-only.
-    /// The `live.jsonl` text differs from the corrupt revision's text, so the assertion
-    /// cannot be satisfied by any accidental fallthrough to the chain.
-    func testOpenOnUnreadableRevisionRefusesAndOffersTheMachineTranscript() async throws {
+    ///
+    /// **This fixture replaces a vacuous one (Gate A finding I3 — the 7th of this project's
+    /// recurring shape).** The original corrupted the ONLY canonical file, which makes a
+    /// readable `current` structurally unrepresentable — so "the offer is the machine's words
+    /// rather than the chain's" could not possibly be wrong, and the test proved nothing.
+    /// Here the chain holds TWO revisions and only revision 0 is damaged, leaving revision 1 —
+    /// the owner's own `.userEdit` — readable and reachable as `current`. The wrong answer is
+    /// now representable, and it is exactly the one that shipped: the screen labelled the
+    /// owner's private edit "the un-edited machine transcript".
+    func testDegradedChainOffersTheMachineTranscriptNotTheOwnersOwnEdit() async throws {
+        let revisionStore = store()
+        try await revisionStore.append(revision("R0", text: "what the machine heard"),
+                                       captureID: captureID)
+        try await revisionStore.append(
+            TranscriptRevision(id: "R1", source: .userEdit,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_060),
+                               spans: [TranscriptSpan(text: "MY PRIVATE EDIT", anchor: .none)],
+                               parentID: "R0", basedOnMachineID: "R0"),
+            captureID: captureID)
+        try writeLiveLog(text: "what the machine heard")
+        // Only revision 0 is damaged. Revision 1 stays readable — and is `current`.
+        try Data("{ truncated".utf8).write(
+            to: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0))
+
+        let model = editor(liveModel())
+        await model.open()
+
+        XCTAssertEqual(model.state, .readOnly(.readOnlyUnreadableRevision(file: 0)))
+        XCTAssertEqual(model.text, "", "a degraded chain offers reading, never editing")
+        XCTAssertFalse(model.showsTextEditor)
+        XCTAssertEqual(model.machineTranscript, "what the machine heard",
+                       "the offer must come from live.jsonl, never from the chain")
+        XCTAssertNotEqual(model.machineTranscript, "MY PRIVATE EDIT",
+                          "labelling the owner's own edit as the machine's words is the bug")
+        XCTAssertTrue(TranscriptEditorModel.readOnlySentence(.readOnlyUnreadableRevision(file: 7))
+                        .contains("7"),
+                      "the sentence must name the actual file")
+    }
+
+    /// The whole-chain-unreadable case still behaves — kept as its own, deliberately
+    /// degenerate fixture so the one above can stay non-degenerate without losing coverage.
+    func testDegradedChainWithNoReadableRevisionStillOffersTheMachineTranscript() async throws {
         try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
         try Data("{ truncated".utf8).write(
             to: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0))
@@ -214,12 +253,21 @@ final class TranscriptEditorModelTests: XCTestCase {
         await model.open()
 
         XCTAssertEqual(model.state, .readOnly(.readOnlyUnreadableRevision(file: 0)))
-        XCTAssertEqual(model.text, "", "a degraded chain offers reading, never editing")
         XCTAssertEqual(model.machineTranscript, "what the machine heard")
-        XCTAssertFalse(model.showsTextEditor)
-        XCTAssertTrue(TranscriptEditorModel.readOnlySentence(.readOnlyUnreadableRevision(file: 7))
-                        .contains("7"),
-                      "the sentence must name the actual file")
+    }
+
+    /// No log at all means nothing to offer — `nil`, never an empty box under a heading
+    /// claiming there is a machine transcript to read.
+    func testDegradedChainWithNoLogOffersNothing() async throws {
+        try await store().append(revision("R0", text: "what the machine heard"), captureID: captureID)
+        try Data("{ truncated".utf8).write(
+            to: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0))
+
+        let model = editor(liveModel())
+        await model.open()
+
+        XCTAssertEqual(model.state, .readOnly(.readOnlyUnreadableRevision(file: 0)))
+        XCTAssertNil(model.machineTranscript)
     }
 
     /// The other degraded-chain shape (§4.5a). It takes the same Q5 branch, but the offer

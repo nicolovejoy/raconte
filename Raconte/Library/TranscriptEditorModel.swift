@@ -228,10 +228,16 @@ final class TranscriptEditorModel {
         let snapshot = await store.chainSnapshot(for: captureID)
 
         guard case .editable = snapshot.editability else {
-            storedText = ""
-            hasUnsavedChanges = false
+            // Re-review Important: unsaved words survive a REFUSED re-entry too. The C1 alert
+            // offers "Back to my edit" and promises the words are still here; landing in a
+            // read-only state used to be exactly what erased them, and restoring the entry
+            // first is impossible without leaving the detail screen, which drops the model.
+            // So the refusal keeps the text — readable and copyable, never editable. It is the
+            // SAVE that must refuse, not the display of the owner's own words.
+            storedText = unsavedTextToPreserve ?? ""
+            hasUnsavedChanges = unsavedTextToPreserve != nil
             resumedFromDraft = false
-            lastKnownText = ""
+            lastKnownText = storedText
             sessionDraftOpenedAt = nil
             let offer = await machineTranscriptIfDegraded(snapshot.editability)
             guard sessionID == session else { return }
@@ -491,8 +497,27 @@ final class TranscriptEditorModel {
 
     // MARK: - Copy
 
+    /// A sentence, not a raw `String(describing:)` dump — this text is rendered to the owner,
+    /// in the editor's banner and in the detail screen's alert. (Ledgered as deferred; done
+    /// here because the Important above rewrote that alert's copy anyway and the mapping is
+    /// four lines.) An unrecognised error still says something true rather than nothing.
     private static func saveFailureMessage(_ error: any Error) -> String {
-        String(describing: error)
+        guard let storeError = error as? TranscriptRevisionStoreError else {
+            return "The save didn’t complete."
+        }
+        switch storeError {
+        case .trashedCapture:
+            return "This entry is in the trash, so edits can’t be saved to it. Restore it first."
+        case .captureMissing:
+            return "This entry’s files are no longer on this device."
+        case .revisionUnreadable(let file):
+            return "Revision file \(file) could not be read, so saving now could lose what it holds."
+        case .transcriptDirUnreadable:
+            return "This entry’s revision folder could not be read, so saving now could lose "
+                + "what it holds."
+        case .allocationCollision:
+            return "Another save is still finishing. Try again."
+        }
     }
 
     /// The read-only sentence for each refusal. One place, so the editor and any later

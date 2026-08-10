@@ -361,6 +361,50 @@ final class TranscriptRevisionStoreTests: XCTestCase {
                      "the sweep must refuse to stamp a trashed capture's head, same as persistHead itself")
     }
 
+    /// **Fix round 3 — the sweep must never stamp a capture that has no chain at
+    /// all.** `transcript/` holding only `live.jsonl` (promotion skipped it —
+    /// `.skippedNoAudio`/`.skippedNoLog`/`.failed`) is `listing() == .present([])`:
+    /// SOME directory exists, but zero canonical files. Before the `!files.isEmpty`
+    /// guard, `stampHeadIfNeeded` gated only on `.present`, so it wrote a `head.json`
+    /// describing an empty chain here — a wasted write buying nothing, since
+    /// `validatedHead` on `.present([])` is already O(1) via `rebuildHead` with no
+    /// bodies to decode either way.
+    func testStampUnstampedHeadsWritesNothingWhenTranscriptHoldsOnlyLiveLog() async throws {
+        try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
+        try Data("{\"seq\":0}\n".utf8).write(to: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory))
+
+        await store().stampUnstampedHeads()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory).path),
+            "no canonical files means no chain to stamp — the sweep must write nothing")
+    }
+
+    /// **The actual stake (fix round 3).** Writing `head.json` into an otherwise-empty
+    /// `transcript/` would flip `DirectorySnapshot.holdsIrreplaceableArtifacts` from
+    /// false to true — `transcriptPresent` reads "any file at all" under
+    /// `transcript/`, which a stray `head.json` alone would satisfy — making a
+    /// mis-tapped capture (nothing durable, `transcript/` created but never written
+    /// into) permanently undeletable. Exactly the zero-byte-log hazard (rule 10)
+    /// `MarkerLog`/`CaptureCoordinator` already guard against elsewhere. Checking the
+    /// file's absence alone (the sibling test above) would not state this; asserting
+    /// `holdsIrreplaceableArtifacts` directly does.
+    func testStampUnstampedHeadsOnAnEmptyTranscriptDirectoryLeavesCaptureStillDeletable() async throws {
+        try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
+
+        let before = DirectorySnapshot.gather(capturesRoot: capturesRoot).captures.first
+        XCTAssertEqual(before?.holdsIrreplaceableArtifacts, false, "sanity: an empty transcript/ starts deletable")
+
+        await store().stampUnstampedHeads()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory).path),
+            "an empty transcript/ has no chain to stamp — the sweep must write nothing")
+        let after = DirectorySnapshot.gather(capturesRoot: capturesRoot).captures.first
+        XCTAssertEqual(after?.holdsIrreplaceableArtifacts, false,
+                       "a mis-tapped capture must stay deletable — the sweep must never flip this")
+    }
+
     // MARK: - 3.5 Head + read-only
 
     func testValidatedHeadOnAbsentHeadRebuildsMatchingDirectory() async throws {

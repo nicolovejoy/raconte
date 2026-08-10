@@ -140,15 +140,20 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
     /// §15b.15: even in the identical "transcript/ already exists" shape as 3.3a — where
     /// the flatten+compare are skipped — the decode-and-refuse in
     /// `readableOrderedRevisions` still runs UNCONDITIONALLY and still throws on a
-    /// degraded chain. This is the scenario `testWriteDraftRefusesWhenChainHasAn
-    /// UndecodableRevision` above already exercises (transcript/ exists via `append`,
-    /// then a sibling is corrupted, then `writeDraft` is called) — restated here under
-    /// the #40.2 section so the "still throws" half of the ruling has its own name and
-    /// is not merely inherited by coincidence. **Mutation check (performed manually,
-    /// not re-run by CI):** moving `readableOrderedRevisions` BELOW the
-    /// `transcriptDirectoryExists` check (i.e. deciding "skip the decode when
-    /// transcript/ exists" instead of "skip the flatten+compare") makes this fail —
-    /// exactly the bug the issue's wording invites (brief work item 2).
+    /// degraded chain. This is the same SCENARIO shape as
+    /// `testWriteDraftRefusesWhenChainHasAnUndecodableRevision` further down this file
+    /// (transcript/ exists via `append`, then a sibling is corrupted, then `writeDraft`
+    /// is called) — restated here under the #40.2 section so the "still throws" half of
+    /// the ruling has its own name and is not merely inherited by coincidence.
+    /// **Deliberately near-duplicate, not dead code to consolidate** (fix round 1
+    /// note, Task 3 report's deferred-minors list): that other test predates #40.2 and
+    /// pins Critical 2/F5 in general; THIS one exists specifically so #40.2's own
+    /// section has a self-contained pin that doesn't depend on a reader also finding
+    /// the older test. **Mutation check (performed manually, not re-run by CI):**
+    /// moving `readableOrderedRevisions` BELOW the `transcriptDirectoryExists` check
+    /// (i.e. deciding "skip the decode when transcript/ exists" instead of "skip the
+    /// flatten+compare") makes this fail — exactly the bug the issue's wording invites
+    /// (brief work item 2).
     func testWriteDraftStillRefusesOnADegradedChainWhenTranscriptDirectoryAlreadyExists() async throws {
         let s = store()
         try await s.append(revision("R0", text: "hello"), captureID: captureID)
@@ -377,6 +382,10 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         return url
     }
 
+    /// Near-duplicate in shape to `testWriteDraftStillRefusesOnADegradedChainWhen
+    /// TranscriptDirectoryAlreadyExists` above (T7 Task 3 §40.2) — deliberately, see
+    /// that test's doc comment for why both are kept rather than one being folded into
+    /// the other.
     func testWriteDraftRefusesWhenChainHasAnUndecodableRevision() async throws {
         try await store().append(revision("R0", text: "hello"), captureID: captureID)
         // Corrupt a LATER file number so the chain has an undecodable revision above

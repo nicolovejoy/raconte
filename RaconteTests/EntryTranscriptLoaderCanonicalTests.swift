@@ -151,6 +151,15 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
     /// `SpeechAnalyzerEngine.runs(of:)` actually produces on device, e.g. `"recorded"` /
     /// `" on march third nineteen ninety eight"`. Before the trim fix, promotion's
     /// re-join would double that boundary space and `before`/`after` would disagree.
+    ///
+    /// T7 Task 3 fix round 1, Minor 4: MUST use `.compute`, not the default `.skip`.
+    /// Production `SpokenDateDetection` reads via `LibraryScreenModel.transcript(for:)`
+    /// (← `CaptureView.detectSpokenDate`), which always asks for `.compute`. Under the
+    /// default `.skip` this test would compare live-consolidated text against a
+    /// `TranscriptHeadSummary.snippet` truncated at `EntrySnippet.characterLimit` (160)
+    /// — it only ever passed because this fixture's text is 47 chars, single-line, well
+    /// under that limit. `.skip` would silently stop catching a doubled boundary space
+    /// the moment someone lengthened the fixture past 160 characters.
     func testSpokenDateDetectionInputTextIsIdenticalBeforeAndAfterPromotion() async throws {
         try writeFinalAudio()
         try writeLiveTranscriptRecords([
@@ -164,10 +173,12 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
                              generator: "SpeechTranscriber", locale: "en_US"),
         ])
 
-        let before = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil)
+        let before = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil,
+                                                 attribution: .compute(sampleRate: 48_000))
         let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
         guard case .promoted = outcome else { return XCTFail("fixture setup failed: \(outcome)") }
-        let after = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil)
+        let after = EntryTranscriptLoader.load(captureDirectory: captureDirectory, expectedRecords: nil,
+                                                attribution: .compute(sampleRate: 48_000))
 
         XCTAssertEqual(before.text, after.text,
                        "SpokenDateDetection reads transcript.text — promotion must not change it")

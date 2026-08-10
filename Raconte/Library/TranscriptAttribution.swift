@@ -84,6 +84,166 @@ enum TranscriptAttribution {
         return paragraphs.filter { !$0.text.isEmpty }
     }
 
+    /// Attribute over a revision's SPANS instead of the machine's committed results (T7
+    /// Task 5) — the entry point that lets voice attribution survive an edit, since a
+    /// revision's spans carry frames too (with an honesty grade, `SpanAnchor`) rather
+    /// than only ever being the untouched machine output `attribute(committed:snapped:)`
+    /// above reads.
+    ///
+    /// A span can only be placed against a marker frame when its anchor claims usable
+    /// bounds AND those bounds are non-zero-length — `.none`/`.unknown` never carry
+    /// frames at all, and a zero-length `.inherited` span is `TranscriptSplice`'s own
+    /// marker for "text typed here, inheriting a POINT, not a measured interval" (its own
+    /// doc comment: "newly typed text becomes an `.inherited` zero-length point"). Such a
+    /// span inherits the voice of the nearest PRECEDING placeable span and can never
+    /// itself start a paragraph: every cut this function computes lands immediately
+    /// BEFORE the next placeable span (`fullSpanIndex(forPlaceablePosition:...)` below),
+    /// which by construction sweeps every non-placeable span between it and the
+    /// PREVIOUS placeable span into the group that just ended, never the one that's
+    /// about to start. A run of non-placeable spans with nothing placeable before them
+    /// at all (leading the array) has nowhere to inherit FROM either — the earliest
+    /// possible cut is still no earlier than the first placeable span, so they land in
+    /// the very first group by the same structural reason.
+    ///
+    /// Text assembly is `TranscriptText.join` per group — the SAME rule
+    /// `TranscriptChain.plainText` uses over a revision's spans — so a no-marker call
+    /// (one group covering every span) reproduces `plainText(revision)` byte-for-byte:
+    /// the whole-record join rule (design §4.2 rule 8) generalises to a whole-span join
+    /// rule without any special-casing needed here.
+    static func attribute(spans: [TranscriptSpan],
+                          snapped: [MarkerSnapping.SnappedMarker]) -> [Paragraph] {
+        guard !spans.isEmpty else { return [] }
+
+        let placeableIndices = spans.indices.filter { isPlaceableSpan(spans[$0]) }
+
+        let relevantMarkers = snapped
+            .filter { isRenderable($0.marker.kind) }
+            .sorted { ($0.snappedFrame, $0.marker.seq) < ($1.snappedFrame, $1.marker.seq) }
+
+        let breakpoints = spanBreakpoints(for: relevantMarkers, spans: spans, placeableIndices: placeableIndices)
+
+        var paragraphs: [Paragraph] = []
+        var groupStart = 0
+        var groupVoice: String?
+        var pendingApprox = false
+
+        for index in breakpoints.keys.sorted() {
+            guard let breakpoint = breakpoints[index], breakpoint.isBreak else { continue }
+            paragraphs.append(spanParagraph(spans: spans, range: groupStart..<index,
+                                            voice: groupVoice,
+                                            approximate: pendingApprox || breakpoint.approximate))
+            groupStart = index
+            groupVoice = breakpoint.voice
+            pendingApprox = breakpoint.approximate
+        }
+        paragraphs.append(spanParagraph(spans: spans, range: groupStart..<spans.count,
+                                        voice: groupVoice, approximate: pendingApprox))
+
+        return paragraphs.filter { !$0.text.isEmpty }
+    }
+
+    /// Whether a span's frame bounds are trustworthy enough to test a marker frame
+    /// against: usable per `SpanAnchor.hasUsableBounds` AND non-zero-length. See the
+    /// design note on `attribute(spans:snapped:)` above for why zero-length is excluded
+    /// even though `.inherited` alone would say "usable".
+    private static func isPlaceableSpan(_ span: TranscriptSpan) -> Bool {
+        guard span.anchor.hasUsableBounds,
+              let start = span.frameStart, let end = span.frameEnd else { return false }
+        return end > start
+    }
+
+    /// Cut-position search restricted to the placeable spans, mirroring
+    /// `cutIndex(forFrame:pieces:)`'s nearer-edge rule exactly (a frame landing strictly
+    /// inside a placeable span cuts at its nearer edge — text is never torn mid-word),
+    /// but over the COMPACTED placeable-only index space (`0...placeableIndices.count`):
+    /// a marker frame can only ever be tested against a span with real, non-zero-length
+    /// bounds.
+    private static func placeableCutPosition(
+        forFrame frame: Int64, spans: [TranscriptSpan], placeableIndices: [Int]
+    ) -> (position: Int, structuralApprox: Bool) {
+        if let insideAt = placeableIndices.firstIndex(where: { idx in
+            let span = spans[idx]
+            return span.frameStart! < frame && frame < span.frameEnd!
+        }) {
+            let span = spans[placeableIndices[insideAt]]
+            if frame - span.frameStart! < span.frameEnd! - frame {
+                return (insideAt, true)       // nearer the start -> cut before the span
+            } else {
+                return (insideAt + 1, true)   // nearer the end -> cut after the span
+            }
+        }
+        let position = placeableIndices.firstIndex { spans[$0].frameStart! >= frame } ?? placeableIndices.count
+        return (position, false)
+    }
+
+    /// Converts a placeable-space cut position back into a real index into `spans`. A
+    /// position landing strictly between two placeable spans resolves to the FULL index
+    /// of the NEXT placeable span — which pulls every non-placeable span between the
+    /// previous placeable span and this one into the group that ENDS here, never the
+    /// group that starts here (the "inherit the nearest PRECEDING placeable span" rule,
+    /// enforced structurally rather than by a special case). Position ==
+    /// `placeableIndices.count` (cut after the last placeable span) resolves to
+    /// `spans.count`, so trailing non-placeable spans stay in the final group too.
+    private static func fullSpanIndex(forPlaceablePosition position: Int,
+                                      spans: [TranscriptSpan], placeableIndices: [Int]) -> Int {
+        position < placeableIndices.count ? placeableIndices[position] : spans.count
+    }
+
+    /// Same walk-and-collapse rule as `breakpoints(for:pieces:)` below (see that
+    /// function's doc comment for the marker-ordering / re-tap / collapsing rules, all
+    /// unchanged here) — retargeted at the span/placeable-index cut computation instead
+    /// of the piece stream.
+    private static func spanBreakpoints(for relevantMarkers: [MarkerSnapping.SnappedMarker],
+                                        spans: [TranscriptSpan],
+                                        placeableIndices: [Int]) -> [Int: Breakpoint] {
+        var activeVoice: String?
+        var result: [Int: Breakpoint] = [:]
+
+        for marker in relevantMarkers {
+            let (position, structuralApprox) = placeableCutPosition(forFrame: marker.snappedFrame,
+                                                                     spans: spans,
+                                                                     placeableIndices: placeableIndices)
+            let index = fullSpanIndex(forPlaceablePosition: position, spans: spans, placeableIndices: placeableIndices)
+            let approx = marker.approximate || structuralApprox
+
+            var isBreak = false
+            switch marker.marker.kind {
+            case .paragraph:
+                isBreak = true
+            case .voice:
+                if marker.marker.voice != activeVoice {
+                    isBreak = true
+                }
+                activeVoice = marker.marker.voice
+            case .unknown:
+                continue
+            }
+
+            var breakpoint = result[index] ?? Breakpoint(voice: activeVoice, approximate: false, isBreak: false)
+            breakpoint.voice = activeVoice
+            breakpoint.approximate = breakpoint.approximate || approx
+            breakpoint.isBreak = breakpoint.isBreak || isBreak
+            result[index] = breakpoint
+        }
+        return result
+    }
+
+    /// A paragraph's text over a slice of `spans`, via `TranscriptText.join` — the ONE
+    /// join rule (design §4.2 rule 8), the SAME rule `TranscriptChain.plainText` uses.
+    /// This is what makes a no-marker call reproduce `plainText(revision)` byte-for-byte:
+    /// one group covering every span, joined the identical way. Unlike
+    /// `paragraph(pieces:...)` above, there is no "whole record verbatim vs joined runs"
+    /// distinction to make here — a `TranscriptSpan` is already the atomic text unit a
+    /// revision's `plainText` itself joins, so one rule suffices.
+    private static func spanParagraph(spans: [TranscriptSpan], range: Range<Int>,
+                                      voice: String?, approximate: Bool) -> Paragraph {
+        guard !range.isEmpty else {
+            return Paragraph(voice: voice, text: "", hasApproximateBoundary: approximate)
+        }
+        let text = TranscriptText.join(spans[range].map(\.text))
+        return Paragraph(voice: voice, text: text, hasApproximateBoundary: approximate)
+    }
+
     static func displayName(forVoice voice: String) -> String {
         voice.uppercased()
     }

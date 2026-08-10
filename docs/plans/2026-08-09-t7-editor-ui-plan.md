@@ -4,11 +4,14 @@
 > to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > Every task: red-first evidence or a mutation check is REQUIRED in the completion report.
 
-**Drafted against unmerged PR #45** (branch `t6/revision-chain`, HEAD `d4fe63f9`, read from
-the worktree `/Users/nico/src/raconte-t6`). Every `file:line` below cites **that worktree**,
-not `main`. **Re-verify all cites after PR #45 merges** — and before dispatching Task 1,
-run the same check the T6 build ran: if a cite disagrees with the code, the code wins and
-the disagreement gets written back here.
+**Cites re-verified against merged `main` (`bf0042d5`, PR #45) on 2026-08-09.** Every
+`file:line` below is repo-relative and was opened at the cited line; the T6 worktree
+(`raconte-t6`) is gone and no path here refers to it. The standing rule still applies:
+before dispatching Task 1, re-check the cites you are about to touch — if a cite disagrees
+with the code, the code wins and the disagreement gets written back here.
+
+**All 12 owner questions were ruled 2026-08-09** (§3). The rulings are folded into the task
+bodies below; §3 is kept as the record, not as a thing an implementer must cross-reference.
 
 **Goal:** the editor. Read the current transcript, change it, and have the change land as a
 new human revision through the T6 machinery that already exists — plus the four things the
@@ -30,7 +33,8 @@ project ledger attached to T7: marker correction, the §7 audit log, typed-word 
 
 **Tech stack:** Swift 6 strict concurrency, XCTest, XcodeGen (`xcodegen generate` after
 adding files — sources are directory globs, no `project.yml` edit). Suite baseline **930
-unit tests** on the T6 branch; re-baseline against `main` after the merge.
+unit tests** as of PR #45's merge; re-run once on `main` before Task 1 and take that number
+as the real baseline.
 
 ---
 
@@ -39,13 +43,17 @@ unit tests** on the T6 branch; re-baseline against `main` after the merge.
 The whole write path is built and tested. T7 is a caller, plus one new writer
 (`entry-log.jsonl`) that lives outside the chain.
 
-Store (`/Users/nico/src/raconte-t6/Raconte/Transcription/TranscriptRevisionStore.swift`):
+Store (`Raconte/Transcription/TranscriptRevisionStore.swift`):
 
 - `listing(captureDirectory:)` :76 — three answers, never collapses to `[]`.
 - `loadChain(captureDirectory:)` :107 → `ChainLoad(revisions:unreadableFiles:listingUnreadable:)`.
 - `validatedHead(captureDirectory:)` :234 — the O(1) scan cache. **Zero production readers today.**
 - `persistHead(captureID:)` :270 — the only head writer; silent no-op on a missing capture (§15.4).
 - `append(_:captureID:)` :312 — create-once; never throws after the revision file is durable (§15.6).
+- `readableOrderedRevisions(captureDirectory:)` :440 — the private helper **both** draft
+  paths open with. It is where §15b.15's refusal lives (throws on `listingUnreadable` or the
+  first `unreadableFiles` entry) *and* where the chain decode happens. Read this before
+  planning Task 3's #40.2 short-circuit — the two are the same call.
 - `writeDraft(captureID:text:now:)` :460 — atomic `draft.json`; snapshots `parentID`/
   `basedOnMachineID`/`openedAt` atomically (§15b.14); refuses on a degraded chain (§15b.15).
 - `closeDraft(captureID:reason:now:)` :518 — no-op when `text == current`'s text (F7);
@@ -101,22 +109,24 @@ Read these before planning any task; three of them change scope.
 2. **The editor edits the flattened text of `current`** (`TranscriptChain.plainText`) and
    hands it back as one string to `writeDraft`. Everything else — anchors, span structure,
    `sourceRevisionID` — is `TranscriptSplice`'s job and must not be second-guessed in the UI.
-   (Whether the *presentation* is one text view or per-paragraph views is owner Q2; the
-   store contract is one string either way.)
+   Presentation is **one flattened text view** (ruled, Q2): paragraph/voice structure
+   disappears while editing and reappears on save. Per-paragraph editing is the likely v2.
 3. **The 2 s debounce is the editor's**, per §12.1: keystrokes → 2 s quiet → `writeDraft`.
    The 90 s / 60 min rules are the store's and already built. Never call `writeDraft` per
    keystroke — see #40.2.
 4. **`entry-log.jsonl` is local-only, unsynced, and dies with the entry** (§7, D4). It never
    fails the write it audits (§7.2). No `seq`. No `deviceID`.
-5. **Raw taps are never modified** (markers design). Whatever marker correction ships, it is
-   additive to `markers.jsonl` or a sibling file — never an edit of an existing record.
-   The *shape* is owner Q3.
+5. **Raw taps are never modified** (markers design). Marker correction ships as **additive
+   records appended to `markers.jsonl`** (ruled, Q3) — never an edit of an existing record,
+   never a sibling overlay file.
 6. **The read path never writes** (design rule 9). The editor's open path may write (it is a
    user action, not a read), but nothing on the scan/render path may — including anything
    Task 3 adds for #40.
 7. **Refuse, don't degrade, on a damaged chain.** §15b.15 already makes the write half
    refuse; T7 owns the read half — a chain with any unreadable revision opens **read-only
-   with a stated reason**, never as an editable text box over partial text.
+   with a stated reason**, never as an editable text box over partial text. The read-only
+   screen **offers the `live.jsonl` transcript, clearly labeled as the un-edited machine
+   transcript** (ruled, Q5).
 8. **Never write "fixes #N" as prose in a commit message** (GitHub closes it on merge).
 
 ---
@@ -263,15 +273,30 @@ owner types*, and the editor is what makes it happen.
    body; `loadChain` stays the detail screen's path. Keep the `live.jsonl` fallback exactly
    as-is for entries with no chain. `.skip`-mode rows must stop decoding revision bodies
    entirely.
-2. **#40.2 — short-circuit `writeDraft`'s chain decode.** The full `loadChain` there exists
-   only to answer the A2b question "would this write create `transcript/` for no content?"
-   — which is moot the moment `transcript/` already exists (the overwhelmingly common case,
-   and always true while editing a promoted entry). Check directory existence first; decode
-   only when it is absent. The §15b.15 degraded-chain refusal must **still fire on every
-   write** — that guard is not the thing being skipped, and a test must pin it.
-3. **#39 — one honest number.** `chainByteSize` on `EntryChainSnapshot` (Task 2) plus a
-   `revisionsByteSize` stat on `DirectorySnapshot` beside `liveTranscriptByteSize`. Surface
-   is owner Q7; the number lands here regardless, with a test.
+2. **#40.2 — bound `writeDraft`'s per-write chain cost. Read this before believing the
+   issue.** #40.2 (and this plan's first draft) said the `loadChain` in `writeDraft` exists
+   "only to answer the A2b question". **That is wrong.** Both draft paths go through
+   `readableOrderedRevisions` (`TranscriptRevisionStore.swift:440`), and that one call does
+   two jobs: it decodes the chain *and* it is where §15b.15's degraded-chain refusal throws.
+   A file is "unreadable" precisely because its decode failed, so **you cannot keep the
+   refusal and skip the decode** — the naive "check `transcript/` exists first, decode only
+   when absent" would silently delete the refusal on every promoted entry, i.e. every entry
+   the editor ever touches.
+
+   What is actually skippable, and all this task may do without a design ruling: the work
+   *after* the decode — `TranscriptChain.current` + `plainText` flatten + the `currentText`
+   comparison (:466-474) — when `transcript/` already exists, since the A2b guard is moot
+   then. That is a real but small saving. If the whole-chain decode per debounced write is
+   still judged too expensive once #39's numbers are in, the honest fix is a separate
+   readability check that does not decode bodies, and that is a **design change, not this
+   task**. File it rather than improvising it. The §15b.15 refusal must fire on every write
+   and a test must pin it either way.
+3. **#39 — one honest number, two surfaces (ruled, Q7).** `chainByteSize` on
+   `EntryChainSnapshot` (Task 2) plus a `revisionsByteSize` stat on `DirectorySnapshot`
+   beside `liveTranscriptByteSize` (`DirectorySnapshot.swift:37`). It is shown in the
+   **revision history panel** (Task 8) and on a **diagnostics screen** — never on entry
+   detail, which stays clean. The growth alarm is on **revisions per entry, threshold ~50**,
+   not on bytes.
 
 **Steps**
 - [ ] **3.1** Red perf-contract test (assert on behaviour, not timing): instrument via a
@@ -286,9 +311,13 @@ owner types*, and the editor is what makes it happen.
   distinctive to decode, asserted absent from the row's output — or a counting seam. Do not
   assert on wall-clock time.)
 - [ ] **3.3** Red test for #40.2: `writeDraft` on a capture with an existing `transcript/`
-  performs no chain decode (seam-counted), and still throws on a degraded chain.
+  skips the `plainText` flatten / A2b comparison (seam-counted), **and still throws on a
+  degraded chain**. **Mutation check:** move the short-circuit above
+  `readableOrderedRevisions` → the degraded-chain test must fail. That mutation is exactly
+  the bug the issue's wording invites.
 - [ ] **3.4** `revisionsByteSize` test + `Mirror` tripwire update on `DirectorySnapshot` if
-  one guards it.
+  one guards it. Plus a test for the revisions-per-entry alarm at ~50 (a pure predicate here;
+  its surface is Task 8's).
 - [ ] **3.5** Full suite + commit `perf: route row summaries through the head cache; drop per-write chain decode (T7, #39/#40)`.
 
 ---
@@ -319,11 +348,19 @@ final class TranscriptEditorModel {
     func textChanged()                   // restarts the 2 s debounce; never writes directly
     func flush() async                   // debounce fired, or app backgrounded → writeDraft
     func done() async -> Bool            // flush, then closeDraft(.sessionEnd); false on failure
-    func cancel() async                  // §2.5 has NO discard: cancel == done. See owner Q1.
+    // No cancel(), no discard, no revert button (ruled, Q1): §2.5 has no discard, so a
+    // "Cancel" that meant "Done" would be a lie. Navigating away IS Done. The undo story
+    // is revision history + revert (Task 8) — say so on screen if anything is said at all.
 }
 ```
 
 **Rules**
+- **One flattened text view** (ruled, Q2) over `TranscriptChain.plainText(current)`. No
+  per-paragraph views, no inline BN/LN or ¶ decorations, no markers visible in the editor at
+  all (ruled, Q11 — marker correction is Task 6's separate mode). Structure disappears while
+  editing and reappears on save. This is v1's biggest visible compromise; do not soften it.
+- **Ending an edit is Done-only** (ruled, Q1). Navigating away, backgrounding past the
+  store's stale rules, and the Done button are the same path. No discard.
 - **Resume beats reload**: an open `draft.json` whose text differs from `current` is what the
   editor opens with (that is what the store's `writeDraft` snapshot fields are for). Show it
   as a plain state, not an alert.
@@ -335,10 +372,16 @@ final class TranscriptEditorModel {
   alerts). No `_ = try?` on an editor save, ever, and never dismiss-then-write.
 - **Read-only states render as sentences, not disabled text boxes**: which revision file is
   unreadable, or that the entry is trashed, or that there is nothing transcribed to edit.
+  - **Trashed = refuse outright** (ruled, Q4). The sentence says "restore it first"; there
+    is no edit-with-a-warning path.
+  - **Degraded chain = refuse, then offer the `live.jsonl` transcript read-only** (ruled,
+    Q5), labeled as the un-edited machine transcript — not as "the transcript". That text
+    comes from the existing `EntryTranscriptLoader` fallback, not a new read.
 - **Keyboard-first (iPad/Mac)** — owner preference, `2026-08-08-capture-landing-decisions.md`
-  §1. v1: ⌘S = flush, ⌘Return / Esc = done, `.defaultFocus` on the text view, and the
-  editor is a full-screen surface on macOS/iPad regular width rather than a sheet. Specific
-  bindings are owner Q9.
+  §1. Confirmed as assumed (ruled, Q9): ⌘S = flush, ⌘Return / Esc = done, `.defaultFocus` on
+  the text view, and the editor is a full-screen surface on macOS/iPad regular width rather
+  than a sheet. **No find/replace, no word count, no editor-owned undo stack in v1** — the
+  system text view's own undo is whatever it is; the durable undo is Task 8.
 - **Detail screen stays the reader.** The editor is a separate surface; the detail screen
   gains an Edit affordance and nothing else. Do not make the transcript section editable
   in place.
@@ -346,7 +389,9 @@ final class TranscriptEditorModel {
 **Steps**
 - [ ] **4.1** Red tests over `TranscriptEditorModel` with a fake/injected store: open on a
   healthy chain → `.editing` with `currentText`; open with a draft → draft text; open on
-  each read-only case → `.readOnly` with the matching reason and `text` unmodifiable.
+  each read-only case → `.readOnly` with the matching reason and `text` unmodifiable. For
+  `readOnlyUnreadableRevision`, also assert the model surfaces the `live.jsonl` text
+  labeled as the machine transcript (Q5); for `readOnlyTrashed`, assert no text is offered.
 - [ ] **4.2** Red test: N `textChanged()` calls inside the debounce window produce exactly
   **one** `writeDraft`. **Mutation check:** remove the debounce → the test must fail.
   (Inject the clock/scheduler; no `Task.sleep` in the test.)
@@ -383,8 +428,9 @@ Without this, Task 4 ships a regression: `EntryTranscript.swift:120` drops parag
 moment `current.source != .machineLive`.
 
 **Files**
-- Modify: `Raconte/Transcription/TranscriptAttribution.swift` (add a span-based entry point)
-- Modify: `Raconte/Library/EntryTranscript.swift:79-125`
+- Modify: `Raconte/Library/TranscriptAttribution.swift` (add a span-based entry point — note
+  it lives under `Library/`, not `Transcription/`)
+- Modify: `Raconte/Library/EntryTranscript.swift:79-150` (`load`; the gate is :120)
 - Test: `RaconteTests/TranscriptAttributionTests.swift` (extend),
   `RaconteTests/TranscriptAttributionLoadTests.swift` (extend)
 
@@ -423,32 +469,38 @@ whole-span join rule — a no-marker entry must still render byte-identically to
 
 ### Task 6 — marker correction + #37 typed-word correction
 
-**Blocked on owner Q3** (correction shape) and **Q11** (whether markers appear inline in the
-editor). Do not dispatch before those are answered.
+**Unblocked** — Q3 and Q11 are ruled: corrections are additive records in `markers.jsonl`,
+and markers are **not** visible inside the editor, so marker correction is its own mode
+(a separate surface off the detail screen or the editor's toolbar, not inline structure you
+drag). Q8 is ruled too: **corrections are not collected anywhere in T7**.
 
 **#37 is mostly already solved by Task 4**: a Swahili word the transcriber mangled is
 retyped in the editor, spliced like any other change, and the audio stays ground truth.
-What Task 6 owes it is (a) an explicit acceptance test that a retyped out-of-vocabulary word
+What Task 6 owes it is one explicit acceptance test: a retyped out-of-vocabulary word
 produces a `.inherited`-anchored span over the replaced word's frames rather than losing the
-anchor, and (b) a decision on whether corrections are *collected* anywhere for T8's
-contextual-string biasing (#38) — owner Q8. Do not build the collection until it is answered;
-building it wrong is worse than not having it.
+anchor. **Corrections are NOT collected** into a per-journal vocabulary list (ruled, Q8) —
+that schema gets designed with #38 once the contextual-biasing SDK surface is verified.
+Building it now and guessing wrong is worse than not having it.
 
-**Marker correction** — the built-in constraint is that raw taps are immutable. The two
-shapes to put to the owner (Q3):
-- **Additive records in `markers.jsonl`** — a new `StructureMarker.kind` (e.g. `retract`,
-  referencing a seq; `voiceCorrection` with a frame). Preserves append-only and the raw-tap
-  rule; `MarkerLogReader` already preserves unknown kinds on disk and ignores them for
-  rendering, so an older build degrades to "shows the uncorrected version" rather than
-  breaking. But it needs a writer on a path that is currently capture-only.
-- **A sibling overlay file** (`marker-edits.jsonl`) — leaves the capture-time log
-  untouched by construction, at the cost of a fourth reader and a fourth three-answer enum.
+**Marker correction** — raw taps are immutable, and the shape is **additive records appended
+to `markers.jsonl`** (ruled, Q3): a new `StructureMarker.kind` for each of the three cases
+below. This preserves append-only and the raw-tap rule; `MarkerLogReader` already preserves
+unknown kinds on disk and ignores them for rendering, so an older build degrades to "shows
+the uncorrected version" rather than breaking. The cost is a writer on a path that is
+currently capture-only — that writer is this task's real work. No sibling overlay file.
 
-Recommendation to the owner: **additive records in `markers.jsonl`**, because the snapping
-rule already re-derives boundaries from raw taps on every read and a correction is just one
-more raw fact about the same timeline.
+Three cases, all as correction records:
+1. **Retract** a mis-tapped marker — references the mistaken record's `seq`.
+2. **Correct a voice** at an existing boundary — a frame plus the right voice id.
+3. **ADD a boundary that was never tapped** (ruled, Q3 — this is new scope the first draft
+   did not have). The owner picks a **word in the transcript**, and the record is anchored to
+   **that word's frame**, not to a time he scrubs to. So the writer needs word→frame, which
+   the spans already carry: take the frame at the start of the span covering the picked word.
+   A word whose span has no usable bounds (`.none`/`.unknown`, zero-length `.inherited`)
+   cannot anchor a boundary — that word is not offerable, and the UI must say so rather than
+   silently placing the boundary somewhere near.
 
-**Steps** (shape assumes the recommendation; revise on the owner's answer)
+**Steps**
 - [ ] **6.1** Red: correction-kind decode/encode round trip; an older-build reader (unknown
   kind) ignores it and renders the uncorrected result — assert both directions.
 - [ ] **6.2** Red: a voice correction at frame F changes the paragraph split; the original
@@ -458,7 +510,13 @@ more raw fact about the same timeline.
 - [ ] **6.4** Red (#37): retype `"Ellen"` → `"LN"` mid-transcript; assert the resulting span
   is `.inherited` over the replaced span's **full** parent bounds (F17), not `.none` and not
   a synthesized sub-range.
-- [ ] **6.5** Marker-correction UI in the editor + a UI test.
+- [ ] **6.4b** Red (boundary ADD, Q3): picking a word mid-paragraph mints a correction record
+  carrying that word's span-start frame, and the rendered paragraphs split there. A word
+  whose span has no usable bounds is rejected with a stated reason and mints nothing.
+  **Mutation check:** anchor the record to the paragraph's start frame instead of the word's
+  → this test must fail.
+- [ ] **6.5** Marker-correction UI as its **own mode** (not inline in the editor — Q11) +
+  a UI test covering retract, voice correction, and boundary-add-by-word.
 - [ ] **6.6** Full suite + commit `feat: marker correction + typed-word correction (T7, #37)`.
 
 ---
@@ -466,6 +524,10 @@ more raw fact about the same timeline.
 ### Task 7 — the metadata audit log (§7)
 
 Independent of everything above; can run in parallel with Tasks 5–6.
+
+**Written and exported, never shown** (ruled, Q10). No "changes to this entry" list on the
+detail screen, no history UI for metadata — the log is diagnostics and future export only,
+and it is still deleted with the entry (§7). Build no view in this task.
 
 **Files**
 - Create: `Raconte/Library/EntryLog.swift` (`EntryLogRecord`, `EntryLogCause`, writer, reader)
@@ -519,6 +581,10 @@ naming what to do when it fires (copy `RecoveryExecutorTests.swift:206`'s patter
 The §12.8 answer ("detached revisions visible, clearly labeled") needs a surface, and revert
 gives `TranscriptMerge` its first production caller — with Task 1's guards already in place.
 
+**This panel is the whole undo story** (ruled, Q1). The editor has no discard and no revert
+button, so if a save cannot be walked back from here, it cannot be walked back at all. Treat
+that as the acceptance bar, not as a nice-to-have.
+
 **Files**
 - Create: `Raconte/Library/UI/RevisionHistoryView.swift`
 - Modify: `Raconte/Library/LibraryScreenModel.swift` (a `revert(captureID:toRevisionID:)`
@@ -528,7 +594,9 @@ gives `TranscriptMerge` its first production caller — with Task 1's guards alr
 **Content** — from `EntryChainSnapshot` (Task 2), no new read:
 - The chain in `(createdAt, id)` order; each row labeled machine vs human, and detached rows
   labeled "machine transcript, not applied".
-- `chainByteSize` (#39) shown here, with the growth alarm if the owner picks a threshold (Q7).
+- `chainByteSize` (#39) shown here — this panel and the diagnostics screen are its only two
+  surfaces (ruled, Q7); entry detail stays clean. The growth alarm fires on **revisions per
+  entry at ~50**, not on bytes.
 - **Revert to a machine revision** — the only merge action meaningful before T8. Accept and
   decline stay uncalled until retranscription exists.
 - A fork indicator when `isForked` (concurrent edits that never converged). Read-only in v1.
@@ -551,11 +619,13 @@ The three residuals from the voice-attribution reviews, plus the paperwork.
 - [ ] **9.1** The **trim vs "byte-identical" docs claim**: the rendering plan claims
   no-marker entries render byte-identically; promotion now trims run whitespace (§15b.10).
   Reconcile the claim with what the code does and pin whichever is true with a test.
-- [ ] **9.2** **Cross-paragraph text selection** is lost with per-paragraph `Text`. Either
-  restore it (one `AttributedString`/`Text` with paragraph breaks) or record the trade
-  explicitly in the view's doc comment. Owner-visible; see Q12.
-- [ ] **9.3** **`hasApproximateBoundary` is symmetric and unpinned by tests** — add the test.
-  Whether it gets a UI affordance is owner Q12.
+- [ ] **9.2** **Cross-paragraph text selection** is lost with per-paragraph `Text`. **Not
+  fixed in T7** (ruled, Q12 — it stays parked). This step is documentation only: record the
+  trade explicitly in the view's doc comment so the next reader does not rediscover it as a
+  bug. Do not restore it.
+- [ ] **9.3** **`hasApproximateBoundary`** — in scope (ruled, Q12). It is symmetric and
+  unpinned by tests: add the test, **and** give an approximate voice/paragraph cut a visible
+  affordance in the rendered transcript.
 - [ ] **9.4** Docs: append a **§16** to the T6 design recording T7's as-built rulings (the
   same way §15/§15b record T6's); update `docs/overview.md` §5 and the roadmap; close #37,
   #39, #40, #41 with what actually shipped and what moved to T8.
@@ -582,8 +652,9 @@ Then: PR, left open for Nico to merge (auto-mode cannot `gh pr merge`).
 ## 3. Open questions for the owner — ALL RULED 2026-08-09 (same day, in session)
 
 Rulings first; the original questions are kept below for their context. Every
-recommendation was accepted. Consequences are folded into the task bodies (or noted
-here where a task needs a textual update before build):
+recommendation was accepted. **All consequences are folded into the task bodies above and
+into §4's non-goals** — this section is the record of what was decided and why, not
+something an implementer needs to cross-reference to build a task:
 
 1. **Done only.** Navigating away = Done. No revert button; the undo story is
    revision history + revert (Task 8).
@@ -668,6 +739,15 @@ Named so they are not re-argued mid-build:
   `.decline` keep zero callers, with Task 1's guards already in front of them.
 - **Retranscription itself** (T8), and #38 contextual biasing.
 - **Capture-time typed words** (#37 option 2) — the expensive shape; edit-time first.
+- **Collecting typed corrections** into a per-journal vocabulary list (ruled, Q8). The
+  schema is designed with #38, after the biasing SDK surface is verified.
+- **#13 tap-a-word-to-play** (ruled, Q6 — later, not T7). Anchors stay intact for it; T7
+  must not degrade them. It also still needs `PlaybackSeek`'s `Int`/`Int64` width fix.
+- **Discard / cancel / an editor-owned undo stack** (ruled, Q1) — §2.5 has no discard;
+  Task 8 is the undo story. Also no find/replace and no word count (ruled, Q9).
+- **Markers inline in the editor** (ruled, Q11) and **per-paragraph editing** (ruled, Q2).
+- **Cross-paragraph text selection** (ruled, Q12) — stays parked, documented in Task 9.2.
+- **Any UI for the metadata audit log** (ruled, Q10) — written and exported, never shown.
 - **Search / FTS**, export, sync (M4/M5).
 - **The capture-landing redesign** — separate track; only the keyboard-first note feeds here.
 - **`backdateOrigin`** (`2026-08-03-backdate-precedence-ux.md`). The audit log reads it if
@@ -683,5 +763,11 @@ Named so they are not re-argued mid-build:
 - The one scope item the ledger did **not** name and this plan adds: Task 5. It is not
   optional — without it the editor deletes the voice rendering on first save.
 - Deliberately not sized: Tasks 4 and 6 are the only ones with real UI risk (the repo has
-  no `TextEditor` today, and no snapshot harness), so both keep their logic in a testable
-  model and their views thin.
+  no `TextEditor` today — verified on `bf0042d5`, zero hits in `Raconte/` — and no snapshot
+  harness), so both keep their logic in a testable model and their views thin.
+- Post-ruling scope deltas: Task 6 **grew** (the word-anchored boundary-ADD case, ruling 3),
+  Task 9 **shrank** (cross-paragraph selection stays parked, ruling 12) and **kept** the
+  approximate-boundary affordance, and Tasks 4/7 shed UI (no discard, no audit-log view).
+- Cite correction found on re-verification: `TranscriptAttribution.swift` is under
+  `Raconte/Library/`, not `Raconte/Transcription/`. And #40.2's premise is wrong as written
+  in the issue — see Task 3.2.

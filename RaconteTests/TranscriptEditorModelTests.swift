@@ -944,6 +944,52 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertFalse(debounce.isArmed)
     }
 
+    /// Re-review Important: `open()`'s READ-ONLY branch wrote five live-session fields after
+    /// its await with no token check — the guard covered only `machineTranscript` and `state`,
+    /// and the sibling editable branch got the rule while the branch above it was missed.
+    ///
+    /// Reachable because `LibraryScreenModel.chainSnapshot` is a `Task.detached` read, so two
+    /// overlapping opens resume in unspecified order, and `.task { await model.open() }` re-runs
+    /// on every push while cancelling does not stop the in-flight detached read.
+    ///
+    /// Probe ordering: the read-only open suspends, the editable open completes, the read-only
+    /// one is released LAST. The live session must survive it — otherwise the owner is looking
+    /// at an empty text box over an entry that has a transcript, and typing + Done replaces
+    /// `current` with only the new words.
+    func testAReadOnlyOpenResumingLastMustNotEmptyTheLiveSession() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        store.snapshot.editability = .readOnlyTrashed
+        let model = editor(store)
+
+        store.gateChainSnapshot = true
+        let readOnlyOpen = Task { await model.open() }
+        await waitUntilSnapshotIsGated(store)
+
+        store.snapshot.editability = .editable          // the entry is fine by the time #2 reads
+        await model.open()
+        XCTAssertEqual(model.state, .editing, "precondition: the live session is editable")
+        XCTAssertEqual(model.text, "the machine text", "precondition: it loaded the transcript")
+
+        store.releaseSnapshot()
+        await readOnlyOpen.value                        // the dead session resumes last
+
+        XCTAssertEqual(model.text, "the machine text",
+                       "a dead session's read-only open must not empty the live editor")
+        XCTAssertEqual(model.state, .editing)
+        XCTAssertFalse(model.hasUnsavedChanges)
+        XCTAssertTrue(model.showsTextEditor)
+    }
+
+    /// Polls until the gated `chainSnapshot` has actually suspended.
+    private func waitUntilSnapshotIsGated(_ store: FakeEditorStore,
+                                          file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<10_000 {
+            if store.isSnapshotGated { return }
+            await Task.yield()
+        }
+        XCTFail("chainSnapshot never reached the gate", file: file, line: line)
+    }
+
     /// Polls until the gated `closeDraft` has actually suspended. Everything here is
     /// `@MainActor`, so yielding is what lets the finish task reach the gate.
     private func waitUntilCloseIsGated(_ store: FakeEditorStore,
@@ -1250,6 +1296,20 @@ final class FakeEditorStore: TranscriptEditorStore {
     private var closeGate: CheckedContinuation<Void, Never>?
     var isCloseGated: Bool { closeGate != nil }
 
+    /// Suspends the NEXT `chainSnapshot` until `releaseSnapshot()`. The answer is captured
+    /// BEFORE suspending, so a gated open sees the disk as it was when it started — which is
+    /// exactly what `LibraryScreenModel.chainSnapshot`'s `Task.detached` read does, and why two
+    /// overlapping `open()`s can resume in either order.
+    var gateChainSnapshot = false
+    private var snapshotGate: CheckedContinuation<Void, Never>?
+    var isSnapshotGated: Bool { snapshotGate != nil }
+
+    func releaseSnapshot() {
+        let gate = snapshotGate
+        snapshotGate = nil
+        gate?.resume()
+    }
+
     func releaseClose() {
         let gate = closeGate
         closeGate = nil
@@ -1276,7 +1336,14 @@ final class FakeEditorStore: TranscriptEditorStore {
 
     func chainSnapshot(for captureID: String) async -> EntryChainSnapshot {
         snapshotCalls += 1
-        return snapshot
+        let answer = snapshot
+        if gateChainSnapshot {
+            gateChainSnapshot = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                snapshotGate = continuation
+            }
+        }
+        return answer
     }
 
     func machineTranscript(for captureID: String) async -> String? { machineTranscriptText }

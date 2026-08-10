@@ -1046,6 +1046,47 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(TranscriptChain.plainText(current), "words that must not vanish")
     }
 
+    /// Re-review Important, and the probe ordering: tap "Back to my edit" WITHOUT restoring
+    /// the entry — the only thing the owner can actually do from that alert, since restoring
+    /// requires leaving the detail screen, which drops the model and the words with it.
+    ///
+    /// The alert says "Your words are still here, unsaved." Its primary action must not be the
+    /// thing that erases them. The sibling test below restores the entry first and therefore
+    /// only ever pinned the transient case.
+    func testReEnteringWhileStillRefusedKeepsTheUnsavedWordsVisible() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let model = editor(liveModel())
+        await model.open()
+        model.text = "words that must not vanish"
+        model.textChanged()
+        try markTrashed()
+        let refused = await model.finishIfNeeded()
+        XCTAssertFalse(refused, "precondition: the save refused")
+
+        await model.open()                  // "Back to my edit", entry still trashed
+
+        XCTAssertEqual(model.state, .readOnly(.readOnlyTrashed))
+        XCTAssertEqual(model.text, "words that must not vanish",
+                       "the alert promises the words are still here — the button it offers "
+                       + "must not be what erases them")
+        XCTAssertTrue(model.hasUnsavedChanges)
+        XCTAssertFalse(model.showsTextEditor, "still refused: readable and copyable, not editable")
+    }
+
+    /// A fresh visit to a trashed entry has nothing unsaved and must still offer no text —
+    /// the preserve rule above must not turn into "always show something".
+    func testAFreshVisitToATrashedEntryStillOffersNoText() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        try markTrashed()
+
+        let model = editor(liveModel())
+        await model.open()
+
+        XCTAssertEqual(model.state, .readOnly(.readOnlyTrashed))
+        XCTAssertEqual(model.text, "")
+        XCTAssertFalse(model.hasUnsavedChanges)
+    }
+
     /// The preserve rule must not fire when there is nothing unsaved, or every re-open would
     /// pin stale text over an entry that has genuinely moved on (a `.recovered` revision, a
     /// second device).

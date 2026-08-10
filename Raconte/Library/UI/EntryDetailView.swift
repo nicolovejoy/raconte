@@ -125,8 +125,11 @@ struct EntryDetailView: View {
             Button("Back to my edit") { showingEditor = true }
             Button("Not now", role: .cancel) {}
         } message: {
-            Text("Your words are still here, unsaved. Reopen the editor to try again — "
-                 + "they’ll be lost if you leave this entry.\n\n\(editSaveFailureReason)")
+            // This copy is only true because `open()` keeps unsaved words on re-entry even
+            // when the entry has become read-only — otherwise the button offered here would
+            // be the thing that erased them (re-review Important).
+            Text("\(editSaveFailureReason)\n\nYour words are still here, unsaved. Reopen the "
+                 + "editor to see them and try again — they’ll be lost if you leave this entry.")
         }
         .alert("Couldn’t save the backdate", isPresented: $backdateFailed) {
             Button("OK") { backdateFailed = false }

@@ -142,6 +142,25 @@ struct TranscriptEditorView: View {
                 Text(TranscriptEditorModel.readOnlySentence(editability))
                     .accessibilityIdentifier("editor.readOnlyReason")
 
+                // The owner's own unsaved words, kept across a refused re-entry (re-review
+                // Important). Readable and selectable so they can be copied somewhere safe —
+                // the refusal is about SAVING, not about showing someone their own writing.
+                if model.hasUnsavedChanges, !model.text.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Your unsaved edit")
+                            .font(.headline)
+                        Text(model.text)
+                            .font(.system(.body, design: .serif))
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("editor.unsavedText")
+                        Text("This can’t be saved while the entry is in this state. Copy it "
+                             + "somewhere safe if you need it — it will be lost when you "
+                             + "leave this entry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if let machineTranscript = model.machineTranscript {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("The un-edited machine transcript")

@@ -900,6 +900,116 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTFail("closeDraft never reached the gate", file: file, line: line)
     }
 
+    /// Gate A Critical 1, reproduced against the real store. The pop path discarded
+    /// `finishIfNeeded()`'s Bool, so a save that refused was completely silent: the screen has
+    /// already popped, so `.failed` can never render, and the only copy of the words was
+    /// released with the model. Locked rule 6 ("never dismiss-then-write"), the same shape as
+    /// the 2026-08-03 detail-trash bug.
+    ///
+    /// The disagreement is the one this model's own doc comment names: the snapshot said
+    /// `.editable` when the editor opened, and the entry was trashed from another surface
+    /// while it was open.
+    func testAFinishThatRefusedToSaveIsRecordedForReporting() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let model = editor(liveModel())
+        await model.open()
+
+        model.text = "words that must not vanish"
+        model.textChanged()
+        try markTrashed()                       // trashed from another surface, editor open
+
+        let saved = await model.finishIfNeeded()
+
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(model.unreportedSaveFailure,
+                        "a refusal on the way out must be reportable — the popped screen "
+                        + "cannot show it itself")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path),
+                       "the words really are nowhere on disk")
+        XCTAssertEqual(try canonicalFileCount(), 1, "nothing was minted")
+        XCTAssertEqual(model.text, "words that must not vanish",
+                       "the only copy left is the one on screen")
+    }
+
+    func testASuccessfulFinishRecordsNothingToReport() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let model = editor(liveModel())
+        await model.open()
+        model.text = "an edit that saves fine"
+        model.textChanged()
+
+        let saved = await model.finishIfNeeded()
+
+        XCTAssertTrue(saved)
+        XCTAssertNil(model.unreportedSaveFailure)
+    }
+
+    func testAcknowledgingTheSaveFailureClearsIt() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+        model.text = "an edit"
+        model.textChanged()
+        store.closeDraftError = TranscriptRevisionStoreError.revisionUnreadable(file: 3)
+        _ = await model.finishIfNeeded()
+        XCTAssertNotNil(model.unreportedSaveFailure, "precondition")
+
+        model.acknowledgeSaveFailure()
+
+        XCTAssertNil(model.unreportedSaveFailure)
+    }
+
+    /// What the alert's "Back to my edit" is worth. Re-entering after a failed save must NOT
+    /// reload the entry over the unsaved words — that would quietly finish the job the failed
+    /// save started. `EntryDetailView` holds one editor model for the life of the screen, so
+    /// the words are still in memory and re-opening has to keep them.
+    func testReopeningAfterAFailedSaveKeepsTheUnsavedTextAndCanThenSaveIt() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let model = editor(liveModel())
+        await model.open()
+        model.text = "words that must not vanish"
+        model.textChanged()
+        try markTrashed()
+        let refused = await model.finishIfNeeded()
+        XCTAssertFalse(refused, "precondition: the save refused")
+
+        // The owner restores the entry and taps "Back to my edit".
+        try EntryMetadataStore.write(EntryMetadata(),
+                                     url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+        await model.open()
+
+        XCTAssertEqual(model.text, "words that must not vanish",
+                       "re-opening must not reload the entry over unsaved words")
+        XCTAssertTrue(model.hasUnsavedChanges)
+        XCTAssertEqual(model.state, .editing)
+
+        let saved = await model.finishIfNeeded()
+
+        XCTAssertTrue(saved)
+        XCTAssertEqual(try canonicalFileCount(), 2)
+        let current = try XCTUnwrap(currentRevision())
+        XCTAssertEqual(TranscriptChain.plainText(current), "words that must not vanish")
+    }
+
+    /// The preserve rule must not fire when there is nothing unsaved, or every re-open would
+    /// pin stale text over an entry that has genuinely moved on (a `.recovered` revision, a
+    /// second device).
+    func testReopeningWithNothingUnsavedReloadsFromTheChain() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let model = editor(liveModel())
+        await model.open()
+        model.text = "an edit that saves fine"
+        model.textChanged()
+        let firstSave = await model.finishIfNeeded()
+        XCTAssertTrue(firstSave, "precondition")
+
+        await model.open()
+
+        XCTAssertEqual(model.text, "an edit that saves fine",
+                       "reloaded from the chain, which now holds the saved edit")
+        XCTAssertFalse(model.hasUnsavedChanges)
+    }
+
     // MARK: - 4.5 backgrounding
 
     /// `scenePhase` leaving `.active` calls `flush()`. What matters is the consequence: a

@@ -1,5 +1,85 @@
 # CLAUDE.md
 
+## Session 2026-08-09 evening → 08-10 (laptop — T7 SDD LOOP LAUNCHED; Tasks 1-3 done; 930 → 986 tests; branch `t7/editor-ui` pushed)
+
+Ran the T7 editor plan as a subagent-driven SDD loop. **Branch `t7/editor-ui` (worktree
+`/Users/nico/src/raconte-t7`, base `9cf853fa`), 10 commits, pushed. Tasks 1-3 complete and
+reviewed clean; Task 4 (the editor itself) is next and NOT started.** Ledger at
+`.superpowers/sdd/2026-08-09-t7-editor-ui-plan/progress.md` in the worktree is the
+authoritative resume point, not this summary. Baseline 930 on main → **986 green**.
+
+- **Task 1** `254e248b`+`a5754c7a` (#41 prereqs). Review found two Importants, both
+  probe-confirmed: closing a recovered draft *before* promotion **permanently** blocked the
+  machine transcript from ever entering the chain (`promoteIfNeeded` skips on any canonical
+  file, and the `.userEdit` the close minted was that file); and the close put an actor hop
+  in front of the first transcript paint — the exact regression the T6c comment three lines
+  below was warning about (probed: 0.1228 s wait against a 0.1234 s walk at 4k captures).
+  One fix: `nonisolated` `hasDraft` fast path, and promote-before-close when a draft exists.
+- **Task 2** `30fdd461`..`9635b93d` (`EntryChainSnapshot`, the editor/history/diagnostics read
+  model). Editability precedence probe-verified against the store's write guards, so "the
+  editor let me type and then the save refused" is structurally impossible. Four Importants:
+  `isForked` could be hardcoded `false` and all 13 tests passed; `chainByteSize`'s
+  "readable or not" half was unpinned (and the report overstated its evidence); **three
+  Gate-A-hardened store internals had been re-implemented, and the `rawLoad` copy had already
+  silently dropped the `dedupedFiles` bucket that Gate A finding N1 exists for**; and a
+  corrupt `entry.json` was labelled `.readOnlyTrashed`. Then a fifth: the detached-revision
+  ordering was documented but vacuously tested (reversing it passed all 958).
+- **Task 3** `6b69b8fa`..`c6e9e1a6` (#40 read costs, #39 visibility). §15b.15's degraded-chain
+  refusal fires on every `writeDraft` — reviewer reproduced the bug the issue's wording
+  invites and watched the tests catch it. Three fix rounds. **Filed #50** for the residual
+  whole-chain-decode-per-write rather than improvising it, per the plan.
+
+**Three owner/controller rulings, all needing §16 at Task 9.4:**
+1. **Detached revisions** (owner): reserve "machine transcript, not applied" for genuinely
+   unapplied revisions. An entry's own rev0 is the foundation of later human edits, so the
+   plan's `!isAttached` shorthand is superseded *for that field only* — the set is now
+   "neither `current` nor in `ancestry(of: current)`". `isAttached` itself is unchanged.
+2. **Row honesty** (owner): rows route through the O(1) head cache, but a trusted head could
+   mask in-place damage — row said healthy, detail and editor both refused. Fix: record each
+   canonical file's byte size in `head.json`, distrust on mismatch. Nearly free because the
+   scan already stats those files for #39. **Same-size corruption still slips through —
+   accepted knowingly and pinned by its own deliberately-named test.**
+3. **Corrupt sidecar** (mine): an unreadable `entry.json` gets its own editability case, not
+   `.readOnlyTrashed` — same principle as #1, never label a state with something untrue.
+   Also mine: Task 3 needed a **launch-time `persistHead` sweep**, since `persistHead`'s only
+   caller is `append` and promotion skips existing chains, so every head on the device stayed
+   distrusted forever and the read-cost win reached zero existing entries.
+
+**The sweep then introduced a data-safety regression the review caught:** it stamped captures
+with *no chain*, and writing `head.json` into an empty `transcript/` flips
+`holdsIrreplaceableArtifacts` false→true — a mis-tapped capture becomes **permanently
+undeletable**, the zero-byte-log trap (rule 10) `MarkerLog` and `CaptureCoordinator` both
+already guard. Fixed with `!files.isEmpty` + two tests, mutation-verified twice.
+
+**Process:** vacuous fixtures are now **6-for-6 across two builds** (Gate A I2, T6d's lattice,
+Gate B C1, plus three on this branch). Every dispatch demands a mutation check; **compile-error
+"red" is explicitly not acceptable evidence** — that weakness is exactly what let two Task 2
+defects through. Standing branch rule: call the store's shared primitives, never copy them.
+**Six harness failures** (five "connection closed mid-response", one 600s watchdog stall) — all
+recovered by resuming the SAME agent from its transcript, zero work redone; resume prompts
+should state the verified worktree diff and say "commit as soon as you are green."
+
+**Owner to-do list audited against code + issues; #46-#50 filed.** Already shipped: journal
+covers/precision dates (#14), the dark-background date bubble, spoken-date backdating (#15),
+capture-page recents (#32, owner confirmed old). In the T7 plan: edit-and-confirm (Task 4),
+Swahili/technical word correction (#37, Task 6). New: **#46** reviewed flag (owner asked for
+it explicitly — distinct from editing), **#47** backdate increment (owner ruled *not urgent*:
+"same is good enough"), **#48** weekday on entries (only expressible at `.day` precision —
+`anchorDate`'s day-1 fill would fabricate a confident wrong weekday), **#49** backdate button
+should disappear once set (the sticky half shipped in `e7efb617`; it currently only relabels).
+
+**Next steps:**
+1. **Resume the SDD loop at Task 4** (the editor). Read the worktree ledger first — it carries
+   four things Task 4 must handle: `refresh()` also runs after backdate save/clear and journal
+   move, so a 90 s-idle open editor draft can be closed `.recovered` from under it;
+   `.readOnlyNoTranscript` refuses where `writeDraft` would succeed, so the editor owns that
+   guard; the `hasDraft` TOCTOU goes live once the editor is a real draft writer; and
+   `EntryTranscript.text` is a truncated snippet under `.skip` despite its doc comment.
+   Then Gate A, Tasks 5-9, Gate B, PR (auto-mode can't `gh pr merge`).
+2. Capture-landing implementation plan (fully specced; carries #27 gated by #35).
+3. Photo-snapshot implementation plan (design approved).
+4. #38 contextual-string biasing (verify SDK surface); #44 needs a device `live.jsonl` pull.
+
 ## Session 2026-08-09 midday (laptop — PR #45 MERGED; flake fixed; T7 plan drafted; photo-snapshot design approved; LN/BN type ruled)
 
 Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main.

@@ -134,6 +134,14 @@ final class TranscriptEditorModel {
     /// different value — or no draft at all — means the file we were writing into is gone.
     @ObservationIgnored private var sessionDraftOpenedAt: Date?
 
+    /// The text as of the last thing that was NOT a keystroke — a load, a resume. The view
+    /// observes the text with `.onChange(of: model.text)`, and SwiftUI compares values across
+    /// body evaluations, so `open()` filling the text and flipping `state` to `.editing`
+    /// re-evaluates the body, sees the value change from `""`, and reports an edit nobody
+    /// made. Without this, opening an entry merely to READ it armed the debounce and left a
+    /// `draft.json` behind, and `hasUnsavedChanges` claimed work the owner never did.
+    @ObservationIgnored private var lastKnownText = ""
+
     init(captureID: String,
          store: any TranscriptEditorStore,
          debounce: any EditorDebounce = TaskEditorDebounce(),
@@ -176,12 +184,17 @@ final class TranscriptEditorModel {
     /// such check is still resumed rather than silently discarded.
     func open() async {
         state = .loading
+        // A re-open (navigating back into the editor on the same model) is a fresh session:
+        // last time's notices must not outlive the thing they described.
+        draftClosedBeneathSession = false
         let snapshot = await store.chainSnapshot(for: captureID)
 
         guard case .editable = snapshot.editability else {
             storedText = ""
             hasUnsavedChanges = false
             resumedFromDraft = false
+            lastKnownText = ""
+            sessionDraftOpenedAt = nil
             machineTranscript = await machineTranscriptIfDegraded(snapshot.editability)
             state = .readOnly(snapshot.editability)
             return
@@ -198,6 +211,7 @@ final class TranscriptEditorModel {
             resumedFromDraft = false
         }
         hasUnsavedChanges = storedText != snapshot.currentText
+        lastKnownText = storedText
         state = .editing
     }
 
@@ -222,6 +236,10 @@ final class TranscriptEditorModel {
     /// Re-arms the 2 s debounce. Never writes directly — that is the whole point.
     func textChanged() {
         guard isEditable else { return }
+        // A load is not a keystroke — see `lastKnownText`. Note this is NOT the same test as
+        // `hasUnsavedChanges`: a resumed draft is unsaved work AND not a fresh edit.
+        guard storedText != lastKnownText else { return }
+        lastKnownText = storedText
         hasUnsavedChanges = true
         debounce.arm(after: debounceSeconds) { [weak self] in
             await self?.flush()

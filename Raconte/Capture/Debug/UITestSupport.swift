@@ -31,6 +31,41 @@ enum UITestHarnessRoot {
     }
 }
 
+/// A pre-made entry with a real revision chain, for the editor's UI test (T7 Task 4.6).
+///
+/// The synthetic harness records real audio but installs `NoOpPCMSink` as its tee branch, so
+/// nothing is ever transcribed under UI test and every recorded entry is
+/// `.readOnlyNoTranscript` — an editor flow cannot be built out of one. Seeding a canonical
+/// revision directly is the smallest honest fixture: `promoteIfNeeded` sees a non-empty
+/// chain and skips (`.skippedAlreadyPromoted`, so no `final/recording.m4a` is needed), the
+/// scanner shows a row because a non-empty `transcript/` is durable content, and playback
+/// degrades to `.none` exactly as it already does for a capture with no audio.
+///
+/// Env-gated (`RACONTE_UITEST_SEED_ENTRY`) so every existing capture flow is untouched, and
+/// idempotent so a relaunch on the same id does not append a second revision.
+enum UITestEntrySeed {
+    static let captureID = "01KYX77KK5QM15915EZBVXTQZ4"
+    static let text = "the machine heard these words"
+
+    static func seedIfRequested(capturesRoot: URL) {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_ENTRY"] != nil else { return }
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: captureID)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+
+        let revision = TranscriptRevision(id: "01KYX77KK5QM15915EZBVXTQZ5",
+                                          source: .machineLive,
+                                          createdAt: Date(),
+                                          spans: [TranscriptSpan(text: text, anchor: .none)])
+        try? FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        guard let data = try? CaptureCoding.encoder().encode(revision) else { return }
+        try? data.write(to: url)
+    }
+}
+
 extension CaptureScreenModel {
     /// `library` is threaded through (M3 T4.5) rather than dropped: `ContentView`'s
     /// `navigationDestination(for: LibraryDestination.self)` reads its OWN

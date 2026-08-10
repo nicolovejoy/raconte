@@ -122,7 +122,11 @@ final class LibraryScreenModel {
         if let id = ProcessInfo.processInfo.environment["RACONTE_UITEST_ID"] {
             // Container root derived, not overridden — the harness keys the container
             // and `captures/` sits beneath it, exactly as in the shipping layout.
-            return LibraryScreenModel(capturesRoot: UITestHarnessRoot.capturesRoot(id: id))
+            let capturesRoot = UITestHarnessRoot.capturesRoot(id: id)
+            // T7 Task 4.6: an entry with a real chain to edit, since nothing is ever
+            // transcribed under the synthetic harness. No-op unless asked for.
+            UITestEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
+            return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif
         return LibraryScreenModel(capturesRoot: CaptureScreenModel.defaultCapturesRoot())

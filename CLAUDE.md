@@ -38,13 +38,28 @@ Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main
   off the icon's #092343); **no dip-switch-style toggles** — traditional switches.
   "Good enough", no further type iteration. Capture-landing is now fully specced:
   IA + type + palette all locked.
-- Housekeeping: stray untracked `.playwright-mcp/` + `g-mixed.png` in repo root
-  (mock-viewing leftovers) — Nico's to delete or keep.
+- **Continuation same sitting — T7 PLAN IS BUILD-READY (`2e54ce41` + `ff2243d0`):**
+  all 12 owner questions RULED (every reco accepted: Done-only editor, one flattened
+  text view, marker correction as its own mode with corrections AND word-anchored
+  boundary-ADDS appended to `markers.jsonl`, refuse-trashed, degraded-chain offers
+  read-only live transcript, #13 later, #39 = history panel + diagnostics with a
+  ~50-revisions-per-entry alarm, #37 not collected yet, keyboard defaults confirmed,
+  audit log written-not-shown, approximate-boundary affordance in / selection fix
+  parked). Then an Opus agent re-verified every cite against merged main and folded
+  the rulings into task bodies. **Two claim errors caught: #40.2's premise is FALSE**
+  — `readableOrderedRevisions` (:440) does the chain decode AND §15b.15's
+  degraded-chain refusal in one call, so the issue's "skip the decode" fix would
+  silently delete the refusal on every promoted entry; Task 3 rewritten with a
+  mutation check pinning it, correction commented on #40. Also
+  `TranscriptAttribution.swift` is in `Raconte/Library/`, not `Transcription/`.
+  Strays cleaned. Mock decision ruled "good enough" — no further type iteration.
 
 **Next steps:**
-1. **Nico: answer the T7 plan's 12 owner questions** (3 blocking, listed in the doc)
-   → then re-verify the plan's file:line cites against merged main and run the SDD
-   loop for T7 (editor v1 → Gate A → attribution/markers/audit → Gate B).
+1. **Launch the T7 SDD loop** — `docs/plans/2026-08-09-t7-editor-ui-plan.md` is
+   fully ruled, cite-verified, nothing blocking. 9 tasks + 2 gates, T6-chain style
+   (Sonnet implementers, Opus reviews, superpowers:subagent-driven-development).
+   First: re-run the 930 suite on main and take that as baseline, then Task 1
+   (#41 prerequisites).
 2. **Capture-landing implementation plan** — everything is locked now (IA A+C-rows+
    B-receipt+thumb-bar, serif, lowercase ln/bn accent labels, icon-blue, traditional
    switches); carries #27 Mail-swipe gated by #35 journal-lock friction.

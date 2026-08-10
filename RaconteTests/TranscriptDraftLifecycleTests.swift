@@ -241,6 +241,56 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         await store().closeStaleDrafts(now: baseTime)
     }
 
+    // MARK: - closeStaleDraftIfNeeded (T7 prereq #41: sibling to closeStaleDrafts,
+    // same rules, one capture — the entry-open call site needs a per-capture variant
+    // rather than paying for the whole corpus walk on every screen open).
+
+    private let otherCaptureID = "01YYYYYYYYYYYYYYYYYYYYYYYY"
+
+    private var otherCaptureDirectory: URL {
+        SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: otherCaptureID)
+    }
+
+    private var otherDraftURL: URL {
+        SegmentLayout.transcriptDraftURL(captureDirectory: otherCaptureDirectory)
+    }
+
+    func testCloseStaleDraftIfNeededClosesAStaleDraftWithRecovered() async throws {
+        let s = store(policy: DraftPolicy(sessionEndSeconds: 90, hourCapSeconds: 3600))
+        try await s.writeDraft(captureID: captureID, text: "abandoned mid-sitting", now: baseTime)
+
+        let minted = await s.closeStaleDraftIfNeeded(captureID: captureID, now: baseTime.addingTimeInterval(200))
+        XCTAssertNotNil(minted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path), "a stale draft must be closed")
+
+        let ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        XCTAssertEqual(ordered.first?.closedBy, .recovered)
+        XCTAssertEqual(ordered.first?.id, minted)
+    }
+
+    func testCloseStaleDraftIfNeededLeavesAFreshDraftUntouched() async throws {
+        let s = store(policy: DraftPolicy(sessionEndSeconds: 90, hourCapSeconds: 3600))
+        try await s.writeDraft(captureID: captureID, text: "still typing", now: baseTime)
+
+        let minted = await s.closeStaleDraftIfNeeded(captureID: captureID, now: baseTime.addingTimeInterval(10))
+        XCTAssertNil(minted)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path), "a fresh draft must survive the call")
+    }
+
+    func testCloseStaleDraftIfNeededOnOneCaptureNeverTouchesAnotherCapturesStaleDraft() async throws {
+        // The whole point of the per-capture variant, vs. closeStaleDrafts' corpus walk.
+        try FileManager.default.createDirectory(at: otherCaptureDirectory, withIntermediateDirectories: true)
+        let s = store(policy: DraftPolicy(sessionEndSeconds: 90, hourCapSeconds: 3600))
+        try await s.writeDraft(captureID: captureID, text: "X's abandoned edit", now: baseTime)
+        try await s.writeDraft(captureID: otherCaptureID, text: "Y's abandoned edit", now: baseTime)
+
+        _ = await s.closeStaleDraftIfNeeded(captureID: captureID, now: baseTime.addingTimeInterval(200))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path), "X's stale draft is closed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: otherDraftURL.path),
+                     "Y's stale draft must be untouched by the call scoped to X")
+    }
+
     // MARK: - Critical 2: an unreadable revision refuses draft ops rather than
     // collapsing into "no such revision" (F5)
 
@@ -299,6 +349,24 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         await s.closeStaleDrafts(now: baseTime.addingTimeInterval(200))
         XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path),
                      "closeStaleDrafts must skip a capture with a degraded chain, not mint over it")
+    }
+
+    /// §15b.15: a degraded chain must leave the draft on disk and mint nothing, even
+    /// though the draft is stale by the clock. `closeStaleDraftIfNeeded` swallows
+    /// `closeDraft`'s throw into `nil` rather than propagating it — the caller (launch,
+    /// entry-open) has no one to show an error to.
+    func testCloseStaleDraftIfNeededReturnsNilAndLeavesDraftWhenChainHasAnUndecodableRevision() async throws {
+        let s = store(policy: DraftPolicy(sessionEndSeconds: 90, hourCapSeconds: 3600))
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)
+        try await s.writeDraft(captureID: captureID, text: "hello world", now: baseTime)
+        try writeRawCanonical(1, "not valid json")
+
+        let minted = await s.closeStaleDraftIfNeeded(captureID: captureID, now: baseTime.addingTimeInterval(200))
+        XCTAssertNil(minted)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path),
+                     "the draft must survive — a degraded chain mints nothing (§15b.15)")
+        let ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        XCTAssertEqual(ordered.count, 1, "no revision must be minted while the chain is degraded")
     }
 
     // MARK: - Important 4: the draft snapshot fields are captured atomically

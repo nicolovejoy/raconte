@@ -227,6 +227,10 @@ final class CaptureScreenModel {
         // blocks bootstrap while a possibly-large corpus walk runs. Placed before the
         // sweep in source order, matching the brief's wiring.
         Task { await library.promoteCorpusOnce() }
+        // Fire-and-forget stale-draft recovery (T7 prereq #41), same shape and same
+        // reasoning as promotion above — after promotion, before the sweep, in source
+        // order.
+        Task { await library.closeStaleDraftsOnce() }
         // Last, deliberately: the library is already on screen, and the sweep runs off
         // the main actor. Also strictly after the finalizer has drained, so it can never
         // remove a directory an encode is still writing into.

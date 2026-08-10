@@ -208,6 +208,12 @@ final class TranscriptEditorModel {
         // A new session, from this line on. Everything below that says "this session" is
         // keyed to it, and any finish still in flight from the previous one is now a dead
         // session's business and may not latch this one.
+        // Captured before anything is reset: unsaved words that never reached disk are this
+        // model's only copy, and must survive a re-open. `hasUnsavedChanges` is false whenever
+        // the text IS safely on disk (a flush clears it), so this fires only when it must —
+        // never pinning stale text over an entry that has genuinely moved on.
+        let unsavedTextToPreserve = hasUnsavedChanges && !storedText.isEmpty ? storedText : nil
+
         sessionID &+= 1
         // A window armed against the PREVIOUS session's text must not survive into this one.
         // The ledger carried this as "unreachable today"; Gate A disproved that.
@@ -232,16 +238,26 @@ final class TranscriptEditorModel {
         }
 
         machineTranscript = nil
-        if let draft = snapshot.openDraft {
+        if let unsaved = unsavedTextToPreserve {
+            // Re-entering after a save that refused (Critical 1): the words never reached
+            // disk, so this model's memory is the only copy there is. Reloading the entry over
+            // them would quietly finish the job the failed save started — and re-entry is
+            // exactly what the alert's "Back to my edit" does.
+            storedText = unsaved
+            sessionDraftOpenedAt = snapshot.openDraft?.openedAt
+            resumedFromDraft = false
+            hasUnsavedChanges = true
+        } else if let draft = snapshot.openDraft {
             storedText = draft.text
             sessionDraftOpenedAt = draft.openedAt
             resumedFromDraft = draft.text != snapshot.currentText
+            hasUnsavedChanges = storedText != snapshot.currentText
         } else {
             storedText = snapshot.currentText
             sessionDraftOpenedAt = nil
             resumedFromDraft = false
+            hasUnsavedChanges = storedText != snapshot.currentText
         }
-        hasUnsavedChanges = storedText != snapshot.currentText
         lastKnownText = storedText
         state = .editing
     }
@@ -351,7 +367,10 @@ final class TranscriptEditorModel {
         // Gated on THIS flush's own result, never on `state` — see `flush()`. A flush that
         // genuinely failed still blocks the close: "retryable" must never become "closes
         // over a draft that never saved".
-        guard await flush() else { return false }
+        guard await flush() else {
+            unreportedSaveFailure = saveFailureReason ?? "The edit couldn’t be saved."
+            return false
+        }
 
         do {
             _ = try await store.closeDraft(captureID: captureID, reason: .sessionEnd, now: clock())
@@ -359,7 +378,9 @@ final class TranscriptEditorModel {
             sessionDraftOpenedAt = nil
             return true
         } catch {
-            state = .failed(Self.saveFailureMessage(error))
+            let message = Self.saveFailureMessage(error)
+            state = .failed(message)
+            unreportedSaveFailure = message
             return false
         }
     }
@@ -393,6 +414,26 @@ final class TranscriptEditorModel {
         finishInFlight = nil
         hasFinished = closed
         return closed
+    }
+
+    /// A save that refused on the way OUT, which nobody has been told about yet (Gate A
+    /// Critical 1). The editor's own `.failed` banner cannot serve here: by the time an exit
+    /// fails the screen has already popped, so the refusal was completely silent and the only
+    /// copy of the words went with the model — locked rule 6, the 2026-08-03 detail-trash bug
+    /// in a new place.
+    ///
+    /// Recorded on the model rather than returned, deliberately: BOTH exit paths can be the
+    /// one that discovers the failure (`onDisappear` and the detail screen's dismissal
+    /// handler race), and only the surviving screen can show an alert. `EntryDetailView`
+    /// reads this, tells the owner, and acknowledges it.
+    private(set) var unreportedSaveFailure: String?
+
+    func acknowledgeSaveFailure() { unreportedSaveFailure = nil }
+
+    /// The reason behind a `.failed` state, if that is the state.
+    var saveFailureReason: String? {
+        if case .failed(let reason) = state { return reason }
+        return nil
     }
 
     // MARK: - Draft closed beneath us

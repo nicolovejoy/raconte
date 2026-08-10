@@ -70,6 +70,11 @@ struct TranscriptEditorView: View {
         // model's only strong reference is the detail screen's `@State`. `finishIfNeeded()`
         // is idempotent, so the `dismiss()` in `finish()` landing here next is a no-op.
         .onDisappear {
+            // The Bool is not dropped on the floor here (Gate A Critical 1): whichever exit
+            // path discovers a refusal records it on the MODEL, and `EntryDetailView` — the
+            // screen still alive to show an alert — reports it. This view is being removed;
+            // it has nowhere to render a failure itself, which is precisely why the model
+            // owns `unreportedSaveFailure` rather than this call owning the answer.
             Task { await model.finishIfNeeded() }
         }
         // Leaving `.active` is one of the three flush triggers (§12.1), alongside the

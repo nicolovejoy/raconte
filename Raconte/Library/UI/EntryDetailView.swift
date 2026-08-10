@@ -30,6 +30,11 @@ struct EntryDetailView: View {
     /// owner's cursor, and a builder that could return nothing would push a blank page
     /// (issue #32's lesson).
     @State private var showingEditor = false
+    /// A save the editor refused on its way out (Gate A Critical 1). The editor's own screen
+    /// has already popped by then, so the detail screen is the only surface left that can say
+    /// so — the same reason `trashFailed`/`moveFailed`/`backdateFailed` live here.
+    @State private var editSaveFailed = false
+    @State private var editSaveFailureReason = ""
     @State private var editorModel: TranscriptEditorModel
 
     /// Sidecar writes that reported failure. Each names what didn't save — the same
@@ -79,7 +84,12 @@ struct EntryDetailView: View {
                 // the stale-draft sweep no help (it will not touch a seconds-old draft).
                 // `finishIfNeeded()` is idempotent, so whichever path gets here first wins and
                 // the other is a no-op.
-                await editorModel.finishIfNeeded()
+                if !(await editorModel.finishIfNeeded()),
+                   let reason = editorModel.unreportedSaveFailure {
+                    editSaveFailureReason = reason
+                    editorModel.acknowledgeSaveFailure()
+                    editSaveFailed = true
+                }
                 await model.rescan()
                 await refresh()
             }
@@ -107,6 +117,16 @@ struct EntryDetailView: View {
             Button("OK") { moveFailed = false }
         } message: {
             Text("The change didn’t save. Try again.")
+        }
+        .alert("Your edit didn’t save", isPresented: $editSaveFailed) {
+            // Offered first because it is the only thing that recovers the words: the editor
+            // model lives as long as this screen, so re-entering still has them (`open()`
+            // preserves unsaved text). Leaving this entry is what loses them.
+            Button("Back to my edit") { showingEditor = true }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text("Your words are still here, unsaved. Reopen the editor to try again — "
+                 + "they’ll be lost if you leave this entry.\n\n\(editSaveFailureReason)")
         }
         .alert("Couldn’t save the backdate", isPresented: $backdateFailed) {
             Button("OK") { backdateFailed = false }

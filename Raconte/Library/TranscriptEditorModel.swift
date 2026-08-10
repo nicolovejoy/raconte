@@ -242,7 +242,7 @@ final class TranscriptEditorModel {
         lastKnownText = storedText
         hasUnsavedChanges = true
         debounce.arm(after: debounceSeconds) { [weak self] in
-            await self?.flush()
+            _ = await self?.flush()
         }
     }
 
@@ -251,11 +251,28 @@ final class TranscriptEditorModel {
     ///
     /// A failure is LOUD: `.failed` with the reason, and nothing dismisses. No `_ = try?` on
     /// an editor save, ever.
-    func flush() async {
-        guard isEditable else { return }
+    ///
+    /// **Returns whether THIS invocation failed to write — not whether the editor is in a
+    /// failed state** (review finding 1). Those are different questions, and conflating them
+    /// made Done permanently unretryable: a draft that flushed fine and then failed to CLOSE
+    /// leaves `hasUnsavedChanges == false` and `state == .failed`, so the next `done()` found
+    /// nothing to flush, saw the stale `.failed`, and returned false without ever reaching
+    /// `closeDraft` again — while the alert on screen said "Try Done again". Realistic close
+    /// failures are transient (I/O; a §15b.15 degraded-chain refusal that a re-promote
+    /// clears), so that dead-ended the screen's recovery affordance against exactly the
+    /// failures it exists for.
+    ///
+    /// "Nothing to write" is a SUCCESS, and it also clears a stale `.failed` — otherwise the
+    /// banner outlives the problem and the short-circuit comes straight back.
+    @discardableResult
+    func flush() async -> Bool {
+        guard isEditable else { return true }
         debounce.cancel()
         await noteDraftClosedBeneathSessionIfNeeded()
-        guard hasUnsavedChanges else { return }
+        guard hasUnsavedChanges else {
+            if case .failed = state { state = .editing }
+            return true
+        }
 
         let pending = storedText
         do {
@@ -265,8 +282,10 @@ final class TranscriptEditorModel {
             if sessionDraftOpenedAt == nil {
                 sessionDraftOpenedAt = await store.openDraft(for: captureID)?.openedAt
             }
+            return true
         } catch {
             state = .failed(Self.saveFailureMessage(error))
+            return false
         }
     }
 
@@ -281,8 +300,10 @@ final class TranscriptEditorModel {
         debounce.cancel()
         guard isEditable else { return true }
 
-        await flush()
-        if case .failed = state { return false }
+        // Gated on THIS flush's own result, never on `state` — see `flush()`. A flush that
+        // genuinely failed still blocks the close: "retryable" must never become "closes
+        // over a draft that never saved".
+        guard await flush() else { return false }
 
         do {
             _ = try await store.closeDraft(captureID: captureID, reason: .sessionEnd, now: clock())

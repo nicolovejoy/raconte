@@ -222,27 +222,38 @@ final class CaptureScreenModel {
         // transcript first becomes available.
         for id in recoveredQueue { await detectSpokenDate(for: id) }
         await library.rescan()
-        // Fire-and-forget corpus promotion (T6c) + stale-draft recovery (T7 prereq #41),
-        // ONE Task, sequential: the library is already on screen and showing today's
-        // `live.jsonl` text via the loader's fallback, so nothing here blocks bootstrap
-        // while a possibly-large corpus walk runs. Placed before the sweep.
+        // Fire-and-forget corpus promotion (T6c) + head-cache stamping (T7 Task 3 fix
+        // round 2) + stale-draft recovery (T7 prereq #41), ONE Task, sequential: the
+        // library is already on screen and showing today's `live.jsonl` text via the
+        // loader's fallback, so nothing here blocks bootstrap while a possibly-large
+        // corpus walk runs. Placed before the trash sweep (`sweepTrash()` below).
         //
-        // Deliberately one Task, not two independent ones (fix round 1, Minor 4): two
-        // separate unstructured Tasks give no guarantee that `closeStaleDraftsOnce()`'s
-        // per-capture work doesn't interleave ahead of `promoteCorpusOnce()`'s for the
-        // SAME capture — and that ordering is load-bearing (Important 1, review fix
-        // round 1): closing a capture's stale draft before it is promoted mints a
-        // `.userEdit` that permanently blocks the `.machineLive` baseline from ever
-        // entering that capture's chain, since `promoteIfNeeded` skips unconditionally
-        // once any canonical file exists. A single Task with sequential awaits removes
-        // the race instead of merely hoping two Tasks happen to run in source order.
+        // Deliberately one Task, not several independent ones (fix round 1, Minor 4):
+        // separate unstructured Tasks give no guarantee that a LATER pass's per-capture
+        // work doesn't interleave ahead of an EARLIER pass's for the SAME capture — and
+        // the ordering here is load-bearing twice over:
+        //   1. (Important 1, review fix round 1) closing a capture's stale draft before
+        //      it is promoted mints a `.userEdit` that permanently blocks the
+        //      `.machineLive` baseline from ever entering that capture's chain, since
+        //      `promoteIfNeeded` skips unconditionally once any canonical file exists —
+        //      promotion must run before `closeStaleDraftsOnce()`.
+        //   2. (fix round 2) stamping runs after promotion for the same reason: an
+        //      unpromoted capture has no chain yet, so `stampUnstampedHeads` would just
+        //      skip it and need a second walk once promotion lands later this same
+        //      launch. It runs before `closeStaleDraftsOnce()` too — stamping is a pure
+        //      read-then-maybe-write over the EXISTING chain and has no dependency on
+        //      drafts either way, so this position costs nothing and keeps the "promote,
+        //      then everything else" shape simple to reason about.
+        // A single Task with sequential awaits removes the race instead of merely
+        // hoping several Tasks happen to run in source order.
         Task {
             await library.promoteCorpusOnce()
+            await library.stampUnstampedHeadsOnce()
             await library.closeStaleDraftsOnce()
         }
-        // Last, deliberately: the library is already on screen, and the sweep runs off
-        // the main actor. Also strictly after the finalizer has drained, so it can never
-        // remove a directory an encode is still writing into.
+        // Last, deliberately: the library is already on screen, and the trash sweep
+        // runs off the main actor. Also strictly after the finalizer has drained, so it
+        // can never remove a directory an encode is still writing into.
         await library.sweepTrash()
     }
 

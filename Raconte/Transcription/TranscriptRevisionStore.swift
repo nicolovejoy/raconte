@@ -317,15 +317,30 @@ actor TranscriptRevisionStore {
             // (an unreadable directory has no bodies to decode).
             return rebuildHead(captureDirectory: captureDirectory)
         case .present(let files):
-            if let persisted = readPersistedHead(captureDirectory: captureDirectory),
-               !persisted.listingUnreadable,
-               persisted.unreadableFiles.isEmpty,
-               persisted.revisionFiles.sorted() == files.sorted(),
-               Self.sizesStillMatch(persisted: persisted, captureDirectory: captureDirectory) {
-                return persisted
+            if let trusted = Self.trustedPersistedHead(captureDirectory: captureDirectory, files: files) {
+                return trusted
             }
             return rebuildHead(captureDirectory: captureDirectory)
         }
+    }
+
+    /// The O(1) trust check itself, returning the persisted head when — and only
+    /// when — it can be trusted exactly as-is. Split out of `validatedHead` (T7 Task 3
+    /// fix round 2) so "is this head trustworthy right now" has exactly ONE
+    /// implementation: the read path (`validatedHead`, above) and the launch-time
+    /// stamping sweep (`stampUnstampedHeads`, below — the write path that decides
+    /// whether a capture needs a fresh `persistHead` call at all) both call this
+    /// rather than re-deriving the rule. `nil` for every reason `validatedHead` would
+    /// otherwise fall back to `rebuildHead`.
+    private nonisolated static func trustedPersistedHead(captureDirectory: URL, files: [Int]) -> TranscriptHead? {
+        guard let persisted = readPersistedHead(captureDirectory: captureDirectory),
+              !persisted.listingUnreadable,
+              persisted.unreadableFiles.isEmpty,
+              persisted.revisionFiles.sorted() == files.sorted(),
+              Self.sizesStillMatch(persisted: persisted, captureDirectory: captureDirectory) else {
+            return nil
+        }
+        return persisted
     }
 
     /// The trust condition's integrity check (T7 Task 3 fix round 1, Important 1): a
@@ -399,6 +414,58 @@ actor TranscriptRevisionStore {
         let data = try CaptureCoding.encoder().encode(head)
         try AtomicFile.replace(at: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory),
                                writing: data)
+    }
+
+    // MARK: - Corpus head stamping (T7 Task 3 fix round 2)
+
+    /// The launch-time sweep the owner ruled for: without it, Task 3's whole win
+    /// never reaches a single entry that existed before this fix shipped.
+    /// `persistHead` has exactly one production caller — `append` — and
+    /// `promoteIfNeeded` writes nothing once a chain already exists
+    /// (`.skippedAlreadyPromoted`), so every `head.json` on a device today predates
+    /// `fileSizes` and is — correctly, per fix round 1's ruling — distrusted forever
+    /// by `sizesStillMatch`. Left unswept, every row read for every already-promoted
+    /// entry keeps paying the full chain decode `validatedHead`'s O(1) path exists to
+    /// avoid, permanently: reproduced by the reviewer as three consecutive row reads
+    /// against an unstamped head each returning the decoded body, head still
+    /// unstamped afterwards.
+    ///
+    /// A NO-OP for a capture whose head is already trustworthy (`trustedPersistedHead`
+    /// — the SAME check `validatedHead` uses, not a second implementation): never
+    /// rewrites `head.json` on a launch that changed nothing, which would be churn on
+    /// the owner's real data and would defeat the point of caching at all. Thin
+    /// plumbing over `persistHead` for everything else, so the trashed/missing-capture
+    /// guards (§15.4, Gate A finding C2/I3) are enforced exactly once, there — this
+    /// sweep adds no guard logic of its own. `.absent`/`.unreadable` listings are
+    /// skipped outright: neither has a chain worth stamping, and `validatedHead`
+    /// never even consults `head.json` for either case, so stamping one would help
+    /// nothing.
+    func stampUnstampedHeads() async {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
+            return
+        }
+        for id in ids.sorted() {
+            await stampHeadIfNeeded(captureID: id)
+        }
+    }
+
+    /// Sibling to `stampUnstampedHeads`, scoped to one capture — matches this file's
+    /// existing corpus-pass/per-capture pairing (`promoteCorpus`/`promoteIfNeeded`,
+    /// `closeStaleDrafts`/`closeStaleDraftIfNeeded`), kept `private` since the sweep
+    /// is the only caller today.
+    private func stampHeadIfNeeded(captureID: String) async {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        guard case .present(let files) = Self.listing(captureDirectory: captureDirectory) else {
+            return
+        }
+        guard Self.trustedPersistedHead(captureDirectory: captureDirectory, files: files) == nil else {
+            return
+        }
+        // `persistHead` already enforces every guard this write needs (trashed,
+        // missing capture, unreadable sidecar) — swallowed here the same way
+        // `append`'s own `persistHead` call swallows it (C1-trigger): a stamping
+        // failure must never abort the rest of the corpus sweep.
+        try? await persistHead(captureID: captureID)
     }
 
     // MARK: - Append

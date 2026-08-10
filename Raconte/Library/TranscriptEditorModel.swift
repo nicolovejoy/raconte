@@ -226,6 +226,15 @@ final class TranscriptEditorModel {
         draftClosedBeneathSession = false
         hasFinished = false
         let snapshot = await store.chainSnapshot(for: captureID)
+        // The one rule, applied once for BOTH branches below: nothing a session that has been
+        // left behind read may be written into the live session's state. `chainSnapshot` is a
+        // `Task.detached` read, so two overlapping opens resume in unspecified order — and
+        // `.task { await model.open() }` re-runs on every push while cancellation does not stop
+        // the detached read already in flight. This guard used to sit further down, covering
+        // only the editable branch; the read-only branch above it wrote five live-session
+        // fields unguarded and could leave the owner staring at an empty text box over an
+        // entry that has a transcript.
+        guard sessionID == session else { return }
 
         guard case .editable = snapshot.editability else {
             // Re-review Important: unsaved words survive a REFUSED re-entry too. The C1 alert
@@ -246,9 +255,6 @@ final class TranscriptEditorModel {
             return
         }
 
-        // Two `open()`s can overlap the same way (the second must win), so this branch is
-        // held to the same rule as the finish path.
-        guard sessionID == session else { return }
         machineTranscript = nil
         if let unsaved = unsavedTextToPreserve {
             // Re-entering after a save that refused (Critical 1): the words never reached

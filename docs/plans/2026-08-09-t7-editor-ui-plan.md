@@ -579,10 +579,38 @@ Then: PR, left open for Nico to merge (auto-mode cannot `gh pr merge`).
 
 ---
 
-## 3. Open questions for the owner
+## 3. Open questions for the owner — ALL RULED 2026-08-09 (same day, in session)
 
-Numbered so they can be answered by number. **1, 2 and 3 block Tasks 4 and 6; the rest can
-be answered while earlier tasks run.**
+Rulings first; the original questions are kept below for their context. Every
+recommendation was accepted. Consequences are folded into the task bodies (or noted
+here where a task needs a textual update before build):
+
+1. **Done only.** Navigating away = Done. No revert button; the undo story is
+   revision history + revert (Task 8).
+2. **One flattened text view.** Paragraph/voice structure reappears on save;
+   per-paragraph editing is the likely v2.
+3. **Corrections append to `markers.jsonl`** — raw taps untouched forever, the reader
+   folds correction records in. **Adding a never-tapped boundary IS allowed, anchored
+   to a word** picked in the transcript (stored as a correction record targeting that
+   word's frame). Task 6 gains the boundary-add case.
+4. **Trashed entries: refuse to edit.** Restore first.
+5. **Degraded-chain refusal offers the live transcript read-only**, clearly labeled
+   as the un-edited machine transcript.
+6. **#13 tap-to-play: later**, not T7. Anchors stay intact for it.
+7. **#39: history panel + diagnostics screen; alarm on revisions-per-entry (~50).**
+   Entry detail stays clean.
+8. **#37 corrections are NOT collected yet** — the vocabulary-list schema is designed
+   with #38 once the biasing SDK surface is verified.
+9. **Keyboard defaults confirmed as assumed** (⌘S, ⌘Return/Esc, autofocus,
+   full-screen on regular width). No find/replace or word count in v1.
+10. **Audit log written and exported, no UI.**
+11. **Markers NOT visible in the editor** — plain-text editor, marker correction is
+    its own mode.
+12. **Approximate-boundary affordance is IN Task 9 scope; cross-paragraph selection
+    stays parked.**
+
+Original questions (for the reasoning behind each ruling). **1, 2 and 3 blocked Tasks 4
+and 6; now none block.**
 
 1. **What ends an edit?** §2.5 has no "discard" — a draft closes to a revision or to
    nothing, and there is no undo of a close. So an editor "Cancel" would have to mean

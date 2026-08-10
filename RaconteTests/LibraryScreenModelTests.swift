@@ -424,4 +424,31 @@ final class LibraryScreenModelTests: XCTestCase {
         let after = await model.transcript(for: idA)
         XCTAssertEqual(after.text, "hello there")
     }
+
+    // MARK: - T7 prereq #41: closeStaleDraftIfNeeded / transcript(for:) ordering
+
+    /// `EntryDetailView.refresh()` now calls `closeStaleDraftIfNeeded` BEFORE its
+    /// transcript read (:92-94) — a recovered edit must be visible in the very first
+    /// read the screen shows, not on the next scan. Pins the same sequence at the model
+    /// layer the T6c test above uses, since the View itself isn't unit-testable.
+    func testStaleDraftRecoveredBeforeTranscriptReadShowsTheRecoveredEditImmediately() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        try await model.revisionStore.append(
+            TranscriptRevision(id: "01R0000000000000000000000A", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_000),
+                               spans: [TranscriptSpan(text: "original machine text", anchor: .none)]),
+            captureID: idA)
+        // Ancient lastWriteAt — unambiguously stale under whatever real `Date()` the
+        // model call below uses internally, no injected clock required.
+        try await model.revisionStore.writeDraft(captureID: idA, text: "recovered edited text",
+                                                  now: Date(timeIntervalSince1970: 0))
+
+        // The exact sequence EntryDetailView.refresh() must follow: recover, THEN read.
+        await model.closeStaleDraftIfNeeded(idA)
+        let transcript = await model.transcript(for: idA)
+
+        XCTAssertEqual(transcript.text, "recovered edited text",
+                       "a stale draft closed before the transcript read must be visible in that read")
+    }
 }

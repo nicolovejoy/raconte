@@ -89,6 +89,12 @@ final class LibraryScreenModel {
     /// (per model instance), never on every `rescan()`.
     private var corpusPromotionRan = false
 
+    /// Guards `closeStaleDraftsOnce()` (T7 prereq #41), same reasoning as
+    /// `corpusPromotionRan`: `closeStaleDraftIfNeeded` is individually idempotent, so
+    /// this guard is a cost saver against a second `bootstrap()` re-walking the whole
+    /// corpus, not a correctness one.
+    private var staleDraftsClosedRan = false
+
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
@@ -375,6 +381,27 @@ final class LibraryScreenModel {
     @discardableResult
     func promoteIfNeeded(_ captureID: String) async -> TranscriptRevisionStore.PromotionOutcome {
         await revisionStore.promoteIfNeeded(captureID: captureID)
+    }
+
+    /// The launch pass (T7 prereq #41): close every capture's stale draft (rule 9,
+    /// §4.6), so an edit abandoned mid-sitting on a prior session is recovered into a
+    /// real revision rather than left dangling in `draft.json` forever. Called
+    /// fire-and-forget from `CaptureScreenModel.bootstrap()`, same shape as
+    /// `promoteCorpusOnce()` and placed right after it in source order — after
+    /// promotion, before the sweep.
+    func closeStaleDraftsOnce() async {
+        guard !staleDraftsClosedRan else { return }
+        staleDraftsClosedRan = true
+        await revisionStore.closeStaleDrafts(now: Date())
+    }
+
+    /// Thin passthrough for the entry-open call site (`EntryDetailView.refresh()`, T7
+    /// prereq #41): close THIS capture's stale draft, if any, before the transcript read
+    /// that follows it — a recovered edit must be visible in the text the screen shows
+    /// immediately, not only after the next launch's corpus-wide pass.
+    @discardableResult
+    func closeStaleDraftIfNeeded(_ captureID: String) async -> String? {
+        await revisionStore.closeStaleDraftIfNeeded(captureID: captureID, now: Date())
     }
 
     // MARK: - Transcript (detail screen)

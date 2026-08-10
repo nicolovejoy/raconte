@@ -9,6 +9,15 @@ import Foundation
 /// the entire span array, never a hunk. Per-hunk merge is out of scope; `degradingOverlaps`
 /// ships anyway because both accept and revert route conceptually through the F11 rule
 /// once per-hunk lands, and it is cheap to pin now.
+
+/// The #41.2 precondition, enforced at the mint site so no caller can skip it: a
+/// human-lineage revision's id must never be written into `basedOnMachineID` — that
+/// field is permanent once minted and poisons §6.4 propagation forever (every later
+/// user edit copies it verbatim, per `TranscriptRevisionStore`'s propagation rule).
+enum TranscriptMergeError: Error, Equatable {
+    case notMachineLineage(String)
+}
+
 enum TranscriptMerge {
 
     /// Accept: adopt the machine revision's spans verbatim — text and frames together,
@@ -18,9 +27,12 @@ enum TranscriptMerge {
     /// from one fresh measurement). `parentID` = current's id, `basedOnMachineID` =
     /// the accepted machine revision's id, `source` = `.merge`.
     static func accept(current: TranscriptRevision, machine: TranscriptRevision,
-                       id: String, createdAt: Date, deviceID: String?) -> TranscriptRevision {
-        mint(spans: adopt(machine.spans, from: machine), id: id, createdAt: createdAt,
-             parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
+                       id: String, createdAt: Date, deviceID: String?) throws -> TranscriptRevision {
+        guard !machine.source.isHumanLineage else {
+            throw TranscriptMergeError.notMachineLineage(machine.id)
+        }
+        return mint(spans: adopt(machine.spans, from: machine), id: id, createdAt: createdAt,
+                    parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
     }
 
     /// Decline: spans byte-identical to current's, `basedOnMachineID` advanced to the
@@ -31,9 +43,12 @@ enum TranscriptMerge {
     /// changes `basedOnMachineID` even though its spans match current's exactly. It is
     /// a real recorded action (the same `.merge` primitive as accept), not a discard.
     static func decline(current: TranscriptRevision, machine: TranscriptRevision,
-                        id: String, createdAt: Date, deviceID: String?) -> TranscriptRevision {
-        mint(spans: adopt(current.spans, from: current), id: id, createdAt: createdAt,
-             parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
+                        id: String, createdAt: Date, deviceID: String?) throws -> TranscriptRevision {
+        guard !machine.source.isHumanLineage else {
+            throw TranscriptMergeError.notMachineLineage(machine.id)
+        }
+        return mint(spans: adopt(current.spans, from: current), id: id, createdAt: createdAt,
+                    parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
     }
 
     /// Revert: adopt the reverted-to machine revision's spans verbatim (design §6.5) —
@@ -41,9 +56,12 @@ enum TranscriptMerge {
     /// legitimately (they arrive with their own frames, not synthesized). `parentID` =
     /// current's id, `basedOnMachineID` = the reverted-to machine revision's id.
     static func revert(current: TranscriptRevision, toMachine machine: TranscriptRevision,
-                       id: String, createdAt: Date, deviceID: String?) -> TranscriptRevision {
-        mint(spans: adopt(machine.spans, from: machine), id: id, createdAt: createdAt,
-             parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
+                       id: String, createdAt: Date, deviceID: String?) throws -> TranscriptRevision {
+        guard !machine.source.isHumanLineage else {
+            throw TranscriptMergeError.notMachineLineage(machine.id)
+        }
+        return mint(spans: adopt(machine.spans, from: machine), id: id, createdAt: createdAt,
+                    parentID: current.id, basedOnMachineID: machine.id, deviceID: deviceID)
     }
 
     /// F11 rule, shipped for future per-hunk use: any RETAINED span whose frame range

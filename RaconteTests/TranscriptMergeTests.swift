@@ -16,7 +16,7 @@ final class TranscriptMergeTests: XCTestCase {
 
     // MARK: - 6.1 Accept
 
-    func testAcceptAdoptsMachineSpansVerbatimTextAndFrames() {
+    func testAcceptAdoptsMachineSpansVerbatimTextAndFrames() throws {
         // The F18 merge-exemption case: the machine revision's own span is `.exact`
         // with real frames — accept must carry BOTH across unchanged, not just the text.
         let machine = TranscriptRevision(id: "M1", source: .machineRetranscribe, createdAt: t0,
@@ -24,20 +24,20 @@ final class TranscriptMergeTests: XCTestCase {
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0,
                                          spans: [TranscriptSpan(text: "hello there", anchor: .none)])
 
-        let merged = TranscriptMerge.accept(current: current, machine: machine,
-                                            id: "MG1", createdAt: t0, deviceID: "dev-1")
+        let merged = try TranscriptMerge.accept(current: current, machine: machine,
+                                                 id: "MG1", createdAt: t0, deviceID: "dev-1")
 
         XCTAssertEqual(merged.spans, [exact("hello world", 0, 100, sourceRevisionID: "M1")])
     }
 
-    func testAcceptSetsParentBasedOnMachineIDAndSource() {
+    func testAcceptSetsParentBasedOnMachineIDAndSource() throws {
         let machine = TranscriptRevision(id: "M1", source: .machineRetranscribe, createdAt: t0,
                                          spans: [exact("hello world", 0, 100)])
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0,
                                          spans: [TranscriptSpan(text: "hello there", anchor: .none)])
 
-        let merged = TranscriptMerge.accept(current: current, machine: machine,
-                                            id: "MG1", createdAt: t0, deviceID: "dev-1")
+        let merged = try TranscriptMerge.accept(current: current, machine: machine,
+                                                 id: "MG1", createdAt: t0, deviceID: "dev-1")
 
         XCTAssertEqual(merged.source, .merge)
         XCTAssertEqual(merged.parentID, "C1")
@@ -45,7 +45,7 @@ final class TranscriptMergeTests: XCTestCase {
         XCTAssertEqual(merged.deviceID, "dev-1")
     }
 
-    func testAcceptDropsSourceRevisionIDWhenItEqualsTheMintedID() {
+    func testAcceptDropsSourceRevisionIDWhenItEqualsTheMintedID() throws {
         // The caller-side omit-when-equal economy (TranscriptSpan.swift:150-156): if the
         // fresh merge id happens to equal the resolved source (pathological but the
         // rule must hold regardless), the field is written back to nil rather than a
@@ -54,8 +54,8 @@ final class TranscriptMergeTests: XCTestCase {
                                          spans: [exact("hi", 0, 10)])
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
 
-        let merged = TranscriptMerge.accept(current: current, machine: machine,
-                                            id: "SAME-ID", createdAt: t0, deviceID: nil)
+        let merged = try TranscriptMerge.accept(current: current, machine: machine,
+                                                 id: "SAME-ID", createdAt: t0, deviceID: nil)
 
         XCTAssertNil(merged.spans[0].sourceRevisionID)
     }
@@ -69,9 +69,9 @@ final class TranscriptMergeTests: XCTestCase {
         try await harness.store.append(machine, captureID: harness.captureID)
 
         let current = machine
-        let merged = TranscriptMerge.accept(current: current, machine: machine,
-                                            id: "01MG00000000000000000000B", createdAt: t0.addingTimeInterval(1),
-                                            deviceID: nil)
+        let merged = try TranscriptMerge.accept(current: current, machine: machine,
+                                                 id: "01MG00000000000000000000B", createdAt: t0.addingTimeInterval(1),
+                                                 deviceID: nil)
         try await harness.store.append(merged, captureID: harness.captureID)
 
         let load = TranscriptRevisionStore.loadChain(captureDirectory: harness.captureDirectory)
@@ -80,26 +80,26 @@ final class TranscriptMergeTests: XCTestCase {
 
     // MARK: - 6.2 Decline
 
-    func testDeclineSpansByteIdenticalToCurrent() {
+    func testDeclineSpansByteIdenticalToCurrent() throws {
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0,
                                          spans: [exact("kept as-is", 0, 50)])
         let machine = TranscriptRevision(id: "M1", source: .machineRetranscribe, createdAt: t0,
                                          spans: [exact("different text", 0, 60)])
 
-        let declined = TranscriptMerge.decline(current: current, machine: machine,
-                                               id: "MG1", createdAt: t0, deviceID: nil)
+        let declined = try TranscriptMerge.decline(current: current, machine: machine,
+                                                    id: "MG1", createdAt: t0, deviceID: nil)
 
         XCTAssertEqual(declined.spans, [exact("kept as-is", 0, 50, sourceRevisionID: "C1")])
     }
 
-    func testDeclineAdvancesBasedOnMachineIDToTheDeclinedRevision() {
+    func testDeclineAdvancesBasedOnMachineIDToTheDeclinedRevision() throws {
         let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0,
                                          spans: [exact("kept as-is", 0, 50)])
         let machine = TranscriptRevision(id: "M1", source: .machineRetranscribe, createdAt: t0,
                                          spans: [exact("different text", 0, 60)])
 
-        let declined = TranscriptMerge.decline(current: current, machine: machine,
-                                               id: "MG1", createdAt: t0, deviceID: nil)
+        let declined = try TranscriptMerge.decline(current: current, machine: machine,
+                                                    id: "MG1", createdAt: t0, deviceID: nil)
 
         XCTAssertEqual(declined.source, .merge)
         XCTAssertEqual(declined.parentID, "C1")
@@ -119,9 +119,9 @@ final class TranscriptMergeTests: XCTestCase {
                                          spans: [exact("different text", 0, 60)])
         try await harness.store.append(machine, captureID: harness.captureID)
 
-        let declined = TranscriptMerge.decline(current: current, machine: machine,
-                                               id: "01MG0000000000000000000C", createdAt: t0.addingTimeInterval(2),
-                                               deviceID: nil)
+        let declined = try TranscriptMerge.decline(current: current, machine: machine,
+                                                   id: "01MG0000000000000000000C", createdAt: t0.addingTimeInterval(2),
+                                                   deviceID: nil)
         try await harness.store.append(declined, captureID: harness.captureID)
 
         let load = TranscriptRevisionStore.loadChain(captureDirectory: harness.captureDirectory)!
@@ -149,9 +149,9 @@ final class TranscriptMergeTests: XCTestCase {
         var load = TranscriptRevisionStore.loadChain(captureDirectory: harness.captureDirectory)!
         XCTAssertEqual(TranscriptChain.current(load.revisions)?.id, m.id)
 
-        let reverted = TranscriptMerge.revert(current: m, toMachine: rev0,
-                                              id: "01MG0000000000000000000C", createdAt: t0.addingTimeInterval(2),
-                                              deviceID: nil)
+        let reverted = try TranscriptMerge.revert(current: m, toMachine: rev0,
+                                                  id: "01MG0000000000000000000C", createdAt: t0.addingTimeInterval(2),
+                                                  deviceID: nil)
         try await harness.store.append(reverted, captureID: harness.captureID)
 
         load = TranscriptRevisionStore.loadChain(captureDirectory: harness.captureDirectory)!
@@ -220,6 +220,100 @@ final class TranscriptMergeTests: XCTestCase {
         XCTAssertEqual(result, retained)
     }
 
+    // MARK: - Adopt-verbatim pin (#41, §15b.13): accept/revert must carry a machine
+    // revision's own anchors across UNCHANGED — `.inherited`/`.none` included, not just
+    // `.exact`. §6.3's "the legitimate route up the lattice" prose describes accept's
+    // usual case (a fresh machine pass IS `.exact`), it does not mean `adopt` may
+    // rewrite whatever anchor it's handed.
+
+    func testAcceptOverInheritedAndNoneAnchoredMachineSpansKeepsThoseAnchorsByteForByte() throws {
+        let machine = TranscriptRevision(id: "M1", source: .machineRetranscribe, createdAt: t0,
+                                         spans: [
+                                            TranscriptSpan(text: "kept", anchor: .inherited,
+                                                          frameStart: 0, frameEnd: 10),
+                                            TranscriptSpan(text: "unbounded", anchor: .none),
+                                         ])
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+
+        let merged = try TranscriptMerge.accept(current: current, machine: machine,
+                                                id: "MG1", createdAt: t0, deviceID: nil)
+
+        XCTAssertEqual(merged.spans, [
+            TranscriptSpan(text: "kept", anchor: .inherited, frameStart: 0, frameEnd: 10, sourceRevisionID: "M1"),
+            TranscriptSpan(text: "unbounded", anchor: .none, sourceRevisionID: "M1"),
+        ])
+    }
+
+    func testRevertOverInheritedAndNoneAnchoredMachineSpansKeepsThoseAnchorsByteForByte() throws {
+        let machine = TranscriptRevision(id: "M1", source: .machineLive, createdAt: t0,
+                                         spans: [
+                                            TranscriptSpan(text: "kept", anchor: .inherited,
+                                                          frameStart: 0, frameEnd: 10),
+                                            TranscriptSpan(text: "unbounded", anchor: .none),
+                                         ])
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+
+        let reverted = try TranscriptMerge.revert(current: current, toMachine: machine,
+                                                  id: "MG1", createdAt: t0, deviceID: nil)
+
+        XCTAssertEqual(reverted.spans, [
+            TranscriptSpan(text: "kept", anchor: .inherited, frameStart: 0, frameEnd: 10, sourceRevisionID: "M1"),
+            TranscriptSpan(text: "unbounded", anchor: .none, sourceRevisionID: "M1"),
+        ])
+    }
+
+    // MARK: - Merge lineage guard (T7 prereq #41): a human-lineage revision passed as
+    // `machine` must never be accepted/declined/reverted-to — writing its id into
+    // `basedOnMachineID` would be permanent and poison §6.4 propagation forever.
+
+    func testAcceptThrowsNotMachineLineageWhenMachineIsUserEdit() {
+        let machine = TranscriptRevision(id: "H1", source: .userEdit, createdAt: t0,
+                                         spans: [exact("human text", 0, 50)])
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+
+        XCTAssertThrowsError(try TranscriptMerge.accept(current: current, machine: machine,
+                                                         id: "MG1", createdAt: t0, deviceID: nil)) { error in
+            XCTAssertEqual(error as? TranscriptMergeError, .notMachineLineage("H1"))
+        }
+    }
+
+    func testDeclineThrowsNotMachineLineageWhenMachineIsUserEdit() {
+        let machine = TranscriptRevision(id: "H1", source: .userEdit, createdAt: t0,
+                                         spans: [exact("human text", 0, 50)])
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+
+        XCTAssertThrowsError(try TranscriptMerge.decline(current: current, machine: machine,
+                                                          id: "MG1", createdAt: t0, deviceID: nil)) { error in
+            XCTAssertEqual(error as? TranscriptMergeError, .notMachineLineage("H1"))
+        }
+    }
+
+    func testRevertThrowsNotMachineLineageWhenMachineIsUserEdit() {
+        let machine = TranscriptRevision(id: "H1", source: .userEdit, createdAt: t0,
+                                         spans: [exact("human text", 0, 50)])
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+
+        XCTAssertThrowsError(try TranscriptMerge.revert(current: current, toMachine: machine,
+                                                         id: "MG1", createdAt: t0, deviceID: nil)) { error in
+            XCTAssertEqual(error as? TranscriptMergeError, .notMachineLineage("H1"))
+        }
+    }
+
+    /// `.unknown("x")` is machine lineage by `RevisionSource.isHumanLineage` (§15/T6a
+    /// rule) — asserted explicitly so a future "tighten this" can't silently change
+    /// lineage law without breaking a test that names the intent.
+    func testAcceptAllowsMachineLiveMachineRetranscribeAndUnknownSourceAsMachine() throws {
+        let current = TranscriptRevision(id: "C1", source: .userEdit, createdAt: t0, spans: [])
+        let sources: [RevisionSource] = [.machineLive, .machineRetranscribe, .unknown("x")]
+        for source in sources {
+            let machine = TranscriptRevision(id: "M-\(source.string)", source: source, createdAt: t0,
+                                             spans: [exact("machine text", 0, 50)])
+            XCTAssertNoThrow(try TranscriptMerge.accept(current: current, machine: machine,
+                                                        id: "MG-\(source.string)", createdAt: t0, deviceID: nil),
+                            "source \(source) must be treated as machine lineage")
+        }
+    }
+
     // MARK: - 6.5 basedOnMachineID propagation (§6.4/F13)
 
     func testUserEditAfterMergeCopiesTheMergesStoredBasedOnMachineIDNotNearestAncestor() async throws {
@@ -254,9 +348,9 @@ final class TranscriptMergeTests: XCTestCase {
                                     parentID: m0.id)
         try await harness.store.append(m2, captureID: harness.captureID)
 
-        let g = TranscriptMerge.accept(current: u1, machine: m2,
-                                       id: "01G0000000000000000000000C", createdAt: t0.addingTimeInterval(4),
-                                       deviceID: nil)
+        let g = try TranscriptMerge.accept(current: u1, machine: m2,
+                                           id: "01G0000000000000000000000C", createdAt: t0.addingTimeInterval(4),
+                                           deviceID: nil)
         try await harness.store.append(g, captureID: harness.captureID)
         XCTAssertEqual(g.basedOnMachineID, m2.id)
 

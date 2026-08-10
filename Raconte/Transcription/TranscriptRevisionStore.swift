@@ -566,30 +566,48 @@ actor TranscriptRevisionStore {
     /// Stale-draft pass for launch + entry-open (rule 9, §4.6 — NEVER the scan): closes
     /// every capture's draft whose `lastWriteAt` is older than `policy.sessionEndSeconds`
     /// with reason `.recovered`. Skips a capture with no draft, a fresh draft, or
-    /// `trashedAt != nil`; one bad capture's failure never aborts the rest of the pass.
+    /// `trashedAt != nil`; one bad capture's failure never aborts the rest of the pass
+    /// (`closeStaleDraftIfNeeded` never throws, so a per-capture failure can only ever
+    /// surface as `nil`, which the loop below simply ignores). The corpus walk owns
+    /// nothing but the directory enumeration and that never-abort property; every rule
+    /// about WHICH capture is stale and closeable lives once in `closeStaleDraftIfNeeded`.
     func closeStaleDrafts(now: Date) async {
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
             return
         }
         for id in ids.sorted() {
-            let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
-            var isCaptureDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
-                  isCaptureDirectory.boolValue else {
-                continue
-            }
-            let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
-            guard let metadata = try? EntryMetadataStore.read(url: sidecarURL), !metadata.isTrashed else {
-                continue
-            }
-            guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
-                continue
-            }
-            guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
-                continue
-            }
-            _ = try? closeDraft(captureID: id, reason: .recovered, now: now)
+            _ = await closeStaleDraftIfNeeded(captureID: id, now: now)
         }
+    }
+
+    /// Sibling to `closeStaleDrafts(now:)`, same rules, scoped to one capture (T7 prereq
+    /// #41): the entry-open call site (`EntryDetailView.refresh()`) needs to recover just
+    /// the capture it's opening, not pay for a corpus walk on every screen open.
+    ///
+    /// Returns the minted revision id, or `nil` in every one of: no draft on disk, the
+    /// draft is fresher than `policy.sessionEndSeconds`, the capture is missing or
+    /// trashed, or `closeDraft` itself threw (a degraded chain, §15b.15 — the draft
+    /// stays on disk untouched, nothing is minted, and there is no caller here to show
+    /// an error to).
+    @discardableResult
+    func closeStaleDraftIfNeeded(captureID: String, now: Date) async -> String? {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isCaptureDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
+              isCaptureDirectory.boolValue else {
+            return nil
+        }
+        let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        guard let metadata = try? EntryMetadataStore.read(url: sidecarURL), !metadata.isTrashed else {
+            return nil
+        }
+        guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
+            return nil
+        }
+        guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
+            return nil
+        }
+        return try? closeDraft(captureID: captureID, reason: .recovered, now: now)
     }
 
     // MARK: - Promotion (T6c, design §5.1/§5.2)

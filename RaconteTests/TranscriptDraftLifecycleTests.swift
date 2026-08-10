@@ -89,6 +89,81 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         }
     }
 
+    // MARK: - #40.2 (T7 Task 3): bound writeDraft's per-write cost
+
+    /// **3.3a — seam-counted.** Once `transcript/` already exists (the overwhelmingly
+    /// common case: the entry was already promoted before the editor ever opened), the
+    /// `plainText` flatten + `text != currentText` comparison are moot — the guard they
+    /// feed lets the write through unconditionally in that case — and must not run.
+    /// `currentTextComparisonRan` is a test-only seam (mirrors `append`'s `beforeWrite`)
+    /// proving the skip actually happens, since the write's own outcome (draft written)
+    /// is identical whether or not the comparison ran and so cannot prove this by itself.
+    /// **Mutation:** delete the `if !transcriptDirectoryExists` guard around the seam
+    /// call (always run the flatten+compare) -> `hitCount` becomes 1 and this fails.
+    func testWriteDraftSkipsCurrentTextComparisonWhenTranscriptDirectoryAlreadyExists() async throws {
+        let s = store()
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)   // transcript/ now exists
+
+        final class HitCounter: @unchecked Sendable {
+            var count = 0
+            func hit() { count += 1 }
+        }
+        let counter = HitCounter()
+
+        try await s.writeDraft(captureID: captureID, text: "goodbye", now: baseTime,
+                               currentTextComparisonRan: { counter.hit() })
+
+        XCTAssertEqual(counter.count, 0,
+                       "#40.2: once transcript/ already exists the A2b comparison is moot and must not run")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path))
+        let draft = try CaptureCoding.decoder().decode(TranscriptDraft.self, from: try Data(contentsOf: draftURL))
+        XCTAssertEqual(draft.text, "goodbye")
+    }
+
+    /// **3.3a, other half.** On a FRESH capture (`transcript/` absent) the comparison
+    /// still must run — it is the only thing deciding whether A2b's "never create
+    /// transcript/ for a no-op draft" rule applies.
+    func testWriteDraftRunsCurrentTextComparisonWhenTranscriptDirectoryIsAbsent() async throws {
+        final class HitCounter: @unchecked Sendable {
+            var count = 0
+            func hit() { count += 1 }
+        }
+        let counter = HitCounter()
+
+        try await store().writeDraft(captureID: captureID, text: "hello", now: baseTime,
+                                     currentTextComparisonRan: { counter.hit() })
+
+        XCTAssertEqual(counter.count, 1, "with no transcript/ yet, the comparison is the ONLY way to know")
+    }
+
+    /// **3.3b — the safety property the mutation check in 3.3a's doc comment guards.**
+    /// §15b.15: even in the identical "transcript/ already exists" shape as 3.3a — where
+    /// the flatten+compare are skipped — the decode-and-refuse in
+    /// `readableOrderedRevisions` still runs UNCONDITIONALLY and still throws on a
+    /// degraded chain. This is the scenario `testWriteDraftRefusesWhenChainHasAn
+    /// UndecodableRevision` above already exercises (transcript/ exists via `append`,
+    /// then a sibling is corrupted, then `writeDraft` is called) — restated here under
+    /// the #40.2 section so the "still throws" half of the ruling has its own name and
+    /// is not merely inherited by coincidence. **Mutation check (performed manually,
+    /// not re-run by CI):** moving `readableOrderedRevisions` BELOW the
+    /// `transcriptDirectoryExists` check (i.e. deciding "skip the decode when
+    /// transcript/ exists" instead of "skip the flatten+compare") makes this fail —
+    /// exactly the bug the issue's wording invites (brief work item 2).
+    func testWriteDraftStillRefusesOnADegradedChainWhenTranscriptDirectoryAlreadyExists() async throws {
+        let s = store()
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)
+        try writeRawCanonical(1, "not valid json")   // transcript/ still exists; chain now degraded
+
+        do {
+            try await s.writeDraft(captureID: captureID, text: "goodbye", now: baseTime)
+            XCTFail("expected a refusal, not a silent write against a degraded chain")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .revisionUnreadable(file: 1))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path),
+                       "a refused writeDraft must not create draft.json")
+    }
+
     // MARK: - closeDraft
 
     func testCloseDraftWithTextEqualToCurrentDeletesDraftAndMintsNothing() async throws {

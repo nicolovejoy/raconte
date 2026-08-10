@@ -494,4 +494,74 @@ final class LibraryScannerTests: XCTestCase {
         let item = try XCTUnwrap(result.items.first)
         XCTAssertEqual(item.journal?.name, "1987")
     }
+
+    // MARK: T7 Task 3 (#40.1) — row summaries route through validatedHead, not loadChain
+
+    private func revisionStore() -> TranscriptRevisionStore { TranscriptRevisionStore(capturesRoot: capturesRoot) }
+
+    @discardableResult
+    private func writeRawCanonical(_ id: String, _ n: Int, _ json: String) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDir(id)),
+            withIntermediateDirectories: true)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDir(id), revision: n)
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    /// **3.1 — today's answer, pinned.** A row whose canonical chain has one healthy
+    /// revision (appended normally, so `head.json` is persisted and trustworthy for
+    /// that revision alone) plus a SECOND, corrupted sibling file written directly
+    /// (never through `append`) — simulating damage that arrives after the head cache
+    /// was last durably written. The file-number set `head.json` remembers (`[0]`) no
+    /// longer matches the directory's (`[0, 1]`), so `validatedHead` cannot trust the
+    /// cache and rebuilds — the same decode-and-detect path `loadChain` always ran.
+    /// `.revisionUnreadable` is raised, identical to the row's answer before this task
+    /// routed it through the head cache (`EntryDegradationTableTests` guards that the
+    /// flag TABLE itself is untouched by this task; this pins the SCENARIO's answer).
+    func testUndecodableSiblingRevisionStillDegradesTheRowAfterHeadCacheRouting() async throws {
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try await revisionStore().append(
+            TranscriptRevision(id: "R0", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               spans: [TranscriptSpan(text: "healthy revision", anchor: .none)]),
+            captureID: idA)
+        try writeRawCanonical(idA, 1, "{ not valid json at all, corrupted")
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, "healthy revision")
+        XCTAssertTrue(item.degradations.contains(.revisionUnreadable),
+                     "an unreadable sibling must still degrade the row once the head cache can no longer be trusted")
+    }
+
+    /// **3.2 — mutation check for #40.1.** The row's snippet must come from the CACHED
+    /// `head.json` summary, never from decoding `canonical-0.json`'s own body — proven
+    /// with a deliberately inconsistent fixture: `head.json` is hand-written (matching
+    /// the actual file-number set, so `validatedHead` trusts it as-is) with a cached
+    /// `firstLine` that does NOT match what decoding the real revision body would
+    /// produce. If the row ever opened and decoded that file, its snippet would show the
+    /// decoded marker instead. Mutation: point `transcriptSummary`/`.skip` back at
+    /// `loadChain` -> this test fails (the decoded body wins, since `loadChain` ignores
+    /// `head.json` entirely).
+    func testRowSnippetComesFromTheHeadCacheNeverFromDecodingARevisionBody() async throws {
+        let revision = TranscriptRevision(id: "R0", source: .machineLive,
+                                          createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                                          spans: [TranscriptSpan(text: "DECODED BODY MARKER", anchor: .none)])
+        try writeRawCanonical(idA, 0, String(data: try CaptureCoding.encoder().encode(revision),
+                                             encoding: .utf8)!)
+
+        let cachedSummary = TranscriptHeadSummary(id: "R0", fileNumber: 0, source: .machineLive,
+                                                  createdAt: revision.createdAt,
+                                                  characterCount: 15, firstLine: "CACHED PREVIEW",
+                                                  isForked: false)
+        let head = TranscriptHead(current: cachedSummary, revisionFiles: [0], unreadableFiles: [],
+                                  revisionCount: 1, listingUnreadable: false)
+        try CaptureCoding.encoder().encode(head)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDir(idA)))
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, "CACHED PREVIEW")
+        XCTAssertFalse((item.snippet ?? "").contains("DECODED"),
+                       "the row must never decode the revision body when the head cache is trustworthy")
+    }
 }

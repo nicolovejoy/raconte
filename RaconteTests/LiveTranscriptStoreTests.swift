@@ -273,6 +273,34 @@ final class LiveTranscriptStoreTests: XCTestCase {
         XCTAssertTrue(capture.transcriptPresent)
     }
 
+    /// #39, T7 Task 3 ruling 1: `Int?`, non-nil once real canonical files exist —
+    /// counting BOTH bytes ("{}" is 2 bytes each), matching `canonicalRevisions`' own
+    /// two-file fixture above so the byte count is directly checkable, not just > 0.
+    func testGatherPopulatesRevisionsByteSize() throws {
+        let dir = SegmentLayout.transcriptDirectory(captureDirectory: captureDir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("canonical-2.json"))
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("canonical-11.json"))
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertEqual(capture.revisionsByteSize, 4, "two 2-byte \"{}\" files")
+    }
+
+    /// `transcript/` present (so `live.jsonl` alone counts as `transcriptPresent`) but
+    /// holding no canonical revision files at all — `revisionsByteSize` stays nil,
+    /// mirroring `liveTranscriptByteSize`'s own "nil if absent" convention, not 0.
+    func testRevisionsByteSizeIsNilWhenNoCanonicalFilesExist() throws {
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir)
+        try writer.open()
+        try writer.append(record("one", 0, 4_800))
+        try writer.close()
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertNil(capture.revisionsByteSize)
+    }
+
     func testAnEmptyTranscriptDirectoryIsNotPresent() throws {
         try FileManager.default.createDirectory(
             at: SegmentLayout.transcriptDirectory(captureDirectory: captureDir),
@@ -281,6 +309,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         let capture = try XCTUnwrap(snapshot.captures.first)
         XCTAssertFalse(capture.transcriptPresent)
         XCTAssertNil(capture.liveTranscriptByteSize)
+        XCTAssertNil(capture.revisionsByteSize)
     }
 
     // MARK: T6a — SegmentLayout head/draft/entry-log paths

@@ -10,6 +10,15 @@ struct EntryTranscript: Sendable, Equatable {
     var state: EntryTranscriptState
     /// The full committed text, consolidated. `nil` unless `state == .present`; empty
     /// when the log is readable and holds no committed text — a real, distinct answer.
+    ///
+    /// **Exception (T7 Task 3, #40.1):** when `AttributionMode.skip` supplied this from
+    /// a promoted canonical chain (the scanner's row path — see `EntryTranscriptLoader
+    /// .load`), this is `TranscriptHeadSummary.firstLine` — the cached head's single
+    /// first line, ≤120 chars — NOT the full text, because getting the full text would
+    /// require decoding the revision body the head cache exists to avoid opening. Only
+    /// ever a row's own concern: the row only ever reads `.snippet` below, which
+    /// truncates further anyway, and every other caller (`AttributionMode.compute`, the
+    /// detail screen) still gets the genuine full text.
     var text: String?
     var degradations: EntryDegradation
     /// Voice-attributed paragraphs (T7 plan step 2), for the detail screen only.
@@ -76,6 +85,22 @@ enum EntryTranscriptLoader {
     /// paragraphs stay consistent with whichever text is shown. Three answers all the
     /// way down: no attached canonical revision (absent `transcript/`, or every file in
     /// it unreadable) falls through to today's `live.jsonl` path unchanged.
+    ///
+    /// **#40.1 (T7 Task 3):** the two `attribution` modes now take genuinely different
+    /// canonical-chain paths, not just a different tail. `.compute` (the detail screen,
+    /// a user-action-triggered read) still goes through `loadChain`, decoding every
+    /// revision body — it needs the full text and `current`'s real `RevisionSource` for
+    /// the paragraph-attribution guard below. `.skip` (the scanner's row, run on every
+    /// entry on every scan) goes through `TranscriptRevisionStore.validatedHead`
+    /// instead — the O(1) head-cache path (design §4.3) that exists precisely so a row
+    /// never opens a `canonical-<n>.json` body just to show a preview. Its `current` is
+    /// therefore a `TranscriptHeadSummary`, not a `TranscriptRevision`: `text` becomes
+    /// `firstLine` (single line, ≤120 chars) rather than the full flattened text — a
+    /// deliberate accuracy trade for a row that only ever renders a truncated snippet
+    /// anyway. Both branches still carry the SAME `live.jsonl`-degradation rules
+    /// (truncation/unreadability of the source log survives even when canonical text
+    /// wins, review finding 1) via `liveLogDegradation` below, and both fall through to
+    /// the identical `live.jsonl`-only path when there is no attached canonical current.
     static func load(captureDirectory: URL, expectedRecords: Int?,
                      attribution: AttributionMode = .skip) -> EntryTranscript {
         let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
@@ -86,29 +111,72 @@ enum EntryTranscriptLoader {
                                         committed: committed, sampleRate: sampleRate)
         }
 
-        let canonicalLoad = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)
-        var canonicalDegradation: EntryDegradation = []
-        if let canonicalLoad, !canonicalLoad.unreadableFiles.isEmpty {
-            canonicalDegradation.insert(.revisionUnreadable)
-        }
-        if let canonicalLoad,
-           let current = TranscriptChain.current(TranscriptChain.ordered(canonicalLoad.revisions)) {
-            var degradations = canonicalDegradation
-            var committed: [TranscriptResult] = []
+        // The `live.jsonl`-side degradation rules, shared verbatim by every canonical-
+        // present branch below (review finding 1): the source log being truncated or
+        // unreadable must survive regardless of which canonical path supplied `text`.
+        func liveLogDegradation(_ base: EntryDegradation) -> EntryDegradation {
+            var degradations = base
             switch loaded.source {
             case .absent:
                 break
             case .unreadable:
                 // The promoted text is only as good as the log it came from — an
                 // unreadable `live.jsonl` must still be surfaced even though `current`
-                // itself decoded fine (review finding 1: this must never be silently
-                // lost just because the canonical branch took over).
+                // itself decoded fine.
                 degradations.insert(.transcriptUnreadable)
             case .present:
                 if case .truncated = LiveTranscriptReader.completeness(lines: loaded.completeLines,
                                                                        expected: expectedRecords) {
                     degradations.insert(.transcriptTruncated)
                 }
+            }
+            return degradations
+        }
+
+        // No attached canonical revision to show (absent transcript/, or every file in
+        // it unreadable/empty) — the live.jsonl-only path, carrying any canonical-side
+        // degradation forward so an owner still learns "revision unreadable" over the
+        // fallback text. Identical for both attribution modes: `paragraphs(for:)`
+        // self-selects `nil` under `.skip`, and this consolidation cost is pre-existing
+        // and out of #40's scope (see this type's own "Known cost" doc on the scanner).
+        func fallbackToLiveLog(canonicalDegradation: EntryDegradation) -> EntryTranscript {
+            switch loaded.source {
+            case .absent:
+                return EntryTranscript(state: .absent, text: nil, degradations: canonicalDegradation)
+            case .unreadable:
+                // Not "no transcript". The log is there and we failed at it.
+                var degradations = canonicalDegradation
+                degradations.insert(.transcriptUnreadable)
+                return EntryTranscript(state: .unreadable, text: nil, degradations: degradations)
+            case .present:
+                var degradations = canonicalDegradation
+                if case .truncated = LiveTranscriptReader.completeness(lines: loaded.completeLines,
+                                                                       expected: expectedRecords) {
+                    degradations.insert(.transcriptTruncated)
+                }
+                let consolidator = LiveTranscriptReader.consolidate(loaded.records)
+                return EntryTranscript(
+                    state: .present,
+                    text: consolidator.committedText,
+                    degradations: degradations,
+                    paragraphs: paragraphs(for: consolidator.committed))
+            }
+        }
+
+        switch attribution {
+        case .compute:
+            let canonicalLoad = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)
+            var canonicalDegradation: EntryDegradation = []
+            if let canonicalLoad, !canonicalLoad.unreadableFiles.isEmpty {
+                canonicalDegradation.insert(.revisionUnreadable)
+            }
+            guard let canonicalLoad,
+                  let current = TranscriptChain.current(TranscriptChain.ordered(canonicalLoad.revisions))
+            else {
+                return fallbackToLiveLog(canonicalDegradation: canonicalDegradation)
+            }
+            var committed: [TranscriptResult] = []
+            if case .present = loaded.source {
                 committed = LiveTranscriptReader.consolidate(loaded.records).committed
             }
             // Paragraphs are attributed off `live.jsonl`'s committed records (T7 plan
@@ -120,33 +188,27 @@ enum EntryTranscriptLoader {
             let attributed = current.source == .machineLive ? paragraphs(for: committed) : nil
             return EntryTranscript(state: .present,
                                    text: TranscriptChain.plainText(current),
-                                   degradations: degradations,
+                                   degradations: liveLogDegradation(canonicalDegradation),
                                    paragraphs: attributed)
-        }
-        // No attached canonical revision to show (absent transcript/, or every file in
-        // it unreadable/empty) — fall through, carrying any degradation forward so an
-        // owner still learns "revision unreadable" over the live.jsonl fallback text.
 
-        switch loaded.source {
-        case .absent:
-            return EntryTranscript(state: .absent, text: nil, degradations: canonicalDegradation)
-        case .unreadable:
-            // Not "no transcript". The log is there and we failed at it.
-            var degradations = canonicalDegradation
-            degradations.insert(.transcriptUnreadable)
-            return EntryTranscript(state: .unreadable, text: nil, degradations: degradations)
-        case .present:
-            var degradations = canonicalDegradation
-            if case .truncated = LiveTranscriptReader.completeness(lines: loaded.completeLines,
-                                                                   expected: expectedRecords) {
-                degradations.insert(.transcriptTruncated)
+        case .skip:
+            // #40.1: the scanner's row path must never decode a revision body.
+            // `validatedHead` is trusted as-is (no file opened, no JSON decoded) unless
+            // the directory listing has moved since the cache was last written, in
+            // which case it falls back to a full rebuild — a cost paid only on the
+            // scan right after a chain-changing write, not on every subsequent one.
+            let head = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+            var canonicalDegradation: EntryDegradation = []
+            if let head, !head.unreadableFiles.isEmpty {
+                canonicalDegradation.insert(.revisionUnreadable)
             }
-            let consolidator = LiveTranscriptReader.consolidate(loaded.records)
-            return EntryTranscript(
-                state: .present,
-                text: consolidator.committedText,
-                degradations: degradations,
-                paragraphs: paragraphs(for: consolidator.committed))
+            guard let head, let current = head.current else {
+                return fallbackToLiveLog(canonicalDegradation: canonicalDegradation)
+            }
+            return EntryTranscript(state: .present,
+                                   text: current.firstLine,
+                                   degradations: liveLogDegradation(canonicalDegradation),
+                                   paragraphs: nil)
         }
     }
 

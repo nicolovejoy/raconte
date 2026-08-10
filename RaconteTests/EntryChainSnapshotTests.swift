@@ -360,6 +360,26 @@ final class EntryChainSnapshotTests: XCTestCase {
                        "must equal BOTH canonical files' combined raw size (one is corrupt), excluding the 999-byte draft.json")
     }
 
+    /// T7 Task 3 ruling 2: `DirectorySnapshot.revisionsByteSize` (the diagnostics
+    /// screen's cheap, corpus-wide stat) and `chainByteSize` (the revision-history
+    /// panel's per-entry read) are two INDEPENDENTLY computed directory listings over
+    /// the same `transcript/` — this pins that they can never silently disagree about
+    /// one entry's chain size, using the same "one readable + one corrupt" fixture the
+    /// test above already established as load-bearing (a "sum only decodable files" bug
+    /// in either implementation would be caught here too).
+    func testRevisionsByteSizeOnDirectorySnapshotMatchesChainByteSizeExactly() throws {
+        try writeRawCanonical(0, try validJSON(for: revision("R0")))
+        try writeRawCanonical(1, "{ not valid json at all, corrupted")
+
+        let chainSnapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+        let directorySnapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(directorySnapshot.captures.first { $0.captureID == captureID })
+
+        XCTAssertGreaterThan(chainSnapshot.chainByteSize, 0, "sanity: the fixture must actually carry bytes")
+        XCTAssertEqual(Int64(try XCTUnwrap(capture.revisionsByteSize)), chainSnapshot.chainByteSize,
+                       "the history panel and the diagnostics screen must never disagree about one entry's chain size")
+    }
+
     // MARK: - Sidecar-unreadable edge case (beyond the 5 required fixtures)
 
     /// Not one of the brief's 5 required Editability fixtures, but a real read-path edge

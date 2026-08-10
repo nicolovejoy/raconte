@@ -35,6 +35,17 @@ struct EntryChainSnapshot: Sendable, Equatable {
     /// order every other chain-derived list in this codebase uses — since Task 8 renders
     /// this list and needs it deterministic.
     var detachedMachineRevisions: [TranscriptHeadSummary]
+    /// Sum of on-disk byte sizes of every LISTED `canonical-<n>.json` file — readable or
+    /// not (a corrupt revision still occupies real bytes, and the storage stat, #39, is
+    /// meant to show the chain's real disk cost, not just the successfully-parsed
+    /// portion). Deliberately excludes `head.json` (a rebuildable cache, design §4.3) and
+    /// `draft.json` (transient/mutable, not part of the immutable chain) — only the
+    /// append-only canonical revision files themselves count as "the chain's own on-disk
+    /// cost". `0` when `transcript/` is absent or its own listing failed. Computed by
+    /// `TranscriptRevisionStore.canonicalFilesByteSize` — the SAME definition
+    /// `DirectorySnapshot.revisionsByteSize` (Task 3) counts, on purpose (see that
+    /// function's doc comment): the history panel and the diagnostics screen must never
+    /// disagree about one entry's chain size.
     var chainByteSize: Int64                // #39
 
     // MARK: - Build
@@ -106,7 +117,11 @@ struct EntryChainSnapshot: Sendable, Equatable {
                                       detachedMachineRevisions: [], chainByteSize: 0)
 
         case .present(let files):
-            let byteSize = Self.byteSize(captureDirectory: captureDirectory, files: files)
+            // #39/#40 Task 3: shared with `DirectorySnapshot.revisionsByteSize` — see
+            // `TranscriptRevisionStore.canonicalFilesByteSize`'s doc comment for why
+            // this must stay the one implementation.
+            let byteSize = TranscriptRevisionStore.canonicalFilesByteSize(
+                captureDirectory: captureDirectory, files: files)
 
             guard let raw = TranscriptRevisionStore.rawLoad(captureDirectory: captureDirectory) else {
                 // Cannot happen: `.present` above already proves `transcript/` exists,
@@ -176,28 +191,6 @@ struct EntryChainSnapshot: Sendable, Equatable {
                                       openDraft: openDraft,
                                       detachedMachineRevisions: detachedSummaries,
                                       chainByteSize: byteSize)
-        }
-    }
-
-    // MARK: - Private reads
-
-    /// Sum of on-disk byte sizes of every LISTED `canonical-<n>.json` file — readable or
-    /// not (a corrupt revision still occupies real bytes, and the storage stat, #39, is
-    /// meant to show the chain's real disk cost, not just the successfully-parsed
-    /// portion). Deliberately excludes `head.json` (a rebuildable cache, design §4.3) and
-    /// `draft.json` (transient/mutable, not part of the immutable chain) — only the
-    /// append-only canonical revision files themselves count as "the chain's own on-disk
-    /// cost". `0` when `transcript/` is absent or its own listing failed: there is
-    /// nothing to sum in either case (handled by the two early-return branches above,
-    /// which never call this).
-    private static func byteSize(captureDirectory: URL, files: [Int]) -> Int64 {
-        files.reduce(Int64(0)) { total, file in
-            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let size = attrs[.size] as? NSNumber else {
-                return total
-            }
-            return total + size.int64Value
         }
     }
 }

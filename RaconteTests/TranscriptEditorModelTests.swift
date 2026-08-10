@@ -102,9 +102,9 @@ final class TranscriptEditorModelTests: XCTestCase {
 
     private func editor(_ store: any TranscriptEditorStore,
                         debounce: ManualDebounce = ManualDebounce(),
-                        now: Date = Date(timeIntervalSince1970: 1_700_001_000)) -> TranscriptEditorModel {
+                        clock: TestClock = TestClock(1_700_001_000)) -> TranscriptEditorModel {
         TranscriptEditorModel(captureID: captureID, store: store, debounce: debounce,
-                              debounceSeconds: 2, clock: { now })
+                              debounceSeconds: 2, clock: clock.callable)
     }
 
     // MARK: - 4.1 open()
@@ -262,9 +262,277 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertFalse(sentence.lowercased().contains("trash"),
                        "a corrupt sidecar is not a tombstone: \(sentence)")
     }
+
+    // MARK: - 4.2 debounce
+
+    /// §12.1's 2 s debounce, cancelled and re-armed per keystroke. Five keystrokes inside
+    /// one window write NOTHING until the window elapses, and then write exactly once — the
+    /// latest text, not five snapshots of a word being typed.
+    ///
+    /// No `Task.sleep` anywhere: the timer is injected (`ManualDebounce`), so this is an
+    /// assertion rather than a race. `armCount` is load-bearing, not mock-gazing — it is the
+    /// only deterministic witness that the keystroke SCHEDULED rather than wrote, which is
+    /// the whole behaviour under test.
+    func testKeystrokesInsideTheDebounceWindowProduceExactlyOneWrite() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        for typed in ["t", "th", "thi", "this", "this is mine"] {
+            model.text = typed
+            model.textChanged()
+        }
+
+        XCTAssertEqual(store.writeDraftCalls, [], "nothing may reach disk mid-word")
+        XCTAssertEqual(debounce.armCount, 5, "every keystroke re-arms the window")
+        XCTAssertTrue(debounce.isArmed)
+        XCTAssertTrue(model.hasUnsavedChanges)
+
+        await debounce.fire()
+
+        XCTAssertEqual(store.writeDraftCalls, ["this is mine"],
+                       "one write when the window elapses, of the latest text")
+        XCTAssertFalse(model.hasUnsavedChanges)
+    }
+
+    /// The other half of the debounce, which no injected timer can pin: `TaskEditorDebounce`
+    /// must CANCEL the window it already armed, or five keystrokes become five timers that
+    /// all eventually fire. Tested directly on the shipping timer, so removing its
+    /// `task?.cancel()` cannot pass the suite.
+    ///
+    /// The deliberate exception to "no sleeping in a debounce test": here the clock IS the
+    /// subject. The window is 20 ms and the wait is an order of magnitude longer.
+    func testTaskEditorDebounceCancelsThePreviouslyArmedWindow() async throws {
+        let debounce = TaskEditorDebounce()
+        let fired = Counter()
+
+        for payload in ["first", "second", "third"] {
+            debounce.arm(after: 0.02) { await fired.record(payload) }
+        }
+        try await Task.sleep(for: .milliseconds(400))
+
+        let recorded = await fired.values
+        XCTAssertEqual(recorded, ["third"], "re-arming must cancel the window it replaced")
+    }
+
+    // MARK: - 4.3 done()
+
+    /// §2.5: a draft whose text equals `current` closes to NOTHING — the file is deleted and
+    /// no revision is minted. The store already does this; what is pinned here is that the
+    /// editor does not work around it (by skipping `closeDraft` and leaving the file, or by
+    /// forcing a mint of text nobody changed).
+    ///
+    /// The fixture is a REAL resumed draft on disk, not an absent one: with no draft at all
+    /// the "draft was deleted" assertion would hold vacuously.
+    func testDoneWithUnchangedTextMintsNothingAndDeletesTheDraft() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        try writeDraftFile(text: "the machine text",
+                           openedAt: Date(timeIntervalSince1970: 1_700_000_900),
+                           lastWriteAt: Date(timeIntervalSince1970: 1_700_000_950),
+                           parentID: "R0")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path), "precondition")
+
+        let model = editor(liveModel())
+        await model.open()
+        let done = await model.done()
+
+        XCTAssertTrue(done)
+        XCTAssertEqual(try canonicalFileCount(), 1, "nothing may be minted for an unchanged edit")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path), "the draft is closed, not left")
+    }
+
+    /// The round-trip postcondition design §15b.11 makes law, through the real splice: after
+    /// Done, `current` is a `.userEdit` revision whose flattened text IS what was typed.
+    ///
+    /// Deliberately edited in the MIDDLE (a word replaced, not appended): an implementation
+    /// that concatenated, or that dropped the parent's spans, or that stored the whole text
+    /// as one span, all differ here — where "append a suffix" would let several of them pass.
+    func testDoneWithChangedTextMintsExactlyOneUserEditWhosePlainTextIsTheEdit() async throws {
+        try await store().append(revision("R0", text: "the machine herd these words"),
+                                 captureID: captureID)
+
+        let model = editor(liveModel())
+        await model.open()
+        model.text = "the machine heard these words"
+        model.textChanged()
+        let done = await model.done()
+
+        XCTAssertTrue(done)
+        XCTAssertEqual(try canonicalFileCount(), 2, "exactly one new revision")
+        let current = try XCTUnwrap(currentRevision())
+        XCTAssertEqual(current.source, .userEdit)
+        XCTAssertEqual(TranscriptChain.plainText(current), "the machine heard these words")
+        XCTAssertEqual(current.parentID, "R0")
+        XCTAssertEqual(current.basedOnMachineID, "R0")
+        XCTAssertEqual(current.closedBy, .sessionEnd)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path))
+        XCTAssertFalse(model.hasUnsavedChanges)
+    }
+
+    // MARK: - 4.4 failures are loud
+
+    /// The 2026-08-03 detail-trash contract, applied to the editor: a save that failed says
+    /// so and nothing dismisses. `chainSnapshot` still reports `.editable` here — the entry
+    /// was trashed on another screen after this editor opened — which is precisely the
+    /// disagreement a disk fixture cannot build.
+    func testWriteDraftThrowSurfacesAsFailedAndKeepsTheText() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "an edit that cannot be saved"
+        model.textChanged()
+        store.writeDraftError = TranscriptRevisionStoreError.trashedCapture
+        await debounce.fire()
+
+        guard case .failed(let reason) = model.state else {
+            return XCTFail("expected .failed, got \(model.state)")
+        }
+        XCTAssertFalse(reason.isEmpty)
+        XCTAssertEqual(model.text, "an edit that cannot be saved", "a failed save never eats the words")
+        XCTAssertTrue(model.hasUnsavedChanges)
+        XCTAssertTrue(model.isEditable, "the owner must be able to keep typing and try again")
+
+        let done = await model.done()
+        XCTAssertFalse(done, "the caller must not dismiss")
+        XCTAssertEqual(store.closeDraftCalls, [], "a draft that never saved is not closed")
+    }
+
+    /// A later successful flush clears the failure — the banner must not outlive the problem.
+    func testASuccessfulFlushAfterAFailureReturnsToEditing() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "first try"
+        model.textChanged()
+        store.writeDraftError = TranscriptRevisionStoreError.trashedCapture
+        await debounce.fire()
+        guard case .failed = model.state else { return XCTFail("expected .failed, got \(model.state)") }
+
+        store.writeDraftError = nil
+        model.text = "second try"
+        model.textChanged()
+        await debounce.fire()
+
+        XCTAssertEqual(model.state, .editing)
+        XCTAssertEqual(store.writeDraftCalls, ["second try"])
+    }
+
+    /// A `closeDraft` that throws makes `done()` return `false`. The draft itself saved fine,
+    /// so the words are safe on disk — but the screen must not pretend the edit was closed.
+    func testCloseDraftThrowMakesDoneReturnFalse() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "saved as a draft, but not closeable"
+        model.textChanged()
+        store.closeDraftError = TranscriptRevisionStoreError.revisionUnreadable(file: 3)
+
+        let done = await model.done()
+
+        XCTAssertFalse(done)
+        XCTAssertEqual(store.writeDraftCalls, ["saved as a draft, but not closeable"],
+                       "the flush still happened — only the close failed")
+        guard case .failed = model.state else { return XCTFail("expected .failed, got \(model.state)") }
+    }
+
+    // MARK: - 4.5 backgrounding
+
+    /// `scenePhase` leaving `.active` calls `flush()`. What matters is the consequence: a
+    /// SEPARATE editor opened afterwards resumes the flushed text, not the pre-edit text.
+    /// Real store, so the resume travels through `draft.json` on disk exactly as it does on
+    /// device after the app is backgrounded and comes back.
+    func testBackgroundFlushIsResumedByASubsequentOpen() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+
+        let first = editor(liveModel())
+        await first.open()
+        first.text = "typed, then backgrounded"
+        first.textChanged()
+        await first.flush()                     // what .onChange(of: scenePhase) does
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path))
+        XCTAssertFalse(first.hasUnsavedChanges)
+
+        let second = editor(liveModel())
+        await second.open()
+
+        XCTAssertEqual(second.text, "typed, then backgrounded")
+        XCTAssertTrue(second.resumedFromDraft)
+        XCTAssertEqual(try canonicalFileCount(), 1, "a flush is a draft write, never a mint")
+    }
+
+    /// Hazard (a): `EntryDetailView.refresh()` also runs after a backdate save/clear and a
+    /// journal move, each closing drafts idle past `DraftPolicy.sessionEndSeconds` with
+    /// reason `.recovered` — so an idle-but-open editor's draft really is minted and deleted
+    /// beneath it. The editor must notice, keep every visible character, and write forward
+    /// from the recovered revision rather than over it.
+    func testADraftClosedBeneathTheSessionIsNoticedAndTheEditWritesForward() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let library = liveModel()
+        let clock = TestClock(1_700_001_000)
+        let model = editor(library, clock: clock)
+        await model.open()
+
+        model.text = "first pass of my edit"
+        model.textChanged()
+        await model.flush()
+
+        // Two minutes idle, then an unrelated backdate save runs refresh() → the stale-draft
+        // sweep closes THIS draft into a `.recovered` revision and deletes the file.
+        let recovered = await library.revisionStore.closeStaleDraftIfNeeded(
+            captureID: captureID, now: Date(timeIntervalSince1970: 1_700_001_200))
+        clock.now = Date(timeIntervalSince1970: 1_700_001_400)
+        XCTAssertNotNil(recovered, "precondition: the sweep really did close our draft")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path))
+        XCTAssertFalse(model.draftClosedBeneathSession, "nothing has looked yet")
+
+        model.text = "first pass of my edit, continued"
+        model.textChanged()
+        await model.flush()
+
+        XCTAssertTrue(model.draftClosedBeneathSession, "the editor must notice, not carry on blind")
+        XCTAssertEqual(model.text, "first pass of my edit, continued", "no visible character is lost")
+
+        let draft = try XCTUnwrap(TranscriptRevisionStore.readDraft(captureDirectory: captureDirectory))
+        XCTAssertEqual(draft.text, "first pass of my edit, continued")
+        XCTAssertEqual(draft.parentID, recovered,
+                       "the fresh draft is parented on the recovered revision, not on the one it replaced")
+
+        let closed = await model.done()
+        XCTAssertTrue(closed)
+        let current = try XCTUnwrap(currentRevision())
+        XCTAssertEqual(TranscriptChain.plainText(current), "first pass of my edit, continued")
+        XCTAssertEqual(current.parentID, recovered)
+        XCTAssertEqual(try canonicalFileCount(), 3, "R0, the recovered revision, and this one")
+    }
 }
 
 // MARK: - Doubles
+
+/// Records what a debounce actually fired, across actor boundaries.
+actor Counter {
+    private(set) var values: [String] = []
+    func record(_ value: String) { values.append(value) }
+}
+
+/// A clock the test advances by hand. Revision order is `(createdAt, id)`, so a fixture
+/// where the editor's own clock stands still while an unrelated sweep mints a revision
+/// "later" would put the sweep's revision at the head of the chain — a fixture artifact, not
+/// the behaviour under test. Advancing this makes the ordering the real one.
+final class TestClock: @unchecked Sendable {
+    var now: Date
+
+    init(_ epochSeconds: TimeInterval) { self.now = Date(timeIntervalSince1970: epochSeconds) }
+
+    var callable: @Sendable () -> Date { { [self] in now } }
+}
 
 /// A debounce whose timer only fires when the test says so — no `Task.sleep` anywhere, so
 /// "N keystrokes produce one write" is a deterministic assertion, not a race.

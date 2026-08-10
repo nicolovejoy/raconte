@@ -215,6 +215,7 @@ final class TranscriptEditorModel {
         let unsavedTextToPreserve = hasUnsavedChanges && !storedText.isEmpty ? storedText : nil
 
         sessionID &+= 1
+        let session = sessionID
         // A window armed against the PREVIOUS session's text must not survive into this one.
         // The ledger carried this as "unreachable today"; Gate A disproved that.
         debounce.cancel()
@@ -232,11 +233,16 @@ final class TranscriptEditorModel {
             resumedFromDraft = false
             lastKnownText = ""
             sessionDraftOpenedAt = nil
-            machineTranscript = await machineTranscriptIfDegraded(snapshot.editability)
+            let offer = await machineTranscriptIfDegraded(snapshot.editability)
+            guard sessionID == session else { return }
+            machineTranscript = offer
             state = .readOnly(snapshot.editability)
             return
         }
 
+        // Two `open()`s can overlap the same way (the second must win), so this branch is
+        // held to the same rule as the finish path.
+        guard sessionID == session else { return }
         machineTranscript = nil
         if let unsaved = unsavedTextToPreserve {
             // Re-entering after a save that refused (Critical 1): the words never reached
@@ -324,8 +330,16 @@ final class TranscriptEditorModel {
     @discardableResult
     func flush() async -> Bool {
         guard isEditable else { return true }
+        // Captured at entry and re-checked after EVERY await below. The work itself still
+        // completes when the owner has moved on — session one's draft deserves to be written
+        // and closed — but not one byte of the LIVE session's state may be written by a
+        // session that has been left behind. That was the re-review's Critical: `done()`
+        // resuming out of `closeDraft` wrote `hasUnsavedChanges = false` into session two,
+        // whose next flush then short-circuited and saved nothing while reporting success.
+        let session = sessionID
         debounce.cancel()
         await noteDraftClosedBeneathSessionIfNeeded()
+        guard sessionID == session else { return true }
         guard hasUnsavedChanges else {
             if case .failed = state { state = .editing }
             return true
@@ -334,13 +348,16 @@ final class TranscriptEditorModel {
         let pending = storedText
         do {
             try await store.writeDraft(captureID: captureID, text: pending, now: clock())
+            guard sessionID == session else { return true }
             if storedText == pending { hasUnsavedChanges = false }
             if case .failed = state { state = .editing }
             if sessionDraftOpenedAt == nil {
-                sessionDraftOpenedAt = await store.openDraft(for: captureID)?.openedAt
+                let openedAt = await store.openDraft(for: captureID)?.openedAt
+                if sessionID == session { sessionDraftOpenedAt = openedAt }
             }
             return true
         } catch {
+            guard sessionID == session else { return false }
             state = .failed(Self.saveFailureMessage(error))
             // Gate A Minor 4: `flush()` cancels the window on entry, so without this a failed
             // save sat with unsaved changes and retried NOTHING until the owner happened to
@@ -361,6 +378,7 @@ final class TranscriptEditorModel {
     /// (minting nothing). The editor does not work around that — it relies on it.
     @discardableResult
     func done() async -> Bool {
+        let session = sessionID
         debounce.cancel()
         guard isEditable else { return true }
 
@@ -368,16 +386,27 @@ final class TranscriptEditorModel {
         // genuinely failed still blocks the close: "retryable" must never become "closes
         // over a draft that never saved".
         guard await flush() else {
+            guard sessionID == session else { return false }
             unreportedSaveFailure = saveFailureReason ?? "The edit couldn’t be saved."
+            // Bound the M4 retry (re-review Minor): `flush()`'s failure branch re-armed the
+            // window, and `done()` used to return without cancelling it again — so a Done
+            // against a PERMANENT refusal left an invisible 2 s loop running for the life of
+            // the detail screen, each turn an `openDraft` plus a whole-chain-decode
+            // `writeDraft` (#50's cost), with the editor already gone. M4 itself is
+            // untouched: a failure while the editor is still open re-arms and retries, which
+            // is visible, bounded by the screen, and has its own test.
+            debounce.cancel()
             return false
         }
 
         do {
             _ = try await store.closeDraft(captureID: captureID, reason: .sessionEnd, now: clock())
+            guard sessionID == session else { return true }
             hasUnsavedChanges = false
             sessionDraftOpenedAt = nil
             return true
         } catch {
+            guard sessionID == session else { return false }
             let message = Self.saveFailureMessage(error)
             state = .failed(message)
             unreportedSaveFailure = message
@@ -452,7 +481,9 @@ final class TranscriptEditorModel {
     /// being written over as though it never existed.
     private func noteDraftClosedBeneathSessionIfNeeded() async {
         guard let owned = sessionDraftOpenedAt else { return }
+        let session = sessionID
         let onDisk = await store.openDraft(for: captureID)
+        guard sessionID == session else { return }
         guard onDisk?.openedAt != owned else { return }
         draftClosedBeneathSession = true
         sessionDraftOpenedAt = nil

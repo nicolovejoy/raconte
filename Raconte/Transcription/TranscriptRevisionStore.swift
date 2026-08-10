@@ -92,6 +92,27 @@ actor TranscriptRevisionStore {
         return .present(files: files)
     }
 
+    /// Sum of on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS under
+    /// one capture's `transcript/` — readable or not (a corrupt revision still occupies
+    /// real bytes). The single implementation `EntryChainSnapshot.chainByteSize` and
+    /// `DirectorySnapshot`'s `revisionsByteSize` (#39, Task 3) both call, so the
+    /// editor's revision-history panel and the corpus-wide diagnostics screen can never
+    /// silently disagree about what "one entry's chain size" means, even though each
+    /// computes its own independent `files` listing to pass in (the panel via
+    /// `TranscriptRevisionStore.listing`, the diagnostics screen via a stat-only
+    /// directory walk `DirectorySnapshot` already does). No revision body is decoded —
+    /// a directory listing (the caller's job) plus one `attributesOfItem` per file.
+    nonisolated static func canonicalFilesByteSize(captureDirectory: URL, files: [Int]) -> Int64 {
+        files.reduce(Int64(0)) { total, file in
+            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let size = attrs[.size] as? NSNumber else {
+                return total
+            }
+            return total + size.int64Value
+        }
+    }
+
     // MARK: - Loading
 
     struct ChainLoad: Sendable, Equatable {
@@ -494,20 +515,48 @@ actor TranscriptRevisionStore {
     /// in which case a draft matching current is still recorded (harmless: `closeDraft`
     /// treats a draft equal to current as "close to nothing" regardless of when it was
     /// written).
-    func writeDraft(captureID: String, text: String, now: Date) throws {
+    ///
+    /// **#40.2 (T7 Task 3) — bounding the per-write cost.** `readableOrderedRevisions`
+    /// below runs UNCONDITIONALLY, on every write, and MUST: it is where §15b.15's
+    /// degraded-chain refusal actually throws, and a file reads as "unreadable"
+    /// precisely because its decode failed — keeping the refusal while skipping the
+    /// decode is not possible; the issue's own wording invited exactly that mistake and
+    /// it is wrong (see the brief). What this task DOES skip: `TranscriptChain
+    /// .plainText`'s flatten of `current` plus the `text != currentText` comparison,
+    /// when `transcript/` already exists — because the guard they feed lets the write
+    /// through unconditionally once that's true, so the comparison's result is
+    /// structurally never read. (`TranscriptChain.current(ordered)` itself stays
+    /// unconditional: it is a pure, decode-free, in-memory walk over `ordered` — no
+    /// I/O, no allocation of a joined string — and is still needed below to snapshot a
+    /// brand-new draft's `parentID`/`basedOnMachineID` even when `transcript/` already
+    /// holds a promoted revision with no draft opened against it yet, the single most
+    /// common first-keystroke case. Only the genuinely costly flatten+compare is gated.)
+    /// The whole-chain DECODE itself (inside `readableOrderedRevisions`) still runs on
+    /// every write — filed as #50 rather than improvised here: a body-free readability
+    /// check is a design change to the chain's format/contract (needs its own
+    /// fingerprinting scheme in `head.json`), not a drop-in optimization.
+    func writeDraft(captureID: String, text: String, now: Date,
+                    currentTextComparisonRan: (@Sendable () -> Void)? = nil) throws {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
-        // Critical 2: refuse rather than silently splice against a chain missing its
-        // true tip.
+        // Critical 2 / §15b.15: refuse rather than silently splice against a chain
+        // missing its true tip. Unconditional — see doc comment above.
         let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
         let current = TranscriptChain.current(ordered)
-        let currentText = current.map(TranscriptChain.plainText) ?? ""
 
         let transcriptDirectory = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)
         let transcriptDirectoryExists = FileManager.default.fileExists(atPath: transcriptDirectory.path)
-        guard text != currentText || transcriptDirectoryExists else {
-            return
+
+        // #40.2: the flatten + comparison are moot once transcript/ already exists —
+        // `currentTextComparisonRan` is a test-only seam (mirrors `append`'s
+        // `beforeWrite`) proving that skip actually happens.
+        if !transcriptDirectoryExists {
+            currentTextComparisonRan?()
+            let currentText = current.map(TranscriptChain.plainText) ?? ""
+            guard text != currentText else {
+                return
+            }
         }
 
         try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)

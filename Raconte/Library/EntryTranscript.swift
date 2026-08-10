@@ -13,12 +13,20 @@ struct EntryTranscript: Sendable, Equatable {
     ///
     /// **Exception (T7 Task 3, #40.1):** when `AttributionMode.skip` supplied this from
     /// a promoted canonical chain (the scanner's row path — see `EntryTranscriptLoader
-    /// .load`), this is `TranscriptHeadSummary.firstLine` — the cached head's single
-    /// first line, ≤120 chars — NOT the full text, because getting the full text would
-    /// require decoding the revision body the head cache exists to avoid opening. Only
-    /// ever a row's own concern: the row only ever reads `.snippet` below, which
-    /// truncates further anyway, and every other caller (`AttributionMode.compute`, the
-    /// detail screen) still gets the genuine full text.
+    /// .load`), this is `TranscriptHeadSummary.snippet` — an ALREADY whitespace-
+    /// collapsed-across-every-line, truncated-with-ellipsis preview (built once at
+    /// cache-write time via the SAME `EntrySnippet.make` the live.jsonl-fallback path
+    /// below calls) — NOT the full text, because getting the full text would require
+    /// decoding the revision body the head cache exists to avoid opening. (Fix round 1,
+    /// Important 3: an earlier version of this cached `firstLine` — first line only,
+    /// no truncation signal — which silently collapsed every multi-line edited entry's
+    /// row preview to its opening line; `snippet` is the dedicated fix.) Only ever a
+    /// row's own concern: `.snippet` below re-applies `EntrySnippet.make` to it, which
+    /// is provably idempotent on an already-snippeted string (re-collapsing a
+    /// single-spaced string is a no-op, and re-truncating an already-≤160-char string
+    /// never re-enters the truncation branch), so nothing double-processes it. Every
+    /// other caller (`AttributionMode.compute`, the detail screen) still gets the
+    /// genuine full text.
     var text: String?
     var degradations: EntryDegradation
     /// Voice-attributed paragraphs (T7 plan step 2), for the detail screen only.
@@ -92,17 +100,24 @@ enum EntryTranscriptLoader {
     /// revision body — it needs the full text and `current`'s real `RevisionSource` for
     /// the paragraph-attribution guard below. `.skip` (the scanner's row, run on every
     /// entry on every scan) goes through `TranscriptRevisionStore.validatedHead`
-    /// instead — the O(1) head-cache path (design §4.3) that exists precisely so a row
-    /// never opens a `canonical-<n>.json` body just to show a preview. Its `current` is
-    /// therefore a `TranscriptHeadSummary`, not a `TranscriptRevision`: `text` becomes
-    /// `firstLine` (single line, ≤120 chars) rather than the full flattened text — a
-    /// deliberate accuracy trade for a row that only ever renders a truncated snippet
-    /// anyway. Both branches still carry the SAME `live.jsonl`-degradation rules
+    /// instead — the O(1)-when-trusted head-cache path (design §4.3, hardened against
+    /// silent staleness by fix round 1's size-integrity check) that exists precisely
+    /// so a row never opens a `canonical-<n>.json` body just to show a preview. Its
+    /// `current` is therefore a `TranscriptHeadSummary`, not a `TranscriptRevision`:
+    /// `text` becomes `snippet` (the cached, already-truncated-with-ellipsis preview)
+    /// rather than the full flattened text. Both branches still carry the SAME
+    /// `live.jsonl`-degradation rules
     /// (truncation/unreadability of the source log survives even when canonical text
     /// wins, review finding 1) via `liveLogDegradation` below, and both fall through to
     /// the identical `live.jsonl`-only path when there is no attached canonical current.
     static func load(captureDirectory: URL, expectedRecords: Int?,
                      attribution: AttributionMode = .skip) -> EntryTranscript {
+        // DEFERRED MINOR (T7 Task 3 fix round 1, reviewer note; #50's neighbourhood,
+        // not fixed here): this JSON-parses every `live.jsonl` RECORD unconditionally,
+        // even on the `.skip` branch, which only ever needs the truncation/
+        // unreadability SIGNAL (`loaded.source`/`loaded.completeLines`) and never the
+        // decoded `records` themselves once a canonical current exists. A cheaper
+        // line-count-only read for `.skip` is possible but out of scope for this round.
         let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
 
         func paragraphs(for committed: [TranscriptResult]) -> [TranscriptAttribution.Paragraph]? {
@@ -193,10 +208,11 @@ enum EntryTranscriptLoader {
 
         case .skip:
             // #40.1: the scanner's row path must never decode a revision body.
-            // `validatedHead` is trusted as-is (no file opened, no JSON decoded) unless
-            // the directory listing has moved since the cache was last written, in
-            // which case it falls back to a full rebuild — a cost paid only on the
-            // scan right after a chain-changing write, not on every subsequent one.
+            // `validatedHead` is trusted as-is (no file opened, no JSON decoded)
+            // unless the directory listing OR any tracked file's size has moved since
+            // the cache was last written (fix round 1, Important 1), in which case it
+            // falls back to a full rebuild — a cost paid only on the scan right after
+            // a chain-changing write or a damaged file, not on every subsequent one.
             let head = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
             var canonicalDegradation: EntryDegradation = []
             if let head, !head.unreadableFiles.isEmpty {
@@ -206,7 +222,7 @@ enum EntryTranscriptLoader {
                 return fallbackToLiveLog(canonicalDegradation: canonicalDegradation)
             }
             return EntryTranscript(state: .present,
-                                   text: current.firstLine,
+                                   text: current.snippet,
                                    degradations: liveLogDegradation(canonicalDegradation),
                                    paragraphs: nil)
         }

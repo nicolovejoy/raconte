@@ -303,33 +303,86 @@ final class TranscriptRevisionStoreTests: XCTestCase {
     }
 
     /// THE O(1) trust-path test (design §4.3, finding 1): once `head.json`'s
-    /// `revisionFiles` matches the store's own (decode-free) listing, `validatedHead`
-    /// must trust the cache outright — it must not open or decode any revision body.
-    /// Proven by corrupting the bytes of a `canonical-<n>.json` *without* changing
-    /// which filenames exist: if the store were still decoding bodies, this corrupted
-    /// revision would show up in `unreadableFiles` and `current` would be lost. It does
-    /// not — the persisted (pre-corruption) values come back unchanged.
+    /// `revisionFiles`/`unreadableFiles`/`fileSizes` all match the store's own (cheap,
+    /// decode-free) checks, `validatedHead` must trust the cache outright — it must not
+    /// open or decode any revision body. Proven with a DISTINGUISHING MARKER (the same
+    /// technique T7 Task 3 fix round 1's row-level tests use): the persisted
+    /// `current.snippet` is overwritten to a value no decode of R1's real, UNCHANGED
+    /// body could ever produce. `revisionFiles`/`unreadableFiles`/`fileSizes` are left
+    /// exactly as `append` wrote them, so the trust condition still holds — if the
+    /// store decoded anyway, the marker would be overwritten by the real "hello".
+    ///
+    /// (An earlier version of this test proved trust by corrupting `canonical-1.json`'s
+    /// BYTES in place and showing the corruption went undetected — that was the exact
+    /// defect fix round 1's size-integrity check closes, so a test celebrating it as
+    /// "working as designed" was itself pinning a bug. See
+    /// `testValidatedHeadDetectsInPlaceCorruptionViaSizeMismatch` below for that
+    /// scenario's corrected form.)
     func testValidatedHeadTrustsPersistedHeadWithoutDecodingRevisionBodies() async throws {
+        try await store().append(revision("R0"), captureID: captureID)
+        try await store().append(revision("R1", parentID: "R0"), captureID: captureID)
+
+        guard var persisted = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory) else {
+            return XCTFail("append must have persisted a head")
+        }
+        XCTAssertEqual(persisted.current?.id, "R1")
+
+        persisted.current?.snippet = "MARKER FROM CACHE, NEVER DECODED"
+        try CaptureCoding.encoder().encode(persisted)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory))
+
+        let head = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(head?.current?.snippet, "MARKER FROM CACHE, NEVER DECODED",
+                       "trusted the cache verbatim — a real decode of R1's body would have produced \"hello\" instead")
+    }
+
+    /// T7 Task 3 fix round 1, Important 1: in-place corruption of a canonical file's
+    /// BYTES — same filename, so the file-number SET the listing sees never moves —
+    /// must now invalidate trust, where the pre-fix design (see the superseded doc
+    /// comment above) would have kept trusting the cache unconditionally. Same
+    /// filename, different SIZE -> `sizesStillMatch` fails -> forced rebuild -> the
+    /// damage is actually found, not silently masked.
+    func testValidatedHeadDetectsInPlaceCorruptionViaSizeMismatch() async throws {
         try await store().append(revision("R0"), captureID: captureID)
         try await store().append(revision("R1", parentID: "R0"), captureID: captureID)
 
         let persistedBeforeCorruption = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
         XCTAssertEqual(persistedBeforeCorruption?.current?.id, "R1")
-        XCTAssertEqual(persistedBeforeCorruption?.revisionFiles, [0, 1])
         XCTAssertEqual(persistedBeforeCorruption?.unreadableFiles, [])
 
-        // Same filename, garbage bytes — the file SET the listing sees is unchanged.
+        // Same filename, garbage bytes of a different length — the file SET is
+        // unchanged, but the size no longer matches what head.json recorded.
         let currentRevisionURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
                                                                       revision: 1)
         try Data("{ this is not a valid TranscriptRevision at all".utf8).write(to: currentRevisionURL)
 
         let head = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
-        XCTAssertEqual(head?.current?.id, "R1",
-                       "trusted the cache — a decode of the corrupted body would have lost this")
-        XCTAssertEqual(head?.unreadableFiles, [],
-                       "a real decode of canonical-1.json would have added 1 here")
-        XCTAssertEqual(head, persistedBeforeCorruption,
-                       "the trust path must return exactly what was persisted, untouched")
+        XCTAssertEqual(head?.current?.id, "R0", "R1 is now unreadable, so R0 is the tip of what's left")
+        XCTAssertEqual(head?.unreadableFiles, [1], "the forced rebuild must actually decode and find the damage")
+    }
+
+    /// T7 Task 3 fix round 1, Important 1 — the ACCEPTED residual gap, pinned
+    /// explicitly so it reads as deliberate rather than an oversight (owner ruling):
+    /// corrupting a canonical file's bytes to garbage of the EXACT SAME LENGTH leaves
+    /// `sizesStillMatch` satisfied, so the trust condition still holds and the damage
+    /// is NOT caught. A content hash would catch this; a size-only fingerprint, by
+    /// design and owner's explicit acceptance, does not.
+    func testSameSizeCorruptionIsAnAcceptedGapNotCaughtByTheIntegrityCheck() async throws {
+        try await store().append(revision("R0", text: "hello"), captureID: captureID)
+
+        guard let before = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory) else {
+            return XCTFail("append must have persisted a head")
+        }
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        let originalSize = try Data(contentsOf: url).count
+
+        // Garbage of the EXACT same byte length.
+        let sameSizeGarbage = Data(repeating: 0x2E /* "." */, count: originalSize)
+        try sameSizeGarbage.write(to: url)
+
+        let after = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
+        XCTAssertEqual(after, before,
+                       "ACCEPTED GAP: same-size damage is invisible to this integrity check by design")
     }
 
     /// Gate A finding I1: a head persisted while `canonical-1.json` was undecodable
@@ -427,10 +480,16 @@ final class TranscriptRevisionStoreTests: XCTestCase {
     /// `revisionFiles` — it WAS seen by the listing, it just isn't part of the chain.
     /// Dropping it from `revisionFiles` means a persisted head can never again match
     /// the store's own listing (which always reports it), permanently defeating the
-    /// O(1) trust path for this capture. Reconstructs the reviewer's exact probe: two
-    /// files, same id, persist, then prove the trust path actually engages on the next
-    /// call by corrupting the deduped file's bytes and confirming it's never decoded.
-    func testDedupedDuplicateFileStaysInRevisionFilesAndTrustPathStillEngages() async throws {
+    /// O(1) trust path for this capture.
+    ///
+    /// The SECOND half (T7 Task 3 fix round 1, Important 1): corrupting the deduped
+    /// file's bytes now DOES invalidate trust — file 1's SIZE no longer matches what
+    /// `head.json` recorded, even though the file-number SET is unchanged. This is a
+    /// correction, not a new finding: the pre-fix version of this test proved the
+    /// corruption went undetected and called that "the trust path still engages,"
+    /// which was the same masking defect fix round 1 closes generally, just for a
+    /// deduped (non-current, non-chain) file instead of `current` itself.
+    func testDedupedDuplicateFileStaysInRevisionFilesAndTrustPathDetectsLaterCorruption() async throws {
         let duplicate = revision("DUP")
         try writeRawCanonical(0, try validJSON(for: duplicate))
         try writeRawCanonical(1, try validJSON(for: duplicate))
@@ -443,16 +502,15 @@ final class TranscriptRevisionStoreTests: XCTestCase {
                        "a duplicate id is not an unreadable file — routing it there would trip I1")
 
         // Corrupt the DEDUPED file's bytes (file 1, dropped from the chain but not from
-        // revisionFiles). listing() still reports {0,1} — the file SET is unchanged —
-        // so the trust condition should hold and this corruption must never be decoded.
+        // revisionFiles) with content of a DIFFERENT length — listing() still reports
+        // {0,1} (the file SET is unchanged), but the size no longer matches.
         let dedupedURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 1)
         try Data("{ not valid json at all, corrupted after persisting".utf8).write(to: dedupedURL)
 
         let second = TranscriptRevisionStore.validatedHead(captureDirectory: captureDirectory)
-        XCTAssertEqual(second, persisted,
-                       "trust path: identical value served — the corruption was never opened")
-        XCTAssertEqual(second?.unreadableFiles, [],
-                       "a real rebuild would have added file 1 to unreadableFiles once corrupted")
+        XCTAssertEqual(second?.current?.id, "DUP", "file 0 is untouched and still the current revision")
+        XCTAssertEqual(second?.unreadableFiles, [1],
+                       "the forced rebuild must actually decode file 1 and find the damage")
     }
 
     // MARK: - 3.6 THE read-path test

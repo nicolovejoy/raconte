@@ -92,25 +92,42 @@ actor TranscriptRevisionStore {
         return .present(files: files)
     }
 
-    /// Sum of on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS under
-    /// one capture's `transcript/` — readable or not (a corrupt revision still occupies
-    /// real bytes). The single implementation `EntryChainSnapshot.chainByteSize` and
-    /// `DirectorySnapshot`'s `revisionsByteSize` (#39, Task 3) both call, so the
-    /// editor's revision-history panel and the corpus-wide diagnostics screen can never
-    /// silently disagree about what "one entry's chain size" means, even though each
-    /// computes its own independent `files` listing to pass in (the panel via
-    /// `TranscriptRevisionStore.listing`, the diagnostics screen via a stat-only
-    /// directory walk `DirectorySnapshot` already does). No revision body is decoded —
-    /// a directory listing (the caller's job) plus one `attributesOfItem` per file.
-    nonisolated static func canonicalFilesByteSize(captureDirectory: URL, files: [Int]) -> Int64 {
-        files.reduce(Int64(0)) { total, file in
+    /// Per-file on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS
+    /// under one capture's `transcript/` — readable or not (a corrupt revision still
+    /// occupies real bytes). Skips (rather than zero-fills) a file that can't be
+    /// stat'd at all, e.g. it vanished between the caller's listing and this call — an
+    /// absent entry reads as "unknown," never as a false 0.
+    ///
+    /// The ONE implementation both `canonicalFilesByteSize` (the byte-size STAT,
+    /// #39/#40) and `sizesStillMatch` (the integrity check, T7 Task 3 fix round 1,
+    /// Important 1) build from — so the storage stat and the trust condition can never
+    /// silently drift on what "this file's size" means. Uses
+    /// `URL.resourceValues(forKeys: [.fileSizeKey])`, not
+    /// `FileManager.attributesOfItem` (cheaper — no full attribute-dictionary
+    /// allocation per file — and load-bearing now that a size disagreement drives a
+    /// real trust decision, not merely a decorative display number).
+    nonisolated static func canonicalFileSizes(captureDirectory: URL, files: [Int]) -> [RevisionFileSize] {
+        files.compactMap { file in
             let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                  let size = attrs[.size] as? NSNumber else {
-                return total
-            }
-            return total + size.int64Value
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
+            return RevisionFileSize(file: file, byteSize: Int64(size))
         }
+    }
+
+    /// Sum of on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS under
+    /// one capture's `transcript/` — readable or not. The single implementation
+    /// `EntryChainSnapshot.chainByteSize` and `DirectorySnapshot`'s
+    /// `revisionsByteSize` (#39, Task 3) both call, so the editor's revision-history
+    /// panel and the corpus-wide diagnostics screen can never silently disagree about
+    /// what "one entry's chain size" means, even though each computes its own
+    /// independent `files` listing to pass in (the panel via
+    /// `TranscriptRevisionStore.listing`, the diagnostics screen via a stat-only
+    /// directory walk `DirectorySnapshot` already does). No revision body is
+    /// decoded — built on `canonicalFileSizes`, which is a directory listing (the
+    /// caller's job) plus one stat per file.
+    nonisolated static func canonicalFilesByteSize(captureDirectory: URL, files: [Int]) -> Int64 {
+        canonicalFileSizes(captureDirectory: captureDirectory, files: files)
+            .reduce(Int64(0)) { $0 + $1.byteSize }
     }
 
     // MARK: - Loading
@@ -223,11 +240,19 @@ actor TranscriptRevisionStore {
                               revisionFiles: revisionFiles,
                               unreadableFiles: raw.unreadableFiles,
                               revisionCount: ordered.count,
-                              listingUnreadable: raw.listingUnreadable)
+                              listingUnreadable: raw.listingUnreadable,
+                              // Important 1 (T7 Task 3 fix round 1): every file this
+                              // rebuild just re-derived a fresh answer for gets its
+                              // size stamped too, so the NEXT `validatedHead` call can
+                              // trust this head without decoding anything, until a
+                              // byte actually changes.
+                              fileSizes: Self.canonicalFileSizes(captureDirectory: captureDirectory,
+                                                                 files: revisionFiles))
     }
 
     /// One `TranscriptHeadSummary` for a revision + the file number it lives in — the
-    /// digest `head.json`'s `current` caches (first line truncated to 120 chars). Not
+    /// digest `head.json`'s `current` caches (first line truncated to 120 chars, plus
+    /// the full-text-derived `snippet` — see that field's own doc comment). Not
     /// `private` (T7 Task 2 fix round 1, Important 3): `EntryChainSnapshot` mints the
     /// same shape for every entry in `detachedMachineRevisions`, and a second
     /// independent implementation is exactly how a future field (or a truncation-rule
@@ -246,7 +271,15 @@ actor TranscriptRevisionStore {
                                      createdAt: revision.createdAt,
                                      characterCount: plain.count,
                                      firstLine: String(firstLineFull.prefix(120)),
-                                     isForked: isForked)
+                                     isForked: isForked,
+                                     // Important 3 (T7 Task 3 fix round 1): the ROW's
+                                     // actual preview — the SAME `EntrySnippet.make`
+                                     // the live.jsonl-fallback path already uses, over
+                                     // the FULL plain text (every line, not just the
+                                     // first) — so a truncated preview is visibly
+                                     // truncated and a multi-line transcript doesn't
+                                     // collapse to its opening line.
+                                     snippet: EntrySnippet.make(from: plain) ?? "")
     }
 
     /// Best-effort read of the persisted `head.json`, or `nil` if it's absent or
@@ -261,18 +294,20 @@ actor TranscriptRevisionStore {
     /// The scanner's read path — `head.json`'s entire purpose (design §4.3): an O(1)
     /// cache, not a decorative one. When the store's own (cheap, decode-free) listing
     /// has exactly the same file numbers the persisted head says it does, AND that head
-    /// admits no unreadable files of its own (Gate A finding I1), the cache is trusted
+    /// admits no unreadable files of its own (Gate A finding I1), AND every one of
+    /// those files' bytes still match the size recorded when the head was persisted
+    /// (T7 Task 3 fix round 1, Important 1 — `sizesStillMatch`), the cache is trusted
     /// as-is — no revision body is opened or decoded. A head persisted while some file
     /// was undecodable is never trusted, even once the file-number set matches again:
     /// otherwise a head cached during damage would keep serving the same stale
     /// `current`/`unreadableFiles` forever after the underlying file becomes readable —
     /// trusting the cache would silently mask a recovery the reader should see. On a
-    /// mismatch, an absent/corrupt/damage-admitting head, or an unreadable
-    /// `transcript/`, this falls back to `rebuildHead`, which decodes the whole chain
-    /// (still zero writes — an in-memory rebuild every call is fine; the property F6
-    /// protects is write-freedom, not the O(1) path staying engaged forever). A
-    /// stale-but-still-wrong head is left on disk for `persistHead` to fix, not patched
-    /// inline here.
+    /// mismatch, an absent/corrupt/damage-admitting head, a size disagreement, or an
+    /// unreadable `transcript/`, this falls back to `rebuildHead`, which decodes the
+    /// whole chain (still zero writes — an in-memory rebuild every call is fine; the
+    /// property F6 protects is write-freedom, not the O(1) path staying engaged
+    /// forever). A stale-but-still-wrong head is left on disk for `persistHead` to fix,
+    /// not patched inline here.
     nonisolated static func validatedHead(captureDirectory: URL) -> TranscriptHead? {
         switch listing(captureDirectory: captureDirectory) {
         case .absent:
@@ -285,11 +320,47 @@ actor TranscriptRevisionStore {
             if let persisted = readPersistedHead(captureDirectory: captureDirectory),
                !persisted.listingUnreadable,
                persisted.unreadableFiles.isEmpty,
-               persisted.revisionFiles.sorted() == files.sorted() {
+               persisted.revisionFiles.sorted() == files.sorted(),
+               Self.sizesStillMatch(persisted: persisted, captureDirectory: captureDirectory) {
                 return persisted
             }
             return rebuildHead(captureDirectory: captureDirectory)
         }
+    }
+
+    /// The trust condition's integrity check (T7 Task 3 fix round 1, Important 1): a
+    /// cheap defense against truncation, a partial write, or cloud-eviction damage that
+    /// leaves a canonical file's NAME in place while its BYTES change — the exact blind
+    /// spot `revisionFiles`/`unreadableFiles` share, since both are keyed on filename
+    /// alone and neither is re-checked once a head is otherwise trusted. Every file
+    /// `persisted.revisionFiles` names must have a recorded size in
+    /// `persisted.fileSizes` that matches a FRESH stat of that file right now (no body
+    /// decoded — `canonicalFileSizes` is the one implementation, shared with the
+    /// storage stat).
+    ///
+    /// A head persisted before `fileSizes` existed has NONE recorded for anything —
+    /// `recorded.count` (0) will never equal `persisted.revisionFiles.count` (>0 for
+    /// any capture with a chain), so this returns `false` for it: MISSING sizes read as
+    /// "does not match," never as "nothing to disagree with." Trusting an unstamped
+    /// head here would silently accept the exact damage this check exists to catch —
+    /// the owner's explicit ruling. The forced rebuild that follows recomputes and
+    /// stamps sizes for the next read (self-heals, §4.8's disposable-cache philosophy).
+    ///
+    /// Deliberately does NOT catch same-size corruption — an accepted, owner-ruled
+    /// residual gap, pinned by its own test rather than left to read as an oversight.
+    private nonisolated static func sizesStillMatch(persisted: TranscriptHead, captureDirectory: URL) -> Bool {
+        let recorded = Dictionary(persisted.fileSizes.map { ($0.file, $0.byteSize) },
+                                  uniquingKeysWith: { first, _ in first })
+        guard recorded.count == persisted.revisionFiles.count else { return false }
+        for file in persisted.revisionFiles {
+            guard let expectedSize = recorded[file] else { return false }
+            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
+            guard let actualSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  Int64(actualSize) == expectedSize else {
+                return false
+            }
+        }
+        return true
     }
 
     /// The only head writer. Recomputes and atomically replaces `head.json`. A no-op

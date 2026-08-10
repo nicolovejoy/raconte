@@ -489,4 +489,27 @@ final class LibraryScreenModel {
         return ManifestFacts(committedRecords: manifest.transcript?.committedRecords,
                              sampleRate: Double(manifest.format.sampleRate))
     }
+
+    // MARK: - Chain snapshot (T7 Task 2)
+
+    /// The editor's read model — also the revision-history panel's and the storage
+    /// stat's (T7 Task 2, #39). One new disk read, deliberately kept separate from
+    /// `transcript(for:)`/`EntryTranscript`: the row/scan path must never pay for it
+    /// (#40.1, Task 3), so this is called only from a user action (editor open, history
+    /// panel, diagnostics) — never from `LibraryScanner` or row construction.
+    ///
+    /// `nonisolated async`, the same shape as `transcript(for:)`: the read itself
+    /// (`EntryChainSnapshot.build`) is synchronous and needs no actor of its own — every
+    /// primitive it touches (`TranscriptRevisionStore.listing`, `EntryMetadataStore
+    /// .read(url:)`, `TranscriptChain.*`) is `nonisolated static`/pure — so this
+    /// deliberately does NOT hop onto `revisionStore`'s actor. `Task.detached` only
+    /// keeps the handful of small file reads off whatever actor/thread the caller is on.
+    nonisolated func chainSnapshot(for captureID: String) async -> EntryChainSnapshot {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                           captureID: captureID)
+            return EntryChainSnapshot.build(captureDirectory: directory)
+        }.value
+    }
 }

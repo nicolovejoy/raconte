@@ -91,10 +91,16 @@ struct EntryDetailView: View {
     /// entry used to do both synchronously while the screen was on screen.
     private func refresh() async {
         if let latest = model.item(captureID) { item = latest }
-        // T7 prereq #41: recover any stale draft BEFORE the read below — a recovered
-        // edit must be visible in the very first text this screen shows, not only after
-        // the next launch's corpus-wide pass.
-        await model.closeStaleDraftIfNeeded(captureID)
+        // T7 prereq #41 (fix round 1: Important 1 + 2, one fix): a draft-free capture —
+        // the overwhelmingly common case — must never hop the revision-store actor
+        // before the read below, so it can't queue behind an in-flight launch corpus
+        // walk (the exact regression the T6c comment three lines down already warns
+        // about). Only when a draft exists does this pay the actor cost, and then it
+        // promotes BEFORE closing: closing first would mint a `.userEdit` that
+        // permanently blocks the `.machineLive` baseline from ever entering the chain
+        // (`promoteIfNeeded` skips unconditionally once any canonical file exists). See
+        // `LibraryScreenModel.recoverStaleDraftBeforeRead`.
+        await model.recoverStaleDraftBeforeRead(captureID)
         transcript = await model.transcript(for: captureID)
         // T6c: promote AFTER the first read, not before — `promoteCorpus()` runs the
         // whole corpus with no yield on the actor, so promoting first would make

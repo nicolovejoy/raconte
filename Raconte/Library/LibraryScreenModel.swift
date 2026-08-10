@@ -404,6 +404,41 @@ final class LibraryScreenModel {
         await revisionStore.closeStaleDraftIfNeeded(captureID: captureID, now: Date())
     }
 
+    /// Cheap, `nonisolated` existence check for this capture's `draft.json` — no actor
+    /// hop (T7 prereq #41, fix round 1, Important 2). `capturesRoot` is itself
+    /// `nonisolated let`, so this reads straight off disk without touching
+    /// `revisionStore`'s actor at all.
+    nonisolated func hasDraft(_ captureID: String) -> Bool {
+        TranscriptRevisionStore.draftExists(capturesRoot: capturesRoot, captureID: captureID)
+    }
+
+    /// The entry-open pre-read sequence (`EntryDetailView.refresh()`, T7 prereq #41,
+    /// fix round 1: Important 1 + Important 2 share one fix, per review ruling).
+    ///
+    /// A draft-free capture — the overwhelmingly common case — takes the `hasDraft`
+    /// fast path and returns `false` immediately with NO actor hop, preserving the
+    /// exact non-blocking property the T6c comment on the promote-after-read call in
+    /// `EntryDetailView.refresh()` already defends: an entry opened during the launch
+    /// corpus walk must never queue behind it.
+    ///
+    /// Only when a draft exists do we pay the actor cost, and then order matters:
+    /// `promoteIfNeeded` MUST run before `closeStaleDraftIfNeeded`. Closing a stale
+    /// draft mints a `.userEdit` revision, and `promoteIfNeeded` unconditionally skips
+    /// (`.skippedAlreadyPromoted`) the moment ANY canonical file exists — so closing
+    /// first would make that `.userEdit` permanently block the `.machineLive` baseline
+    /// from ever entering the chain (Important 1, probe-confirmed). Promoting first
+    /// matches launch's own order (`promoteCorpusOnce()` then `closeStaleDraftsOnce()`).
+    ///
+    /// Returns whether the actor was hopped — purely so this ordering is directly
+    /// observable by a test without relying on timing.
+    @discardableResult
+    func recoverStaleDraftBeforeRead(_ captureID: String) async -> Bool {
+        guard hasDraft(captureID) else { return false }
+        await promoteIfNeeded(captureID)
+        await closeStaleDraftIfNeeded(captureID)
+        return true
+    }
+
     // MARK: - Transcript (detail screen)
 
     /// The detail screen's view of one capture's transcript: full text plus the same

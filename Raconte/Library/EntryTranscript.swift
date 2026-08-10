@@ -86,19 +86,21 @@ enum EntryTranscriptLoader {
     /// T6c preference: a promoted revision chain, when it has a readable current
     /// revision, supplies the display text — read-path-never-writes (design §4.8), so
     /// this never mutates `transcript/`, it only changes which text comes back.
-    /// Attribution (`.compute` mode) is UNCHANGED for v1: it still renders from
-    /// `live.jsonl`'s committed records + `markers.jsonl`, exactly as before promotion
-    /// existed. Canonical text and `live.jsonl`'s committed text are display-identical
-    /// by construction at promotion time (same `TranscriptText.join`), so the
-    /// paragraphs stay consistent with whichever text is shown. Three answers all the
-    /// way down: no attached canonical revision (absent `transcript/`, or every file in
-    /// it unreadable) falls through to today's `live.jsonl` path unchanged.
+    /// **Attribution (`.compute` mode) as of T7 Task 5:** paragraphs are attributed over
+    /// `current`'s own spans (`TranscriptAttribution.attribute(spans:snapped:)`), not
+    /// `live.jsonl`'s committed records — so voice attribution survives an edit instead
+    /// of switching off the moment `current` stops being the untouched machine
+    /// transcript. `live.jsonl` is still read to snap marker frames against the real
+    /// audio gaps (unaffected by later edits); only the paragraph GROUPING step reads
+    /// `spans`. Three answers all the way down: no attached canonical revision (absent
+    /// `transcript/`, or every file in it unreadable) falls through to today's
+    /// `live.jsonl`-only path unchanged (committed-based attribution, as before T7).
     ///
-    /// **#40.1 (T7 Task 3):** the two `attribution` modes now take genuinely different
+    /// **#40.1 (T7 Task 3):** the two `attribution` modes take genuinely different
     /// canonical-chain paths, not just a different tail. `.compute` (the detail screen,
     /// a user-action-triggered read) still goes through `loadChain`, decoding every
-    /// revision body — it needs the full text and `current`'s real `RevisionSource` for
-    /// the paragraph-attribution guard below. `.skip` (the scanner's row, run on every
+    /// revision body — it needs the full text and (since Task 5) `current`'s own spans
+    /// for attribution. `.skip` (the scanner's row, run on every
     /// entry on every scan) goes through `TranscriptRevisionStore.validatedHead`
     /// instead — the O(1)-when-trusted head-cache path (design §4.3, hardened against
     /// silent staleness by fix round 1's size-integrity check) that exists precisely

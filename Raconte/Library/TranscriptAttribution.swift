@@ -152,12 +152,26 @@ enum TranscriptAttribution {
         return end > start
     }
 
-    /// Cut-position search restricted to the placeable spans, mirroring
-    /// `cutIndex(forFrame:pieces:)`'s nearer-edge rule exactly (a frame landing strictly
-    /// inside a placeable span cuts at its nearer edge — text is never torn mid-word),
-    /// but over the COMPACTED placeable-only index space (`0...placeableIndices.count`):
-    /// a marker frame can only ever be tested against a span with real, non-zero-length
-    /// bounds.
+    /// Cut-position search restricted to the placeable spans, over the COMPACTED
+    /// placeable-only index space (`0...placeableIndices.count`): a marker frame can
+    /// only ever be tested against a span with real, non-zero-length bounds.
+    ///
+    /// The nearer-edge rule is the SAME idea as `cutIndex(forFrame:pieces:)`'s (text is
+    /// never torn mid-word — a frame with no room on one side cuts at the other), but
+    /// "mirrors it exactly" overstates it for one real case: `TranscriptSplice` degrades
+    /// a touched span into one or more `.inherited` FRAGMENTS that all carry the PARENT
+    /// span's FULL bounds (`TranscriptSplice.swift`, the "each carrying the PARENT
+    /// SPAN'S FULL bounds" rule), so two or more CONSECUTIVE placeable spans can share
+    /// an identical `[frameStart, frameEnd)`. `firstIndex(where:)` finds the FIRST such
+    /// fragment, and "nearer the end" then cuts after that FIRST fragment — not after
+    /// the run those fragments came from. This is still safe: nothing tears mid-word
+    /// (the splice round-trip keeps fragment texts space-aligned, so a cut between two
+    /// same-bounds fragments lands on a real text boundary, never inside one), and the
+    /// result is flagged `structuralApprox: true` either way, same as every other
+    /// interior cut — the imprecision is disclosed, not silently claimed as exact. Not
+    /// separately pinned by a test here (no `structuralApprox`-flagged case where two
+    /// placeable spans share bounds AND a marker lands strictly inside them) — left for
+    /// Gate B if a cheap fixture surfaces.
     private static func placeableCutPosition(
         forFrame frame: Int64, spans: [TranscriptSpan], placeableIndices: [Int]
     ) -> (position: Int, structuralApprox: Bool) {
@@ -184,6 +198,19 @@ enum TranscriptAttribution {
     /// enforced structurally rather than by a special case). Position ==
     /// `placeableIndices.count` (cut after the last placeable span) resolves to
     /// `spans.count`, so trailing non-placeable spans stay in the final group too.
+    ///
+    /// `position < placeableIndices.count` implicitly assumes `placeableIndices`
+    /// (equivalently, `spans`) is ordered ascending by `frameStart` — true for every
+    /// producer today (`TranscriptRevisionStore.spans(fromCommitted:)`,
+    /// `TranscriptSplice.spans`), but not an invariant this function enforces, and a
+    /// future write path could violate it (e.g. a merge that reorders spans without
+    /// re-deriving frame order). The blast radius if it ever is violated is bounded: the
+    /// caller (`attribute(spans:snapped:)`) always builds paragraphs from `groupStart`
+    /// forward in ARRAY order and every group's range is `Range<Int>` over `spans`
+    /// directly, so the output still covers `0..<spans.count` exactly once, in order,
+    /// with every span's text included exactly once — only WHERE a boundary lands could
+    /// degrade (a marker attributed to the wrong side of a cut), never data loss,
+    /// duplication, or a crash.
     private static func fullSpanIndex(forPlaceablePosition position: Int,
                                       spans: [TranscriptSpan], placeableIndices: [Int]) -> Int {
         position < placeableIndices.count ? placeableIndices[position] : spans.count

@@ -373,6 +373,11 @@ final class TranscriptAttributionTests: XCTestCase {
     /// has no actual evidence for) — the stronger reading of "never allowed to start a
     /// paragraph on its own evidence": it must never be attributed a voice it didn't
     /// earn, not even by being folded into whichever voice happens to follow it.
+    /// RULED (controller, T7 Task 5 review): a deliberate deviation from the brief's
+    /// literal "inherit the nearest preceding placeable span" wording for exactly this
+    /// no-predecessor edge case, accepted because it follows the owner's thrice-affirmed
+    /// never-label-untrue principle — attributing a voice with no evidence is exactly
+    /// what that principle forbids. Not drift; leave as-is.
     func testLeadingNonPlaceableSpanWithNothingToInheritStaysUnvoiced() {
         let spans = [
             TranscriptSpan(text: "typed opening", anchor: .none),
@@ -385,6 +390,63 @@ final class TranscriptAttributionTests: XCTestCase {
         XCTAssertEqual(paragraphs.count, 2)
         XCTAssertEqual(paragraphs.map(\.voice), [nil, "bn"])
         XCTAssertEqual(paragraphs.map(\.text), ["typed opening", "kept"])
+    }
+
+    /// Review finding (task-5-report re-review): the interior-cut branch of
+    /// `placeableCutPosition` — a marker frame landing STRICTLY inside a placeable
+    /// span's `[frameStart, frameEnd)`, with room on both sides — was exercised by ZERO
+    /// span-path tests; every prior fixture put the marker at 0, exactly at a span
+    /// boundary, or in a gap between spans. This is also the ONLY source of
+    /// `structuralApprox: true` on the span path, so `hasApproximateBoundary` was
+    /// entirely unpinned there too.
+    ///
+    /// Marker at 70_000 inside "word"'s `[50_000, 150_000)`: 20_000 from the start,
+    /// 80_000 to the end — nearer the start, so the cut lands BEFORE the span
+    /// (`insideAt`, not `insideAt + 1`). Deliberately a TWO-span fixture, not one: with
+    /// only one placeable span, "cut before" and "cut after" both leave one side of the
+    /// cut empty (filtered) and produce the SAME single surviving paragraph — a
+    /// direction bug would be invisible. Here the wrong direction pulls "word" into the
+    /// FIRST paragraph instead of starting the second one, which the mutation check
+    /// below confirms actually fails on this fixture (unlike an earlier, single-span
+    /// draft of this test, which did not).
+    func testMarkerStrictlyInsideAPlaceableSpanNearerTheStartIsApproximate() {
+        let spans = [
+            TranscriptSpan(text: "before", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "word", anchor: .exact, frameStart: 50_000, frameEnd: 150_000),
+        ]
+        let markers = [snapped(mark(70_000, seq: 0, kind: .paragraph), at: 70_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.text), ["before", "word"])
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
+    }
+
+    /// Companion to the "nearer the start" test above: marker at 90_000 inside "word"'s
+    /// [0, 100_000) — 90_000 from the start, 10_000 to the end — nearer the end, so the
+    /// cut lands AFTER the span (`insideAt + 1`). A second span ("next") makes the cut
+    /// DIRECTION observable: this fixture asserts BOTH the resulting cut position (which
+    /// span lands in which paragraph) AND that the boundary is flagged approximate on
+    /// BOTH sides of it (`Paragraph.hasApproximateBoundary`'s own contract — the
+    /// imprecision belongs to the cut, not to one side of it). Distinct fixture from
+    /// `testMarkerInsideASingleRunCutsAtTheNearerEdge` (the committed/`Piece`-based
+    /// sibling test) — that one pins `cutIndex(forFrame:pieces:)`; this one pins the
+    /// separate `placeableCutPosition` implementation for the span path.
+    func testMarkerStrictlyInsideAPlaceableSpanNearerTheEndIsApproximate() {
+        let spans = [
+            TranscriptSpan(text: "word", anchor: .exact, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "next", anchor: .exact, frameStart: 100_000, frameEnd: 200_000),
+        ]
+        let markers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.text), ["word", "next"])
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
     }
 
     /// A span with an `.unknown` anchor (a foreign/future anchoring scheme this build

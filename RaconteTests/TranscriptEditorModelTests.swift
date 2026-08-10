@@ -784,12 +784,18 @@ final class TranscriptEditorModelTests: XCTestCase {
         await waitUntilCloseIsGated(store)
 
         await model.open()                  // the owner taps Edit again, mid-close
-
-        store.releaseClose()
-        _ = await sessionOne.value          // session one completes and would latch the flag
-
+        // The typing happens BEFORE session one is released — the ordering the owner actually
+        // performs, and the one the previous version of this test stepped around by two lines.
+        // Session one's `done()` then resumes INTO a live session that has unsaved work, and
+        // its post-await `hasUnsavedChanges = false` / `sessionDraftOpenedAt = nil` land on
+        // session two. This ordering catches both defects at once: the state clobber here, and
+        // the `hasFinished` latch, since session one still completes before session two exits.
         model.text = "session two"
         model.textChanged()
+
+        store.releaseClose()
+        _ = await sessionOne.value
+
         let sessionTwoSaved = await model.finishIfNeeded()
 
         XCTAssertTrue(sessionTwoSaved)
@@ -887,6 +893,55 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(model.state, .editing)
         XCTAssertFalse(model.hasUnsavedChanges)
         XCTAssertEqual(store.writeDraftCalls, ["an edit", "an edit"])
+    }
+
+    /// Re-review Minor, the other side of M4. `flush()`'s failure branch re-arms the window;
+    /// `done()` used to return without cancelling it again. Against a PERMANENT refusal that
+    /// left an invisible 2 s loop running for the life of the detail screen — the editor is
+    /// already gone, so nothing on screen shows it — each turn paying an `openDraft` plus a
+    /// whole-chain-decode `writeDraft` (#50's cost).
+    ///
+    /// The bound must not resurrect M4: a failure while the editor is still OPEN still retries
+    /// without a keystroke, which `testAFailedFlushKeepsRetryingWithoutMoreTyping` pins.
+    func testAFailedDoneLeavesNoBackgroundRetryLoopRunning() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "an edit that can never be saved"
+        model.textChanged()
+        store.writeDraftError = TranscriptRevisionStoreError.trashedCapture
+
+        let saved = await model.done()
+
+        XCTAssertFalse(saved)
+        XCTAssertFalse(debounce.isArmed,
+                       "a failed Done must not leave a retry loop running behind a screen "
+                       + "that has already gone")
+        XCTAssertNotNil(model.unreportedSaveFailure, "it is reported instead of retried blindly")
+    }
+
+    /// The close-failure branch needs no bound of its own, and this asserts WHY rather than
+    /// leaving it to be re-derived: `flush()` cancels on entry and re-arms only on its OWN
+    /// failure, so a close that fails after a flush that succeeded has nothing armed behind
+    /// it. Verified by mutation — removing a `cancel()` here changed nothing, so the line was
+    /// dead and was deleted rather than shipped as reassurance. The assertion stays, so a
+    /// future re-arm-on-success would be caught here.
+    func testAFailedCloseLeavesNoBackgroundRetryLoopRunning() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "an edit"
+        model.textChanged()
+        store.closeDraftError = TranscriptRevisionStoreError.revisionUnreadable(file: 3)
+
+        let saved = await model.done()
+
+        XCTAssertFalse(saved)
+        XCTAssertFalse(debounce.isArmed)
     }
 
     /// Polls until the gated `closeDraft` has actually suspended. Everything here is

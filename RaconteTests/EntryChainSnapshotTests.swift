@@ -224,6 +224,42 @@ final class EntryChainSnapshotTests: XCTestCase {
         XCTAssertEqual(mSummary?.firstLine, "retranscribed")
     }
 
+    /// Fix round 2: the order documented on `detachedMachineRevisions` (chain
+    /// `(createdAt, id)`, see the field's own doc comment) had ZERO test coverage that
+    /// could actually detect an ordering bug — every prior detached fixture yields
+    /// exactly one element, so `.map(\.id) == [singleID]` passes under ANY ordering.
+    /// Probe-confirmed by the reviewer: swapping `ordered.filter` for
+    /// `ordered.reversed().filter` at the detached-revisions filter site passed the
+    /// entire 958-test suite.
+    ///
+    /// Two genuinely detached machine revisions off the same REV0/REV1 shape as the
+    /// test above — `M_EARLY`/`M_LATE` are named for their `createdAt`, not their append
+    /// order, and are appended to the store in REVERSE chronological order (`M_LATE`
+    /// first) so this test cannot pass by accident off insertion/file-number order
+    /// either — only the real `(createdAt, id)` order produces `[M_EARLY, M_LATE]`.
+    /// Neither has a `parentID`/`basedOnMachineID` at all, so both are, individually,
+    /// neither `current` (REV1) nor in `ancestry(of: REV1) == {REV0}` — genuinely
+    /// detached, the same reasoning the test above already established for a single `M`,
+    /// so this test is testing ORDER, not re-testing the filter.
+    func testDetachedMachineRevisionsOrderIsChronologicalNotInsertionOrder() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0, text: "raw"),
+                                 captureID: captureID)
+        try await store().append(revision("REV1", source: .userEdit, secondsOffset: 10,
+                                          parentID: "REV0", text: "edited"), captureID: captureID)
+        // Appended out of chronological order on purpose — see doc comment above.
+        try await store().append(revision("M_LATE", source: .machineRetranscribe, secondsOffset: 30,
+                                          text: "late"), captureID: captureID)
+        try await store().append(revision("M_EARLY", source: .machineRetranscribe, secondsOffset: 20,
+                                          text: "early"), captureID: captureID)
+
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertEqual(snapshot.currentRevisionID, "REV1")
+        XCTAssertEqual(snapshot.revisionCount, 4)
+        XCTAssertEqual(snapshot.detachedMachineRevisions.map(\.id), ["M_EARLY", "M_LATE"],
+                       "chain (createdAt, id) order — M_EARLY's createdAt is smaller despite being appended second")
+    }
+
     /// Important 1 (fix round 1): `isForked` had zero behavioural coverage — a hardcoded
     /// `false` passed every existing test. Fork shape from
     /// `TranscriptChainTests.testA1DivergenceWalk`: rev0 machine (root), editA and editB

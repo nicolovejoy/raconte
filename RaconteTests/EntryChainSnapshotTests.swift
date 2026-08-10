@@ -111,18 +111,37 @@ final class EntryChainSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.revisionCount, 1)
     }
 
+    /// Minor 6 (fix round 1): bind the associated reason and assert it is non-empty —
+    /// a bare `guard case .readOnlyListingUnreadable = …` (no binding) would also pass
+    /// for `.readOnlyListingUnreadable("")`, which is not what `TranscriptRevisionStore
+    /// .listing` ever actually produces.
     func testTranscriptDirAsAFileIsReadOnlyListingUnreadable() throws {
         try Data("not a directory".utf8).write(to: transcriptDirectory)
 
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
-        guard case .readOnlyListingUnreadable = snapshot.editability else {
+        guard case .readOnlyListingUnreadable(let reason) = snapshot.editability else {
             return XCTFail("expected .readOnlyListingUnreadable, got \(snapshot.editability)")
         }
+        XCTAssertFalse(reason.isEmpty, "the reason string must actually describe the failure")
         XCTAssertNil(snapshot.currentRevisionID)
         XCTAssertEqual(snapshot.currentText, "")
         XCTAssertEqual(snapshot.revisionCount, 0)
         XCTAssertEqual(snapshot.chainByteSize, 0)
+    }
+
+    /// Minor 5 (fix round 1): a trashed sidecar over a chain whose `transcript/` is ALSO
+    /// damaged — pins that the trashed check really does run first, ahead of the damage
+    /// checks, as the precedence rule states, rather than the two merely never having
+    /// been exercised together.
+    func testTrashedAndDamagedChainStillReportsTrashedNotDamage() throws {
+        try markTrashed()
+        try Data("not a directory".utf8).write(to: transcriptDirectory)
+
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertEqual(snapshot.editability, .readOnlyTrashed,
+                       "trashed must win over an unreadable transcript/ listing")
     }
 
     func testOneUndecodableCanonicalFileIsReadOnlyUnreadableRevision() throws {
@@ -166,18 +185,14 @@ final class EntryChainSnapshotTests: XCTestCase {
     /// disconnected from rev1's lineage entirely (no parentID/basedOnMachineID) ⇒
     /// current == rev1, revisionCount == 3.
     ///
-    /// The brief's own illustrative outcome for this shape says
-    /// `detachedMachineRevisions == [M]`. Traced against the ALREADY-SHIPPED
-    /// `TranscriptChain.isAttached` (verified here, and matching the pattern in
-    /// `TranscriptChainTests.testF1MachineAfterMachineIsDetached` /
-    /// `.testA1DataLossWalk`): `isAttached` requires the human tip to be among a
-    /// candidate's OWN ancestors, and rev0 — being the chain's literal root — has NO
-    /// ancestors at all, so it can never satisfy that once ANY human tip exists anywhere
-    /// in the chain. Applying the brief's own literal rule
-    /// (`detachedMachineRevisions = every revision where !isAttached`) to this exact
-    /// scenario therefore yields REV0 *and* M, not M alone. This test pins the real,
-    /// verified behavior of the shipped primitive rather than silently "fixing" it —
-    /// flagged in the task report as a brief/code disagreement for owner attention.
+    /// Fix round 1, owner ruling: `detachedMachineRevisions` is now "not applied" =
+    /// neither `current` nor one of its ancestors (`TranscriptChain.ancestry(of:
+    /// current, among: ordered)`), machine-sourced only — NOT the plan's original
+    /// `!TranscriptChain.isAttached` shorthand, which also caught REV0 (see this test's
+    /// history / the task report for why: `isAttached` requires the human tip to be
+    /// among a CANDIDATE's own ancestors, which a root can never satisfy). REV0 is
+    /// REV1's own parent — i.e. IS in `ancestry(of: REV1)` — so it correctly does NOT
+    /// appear here under the new rule: `detachedMachineRevisions == [M]`.
     func testDetachedMachineRetranscribeIsListedSeparatelyFromAttachedCurrent() async throws {
         try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0, text: "raw"),
                                  captureID: captureID)
@@ -194,15 +209,46 @@ final class EntryChainSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.revisionCount, 3)
         XCTAssertFalse(snapshot.isForked)
 
+        // Ordered comparison (Minor 8), not a Set: chain (createdAt, id) order, since
+        // Task 8 renders this list and needs a deterministic order.
+        XCTAssertEqual(snapshot.detachedMachineRevisions.map(\.id), ["M"],
+                       "REV0 is REV1's own ancestor and must NOT be labeled 'not applied'")
         let detachedIDs = Set(snapshot.detachedMachineRevisions.map(\.id))
-        XCTAssertEqual(detachedIDs, ["REV0", "M"],
-                       "verified TranscriptChain.isAttached behavior — see task report")
-        XCTAssertFalse(detachedIDs.contains("REV1"), "current/attached must never appear as detached")
+        XCTAssertFalse(detachedIDs.contains("REV0"),
+                       "the whole point of the owner ruling: the root machine baseline a human edit was built on is not 'unapplied'")
+        XCTAssertFalse(detachedIDs.contains("REV1"), "current must never appear as detached")
 
         let mSummary = snapshot.detachedMachineRevisions.first { $0.id == "M" }
         XCTAssertEqual(mSummary?.source, .machineRetranscribe)
         XCTAssertEqual(mSummary?.fileNumber, 2)
         XCTAssertEqual(mSummary?.firstLine, "retranscribed")
+    }
+
+    /// Important 1 (fix round 1): `isForked` had zero behavioural coverage — a hardcoded
+    /// `false` passed every existing test. Fork shape from
+    /// `TranscriptChainTests.testA1DivergenceWalk`: rev0 machine (root), editA and editB
+    /// both userEdit off rev0, neither in the other's ancestry. Also folds in a fully
+    /// disconnected machine revision `M` (no parent at all) so this ONE fixture proves
+    /// `isForked` on BOTH surfaces the reviewer named: `EntryChainSnapshot.isForked`
+    /// itself, and the `isForked` field threaded onto every `TranscriptHeadSummary` in
+    /// `detachedMachineRevisions`.
+    func testForkedHumanLineageSetsIsForkedOnSnapshotAndOnDetachedSummaries() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0, text: "raw"),
+                                 captureID: captureID)
+        try await store().append(revision("EDITA", source: .userEdit, secondsOffset: 10,
+                                          parentID: "REV0", text: "edit a"), captureID: captureID)
+        try await store().append(revision("EDITB", source: .userEdit, secondsOffset: 20,
+                                          parentID: "REV0", text: "edit b"), captureID: captureID)
+        try await store().append(revision("M", source: .machineRetranscribe, secondsOffset: 30,
+                                          text: "retranscribed"), captureID: captureID)
+
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertTrue(snapshot.isForked, "EDITA/EDITB neither is in the other's ancestry")
+        XCTAssertEqual(snapshot.currentRevisionID, "EDITB", "later by (createdAt, id)")
+        XCTAssertEqual(snapshot.detachedMachineRevisions.map(\.id), ["M"])
+        XCTAssertEqual(snapshot.detachedMachineRevisions.first?.isForked, true,
+                       "the chain-wide forked flag must be threaded onto the summary too")
     }
 
     // MARK: - 2.3 Draft passthrough
@@ -231,8 +277,9 @@ final class EntryChainSnapshotTests: XCTestCase {
 
     /// Copied pattern from `TranscriptRevisionStoreTests`' 3.6 (T6 Task 3.6): every
     /// static read must leave the whole capture directory byte- and mtime-identical.
-    /// Includes revisions AND a stray draft.json, so both files the build might be
-    /// tempted to "fix" are present.
+    /// Includes revisions, a stray draft.json, AND an `entry.json` (Minor 7, fix round
+    /// 1 — the one file `build` reads through a store API, `EntryMetadataStore.read`,
+    /// that the original fixture omitted entirely).
     func testReadPathWritesNothing() async throws {
         try await store().append(revision("R0", text: "hello"), captureID: captureID)
         try await store().append(revision("R1", source: .userEdit, secondsOffset: 10,
@@ -243,6 +290,7 @@ final class EntryChainSnapshotTests: XCTestCase {
                                     text: "in progress")
         try CaptureCoding.encoder().encode(draft)
             .write(to: SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory))
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
 
         let before = try snapshotTree(captureDirectory)
 
@@ -254,22 +302,26 @@ final class EntryChainSnapshotTests: XCTestCase {
 
     // MARK: - chainByteSize definition (#39)
 
-    /// Pins the definition (implementer's call, per the brief): only the canonical
-    /// revision files count, never `head.json` or `draft.json`.
-    func testChainByteSizeCountsOnlyCanonicalRevisionFilesExcludingHeadAndDraft() async throws {
-        try await store().append(revision("R0", text: "hello"), captureID: captureID)
-        let canonicalURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
-        let expected = try fileSize(canonicalURL)
+    /// Pins the FULL definition (Important 1, fix round 1: the original test only pinned
+    /// the exclusion half — head.json/draft.json out — via `XCTAssertGreaterThan(…, 0)`,
+    /// which a "sum only decodable files" bug would also satisfy). Two canonical files,
+    /// ONE of them undecodable garbage — `chainByteSize` must equal their combined raw
+    /// size regardless, matching the doc comment's "readable or not".
+    func testChainByteSizeCountsOnlyCanonicalRevisionFilesExcludingHeadAndDraftEvenWhenOneIsCorrupt() async throws {
+        let url0 = try writeRawCanonical(0, try validJSON(for: revision("R0")))
+        let url1 = try writeRawCanonical(1, "{ not valid json at all, corrupted")
+        let expected = try fileSize(url0) + fileSize(url1)
 
-        // head.json already exists (persisted by `append`); pad a draft.json to a known,
-        // large, nonzero size too — a bug that swept either in would be caught here.
+        // No head.json in this fixture (writeRawCanonical doesn't mint one — only
+        // `append` does); pad a draft.json to a known, large, nonzero size so a bug that
+        // swept it in would be caught too.
         try Data(repeating: 0, count: 999).write(
             to: SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory))
 
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
         XCTAssertEqual(snapshot.chainByteSize, expected,
-                       "must equal canonical-0.json's own size, excluding head.json and the 999-byte draft.json")
+                       "must equal BOTH canonical files' combined raw size (one is corrupt), excluding the 999-byte draft.json")
     }
 
     // MARK: - Sidecar-unreadable edge case (beyond the 5 required fixtures)
@@ -280,13 +332,20 @@ final class EntryChainSnapshotTests: XCTestCase {
     /// `TranscriptRevisionStore`'s own write guards (`guardWritable`) throw outright on
     /// exactly this sidecar — an `.editable` reading here would reproduce the "editor let
     /// me start typing, then the save refused" bug the precedence rule exists to prevent.
-    func testUndecodableSidecarIsNeverEditable() async throws {
+    ///
+    /// Important 4 (fix round 1, owner ruling): pins the SPECIFIC case now —
+    /// `.readOnlyMetadataUnreadable`, not the false `.readOnlyTrashed` label the entry
+    /// used to get.
+    func testUndecodableSidecarIsMetadataUnreadableNotTrashed() async throws {
         try await store().append(revision("R0", text: "hello"), captureID: captureID)
         try Data("{ not a valid sidecar at all".utf8).write(to: sidecarURL)
 
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
-        XCTAssertNotEqual(snapshot.editability, .editable)
+        guard case .readOnlyMetadataUnreadable(let reason) = snapshot.editability else {
+            return XCTFail("expected .readOnlyMetadataUnreadable, got \(snapshot.editability)")
+        }
+        XCTAssertFalse(reason.isEmpty)
     }
 
     // MARK: - LibraryScreenModel wiring

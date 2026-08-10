@@ -980,6 +980,53 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertTrue(model.showsTextEditor)
     }
 
+    /// Re-review Minor: `flush()`'s dead-session early return skipped `writeDraft` entirely
+    /// yet reported success, so `done()` went on to `closeDraft` and minted whatever stale
+    /// `draft.json` was on disk instead of the text that is actually current. That contradicts
+    /// this method's own stated rule — the dead session's WORK completes, only its STATE
+    /// writes are skipped — which the guards after the write already honour.
+    ///
+    /// The interleaving the reviewer names: a draft exists (so `sessionDraftOpenedAt != nil`),
+    /// and an `open()` lands during `noteDraftClosedBeneathSessionIfNeeded`'s `openDraft` await.
+    func testADeadSessionsFlushStillWritesTheCurrentTextRatherThanLeavingAStaleDraft() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+
+        // Session one flushes, so a draft exists and `sessionDraftOpenedAt` is set.
+        model.text = "session one flushed"
+        model.textChanged()
+        await model.flush()
+        XCTAssertEqual(store.writeDraftCalls, ["session one flushed"], "precondition")
+
+        // Session one exits; its flush suspends inside the `openDraft` read.
+        store.gateOpenDraft = true
+        let sessionOneExit = Task { await model.finishIfNeeded() }
+        await waitUntilOpenDraftIsGated(store)
+
+        // Session two begins underneath it and carries unsaved words.
+        await model.open()
+        model.text = "session two, unsaved"
+        model.textChanged()
+
+        store.releaseOpenDraft()
+        _ = await sessionOneExit.value
+
+        XCTAssertEqual(store.writeDraftCalls.last, "session two, unsaved",
+                       "the exit must write the text that is actually current, so the close "
+                       + "that follows cannot mint a stale draft")
+    }
+
+    /// Polls until the gated `openDraft` has actually suspended.
+    private func waitUntilOpenDraftIsGated(_ store: FakeEditorStore,
+                                           file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<10_000 {
+            if store.isOpenDraftGated { return }
+            await Task.yield()
+        }
+        XCTFail("openDraft never reached the gate", file: file, line: line)
+    }
+
     /// Polls until the gated `chainSnapshot` has actually suspended.
     private func waitUntilSnapshotIsGated(_ store: FakeEditorStore,
                                           file: StaticString = #filePath, line: UInt = #line) async {
@@ -1300,6 +1347,18 @@ final class FakeEditorStore: TranscriptEditorStore {
     /// BEFORE suspending, so a gated open sees the disk as it was when it started — which is
     /// exactly what `LibraryScreenModel.chainSnapshot`'s `Task.detached` read does, and why two
     /// overlapping `open()`s can resume in either order.
+    /// Suspends the NEXT `openDraft` until `releaseOpenDraft()` — the await inside
+    /// `noteDraftClosedBeneathSessionIfNeeded`, which is where an `open()` can land mid-flush.
+    var gateOpenDraft = false
+    private var openDraftGate: CheckedContinuation<Void, Never>?
+    var isOpenDraftGated: Bool { openDraftGate != nil }
+
+    func releaseOpenDraft() {
+        let gate = openDraftGate
+        openDraftGate = nil
+        gate?.resume()
+    }
+
     var gateChainSnapshot = false
     private var snapshotGate: CheckedContinuation<Void, Never>?
     var isSnapshotGated: Bool { snapshotGate != nil }
@@ -1348,7 +1407,15 @@ final class FakeEditorStore: TranscriptEditorStore {
 
     func machineTranscript(for captureID: String) async -> String? { machineTranscriptText }
 
-    func openDraft(for captureID: String) async -> TranscriptDraft? { draftOnDisk }
+    func openDraft(for captureID: String) async -> TranscriptDraft? {
+        if gateOpenDraft {
+            gateOpenDraft = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                openDraftGate = continuation
+            }
+        }
+        return draftOnDisk
+    }
 
     func writeDraft(captureID: String, text: String, now: Date) async throws {
         writeDraftCalls.append(text)

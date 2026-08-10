@@ -123,9 +123,15 @@ final class TranscriptEditorModel {
 
     let captureID: String
 
+    /// §12.1's debounce window. Named, and `internal`, so the number has ONE home and is
+    /// reachable by a test: every behavioural test injects its own window (they drive an
+    /// injected timer), so the initializer's default was otherwise exercised by nothing at
+    /// all and could have been changed to 20 s with the whole suite still green.
+    static let defaultDebounceSeconds: TimeInterval = 2
+
     private let store: any TranscriptEditorStore
     private let debounce: any EditorDebounce
-    private let debounceSeconds: TimeInterval
+    let debounceSeconds: TimeInterval
     private let clock: @Sendable () -> Date
 
     /// `openedAt` of the `draft.json` this editing session believes it owns; `nil` before the
@@ -148,7 +154,7 @@ final class TranscriptEditorModel {
     init(captureID: String,
          store: any TranscriptEditorStore,
          debounce: any EditorDebounce = TaskEditorDebounce(),
-         debounceSeconds: TimeInterval = 2,
+         debounceSeconds: TimeInterval = TranscriptEditorModel.defaultDebounceSeconds,
          clock: @escaping @Sendable () -> Date = { Date() }) {
         self.captureID = captureID
         self.store = store
@@ -373,16 +379,16 @@ final class TranscriptEditorModel {
         case .readOnlyUnreadableRevision(let file):
             return "This entry can’t be edited: revision file \(file) could not be read. "
                 + "Editing it now would silently drop whatever that revision holds."
-        case .readOnlyListingUnreadable:
-            return "This entry can’t be edited: its revision folder could not be read. "
-                + "Editing it now would silently drop whatever the folder holds."
+        case .readOnlyListingUnreadable(let reason):
+            return "This entry can’t be edited: its revision folder could not be read "
+                + "(\(reason)). Editing it now would silently drop whatever the folder holds."
         case .readOnlyTrashed:
             return "This entry is in the trash. Restore it first, then edit it."
         case .readOnlyNoTranscript:
             return "There’s nothing transcribed in this entry to edit yet."
-        case .readOnlyMetadataUnreadable:
-            return "This entry’s details file could not be read, so it can’t be edited. "
-                + "The recording and transcript are untouched."
+        case .readOnlyMetadataUnreadable(let reason):
+            return "This entry’s details file could not be read (\(reason)), so it can’t be "
+                + "edited. The recording and transcript are untouched."
         }
     }
 }

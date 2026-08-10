@@ -217,6 +217,9 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(model.text, "", "a degraded chain offers reading, never editing")
         XCTAssertEqual(model.machineTranscript, "what the machine heard")
         XCTAssertFalse(model.showsTextEditor)
+        XCTAssertTrue(TranscriptEditorModel.readOnlySentence(.readOnlyUnreadableRevision(file: 7))
+                        .contains("7"),
+                      "the sentence must name the actual file")
     }
 
     /// The other degraded-chain shape (§4.5a). It takes the same Q5 branch, but the offer
@@ -236,6 +239,11 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertFalse(reason.isEmpty)
         XCTAssertNil(model.machineTranscript, "the log lives inside the folder we cannot read")
         XCTAssertFalse(model.showsTextEditor)
+        // Review finding 3: the diagnostic payload must reach the screen, not be swallowed by
+        // a case that matched without binding it.
+        XCTAssertTrue(TranscriptEditorModel.readOnlySentence(.readOnlyListingUnreadable(reason))
+                        .contains(reason),
+                      "the sentence must name the actual reason")
     }
 
     /// Re-opening the same model instance (navigate back into the editor) is a fresh session:
@@ -304,9 +312,25 @@ final class TranscriptEditorModelTests: XCTestCase {
         let sentence = TranscriptEditorModel.readOnlySentence(.readOnlyMetadataUnreadable(reason))
         XCTAssertFalse(sentence.lowercased().contains("trash"),
                        "a corrupt sidecar is not a tombstone: \(sentence)")
+        // Review finding 3.
+        XCTAssertTrue(sentence.contains(reason), "the sentence must name the actual reason")
     }
 
     // MARK: - 4.2 debounce
+
+    /// Change detector on §12.1's window (review finding 4). Every behavioural test injects
+    /// its own debounce window — they drive an injected timer — so the initializer's default
+    /// was exercised by nothing at all: changing it to 20 s left the whole suite green. Same
+    /// shape as `RevisionGrowthAlarmTests.testThresholdIsFifty`.
+    func testDebounceWindowDefaultsToTwoSeconds() {
+        XCTAssertEqual(TranscriptEditorModel.defaultDebounceSeconds, 2)
+
+        let model = TranscriptEditorModel(captureID: captureID,
+                                          store: FakeEditorStore.editable(currentText: "x"))
+
+        XCTAssertEqual(model.debounceSeconds, 2,
+                       "the initializer default must be the named constant, not its own literal")
+    }
 
     /// §12.1's 2 s debounce, cancelled and re-armed per keystroke. Five keystrokes inside
     /// one window write NOTHING until the window elapses, and then write exactly once — the

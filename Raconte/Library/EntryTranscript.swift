@@ -228,6 +228,27 @@ enum EntryTranscriptLoader {
         }
     }
 
+    /// The MACHINE transcript alone: `live.jsonl`, consolidated, with the canonical chain
+    /// deliberately not consulted at all (T7 Task 4, ruling Q5 — Gate A finding I3).
+    ///
+    /// `load(captureDirectory:expectedRecords:attribution:)` above cannot serve this, and
+    /// riding it was a real defect: its canonical branch PREFERS `current`'s text and reaches
+    /// the live-log fallback only when no readable revision exists at all. So a chain with one
+    /// damaged file and one readable `.userEdit` handed back the OWNER'S OWN EDIT — to an
+    /// editor screen whose heading calls it the un-edited machine transcript. Q5's offer is
+    /// the loader's FALLBACK text specifically, and never labelling a state with something
+    /// untrue is a principle the owner has now ruled on three times.
+    ///
+    /// `nil` for an absent or unreadable log, and for a readable log with nothing committed in
+    /// it. Built on the same `LiveTranscriptReader.load` + `.consolidate` primitives
+    /// `fallbackToLiveLog` uses, so issue #10's consolidation rules keep one implementation.
+    static func machineLiveText(captureDirectory: URL) -> String? {
+        let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+        guard case .present = loaded.source else { return nil }
+        let text = LiveTranscriptReader.consolidate(loaded.records).committedText
+        return text.isEmpty ? nil : text
+    }
+
     /// `markers.jsonl` → snap → attribute, applying the marker-source rules (design
     /// §7). Split out so the `.present` branch above stays one read of each log.
     private static func attributedParagraphs(captureDirectory: URL,

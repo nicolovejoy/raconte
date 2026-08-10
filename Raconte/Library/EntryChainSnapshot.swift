@@ -13,6 +13,12 @@ struct EntryChainSnapshot: Sendable, Equatable {
         case readOnlyListingUnreadable(String)       // §4.5a
         case readOnlyTrashed
         case readOnlyNoTranscript                    // nothing promoted, nothing to edit
+        /// `entry.json` is present but did not decode (fix round 1, Important 4 — owner
+        /// ruling). Blocking is correct (matches `TranscriptRevisionStore.guardWritable`,
+        /// which throws on exactly this sidecar state), but the entry is NOT trashed —
+        /// labeling it `.readOnlyTrashed` would tell the owner an entry is in the trash
+        /// (wrong Restore / Delete Now affordances) when it is merely corrupt.
+        case readOnlyMetadataUnreadable(String)
     }
 
     var editability: Editability
@@ -22,30 +28,33 @@ struct EntryChainSnapshot: Sendable, Equatable {
     var revisionCount: Int
     var isForked: Bool                      // TranscriptChain.forkedHumanLineage
     var openDraft: TranscriptDraft?         // resume-in-progress, and Task 8's "unsaved" marker
-    var detachedMachineRevisions: [TranscriptHeadSummary]  // §12.8 — visible, labeled
+    /// Machine-sourced revisions that are genuinely unapplied — neither `current` nor one
+    /// of its ancestors (fix round 1, owner ruling; supersedes the plan's `!isAttached`
+    /// shorthand for this field only — see `build`'s doc comment). §12.8: labeled "machine
+    /// transcript, not applied" in the UI. Chain `(createdAt, id)` order — the same total
+    /// order every other chain-derived list in this codebase uses — since Task 8 renders
+    /// this list and needs it deterministic.
+    var detachedMachineRevisions: [TranscriptHeadSummary]
     var chainByteSize: Int64                // #39
 
     // MARK: - Build
 
     /// Builds the snapshot for one capture directory. No actor hop of its own — every
-    /// primitive this touches (`TranscriptRevisionStore.listing`, `EntryMetadataStore
-    /// .read(url:)`, `TranscriptChain.*`) is `nonisolated static`/pure — and, by
-    /// construction, no filesystem write: the same "read path never writes" property
-    /// `TranscriptRevisionStore` itself holds its own static reads to (design §4.3).
+    /// primitive this touches (`TranscriptRevisionStore.listing`/`.rawLoad`/`.readDraft`,
+    /// `EntryMetadataStore.read(url:)`, `TranscriptChain.*`) is `nonisolated
+    /// static`/pure — and, by construction, no filesystem write: the same "read path
+    /// never writes" property `TranscriptRevisionStore` itself holds its own static reads
+    /// to (design §4.3).
     ///
     /// **`editability` precedence** (brief rule, matching the store's write-guard order
     /// exactly, so "the editor let me start typing and then the save refused" is
-    /// structurally impossible): trashed sidecar first, then an unreadable `transcript/`
-    /// listing, then any individually-unreadable revision file, then "no current revision
-    /// at all" (nothing promoted yet). Only when none of those apply is the entry
-    /// `.editable`. An UNREADABLE (present-but-undecodable) sidecar is folded into the
-    /// trashed branch — the same conservative default `closeStaleDraftIfNeeded` already
-    /// uses (`guard let metadata = try? … else return`, TranscriptRevisionStore.swift):
-    /// the store's own write guards throw outright on a sidecar we can't parse, so an
-    /// entry we can't even confirm isn't trashed must never read as `.editable` — that
-    /// would be exactly the bug this precedence exists to rule out. It doesn't literally
-    /// mean "trashed" (there is no dedicated case for "sidecar unreadable"), but it is the
-    /// one case that both blocks editing and costs nothing further to compute.
+    /// structurally impossible): an undecodable sidecar, THEN a genuinely trashed
+    /// sidecar, then an unreadable `transcript/` listing, then any individually-
+    /// unreadable revision file, then "no current revision at all" (nothing promoted
+    /// yet). Only when none of those apply is the entry `.editable`. (Fix round 1,
+    /// Important 4: the undecodable-sidecar case used to fold into `.readOnlyTrashed` —
+    /// same blocking behavior, but a false label — and now has its own case,
+    /// `.readOnlyMetadataUnreadable`.)
     ///
     /// The content fields (`currentRevisionID`/`currentText`/…/`detachedMachineRevisions`)
     /// are populated whenever the chain itself is readable, INDEPENDENT of the trashed
@@ -61,63 +70,104 @@ struct EntryChainSnapshot: Sendable, Equatable {
     /// attempted regardless of which branch below is taken.
     static func build(captureDirectory: URL) -> EntryChainSnapshot {
         let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
-        let trashed = (try? EntryMetadataStore.read(url: sidecarURL))?.isTrashed ?? true
+        var trashed = false
+        var metadataUnreadableReason: String?
+        do {
+            trashed = try EntryMetadataStore.read(url: sidecarURL).isTrashed
+        } catch {
+            // `EntryMetadataStore.read(url:)` throws only for a PRESENT, undecodable
+            // sidecar — an absent one returns `.defaults` (not trashed) without
+            // throwing. So landing here means "corrupt", never "missing".
+            metadataUnreadableReason = String(describing: error)
+        }
 
-        let openDraft = Self.readDraft(captureDirectory: captureDirectory)
+        // The one override that beats every chain-derived Editability below, in order:
+        // an unreadable sidecar first (we cannot even ask whether it's trashed), then a
+        // genuinely trashed one.
+        let precedenceOverride: Editability? = {
+            if let reason = metadataUnreadableReason { return .readOnlyMetadataUnreadable(reason) }
+            if trashed { return .readOnlyTrashed }
+            return nil
+        }()
+
+        let openDraft = TranscriptRevisionStore.readDraft(captureDirectory: captureDirectory)
 
         switch TranscriptRevisionStore.listing(captureDirectory: captureDirectory) {
         case .absent:
-            return EntryChainSnapshot(editability: trashed ? .readOnlyTrashed : .readOnlyNoTranscript,
+            return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
                                       currentRevisionID: nil, currentText: "", currentSource: nil,
                                       revisionCount: 0, isForked: false, openDraft: openDraft,
                                       detachedMachineRevisions: [], chainByteSize: 0)
 
         case .unreadable(let reason):
-            return EntryChainSnapshot(editability: trashed ? .readOnlyTrashed : .readOnlyListingUnreadable(reason),
+            return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyListingUnreadable(reason),
                                       currentRevisionID: nil, currentText: "", currentSource: nil,
                                       revisionCount: 0, isForked: false, openDraft: openDraft,
                                       detachedMachineRevisions: [], chainByteSize: 0)
 
         case .present(let files):
             let byteSize = Self.byteSize(captureDirectory: captureDirectory, files: files)
-            let loaded = Self.numberedLoad(captureDirectory: captureDirectory, files: files)
 
-            if let firstUnreadable = loaded.unreadableFiles.first {
+            guard let raw = TranscriptRevisionStore.rawLoad(captureDirectory: captureDirectory) else {
+                // Cannot happen: `.present` above already proves `transcript/` exists,
+                // and `rawLoad` only returns `nil` for `.absent`. No unsafe force-unwrap
+                // across the module boundary, so degrade the same way `.absent` does
+                // rather than crash on a state that should be unreachable.
+                return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
+                                          currentRevisionID: nil, currentText: "", currentSource: nil,
+                                          revisionCount: 0, isForked: false, openDraft: openDraft,
+                                          detachedMachineRevisions: [], chainByteSize: byteSize)
+            }
+
+            if let firstUnreadable = raw.unreadableFiles.first {
                 return EntryChainSnapshot(
-                    editability: trashed ? .readOnlyTrashed : .readOnlyUnreadableRevision(file: firstUnreadable),
+                    editability: precedenceOverride ?? .readOnlyUnreadableRevision(file: firstUnreadable),
                     currentRevisionID: nil, currentText: "", currentSource: nil,
                     revisionCount: 0, isForked: false, openDraft: openDraft,
                     detachedMachineRevisions: [], chainByteSize: byteSize)
             }
 
-            let ordered = loaded.ordered
+            let ordered = TranscriptChain.ordered(raw.numbered.map(\.revision))
+            let fileNumbers = Dictionary(raw.numbered.map { ($0.revision.id, $0.file) }, uniquingKeysWith: min)
             let forked = TranscriptChain.forkedHumanLineage(ordered)
 
             guard let current = TranscriptChain.current(ordered) else {
-                return EntryChainSnapshot(editability: trashed ? .readOnlyTrashed : .readOnlyNoTranscript,
+                return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
                                           currentRevisionID: nil, currentText: "", currentSource: nil,
                                           revisionCount: ordered.count, isForked: forked, openDraft: openDraft,
                                           detachedMachineRevisions: [], chainByteSize: byteSize)
             }
 
-            // §12.8: every revision `TranscriptChain` itself calls unattached — labeled
-            // "machine transcript, not applied" in the UI. This reuses `isAttached`
-            // verbatim rather than re-deriving a narrower "off to the side only" filter,
-            // per the brief's instruction not to reimplement chain logic here. Note this
-            // also includes a chain's original root machine revision once ANY human tip
-            // exists elsewhere in the chain — `isAttached` requires the human tip to be
-            // among a machine revision's OWN ancestors, and a root has no ancestors at
-            // all, so it can never satisfy that once a human edit exists anywhere (see
-            // TranscriptChainTests.testF1MachineAfterMachineIsDetached /
-            // .testA1DataLossWalk for the same already-shipped pattern on other
-            // pre-human-tip machine revisions).
-            let detached = ordered.filter { !TranscriptChain.isAttached($0, in: ordered) }
-            let detachedSummaries = detached.compactMap { revision -> TranscriptHeadSummary? in
-                guard let fileNumber = loaded.fileNumbers[revision.id] else { return nil }
-                return Self.summary(for: revision, fileNumber: fileNumber, isForked: forked)
+            // Fix round 1, owner ruling: "not applied" (§12.8) is reserved for machine
+            // revisions that are genuinely orphaned — neither `current` nor one of its
+            // ancestors. A chain's root machine revision is `current`'s own ancestor (the
+            // foundation a human edit was built on) and must NOT carry this label, even
+            // though it fails the plan's original, broader `!TranscriptChain.isAttached`
+            // test — `isAttached` requires the human tip to be among a CANDIDATE's own
+            // ancestors, which a root (having none at all) can never satisfy once any
+            // human tip exists anywhere in the chain. `TranscriptChain.isAttached` itself
+            // is unchanged, and `TranscriptChain.current` still uses it; this supersedes
+            // the shorthand for THIS field only. Expressed with existing primitives only
+            // (`current`, `TranscriptChain.ancestry(of:among:)`) — no new chain logic.
+            //
+            // Human-lineage revisions are excluded outright regardless of ancestry: this
+            // field is `detachedMachineRevisions` and must never carry a human-authored
+            // edit, including a diverged (forked) one that also happens to be neither
+            // `current` nor its ancestor — see `RevisionSource.isHumanLineage`.
+            //
+            // Order: `ordered.filter` preserves `ordered`'s own `(createdAt, id)` order.
+            let currentAncestry = TranscriptChain.ancestry(of: current, among: ordered)
+            let notApplied = ordered.filter { revision in
+                !revision.source.isHumanLineage
+                    && revision.id != current.id
+                    && !currentAncestry.contains(revision.id)
+            }
+            let detachedSummaries = notApplied.compactMap { revision -> TranscriptHeadSummary? in
+                guard let fileNumber = fileNumbers[revision.id] else { return nil }
+                return TranscriptRevisionStore.headSummary(for: revision, fileNumber: fileNumber, isForked: forked)
             }
 
-            return EntryChainSnapshot(editability: trashed ? .readOnlyTrashed : .editable,
+            return EntryChainSnapshot(editability: precedenceOverride ?? .editable,
                                       currentRevisionID: current.id,
                                       currentText: TranscriptChain.plainText(current),
                                       currentSource: current.source,
@@ -130,15 +180,6 @@ struct EntryChainSnapshot: Sendable, Equatable {
     }
 
     // MARK: - Private reads
-
-    /// Best-effort read of `draft.json` — mirrors `TranscriptRevisionStore`'s own private
-    /// `readDraft`: an undecodable or absent draft is treated identically as "no draft",
-    /// never as an error.
-    private static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
-        let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? CaptureCoding.decoder().decode(TranscriptDraft.self, from: data)
-    }
 
     /// Sum of on-disk byte sizes of every LISTED `canonical-<n>.json` file — readable or
     /// not (a corrupt revision still occupies real bytes, and the storage stat, #39, is
@@ -158,53 +199,5 @@ struct EntryChainSnapshot: Sendable, Equatable {
             }
             return total + size.int64Value
         }
-    }
-
-    private struct NumberedLoad {
-        var ordered: [TranscriptRevision]      // (createdAt, id) order, deduped by id
-        var fileNumbers: [String: Int]         // revision id -> lowest file number seen for it
-        var unreadableFiles: [Int]
-    }
-
-    /// Same decode-and-dedup rule as `TranscriptRevisionStore`'s own (private) `rawLoad`
-    /// (Gate A finding C1: keep the first file seen for a given revision id, silently drop
-    /// any later duplicate) — reimplemented here rather than reused because file numbers
-    /// are needed for EVERY revision that may end up in `detachedMachineRevisions`, not
-    /// just `current`'s, and `TranscriptRevisionStore.loadChain` deliberately discards
-    /// file numbers entirely (see its own doc comment). `TranscriptRevisionStore.listing`
-    /// — the public primitive — still supplies `files`, so only the per-file decode/dedup
-    /// bookkeeping is duplicated, not the trashed/listing/unreadable precedence itself.
-    private static func numberedLoad(captureDirectory: URL, files: [Int]) -> NumberedLoad {
-        var numbered: [(file: Int, revision: TranscriptRevision)] = []
-        var unreadableFiles: [Int] = []
-        var seenIDs: Set<String> = []
-        let decoder = CaptureCoding.decoder()
-        for file in files {
-            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
-            guard let data = try? Data(contentsOf: url),
-                  let revision = try? decoder.decode(TranscriptRevision.self, from: data) else {
-                unreadableFiles.append(file)
-                continue
-            }
-            guard seenIDs.insert(revision.id).inserted else { continue }
-            numbered.append((file: file, revision: revision))
-        }
-        let fileNumbers = Dictionary(numbered.map { ($0.revision.id, $0.file) }, uniquingKeysWith: min)
-        return NumberedLoad(ordered: TranscriptChain.ordered(numbered.map(\.revision)),
-                            fileNumbers: fileNumbers, unreadableFiles: unreadableFiles)
-    }
-
-    /// Same shape as `TranscriptRevisionStore`'s private `rebuildHead` summary
-    /// construction (first line, truncated to 120 chars) — the one other place that mints
-    /// a `TranscriptHeadSummary`.
-    private static func summary(for revision: TranscriptRevision, fileNumber: Int,
-                                isForked: Bool) -> TranscriptHeadSummary {
-        let plain = TranscriptChain.plainText(revision)
-        let firstLineFull = plain.split(separator: "\n", maxSplits: 1,
-                                        omittingEmptySubsequences: false).first
-            .map(String.init) ?? plain
-        return TranscriptHeadSummary(id: revision.id, fileNumber: fileNumber, source: revision.source,
-                                     createdAt: revision.createdAt, characterCount: plain.count,
-                                     firstLine: String(firstLineFull.prefix(120)), isForked: isForked)
     }
 }

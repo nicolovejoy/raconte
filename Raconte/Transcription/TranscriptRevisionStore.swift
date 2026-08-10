@@ -122,7 +122,14 @@ actor TranscriptRevisionStore {
     /// readable or not"); routing it into `unreadableFiles` instead would trip the I1
     /// trust condition and reproduce C1's exact symptom (a head that can never be
     /// trusted again, because `unreadableFiles` would never be empty).
-    private nonisolated static func rawLoad(
+    ///
+    /// Not `private` (T7 Task 2 fix round 1, Important 3): `EntryChainSnapshot` needs
+    /// per-revision file numbers for every revision it may show, not just `current`'s —
+    /// something `loadChain` structurally can't provide — and reimplementing this
+    /// decode-and-dedupe walk a second time is exactly how the C1/N1 duplicate-file-
+    /// number rules end up with two implementations and only one carrying the fix.
+    /// `internal` (module-default) rather than adding a new public API surface.
+    nonisolated static func rawLoad(
         captureDirectory: URL
     ) -> (numbered: [(file: Int, revision: TranscriptRevision)], unreadableFiles: [Int],
           dedupedFiles: [Int], listingUnreadable: Bool)? {
@@ -184,20 +191,11 @@ actor TranscriptRevisionStore {
         // fine) or the I1 trust condition would never be satisfiable again for this
         // capture.
         let revisionFiles = (raw.numbered.map(\.file) + raw.unreadableFiles + raw.dedupedFiles).sorted()
+        let forked = TranscriptChain.forkedHumanLineage(ordered)
 
         let summary: TranscriptHeadSummary? = TranscriptChain.current(ordered).flatMap { revision in
             guard let fileNumber = fileNumberByID[revision.id] else { return nil }
-            let plain = TranscriptChain.plainText(revision)
-            let firstLineFull = plain.split(separator: "\n", maxSplits: 1,
-                                            omittingEmptySubsequences: false).first
-                .map(String.init) ?? plain
-            return TranscriptHeadSummary(id: revision.id,
-                                         fileNumber: fileNumber,
-                                         source: revision.source,
-                                         createdAt: revision.createdAt,
-                                         characterCount: plain.count,
-                                         firstLine: String(firstLineFull.prefix(120)),
-                                         isForked: TranscriptChain.forkedHumanLineage(ordered))
+            return Self.headSummary(for: revision, fileNumber: fileNumber, isForked: forked)
         }
 
         return TranscriptHead(current: summary,
@@ -205,6 +203,29 @@ actor TranscriptRevisionStore {
                               unreadableFiles: raw.unreadableFiles,
                               revisionCount: ordered.count,
                               listingUnreadable: raw.listingUnreadable)
+    }
+
+    /// One `TranscriptHeadSummary` for a revision + the file number it lives in — the
+    /// digest `head.json`'s `current` caches (first line truncated to 120 chars). Not
+    /// `private` (T7 Task 2 fix round 1, Important 3): `EntryChainSnapshot` mints the
+    /// same shape for every entry in `detachedMachineRevisions`, and a second
+    /// independent implementation is exactly how a future field (or a truncation-rule
+    /// change) drifts between the two. `isForked` is chain-wide (design §4.2), computed
+    /// once by the caller over the WHOLE `ordered` chain and threaded through here
+    /// rather than recomputed per revision.
+    nonisolated static func headSummary(for revision: TranscriptRevision, fileNumber: Int,
+                                        isForked: Bool) -> TranscriptHeadSummary {
+        let plain = TranscriptChain.plainText(revision)
+        let firstLineFull = plain.split(separator: "\n", maxSplits: 1,
+                                        omittingEmptySubsequences: false).first
+            .map(String.init) ?? plain
+        return TranscriptHeadSummary(id: revision.id,
+                                     fileNumber: fileNumber,
+                                     source: revision.source,
+                                     createdAt: revision.createdAt,
+                                     characterCount: plain.count,
+                                     firstLine: String(firstLineFull.prefix(120)),
+                                     isForked: isForked)
     }
 
     /// Best-effort read of the persisted `head.json`, or `nil` if it's absent or
@@ -393,7 +414,11 @@ actor TranscriptRevisionStore {
     /// Best-effort read of `draft.json`, or `nil` if it's absent or doesn't decode.
     /// Mirrors `readPersistedHead`: an undecodable draft is treated the same as no
     /// draft rather than as an error — there is nothing safe to close or overwrite.
-    private nonisolated static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
+    ///
+    /// Not `private` (T7 Task 2 fix round 1, Important 3), same reasoning as
+    /// `draftExists` (T7 prereq #41): `EntryChainSnapshot.openDraft` reuses this exact
+    /// read rather than a second copy of the same absent/undecodable-collapse rule.
+    nonisolated static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
         let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? CaptureCoding.decoder().decode(TranscriptDraft.self, from: data)

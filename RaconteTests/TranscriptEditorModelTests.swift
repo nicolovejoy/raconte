@@ -511,7 +511,10 @@ final class TranscriptEditorModelTests: XCTestCase {
         await debounce.fire()
 
         XCTAssertEqual(model.state, .editing)
-        XCTAssertEqual(store.writeDraftCalls, ["second try"])
+        // Attempts, not successes (see `FakeEditorStore.writeDraftCalls`): the failed first
+        // write is recorded too, which makes this the stronger claim — the editor really did
+        // try, fail, and then try again, rather than never having attempted the first one.
+        XCTAssertEqual(store.writeDraftCalls, ["first try", "second try"])
     }
 
     /// A `closeDraft` that throws makes `done()` return `false`. The draft itself saved fine,
@@ -532,6 +535,62 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertEqual(store.writeDraftCalls, ["saved as a draft, but not closeable"],
                        "the flush still happened — only the close failed")
         guard case .failed = model.state else { return XCTFail("expected .failed, got \(model.state)") }
+    }
+
+    /// Review finding 1. The alert on a failed Done says "Try Done again" — so trying again
+    /// must actually try. The failure mode this pins: the draft flushed successfully (so
+    /// `hasUnsavedChanges` is false), then `closeDraft` threw. If the next `done()` decides
+    /// whether to close by looking at `state`, the leftover `.failed` short-circuits it and
+    /// the store is never reached again — the screen's own recovery affordance is dead
+    /// against exactly the transient failures (I/O, a §15b.15 refusal that a re-promote
+    /// clears) it exists for, and the only escape is typing a character.
+    ///
+    /// The store recovers between the two calls, so `closeDraftCalls.count` distinguishes
+    /// "retried and succeeded" from "returned false without trying" — a single `done()`, as
+    /// the original test made, cannot tell those apart.
+    func testDoneRetriesTheCloseAfterATransientCloseFailure() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let debounce = ManualDebounce()
+        let model = editor(store, debounce: debounce)
+        await model.open()
+
+        model.text = "an edit worth keeping"
+        model.textChanged()
+        await debounce.fire()
+        XCTAssertEqual(store.writeDraftCalls, ["an edit worth keeping"], "precondition: the draft saved")
+        XCTAssertFalse(model.hasUnsavedChanges, "precondition: nothing left to flush")
+
+        store.closeDraftError = TranscriptRevisionStoreError.revisionUnreadable(file: 3)
+        let first = await model.done()
+        XCTAssertFalse(first)
+        XCTAssertEqual(store.closeDraftCalls.count, 1)
+        guard case .failed = model.state else { return XCTFail("expected .failed, got \(model.state)") }
+
+        store.closeDraftError = nil
+        let second = await model.done()
+
+        XCTAssertTrue(second, "a transient close failure must be retryable without typing")
+        XCTAssertEqual(store.closeDraftCalls.count, 2, "the retry has to reach the store")
+        XCTAssertEqual(model.state, .editing, "the banner must not outlive the problem")
+    }
+
+    /// The other side of the same fix: a flush that genuinely fails must still block the
+    /// close, so "retryable" never becomes "closes over a draft that never saved".
+    func testDoneStillRefusesToCloseWhileTheFlushItselfIsFailing() async {
+        let store = FakeEditorStore.editable(currentText: "the machine text")
+        let model = editor(store)
+        await model.open()
+
+        model.text = "an edit that cannot be saved"
+        model.textChanged()
+        store.writeDraftError = TranscriptRevisionStoreError.trashedCapture
+
+        let first = await model.done()
+        let second = await model.done()
+
+        XCTAssertFalse(first)
+        XCTAssertFalse(second)
+        XCTAssertEqual(store.closeDraftCalls, [], "never close over a draft that never saved")
     }
 
     // MARK: - 4.5 backgrounding
@@ -664,6 +723,9 @@ final class FakeEditorStore: TranscriptEditorStore {
     var writeDraftError: (any Error)?
     var closeDraftError: (any Error)?
 
+    /// ATTEMPTS, not successes — both are recorded before the configured error is thrown.
+    /// Recording only what succeeded makes "did the retry reach the store at all?"
+    /// unanswerable, which is exactly the question review finding 1 turns on.
     private(set) var writeDraftCalls: [String] = []
     private(set) var closeDraftCalls: [DraftCloseReason] = []
     private(set) var snapshotCalls = 0
@@ -689,8 +751,8 @@ final class FakeEditorStore: TranscriptEditorStore {
     func openDraft(for captureID: String) async -> TranscriptDraft? { draftOnDisk }
 
     func writeDraft(captureID: String, text: String, now: Date) async throws {
-        if let writeDraftError { throw writeDraftError }
         writeDraftCalls.append(text)
+        if let writeDraftError { throw writeDraftError }
         draftOnDisk = TranscriptDraft(captureID: captureID,
                                       parentID: draftOnDisk?.parentID ?? snapshot.currentRevisionID,
                                       basedOnMachineID: draftOnDisk?.basedOnMachineID,
@@ -700,8 +762,8 @@ final class FakeEditorStore: TranscriptEditorStore {
 
     @discardableResult
     func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
-        if let closeDraftError { throw closeDraftError }
         closeDraftCalls.append(reason)
+        if let closeDraftError { throw closeDraftError }
         let hadDraft = draftOnDisk != nil
         draftOnDisk = nil
         return hadDraft ? "minted" : nil

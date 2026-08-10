@@ -537,4 +537,57 @@ final class LibraryScreenModel {
             return EntryChainSnapshot.build(captureDirectory: directory)
         }.value
     }
+
+    // MARK: - Editor draft passthroughs (T7 Task 4)
+
+    /// The un-edited machine transcript, for the editor's degraded-chain refusal (T7 plan
+    /// ruling Q5): a chain we cannot read still gets its `live.jsonl` text offered
+    /// read-only, labeled as the machine transcript rather than as "the transcript".
+    ///
+    /// Deliberately built on `transcript(for:)` — the EXISTING `EntryTranscriptLoader`
+    /// fallback, `AttributionMode.compute`, which returns the genuine full text — not on
+    /// a new read and never on the scanner's `.skip` path, whose `EntryTranscript.text` is
+    /// a truncated snippet (that field's own doc comment, T7 Task 3 exception).
+    ///
+    /// `nil` for an absent or unreadable log, and for a readable log with nothing in it:
+    /// the editor has nothing to offer in any of those cases, and an empty box under a
+    /// "here is the machine transcript" heading would claim otherwise.
+    nonisolated func machineTranscript(for captureID: String) async -> String? {
+        let loaded = await transcript(for: captureID)
+        guard case .present = loaded.state, let text = loaded.text, !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// `transcript/draft.json` as it is on disk right now — the editor's only way to notice
+    /// that a `refresh()`-driven `closeStaleDraftIfNeeded` closed the draft beneath an open
+    /// editing session. Calls the store's own shared `readDraft` primitive rather than a
+    /// second copy of the absent/undecodable-collapse rule.
+    nonisolated func openDraft(for captureID: String) async -> TranscriptDraft? {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                           captureID: captureID)
+            return TranscriptRevisionStore.readDraft(captureDirectory: directory)
+        }.value
+    }
+
+    /// Thin passthrough. Deliberately does NOT `rescan()`: this runs on every debounce fire
+    /// (every 2 s of typing), and a whole-corpus scan per keystroke-burst is exactly the
+    /// cost `chainSnapshot` was kept off the scan path to avoid. The library rows are
+    /// refreshed once, by the detail screen, after the editor closes.
+    func writeDraft(captureID: String, text: String, now: Date) async throws {
+        try await revisionStore.writeDraft(captureID: captureID, text: text, now: now)
+    }
+
+    /// Thin passthrough. Returns the minted revision id, or `nil` when the draft matched
+    /// `current` and was simply deleted (design §2.5) — the editor treats both as success;
+    /// only a THROW means nothing was saved.
+    @discardableResult
+    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
+        try await revisionStore.closeDraft(captureID: captureID, reason: reason, now: now)
+    }
 }
+
+/// The editor writes through this model, never straight to `TranscriptRevisionStore` — one
+/// store instance per file, app-wide (see `entryMetadataStore`'s own note).
+extension LibraryScreenModel: TranscriptEditorStore {}

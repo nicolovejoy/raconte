@@ -219,6 +219,49 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTAssertFalse(model.showsTextEditor)
     }
 
+    /// The other degraded-chain shape (§4.5a). It takes the same Q5 branch, but the offer
+    /// comes back EMPTY and must — `live.jsonl` lives inside the very folder we could not
+    /// read, so "refuse, then offer the machine transcript" has nothing to offer here. Pinned
+    /// rather than left implicit, so nobody later reads the nil as a missed case and "fixes"
+    /// it into a claim the disk cannot support.
+    func testOpenOnUnreadableListingRefusesWithNoMachineTranscriptToOffer() async throws {
+        try Data("not a directory".utf8).write(to: transcriptDirectory)
+
+        let model = editor(liveModel())
+        await model.open()
+
+        guard case .readOnly(.readOnlyListingUnreadable(let reason)) = model.state else {
+            return XCTFail("expected .readOnlyListingUnreadable, got \(model.state)")
+        }
+        XCTAssertFalse(reason.isEmpty)
+        XCTAssertNil(model.machineTranscript, "the log lives inside the folder we cannot read")
+        XCTAssertFalse(model.showsTextEditor)
+    }
+
+    /// Re-opening the same model instance (navigate back into the editor) is a fresh session:
+    /// a notice about a draft closed beneath the LAST session must not still be on screen.
+    func testReopeningClearsTheBeneathSessionNotice() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        let library = liveModel()
+        let clock = TestClock(1_700_001_000)
+        let model = editor(library, clock: clock)
+        await model.open()
+        model.text = "an edit"
+        model.textChanged()
+        await model.flush()
+        _ = await library.revisionStore.closeStaleDraftIfNeeded(
+            captureID: captureID, now: Date(timeIntervalSince1970: 1_700_001_200))
+        clock.now = Date(timeIntervalSince1970: 1_700_001_400)
+        model.text = "an edit, continued"
+        model.textChanged()
+        await model.flush()
+        XCTAssertTrue(model.draftClosedBeneathSession, "precondition")
+
+        await model.open()
+
+        XCTAssertFalse(model.draftClosedBeneathSession)
+    }
+
     /// Hazard (b): `.readOnlyNoTranscript` is the one case where the STORE would let the
     /// write through — `writeDraft` against a capture with no chain succeeds and creates a
     /// `draft.json`. The editor owns this guard, so it must gate on editability and never on
@@ -314,6 +357,55 @@ final class TranscriptEditorModelTests: XCTestCase {
 
         let recorded = await fired.values
         XCTAssertEqual(recorded, ["third"], "re-arming must cancel the window it replaced")
+    }
+
+    /// Found while wiring the view (4.6). `TranscriptEditorView` observes the text with
+    /// `.onChange(of: model.text)`, and SwiftUI compares values across body evaluations — so
+    /// the moment `open()` fills the text and flips `state` to `.editing`, the body
+    /// re-evaluates, the value has changed from `""`, and `textChanged()` fires for an edit
+    /// nobody made. Left alone that arms the debounce and writes a `draft.json` for merely
+    /// OPENING an entry to read it, and makes `hasUnsavedChanges` claim unsaved work.
+    ///
+    /// The editor must treat "the text is what I just loaded" as no change at all.
+    func testOpeningAndLeavingWithoutTypingWritesNothing() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+
+        let debounce = ManualDebounce()
+        let model = editor(liveModel(), debounce: debounce)
+        await model.open()
+
+        model.textChanged()                 // what .onChange(of:) does on the load itself
+
+        XCTAssertFalse(model.hasUnsavedChanges, "loading text is not an edit")
+        XCTAssertFalse(debounce.isArmed, "no window may be armed for an edit nobody made")
+
+        await debounce.fire()
+        let done = await model.done()
+
+        XCTAssertTrue(done)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: draftURL.path),
+                       "opening an entry to read it must not leave a draft behind")
+        XCTAssertEqual(try canonicalFileCount(), 1)
+    }
+
+    /// The other half: a resumed draft's text is likewise not a fresh edit, but it IS
+    /// genuinely unsaved, so `hasUnsavedChanges` must stay true while the debounce stays
+    /// unarmed. Two properties that a single "reset everything on load" fix would conflate.
+    func testResumedDraftTextIsUnsavedButNotAFreshEdit() async throws {
+        try await store().append(revision("R0", text: "the machine text"), captureID: captureID)
+        try writeDraftFile(text: "my half-finished edit",
+                           openedAt: Date(timeIntervalSince1970: 1_700_000_900),
+                           lastWriteAt: Date(timeIntervalSince1970: 1_700_000_950),
+                           parentID: "R0")
+
+        let debounce = ManualDebounce()
+        let model = editor(liveModel(), debounce: debounce)
+        await model.open()
+
+        model.textChanged()
+
+        XCTAssertTrue(model.hasUnsavedChanges, "the draft really is unsaved work")
+        XCTAssertFalse(debounce.isArmed, "but loading it is still not a keystroke")
     }
 
     // MARK: - 4.3 done()

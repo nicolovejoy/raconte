@@ -24,6 +24,13 @@ struct EntryDetailView: View {
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
+    /// The editor is a full-screen push, not a sheet (T7 Task 4, ruling Q9). Its model is
+    /// built once, in `init`, rather than inside the destination builder: a builder that
+    /// re-mints it on every body evaluation would restart the editing session under the
+    /// owner's cursor, and a builder that could return nothing would push a blank page
+    /// (issue #32's lesson).
+    @State private var showingEditor = false
+    @State private var editorModel: TranscriptEditorModel
 
     /// Sidecar writes that reported failure. Each names what didn't save — the same
     /// swallowed-`try?` family as `TrashView.permanentDeleteFailed`, which the owner hit
@@ -34,10 +41,13 @@ struct EntryDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    @MainActor
     init(model: LibraryScreenModel, item: EntryListItem) {
         self.model = model
         self.captureID = item.captureID
         _item = State(initialValue: item)
+        _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
+                                                                 store: model))
     }
 
     var body: some View {
@@ -55,6 +65,18 @@ struct EntryDetailView: View {
         }
         .navigationTitle(item.formattedEffectiveDate())
         .task { await refresh() }
+        .navigationDestination(isPresented: $showingEditor) {
+            TranscriptEditorView(model: editorModel)
+        }
+        // The editor writes through the store directly and deliberately does NOT rescan on
+        // every debounce fire; the library rows catch up once, here, when it closes.
+        .onChange(of: showingEditor) { _, shown in
+            guard !shown else { return }
+            Task {
+                await model.rescan()
+                await refresh()
+            }
+        }
         // No `deinit` on `CapturePlayback` stops the audio, and a `@State` value outlives
         // the pop by however long SwiftUI holds it — without this, backing out of a
         // playing entry keeps playing.
@@ -326,6 +348,12 @@ struct EntryDetailView: View {
                 }
                 .accessibilityIdentifier("detail.transcript.text")
             }
+
+            // The detail screen stays the reader: it gains an Edit affordance and nothing
+            // else. The transcript above is never editable in place.
+            Button("Edit transcript…") { showingEditor = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.editButton")
 
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "

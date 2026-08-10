@@ -151,6 +151,19 @@ final class TranscriptEditorModel {
     /// Whether THIS editing session has already been closed — see `finishIfNeeded()`.
     @ObservationIgnored private var hasFinished = false
 
+    /// Which editing session the model is on. A plain "already finished" Bool was a lost
+    /// update (Gate A Critical 2): `open()` cleared it BEFORE its own `await`, while
+    /// `finishIfNeeded()` assigned it AFTER `await done()`, so a finish belonging to session
+    /// one could latch the flag for session two — whose edit then never reached the store,
+    /// while `finishIfNeeded()` cheerfully returned true. A token makes "does this result
+    /// still belong to the session that asked for it?" answerable, which a Bool cannot be.
+    @ObservationIgnored private var sessionID = 0
+
+    /// The finish currently in flight, with the session that started it. Both exit paths (the
+    /// Done button and the pop) can race on device; without this they pass the `hasFinished`
+    /// check together and close twice, minting a second revision for one edit.
+    @ObservationIgnored private var finishInFlight: (session: Int, task: Task<Bool, Never>)?
+
     init(captureID: String,
          store: any TranscriptEditorStore,
          debounce: any EditorDebounce = TaskEditorDebounce(),
@@ -192,6 +205,14 @@ final class TranscriptEditorModel {
     /// draft writer; routing open through the real read means a draft that appears after any
     /// such check is still resumed rather than silently discarded.
     func open() async {
+        // A new session, from this line on. Everything below that says "this session" is
+        // keyed to it, and any finish still in flight from the previous one is now a dead
+        // session's business and may not latch this one.
+        sessionID &+= 1
+        // A window armed against the PREVIOUS session's text must not survive into this one.
+        // The ledger carried this as "unreachable today"; Gate A disproved that.
+        debounce.cancel()
+        finishInFlight = nil
         state = .loading
         // A re-open (navigating back into the editor on the same model) is a fresh session:
         // last time's notices must not outlive the thing they described.
@@ -251,8 +272,18 @@ final class TranscriptEditorModel {
         guard storedText != lastKnownText else { return }
         lastKnownText = storedText
         hasUnsavedChanges = true
+        armFlush()
+    }
+
+    /// Arms the debounce for THIS session. The session check inside the closure is not
+    /// redundant with `open()`'s `cancel()`: a real `Task.sleep` can complete at the same
+    /// instant cancellation arrives, so cancelling cannot be the guarantee on its own — the
+    /// window that fires anyway has to decline by itself.
+    private func armFlush() {
+        let session = sessionID
         debounce.arm(after: debounceSeconds) { [weak self] in
-            _ = await self?.flush()
+            guard let self, self.sessionID == session else { return }
+            _ = await self.flush()
         }
     }
 
@@ -295,6 +326,13 @@ final class TranscriptEditorModel {
             return true
         } catch {
             state = .failed(Self.saveFailureMessage(error))
+            // Gate A Minor 4: `flush()` cancels the window on entry, so without this a failed
+            // save sat with unsaved changes and retried NOTHING until the owner happened to
+            // type another character. Re-arming makes a transient failure self-healing — the
+            // entry gets restored from the trash, the next window succeeds, and the banner
+            // clears itself. It stops as soon as a write succeeds or the editor closes
+            // (`done()` cancels), and it is armed for THIS session only.
+            armFlush()
             return false
         }
     }
@@ -336,8 +374,23 @@ final class TranscriptEditorModel {
     /// but the next attempt must still be able to try.
     @discardableResult
     func finishIfNeeded() async -> Bool {
+        let session = sessionID
+        // Both exit paths can be in flight at once; the second joins the first rather than
+        // closing a second time (which would mint two revisions for one edit).
+        if let inFlight = finishInFlight, inFlight.session == session {
+            return await inFlight.task.value
+        }
         guard !hasFinished else { return true }
-        let closed = await done()
+
+        let task = Task { @MainActor in await self.done() }
+        finishInFlight = (session: session, task: task)
+        let closed = await task.value
+
+        // Only a finish that STILL belongs to the current session may latch it. A finish from
+        // a session the owner has already left behind must not mark the new one saved — that
+        // was Critical 2, and it silently discarded the second session's words entirely.
+        guard sessionID == session else { return closed }
+        finishInFlight = nil
         hasFinished = closed
         return closed
     }

@@ -250,11 +250,20 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
         XCTAssertEqual(transcript.text, "intro words reply words")
     }
 
-    /// A human revision (T6d/T6e onward) has diverged from `live.jsonl` by definition.
-    /// `paragraphs` must be nil rather than attributing markers.jsonl over post-edit
-    /// text — otherwise a marked-up entry would silently show stale pre-edit words
-    /// under a voice label.
-    func testComputeModeReturnsNilParagraphsWhenCurrentRevisionIsNotMachineLive() async throws {
+    /// T7 Task 5: this used to be the test that JUSTIFIED the `current.source ==
+    /// .machineLive` gate — before Task 5, `paragraphs` was forced to `nil`
+    /// unconditionally the moment a human edit existed, discarding the owner's
+    /// two-voice structure on his very first edit. The gate is gone; attribution now
+    /// runs over the EDITED revision's own spans
+    /// (`TranscriptAttribution.attribute(spans:snapped:)`). This particular fixture's
+    /// edited revision carries `.none`-anchored spans with NO frame data at all (a
+    /// from-scratch rewrite, not a splice against the machine text), so there is
+    /// nothing for a marker to be placed against — the correct new answer is ONE
+    /// unvoiced paragraph holding the whole edited text, not a hard `nil`. A splice
+    /// that RETAINS frame-carrying spans (the realistic "retyped one word" shape) DOES
+    /// get real per-voice attribution — see `TranscriptAttributionLoadTests
+    /// .testEditedRevisionStillAttributesVoicesFromMarkers`.
+    func testComputeModeAttributesOverAnEditedRevisionsOwnSpans() async throws {
         try writeFinalAudio()
         try writeLiveTranscript([("intro words", 0, 20_000), ("reply words", 40_000, 60_000)])
         let outcome = await revisionStore().promoteIfNeeded(captureID: captureID)
@@ -263,7 +272,8 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
             StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
             StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
         ])
-        // A divergent human edit on top — the shape T6d/T6e will produce.
+        // A divergent human edit on top — the shape T6d/T6e will produce. `.none`
+        // anchor, no frames: a rewrite with nothing left to place a marker against.
         try writeRawCanonical(1, TranscriptRevision(
             id: "EDITED", source: .userEdit, createdAt: Date(timeIntervalSince1970: 1_700_000_100),
             spans: [TranscriptSpan(text: "a completely rewritten paragraph", anchor: .none)]))
@@ -272,7 +282,11 @@ final class EntryTranscriptLoaderCanonicalTests: XCTestCase {
                                                      attribution: .compute(sampleRate: 48_000))
 
         XCTAssertEqual(transcript.text, "a completely rewritten paragraph")
-        XCTAssertNil(transcript.paragraphs,
-                    "markers.jsonl attribution must not be shown over text it never produced")
+        let paragraphs = try XCTUnwrap(transcript.paragraphs,
+                                       "an edited revision must still attribute (not fall back to nil) — " +
+                                       "this fixture just has no frame data left to place a marker against")
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertNil(paragraphs[0].voice, "no span here carries usable bounds, so no marker can attach")
+        XCTAssertEqual(paragraphs[0].text, "a completely rewritten paragraph")
     }
 }

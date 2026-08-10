@@ -74,6 +74,31 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         SegmentLayout.markerLogURL(captureDirectory: captureDir(id))
     }
 
+    // MARK: - T7 Task 5 fixture helpers (promote + edit through the real store)
+
+    private func store() -> TranscriptRevisionStore { TranscriptRevisionStore(capturesRoot: capturesRoot) }
+
+    /// `TranscriptRevisionStore.promoteIfNeeded` requires durable audio to exist before
+    /// it will promote `live.jsonl` into revision zero — content doesn't matter, only
+    /// that the file is present (mirrors `TranscriptPromotionCanonicalTests`).
+    private func writeFinalAudio(_ id: String) throws {
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(id))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(id)))
+    }
+
+    /// Promotes `live.jsonl` into revision zero, then edits it via the REAL draft
+    /// lifecycle (`writeDraft` + `closeDraft`, which runs the real `TranscriptSplice`) —
+    /// so the current revision is genuinely `.userEdit`, not a hand-built fixture. This
+    /// is the exact shape the gate at `EntryTranscript.swift`'s `load` used to block.
+    @discardableResult
+    private func promoteThenEdit(_ id: String, editedText: String) async throws -> String? {
+        try writeFinalAudio(id)
+        _ = await store().promoteIfNeeded(captureID: id)
+        try await store().writeDraft(captureID: id, text: editedText, now: Date(timeIntervalSince1970: 2_000))
+        return try await store().closeDraft(captureID: id, reason: .sessionEnd, now: Date(timeIntervalSince1970: 2_100))
+    }
+
     // MARK: - End-to-end through the detail screen
 
     func testDetailTranscriptAttributesVoicesFromTheMarkerLog() async throws {
@@ -165,6 +190,65 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertEqual(transcript.state, .absent)
         XCTAssertNil(transcript.text)
         XCTAssertNil(transcript.paragraphs)
+    }
+
+    // MARK: - T7 Task 5: attribution survives an edit (the test that used to justify
+    // the `current.source == .machineLive` gate — brief step 5.4)
+
+    /// Before Task 5, this scenario is EXACTLY what the gate at `EntryTranscript.swift`
+    /// blocked: `current` is `.userEdit` (promoted, then one word retyped through the
+    /// real draft lifecycle), and markers exist — but the gate forced `paragraphs` to
+    /// `nil` unconditionally, discarding the owner's two-voice structure the moment he
+    /// made a single edit. This is the regression Task 5 removes.
+    func testEditedRevisionStillAttributesVoicesFromMarkers() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try await promoteThenEdit(idA, editedText: "intro words answer words")   // "reply" -> "answer"
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+
+        let transcript = await model().transcript(for: idA)
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs,
+                                       "an edited revision must still attribute voices, not fall back to nil")
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), [StructureMarker.Voice.bigNico, StructureMarker.Voice.littleNico])
+        XCTAssertTrue(paragraphs[0].text.contains("intro") && !paragraphs[0].text.contains("answer"))
+        XCTAssertTrue(paragraphs[1].text.contains("answer") && !paragraphs[1].text.contains("reply"))
+
+        // The paragraphs must still rejoin to exactly what the chain itself considers
+        // "current" — computed independently here, not hardcoded, so a bug that
+        // attributed over the WRONG revision's spans would still be caught.
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        let expectedText = TranscriptChain.plainText(current)
+        XCTAssertEqual(paragraphs.map(\.text).joined(separator: " "), expectedText)
+        XCTAssertEqual(transcript.text, expectedText, "text is the edited text, unaffected by attribution")
+    }
+
+    /// Baseline invariant either side of the gate's removal: an edited entry with NO
+    /// marker log still gets `paragraphs == nil` (design §7's absence rule), and `text`
+    /// is the edited plain text regardless. Genuinely useful as a regression guard once
+    /// the gate is gone: nothing about removing it may accidentally start synthesizing
+    /// paragraphs when there is no marker log to attribute from.
+    func testEditedEntryWithNoMarkerLogHasNilParagraphsAndTheEditedText() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try await promoteThenEdit(idA, editedText: "intro words answer words")
+        // No markers.jsonl written at all.
+
+        let transcript = await model().transcript(for: idA)
+
+        XCTAssertNil(transcript.paragraphs, "absent marker log must never render as single-voice, even edited")
+        XCTAssertEqual(transcript.text, "intro words answer words")
     }
 
     // MARK: - Performance contract: the scanner never reads markers.jsonl

@@ -126,6 +126,23 @@ enum EntryTranscriptLoader {
                                         committed: committed, sampleRate: sampleRate)
         }
 
+        // T7 Task 5: attribution over `current`'s OWN spans, not `committed`'s — a
+        // revision's spans carry frames too (with an honesty grade), so voice
+        // attribution survives an edit instead of switching off the moment `current`
+        // stops being the live machine transcript. See
+        // `TranscriptAttribution.attribute(spans:snapped:)`'s doc comment for the
+        // placement rule over spans with no usable (or zero-length) bounds. `committed`
+        // is still read/consolidated by the `.compute` branch below: `snappedMarkers`
+        // still snaps raw marker frames against the real audio gaps it derives from
+        // `committed` — those never change regardless of a later edit — only the
+        // paragraph GROUPING step switches from `committed` to `spans`.
+        func spanParagraphs(_ spans: [TranscriptSpan],
+                            committed: [TranscriptResult]) -> [TranscriptAttribution.Paragraph]? {
+            guard case .compute(let sampleRate) = attribution else { return nil }
+            return attributedParagraphs(captureDirectory: captureDirectory,
+                                        spans: spans, committed: committed, sampleRate: sampleRate)
+        }
+
         // The `live.jsonl`-side degradation rules, shared verbatim by every canonical-
         // present branch below (review finding 1): the source log being truncated or
         // unreadable must survive regardless of which canonical path supplied `text`.
@@ -194,13 +211,12 @@ enum EntryTranscriptLoader {
             if case .present = loaded.source {
                 committed = LiveTranscriptReader.consolidate(loaded.records).committed
             }
-            // Paragraphs are attributed off `live.jsonl`'s committed records (T7 plan
-            // step 2, unchanged for v1) — trustworthy only when `current` IS that
-            // machine-live text. A human revision (T6d/T6e onward) has diverged from
-            // the log by definition; attributing markers.jsonl over post-edit text
-            // would silently render stale pre-edit words under a voice label (review
-            // finding 2). Re-attributing edited text is T7's job, not this loader's.
-            let attributed = current.source == .machineLive ? paragraphs(for: committed) : nil
+            // T7 Task 5: attribution now runs over `current.spans` via
+            // `spanParagraphs`, whatever `current.source` is — the gate that used to
+            // force `nil` for anything but `.machineLive` (and silently drop the
+            // owner's two-voice structure on his very first edit) is gone. See
+            // `spanParagraphs`'s doc comment above for why `committed` is still read.
+            let attributed = spanParagraphs(current.spans, committed: committed)
             return EntryTranscript(state: .present,
                                    text: TranscriptChain.plainText(current),
                                    degradations: liveLogDegradation(canonicalDegradation),
@@ -249,28 +265,53 @@ enum EntryTranscriptLoader {
         return text.isEmpty ? nil : text
     }
 
-    /// `markers.jsonl` → snap → attribute, applying the marker-source rules (design
-    /// §7). Split out so the `.present` branch above stays one read of each log.
-    private static func attributedParagraphs(captureDirectory: URL,
-                                              committed: [TranscriptResult],
-                                              sampleRate: Double) -> [TranscriptAttribution.Paragraph]? {
+    /// `markers.jsonl` → snap, applying the marker-source rules (design §7): an absent
+    /// or unreadable log, or one with nothing usable in it, is `nil` — never "single
+    /// voice, nothing to see" (the journals.json lesson repeated for markers). Shared by
+    /// both `attributedParagraphs` overloads below so the two attribution paths
+    /// (`committed`-based and, since T7 Task 5, `spans`-based) can never silently
+    /// disagree on when a marker log counts as usable.
+    private static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
+                                       sampleRate: Double) -> [MarkerSnapping.SnappedMarker]? {
         let markerLoad = MarkerLogReader.load(captureDirectory: captureDirectory)
         switch markerLoad.source {
         case .absent, .unreadable:
-            // `.unreadable` is deliberately folded in with `.absent` here — never
-            // rendered as "single voice, nothing to see" (design §7, the journals.json
-            // lesson repeated for markers).
             return nil
         case .present:
             guard !markerLoad.markers.isEmpty else { return nil }
             let intervals = MarkerSnapping.intervals(fromCommitted: committed)
             let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
-            let snapped = MarkerSnapping.snap(markers: markerLoad.markers,
-                                              intervals: intervals, windowFrames: window)
-            let paragraphs = TranscriptAttribution.attribute(committed: committed, snapped: snapped)
-            // Markers with no transcript (hazard 4): `attribute` returns `[]`, which
-            // must render as "not transcribed", not as an empty paragraph list.
-            return paragraphs.isEmpty ? nil : paragraphs
+            return MarkerSnapping.snap(markers: markerLoad.markers, intervals: intervals, windowFrames: window)
         }
+    }
+
+    /// The live-log fallback path's attribution (`fallbackToLiveLog`, above): no
+    /// canonical revision exists to attribute over, so this reads straight off
+    /// `committed`, unchanged since before T7 Task 5.
+    private static func attributedParagraphs(captureDirectory: URL,
+                                              committed: [TranscriptResult],
+                                              sampleRate: Double) -> [TranscriptAttribution.Paragraph]? {
+        guard let snapped = snappedMarkers(captureDirectory: captureDirectory,
+                                           committed: committed, sampleRate: sampleRate) else { return nil }
+        let paragraphs = TranscriptAttribution.attribute(committed: committed, snapped: snapped)
+        // Markers with no transcript (hazard 4): `attribute` returns `[]`, which must
+        // render as "not transcribed", not as an empty paragraph list.
+        return paragraphs.isEmpty ? nil : paragraphs
+    }
+
+    /// The canonical-chain path's attribution (T7 Task 5): attributes over a
+    /// REVISION's spans instead of `committed`, the change that lets voice attribution
+    /// survive an edit. `committed` is still required here — `snappedMarkers` still
+    /// snaps raw marker frames against the real audio gaps it derives from `committed`,
+    /// which never change regardless of a later edit; only the paragraph GROUPING step
+    /// (`TranscriptAttribution.attribute(spans:snapped:)`) reads `spans` instead.
+    private static func attributedParagraphs(captureDirectory: URL,
+                                              spans: [TranscriptSpan],
+                                              committed: [TranscriptResult],
+                                              sampleRate: Double) -> [TranscriptAttribution.Paragraph]? {
+        guard let snapped = snappedMarkers(captureDirectory: captureDirectory,
+                                           committed: committed, sampleRate: sampleRate) else { return nil }
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: snapped)
+        return paragraphs.isEmpty ? nil : paragraphs
     }
 }

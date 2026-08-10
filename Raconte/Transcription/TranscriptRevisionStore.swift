@@ -439,7 +439,15 @@ actor TranscriptRevisionStore {
     /// sweep adds no guard logic of its own. `.absent`/`.unreadable` listings are
     /// skipped outright: neither has a chain worth stamping, and `validatedHead`
     /// never even consults `head.json` for either case, so stamping one would help
-    /// nothing.
+    /// nothing. `.present([])` — `transcript/` exists but holds no `canonical-<n>.json`
+    /// (a capture whose `live.jsonl` promotion skipped, or a `transcript/` left empty
+    /// by a crash between its `createDirectory` and first write) — is ALSO skipped
+    /// (fix round 3): there is no chain to stamp there either, and writing `head.json`
+    /// into an otherwise-empty `transcript/` would flip
+    /// `DirectorySnapshot.holdsIrreplaceableArtifacts` from false to true, making a
+    /// mis-tapped capture permanently undeletable — the exact zero-byte-log hazard
+    /// (rule 10) `MarkerLog.swift`/`CaptureCoordinator.swift` both already guard
+    /// against elsewhere.
     func stampUnstampedHeads() async {
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
             return
@@ -455,7 +463,7 @@ actor TranscriptRevisionStore {
     /// is the only caller today.
     private func stampHeadIfNeeded(captureID: String) async {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        guard case .present(let files) = Self.listing(captureDirectory: captureDirectory) else {
+        guard case .present(let files) = Self.listing(captureDirectory: captureDirectory), !files.isEmpty else {
             return
         }
         guard Self.trustedPersistedHead(captureDirectory: captureDirectory, files: files) == nil else {

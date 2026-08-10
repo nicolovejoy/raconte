@@ -237,9 +237,13 @@ final class CaptureScreenModel {
         //      `.machineLive` baseline from ever entering that capture's chain, since
         //      `promoteIfNeeded` skips unconditionally once any canonical file exists —
         //      promotion must run before `closeStaleDraftsOnce()`.
-        //   2. (fix round 2) stamping runs after promotion for the same reason: an
-        //      unpromoted capture has no chain yet, so `stampUnstampedHeads` would just
-        //      skip it and need a second walk once promotion lands later this same
+        //   2. (fix round 2) stamping runs after promotion for the same reason: a
+        //      capture with no canonical files yet — either no `transcript/` at all, or
+        //      a `transcript/` promotion hasn't populated (`live.jsonl`-only, or empty —
+        //      `stampHeadIfNeeded` explicitly refuses `.present([])`, not just `.absent`,
+        //      as of fix round 3) — has nothing for `stampUnstampedHeads` to stamp, so
+        //      running it before promotion would just mean walking those captures twice:
+        //      once finding no chain, again after promotion lands one later this same
         //      launch. It runs before `closeStaleDraftsOnce()` too — stamping is a pure
         //      read-then-maybe-write over the EXISTING chain and has no dependency on
         //      drafts either way, so this position costs nothing and keeps the "promote,

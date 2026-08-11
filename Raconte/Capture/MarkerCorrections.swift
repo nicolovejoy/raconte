@@ -27,7 +27,21 @@ import Foundation
 ///   its own `frame` (computed by `MarkerCorrectionWriter` from a picked word's span
 ///   start, never a scrubbed time) — a boundary the owner never tapped at capture time.
 enum MarkerCorrections {
-    static func effectiveMarkers(_ raw: [StructureMarker]) -> [StructureMarker] {
+    /// One entry in the effective list. `isExact` distinguishes a boundary-add's
+    /// synthesized marker (review Critical 1) from every other effective marker: the
+    /// synthesized frame is a SPAN's own bound, computed once by
+    /// `MarkerCorrectionWriter` directly from that span — exact by construction, never
+    /// a raw tap subject to the latency `MarkerSnapping` exists to correct. A raw tap
+    /// (including one whose VOICE was corrected — the FRAME is still the original raw
+    /// tap's own) is `isExact == false` and must still be snapped exactly as before
+    /// Task 6. The caller (`EntryTranscript.snappedMarkers`) is what actually skips
+    /// snapping for `isExact` markers; this type only classifies.
+    struct EffectiveMarker: Equatable {
+        var marker: StructureMarker
+        var isExact: Bool
+    }
+
+    static func effectiveMarkers(_ raw: [StructureMarker]) -> [EffectiveMarker] {
         var retractedSeqs: Set<Int> = []
         var voiceCorrectionsByFrame: [Int64: String] = [:]
         var additions: [StructureMarker] = []
@@ -39,13 +53,28 @@ enum MarkerCorrections {
             case .correctionVoice:
                 if let voice = marker.voice { voiceCorrectionsByFrame[marker.frame] = voice }
             case .correctionBoundaryAdd:
+                // `seq` is deliberately the CORRECTION record's own — not a fresh
+                // one — so a later `.correctionRetract` can target this exact
+                // synthesized marker the same way it targets any raw tap (review
+                // Important 3).
                 additions.append(StructureMarker(seq: marker.seq, frame: marker.frame, kind: .paragraph))
             case .voice, .paragraph, .unknown:
                 break
             }
         }
+        let additionSeqs = Set(additions.map(\.seq))
 
+        // Additions are appended BEFORE the retract removal (review Important 3, fix
+        // for a real bug): file order (append order) is not resolution order — this
+        // type's own doc comment already said so, but the retract step didn't honor
+        // it. Appending additions AFTER `removeAll` meant a retract could never
+        // cancel a boundary-add: the addition wasn't in the list yet when the removal
+        // ran, so it survived forever, and each retry appended another permanent
+        // no-op `.correctionRetract` record. Order between the two steps below is now
+        // "add everything, then remove what's retracted" — genuinely order-
+        // independent with respect to append order, matching the doc comment's claim.
         var effective = raw.filter { $0.kind == .voice || $0.kind == .paragraph }
+        effective.append(contentsOf: additions)
         effective.removeAll { retractedSeqs.contains($0.seq) }
         effective = effective.map { marker in
             guard marker.kind == .voice, let corrected = voiceCorrectionsByFrame[marker.frame] else {
@@ -55,7 +84,6 @@ enum MarkerCorrections {
             updated.voice = corrected
             return updated
         }
-        effective.append(contentsOf: additions)
-        return effective
+        return effective.map { EffectiveMarker(marker: $0, isExact: additionSeqs.contains($0.seq)) }
     }
 }

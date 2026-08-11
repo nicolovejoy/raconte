@@ -1,6 +1,51 @@
 # CLAUDE.md
 
-## Session 2026-08-09 evening → 08-10 (laptop — T7 SDD LOOP LAUNCHED; Tasks 1-3 done; 930 → 986 tests; branch `t7/editor-ui` pushed)
+## Session 2026-08-10 → 08-11 (laptop — T7 Tasks 4-6 + GATE A done; 986 → 1073 tests; Task 7 next)
+
+Resumed the T7 SDD loop at Task 4 (Fable controller, Opus implementer for Task 4 per owner
+ruling, Sonnet for 5-6, Opus reviews throughout). **Branch `t7/editor-ui` pushed at
+`80337d99` — 25 commits this session, 1073 unit + 12 UI tests green.** Ledger in the
+worktree is the authoritative resume point; it now carries a RESUME POINT block.
+
+- **Task 4 (the editor)** + **Gate A** were the session's spine. The gate BLOCKED correctly:
+  across its 3 fix rounds, six probe-confirmed defects died, including two data-loss
+  Criticals — the pop path silently swallowing a failed save, and a Back→Edit-again lost
+  update where the second session's words never reached the store while Done reported
+  success (reproduced through the real store). The fix converged on a session-token
+  protocol: a dead session's WORK still completes, but none of the live session's STATE may
+  be written by it — now guarded after every await in the model.
+- **Task 5 (span attribution)**: BN/LN rendering now survives edits; the `.machineLive`
+  gate is gone and paragraphs/text divergence is structurally impossible.
+- **Task 6 (marker correction + #37)**: additive correction records (retract, voice-correct,
+  word-anchored boundary ADD), forward-compatible; worst review find was word-anchored adds
+  being fed through MarkerSnapping — on the device-observed abutting-runs norm the owner's
+  boundary-add could snap to frame 0 and produce NO visible split. Fixed read-side (exact
+  markers never snap; stored frames were always right).
+- **Two owner rulings (both → §16 at Task 9.4):** a leading non-placeable span renders
+  `voice: nil`, never a guessed voice; and **a wholesale zero-overlap word replacement
+  ("Ellen"→"LN") INHERITS the replaced word's audio frames** — today's splice discards them,
+  which is why the brief's own #37 example was disproved by probe. The splice change is
+  **Task 9b**, in-branch before Gate B.
+- **Vacuous fixtures hit 10 instances, now in three shapes** (degenerate assertion,
+  degenerate fixture file-count, wholly untested branch). The countermeasure that worked:
+  mutation-in-RED as the implementer's burden, REDs required to fail *for the reason the
+  finding names*, and re-reviewers deleting fixes to watch tests fail. Gate B carries the
+  structural question as a named agenda item.
+- **Six harness failures** (five 600 s watchdog stalls in one storm + one earlier), across
+  three agents. Zero work lost. Protocol additions: commit per green STEP; after a SECOND
+  stall on one agent, hand off to a fresh agent with a written state summary instead of a
+  third resume; Edit/Write tools only (a Bash classifier rejection once applied no edit
+  while the test failure read as "fix didn't work"); mutation scripts must assert their own
+  patterns matched (a no-op mutation reads identically to a worthless test).
+
+**Next steps:**
+1. **Re-dispatch Task 7** (audit log — agent was stopped cleanly at reboot; untracked
+   skeleton `EntryLog.swift` left in the worktree for the next agent to judge). Ledger's
+   RESUME POINT block has the full dispatch context.
+2. Task 8 (history panel + revert) → Task 9 (minors + §16: five rulings queued) →
+   **Task 9b** (splice inherit, owner-ruled) → Gate B → PR (Nico merges).
+3. After merge: capture-landing implementation plan; photo-snapshot plan; #38 SDK recon;
+   #44 device live.jsonl pull.
 
 Ran the T7 editor plan as a subagent-driven SDD loop. **Branch `t7/editor-ui` (worktree
 `/Users/nico/src/raconte-t7`, base `9cf853fa`), 10 commits, pushed. Tasks 1-3 complete and

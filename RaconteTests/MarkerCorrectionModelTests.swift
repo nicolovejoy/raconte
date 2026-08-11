@@ -42,14 +42,17 @@ final class MarkerCorrectionModelTests: XCTestCase {
                        "the .none-anchored word must not be offerable")
     }
 
-    /// Correction kinds are never listed as boundaries — this screen shows the raw
-    /// TAPS to act on, and a correction record showing up as something to retract
-    /// would let the owner retract a retract.
+    /// Correction kinds are never listed as boundaries — this screen shows the
+    /// EFFECTIVE state (folded), and a correction record showing up as something to
+    /// retract would let the owner retract a retract. The retract here deliberately
+    /// targets a seq that ISN'T the voice marker's own (99, nonexistent) — the point
+    /// under test is "a correction record is never itself a row", not "a retract
+    /// removed the row it targeted" (that is a separate test, below).
     func testCorrectionRecordsThemselvesAreNeverListedAsBoundaries() async {
         let store = FakeMarkerCorrectionStore()
         store.markers = [
             StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn"),
-            StructureMarker(seq: 1, frame: 0, kind: .correctionRetract, retractsSeq: 0),
+            StructureMarker(seq: 1, frame: 0, kind: .correctionRetract, retractsSeq: 99),
         ]
         store.spans = []
 
@@ -87,6 +90,11 @@ final class MarkerCorrectionModelTests: XCTestCase {
 
     // MARK: - retract
 
+    /// Real disk behaviour (locked decision 5): a retract never removes the original
+    /// raw marker, it APPENDS a `.correctionRetract` record beside it. The fake
+    /// mirrors that exactly — `onRetract` ADDS a correction record, never deletes the
+    /// original from `store.markers` — so this test also exercises the fold inside
+    /// `open()` itself, not just "did re-open happen".
     func testRetractCallsTheStoreWithTheRowsSeqAndReopens() async {
         let store = FakeMarkerCorrectionStore()
         store.markers = [StructureMarker(seq: 3, frame: 4_800, kind: .paragraph)]
@@ -96,13 +104,14 @@ final class MarkerCorrectionModelTests: XCTestCase {
         await model.open()
         XCTAssertEqual(model.boundaries.count, 1)
 
-        // The fake simulates the retract actually taking effect on disk, so a
-        // successful re-open (not just the write) is what empties the list.
-        store.onRetract = { seq in store.markers.removeAll { $0.seq == seq } }
+        store.onRetract = { seq in
+            store.markers.append(StructureMarker(seq: 4, frame: 0, kind: .correctionRetract, retractsSeq: seq))
+        }
         await model.retract(model.boundaries[0])
 
         XCTAssertEqual(store.retractedSeqs, [3])
-        XCTAssertTrue(model.boundaries.isEmpty, "retract() must re-open, not just write")
+        XCTAssertTrue(model.boundaries.isEmpty,
+                      "the fold must remove the retracted row on re-open, not just append the correction record")
         XCTAssertNil(model.errorMessage)
     }
 

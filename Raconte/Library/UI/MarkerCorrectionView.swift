@@ -57,14 +57,17 @@ struct MarkerCorrectionView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if row.kind == .voice {
-                Menu {
-                    Button("bn (big Nico)") { Task { await model.correctVoice(row, to: StructureMarker.Voice.bigNico) } }
-                    Button("ln (little Nico)") { Task { await model.correctVoice(row, to: StructureMarker.Voice.littleNico) } }
-                } label: {
-                    Image(systemName: "person.wave.2")
-                }
-                .accessibilityIdentifier("markerCorrection.correctVoice.\(row.id)")
+            // Two plain buttons, not a picker/menu — there are only ever two voices
+            // (owner decision 3, `StructureMarker.swift`), so a menu would be needless
+            // indirection over a binary choice. Only the OTHER voice is offered: a
+            // "correction" to the voice it already says would be a no-op write.
+            if row.kind == .voice, row.voice != StructureMarker.Voice.bigNico {
+                Button("bn") { Task { await model.correctVoice(row, to: StructureMarker.Voice.bigNico) } }
+                    .accessibilityIdentifier("markerCorrection.correctVoice.bn.\(row.id)")
+            }
+            if row.kind == .voice, row.voice != StructureMarker.Voice.littleNico {
+                Button("ln") { Task { await model.correctVoice(row, to: StructureMarker.Voice.littleNico) } }
+                    .accessibilityIdentifier("markerCorrection.correctVoice.ln.\(row.id)")
             }
             Button {
                 Task { await model.retract(row) }

@@ -13,9 +13,12 @@ protocol MarkerCorrectionStore: AnyObject {
     /// readable current revision — nothing here to correct, same "nothing transcribed
     /// yet" state the editor's `.readOnlyNoTranscript` already names.
     func currentSpans(for captureID: String) async -> [TranscriptSpan]?
-    /// The RAW marker list, unfolded — this screen is what corrections apply against,
-    /// so it must see the actual taps (and any prior corrections still on disk), never
-    /// the read-time-folded effective list `EntryTranscript` renders for display.
+    /// The RAW marker list, unfolded — everything on disk, taps and correction
+    /// records alike. `MarkerCorrectionModel.open()` runs this through
+    /// `MarkerCorrections.effectiveMarkers` itself before rendering `boundaries`
+    /// (never the raw list directly — a retract only ever APPENDS a
+    /// `.correctionRetract`, it never removes the original tap, so showing the raw
+    /// list would make a retracted row immortal).
     func rawMarkers(for captureID: String) async -> [StructureMarker]
     func retractMarker(seq: Int, captureID: String) async throws
     func correctVoice(frame: Int64, voice: String, captureID: String) async throws
@@ -96,7 +99,19 @@ final class MarkerCorrectionModel {
         let markers = await store.rawMarkers(for: captureID)
         let spans = await store.currentSpans(for: captureID)
 
-        boundaries = markers
+        // MUST be the EFFECTIVE list, not the raw one: raw taps are immutable (locked
+        // decision 5), so a retract never removes anything from `markers` — it only
+        // ever appends a `.correctionRetract` record. Folding here is what makes a
+        // retracted row actually disappear and a voice-corrected row show the
+        // CORRECTED voice, not the original raw one. `MarkerCorrections
+        // .effectiveMarkers` already drops correction records themselves (they are
+        // never `.voice`/`.paragraph`), so the extra `.filter` below is redundant
+        // defense, not the mechanism — kept because "boundaries never contains a
+        // correction record" is worth stating twice given how directly it bit this
+        // exact model during development (see the fixed regression this comment sits
+        // beside in git history).
+        let effective = MarkerCorrections.effectiveMarkers(markers)
+        boundaries = effective
             .filter { $0.kind == .voice || $0.kind == .paragraph }
             .sorted { $0.frame < $1.frame }
             .map { BoundaryRow(id: $0.seq, frame: $0.frame, kind: $0.kind, voice: $0.voice) }

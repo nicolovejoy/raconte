@@ -126,6 +126,10 @@ final class LibraryScreenModel {
             // T7 Task 4.6: an entry with a real chain to edit, since nothing is ever
             // transcribed under the synthetic harness. No-op unless asked for.
             UITestEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
+            // T7 Task 6.5: a second entry with real frame-bounded spans + existing
+            // taps, since the editor's fixture above is deliberately frameless. No-op
+            // unless asked for.
+            UITestMarkerCorrectionSeed.seedIfRequested(capturesRoot: capturesRoot)
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif

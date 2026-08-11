@@ -342,4 +342,89 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertEqual(paragraphs.count, 2, "the 48kHz fallback finds the gap, same as an explicit 48kHz manifest")
         XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary })
     }
+
+    // MARK: - T7 Task 6: marker corrections, end to end through the real disk wire
+
+    /// 6.2: a `.correctionVoice` record at frame F can flip whether that boundary
+    /// counts as a paragraph break — a re-tap of the SAME voice makes no break
+    /// (`TranscriptAttribution.breakpoints`'s own re-tap rule), so two raw `.voice`
+    /// taps both saying "bn" render as ONE paragraph; correcting the second to "ln"
+    /// (the brief's "correct a voice at an EXISTING boundary" — the correction's
+    /// `frame` matches the raw tap's frame exactly) is what splits it into two. The
+    /// original tap bytes on disk must stay untouched — corrections are additive,
+    /// never a rewrite (locked decision 5).
+    func testVoiceCorrectionChangesTheParagraphSplitAndLeavesTheOriginalTapByteUnchanged() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn"),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: "bn"),   // same voice: no break yet
+        ])
+
+        let originalBytes = try Data(contentsOf: markerLogURL(idA))
+
+        let unsplit = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(unsplit.paragraphs).count, 1,
+                       "a re-tap of the same voice must not manufacture a split")
+
+        let writer = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(StructureMarker(seq: 0, frame: 30_000, kind: .correctionVoice, voice: "ln"))
+        try writer.close()
+
+        let afterBytes = try Data(contentsOf: markerLogURL(idA))
+        XCTAssertTrue(afterBytes.starts(with: originalBytes),
+                     "the two original tap lines must be byte-unchanged after the correction append")
+        XCTAssertGreaterThan(afterBytes.count, originalBytes.count, "the correction was actually appended")
+
+        let corrected = await model().transcript(for: idA)
+        let correctedParagraphs = try XCTUnwrap(corrected.paragraphs)
+        XCTAssertEqual(correctedParagraphs.count, 2,
+                       "the voice correction now disagrees with the still-active voice, splitting the paragraph")
+        XCTAssertEqual(correctedParagraphs.map(\.voice), ["bn", "ln"])
+        XCTAssertEqual(correctedParagraphs.map(\.text), ["intro words", "reply words"])
+    }
+
+    /// 6.3: a `.correctionRetract` removes the split a mis-tapped `.paragraph` marker
+    /// created; a retract of a nonexistent seq is ignored, not an error — a UI retract
+    /// action racing another retract (or acting on a stale row) must not crash or
+    /// silently remove the wrong thing.
+    func testRetractRemovesAMisTappedSplitAndIgnoresANonexistentTarget() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("first part", 0, 96_000),
+            ("second part", 96_000, 192_000),
+        ])
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 96_000, kind: .paragraph)])
+
+        let split = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(split.paragraphs).count, 2, "the mis-tapped paragraph split, before retraction")
+
+        let writer1 = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer1.open()
+        // Retract of a seq that never existed: must be a no-op, not a throw and not a
+        // crash — and must not touch the real marker at seq 0.
+        try writer1.append(StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: 999))
+        try writer1.close()
+
+        let stillSplit = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(stillSplit.paragraphs).count, 2,
+                      "a retract of a nonexistent seq must be ignored, not silently remove something else")
+
+        let writer2 = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer2.open()
+        try writer2.append(StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: 0))
+        try writer2.close()
+
+        let retracted = await model().transcript(for: idA)
+        // Retracting the ONLY marker leaves nothing usable to attribute — design §7's
+        // "nothing usable in the log" rule, same one an empty marker log already gets —
+        // never collapsed to "single voice" nor left as the pre-retraction split.
+        XCTAssertNil(retracted.paragraphs,
+                    "retracting the only marker leaves nothing usable to attribute")
+        XCTAssertEqual(retracted.text, "first part second part", "the underlying transcript text is unaffected")
+    }
 }

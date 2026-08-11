@@ -82,6 +82,49 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(result[0].frameEnd, 20, "the fragment's frameEnd must be the PARENT's own, not a sub-range")
     }
 
+    // MARK: - T7 Task 6, #37: typed-word correction (out-of-vocab retype)
+
+    /// #37's real scenario, in issue #38's own words: "spoken 'LN' transcribes as
+    /// 'ellen' every time" — lowercase, mid-sentence, not the capitalized name. The
+    /// owner retypes it in the editor. This is what Task 4's splice already gives #37
+    /// for free — the acceptance test the brief asks for.
+    ///
+    /// **A premise check that mattered:** a capitalized "Ellen" -> "LN" pair shares NO
+    /// characters at all (character-level Myers diff, case-sensitive), so the whole
+    /// "Ellen" span would be wholly removed and "LN" would land via the BRAND-NEW-TEXT
+    /// path (`TranscriptSplice.swift`'s `.insertion` case) — a zero-length `.inherited`
+    /// POINT at the preceding span's end, not the replaced span's bounds at all. Probed
+    /// directly (`target.difference(from: source)`) before trusting either premise. The
+    /// ACTUAL scenario is lowercase — "ellen" and "ln" share their `l` and `n` — so the
+    /// diff finds a genuine two-character survivor (`ln`) inside the old five-character
+    /// run, which is exactly what makes this a TOUCHED span (F17's path), not a wholesale
+    /// replacement: the retyped word must land as an `.inherited` span over the touched
+    /// SPAN's own FULL parent bounds — not `.none` (the anchor would be lost entirely)
+    /// and not a synthesized sub-range (claiming more precision than the edit has;
+    /// nobody re-timed "ln" against the audio).
+    func testRetypingAnOutOfVocabWordProducesInheritedOverTheFullReplacedSpanBounds() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello ln said")
+
+        XCTAssertEqual(result, [
+            exact("hello", 0, 10, sourceRevisionID: parentID),
+            TranscriptSpan(text: "ln", anchor: .inherited, frameStart: 10, frameEnd: 20,
+                           sourceRevisionID: parentID),
+            exact("said", 20, 30, sourceRevisionID: parentID),
+        ])
+
+        let corrected = result[1]
+        XCTAssertEqual(corrected.text, "ln")
+        XCTAssertEqual(corrected.anchor, .inherited, "never .none — the touched span's provenance is kept")
+        XCTAssertEqual(corrected.frameStart, 10, "the TOUCHED span's own start, not a scrubbed or synthesized time")
+        XCTAssertEqual(corrected.frameEnd, 20, "the TOUCHED span's own end — the full bounds, never a sub-range")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello ln said")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

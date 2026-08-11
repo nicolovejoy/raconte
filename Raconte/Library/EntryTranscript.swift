@@ -267,12 +267,19 @@ enum EntryTranscriptLoader {
         return text.isEmpty ? nil : text
     }
 
-    /// `markers.jsonl` → snap, applying the marker-source rules (design §7): an absent
-    /// or unreadable log, or one with nothing usable in it, is `nil` — never "single
-    /// voice, nothing to see" (the journals.json lesson repeated for markers). Shared by
-    /// both `attributedParagraphs` overloads below so the two attribution paths
-    /// (`committed`-based and, since T7 Task 5, `spans`-based) can never silently
-    /// disagree on when a marker log counts as usable.
+    /// `markers.jsonl` → fold corrections → snap, applying the marker-source rules
+    /// (design §7): an absent or unreadable log, or one with nothing usable in it, is
+    /// `nil` — never "single voice, nothing to see" (the journals.json lesson repeated
+    /// for markers). Shared by both `attributedParagraphs` overloads below so the two
+    /// attribution paths (`committed`-based and, since T7 Task 5, `spans`-based) can
+    /// never silently disagree on when a marker log counts as usable.
+    ///
+    /// **T7 Task 6:** `MarkerCorrections.effectiveMarkers` runs BEFORE snapping — raw
+    /// taps on disk are never touched (locked decision 5), but every reader of the log
+    /// must see the corrected picture, so the fold happens once, here, rather than in
+    /// each attribution call site. "Nothing usable" now also covers a raw list that
+    /// resolves to empty AFTER corrections (e.g. retracting the only marker) — the same
+    /// rule an empty raw list already got, extended to the effective one.
     private static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
                                        sampleRate: Double) -> [MarkerSnapping.SnappedMarker]? {
         let markerLoad = MarkerLogReader.load(captureDirectory: captureDirectory)
@@ -280,10 +287,11 @@ enum EntryTranscriptLoader {
         case .absent, .unreadable:
             return nil
         case .present:
-            guard !markerLoad.markers.isEmpty else { return nil }
+            let effective = MarkerCorrections.effectiveMarkers(markerLoad.markers)
+            guard !effective.isEmpty else { return nil }
             let intervals = MarkerSnapping.intervals(fromCommitted: committed)
             let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
-            return MarkerSnapping.snap(markers: markerLoad.markers, intervals: intervals, windowFrames: window)
+            return MarkerSnapping.snap(markers: effective, intervals: intervals, windowFrames: window)
         }
     }
 

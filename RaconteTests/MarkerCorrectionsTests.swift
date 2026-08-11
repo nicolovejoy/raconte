@@ -99,4 +99,78 @@ final class MarkerCorrectionsTests: XCTestCase {
         XCTAssertEqual(MarkerCorrections.effectiveMarkers(withUnknownCorrection), uncorrected,
                        "an unknown correction kind must render exactly as if it were absent")
     }
+
+    // MARK: - 6.4b: boundary ADD by picked word — MarkerCorrectionWriter
+
+    private var capturesRoot: URL!
+    private var captureDir: URL!
+
+    override func setUpWithError() throws {
+        capturesRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("RaconteMarkerCorrections-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("captures", isDirectory: true)
+        captureDir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: "cap")
+        try FileManager.default.createDirectory(at: captureDir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: capturesRoot.deletingLastPathComponent())
+    }
+
+    private func span(_ text: String, _ anchor: SpanAnchor, _ start: Int64? = nil, _ end: Int64? = nil) -> TranscriptSpan {
+        TranscriptSpan(text: text, anchor: anchor, frameStart: start, frameEnd: end)
+    }
+
+    /// The writer anchors to the PICKED SPAN's own start frame — never the group/
+    /// paragraph's start frame (brief case 3: "the record is anchored to that word's
+    /// frame, not to a time he scrubs to"). Picking a word mid-way through several
+    /// spans (index 1, not index 0) is the discriminating fixture: anchoring to the
+    /// group's start (span 0's frame, 0) instead of the picked word's own (span 1's
+    /// frame, 20_000) would still produce SOME correction record, just at the wrong
+    /// frame — only a fixture with more than one span in scope can catch that.
+    func testAddBoundaryAnchorsToThePickedSpansOwnStartFrameNotTheGroupStart() throws {
+        let spans = [
+            span("one", .inherited, 0, 10_000),
+            span("two", .inherited, 20_000, 30_000),
+            span("three", .inherited, 40_000, 50_000),
+        ]
+
+        let written = try MarkerCorrectionWriter.addBoundary(atSpanIndex: 1, spans: spans,
+                                                              captureDirectory: captureDir)
+
+        XCTAssertEqual(written, 20_000, "must be span 1's own start, not span 0's (the group's start)")
+
+        let onDisk = MarkerLogReader.load(captureDirectory: captureDir).markers
+        XCTAssertEqual(onDisk.count, 1)
+        XCTAssertEqual(onDisk[0].kind, .correctionBoundaryAdd)
+        XCTAssertEqual(onDisk[0].frame, 20_000)
+    }
+
+    /// A word whose span has no usable bounds (`.none`/`.unknown` anchor, or a
+    /// zero-length `.inherited` span — Task 5's exact placeability rule, shared via
+    /// `TranscriptAttribution.isPlaceableSpan` rather than re-derived) is rejected with
+    /// a stated reason and writes NOTHING — not a boundary silently placed nearby.
+    func testAddBoundaryRejectsAWordWithNoUsableBoundsAndWritesNothing() throws {
+        let spans = [
+            span("typed", .none, nil, nil),
+            span("point", .inherited, 10_000, 10_000),   // zero-length: an insertion point
+        ]
+
+        for index in [0, 1] {
+            XCTAssertThrowsError(try MarkerCorrectionWriter.addBoundary(
+                atSpanIndex: index, spans: spans, captureDirectory: captureDir)) { error in
+                guard case MarkerCorrectionWriter.BoundaryAddError.noUsableBounds = error else {
+                    return XCTFail("expected .noUsableBounds for span \(index), got \(error)")
+                }
+            }
+        }
+
+        XCTAssertEqual(MarkerLogReader.load(captureDirectory: captureDir).source, .absent,
+                       "a rejected boundary-add must leave markers.jsonl untouched — nothing offerable, nothing written")
+    }
+
+    func testAddBoundaryRejectsAnOutOfRangeIndex() {
+        XCTAssertThrowsError(try MarkerCorrectionWriter.addBoundary(
+            atSpanIndex: 5, spans: [span("only", .exact, 0, 100)], captureDirectory: captureDir))
+    }
 }

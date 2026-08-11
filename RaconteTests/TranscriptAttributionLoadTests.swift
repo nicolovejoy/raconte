@@ -431,13 +431,23 @@ final class TranscriptAttributionLoadTests: XCTestCase {
     /// 6.4b, end to end: `MarkerCorrectionWriter.addBoundary` runs against the SAME
     /// `current.spans` the spans-based attribution path (Task 5) reads, and the
     /// resulting paragraph split lands where the picked word's own span starts — not
-    /// at the group's start, and not anywhere `MarkerSnapping` could move it (the
-    /// frame comes straight off a promoted `.inherited` span's exact bounds, not a
-    /// raw tap, so snapping's gap search never applies here). Three separate
-    /// `live.jsonl` records (not runs) so promotion yields three separate placeable
-    /// spans (`TranscriptRevisionStore.spans(fromCommitted:)`'s no-runs branch) — the
-    /// real chain, not a hand-built fixture, so a bug in how promotion assembles spans
+    /// at the group's start. Three separate `live.jsonl` records (not runs) so
+    /// promotion yields three separate placeable spans
+    /// (`TranscriptRevisionStore.spans(fromCommitted:)`'s no-runs branch) — the real
+    /// chain, not a hand-built fixture, so a bug in how promotion assembles spans
     /// would also be caught.
+    ///
+    /// **Correction (review Critical 2):** this fixture's words have real GAPS between
+    /// them (10_000-frame silences), so `MarkerSnapping`'s gap search is a coincidental
+    /// no-op here regardless of whether the boundary-add frame is protected from
+    /// snapping at all — the doc comment used to claim "snapping's gap search never
+    /// applies here" as if that were structural, which was false: it was an artifact
+    /// of this fixture's shape, not a property of the mechanism. The actual guarantee
+    /// (`EntryTranscript.snappedMarkers` marking a boundary-add's frame `isExact` and
+    /// routing it around `MarkerSnapping.snap` entirely) is pinned by the ADJACENT
+    /// test below, `testAddBoundaryOnAbuttingWordsIsNotSnapped`, using the shape that
+    /// actually discriminates: words with NO gap between them at all, which is the
+    /// device-observed norm for in-record runs.
     func testAddBoundaryEndToEndSplitsTheRenderedParagraphAtThePickedWord() async throws {
         try writeManifest(idA)
         try writeFinalAudio(idA)
@@ -463,5 +473,48 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         let paragraphs = try XCTUnwrap(after.paragraphs, "the boundary-add must have created something to attribute")
         XCTAssertEqual(paragraphs.map(\.text), ["one", "two three"],
                        "split lands before span 1, not before span 0 (the group's own start)")
+    }
+
+    /// Review Critical 1 + 2: the reviewer's own probe, reproduced against the SHIPPED
+    /// code before the fix (quoted in the fix commit) — four ABUTTING word intervals
+    /// (`[0,10k][10k,20k][20k,30k][30k,50k]`, no gaps at all between any of them) is
+    /// the device-observed norm for in-record runs (owner's own marker-session data),
+    /// not an edge case. Before the fix: `MarkerSnapping.merged()` fuses all four into
+    /// one continuous `[0,50000]` "speech" interval with no gap anywhere; a
+    /// boundary-add's frame at word-start `20_000` then reads as "inside speech" (rule
+    /// 0 fails), finds no gap (rule 1), and snaps to a boundary or the raw frame
+    /// itself depending on window size — landing on frame 0 in the reviewer's probe,
+    /// which produced NO visible split at all (the resulting empty leading group gets
+    /// filtered). This is exactly what the brief's "must say so rather than silently
+    /// placing the boundary somewhere near" forbids: a boundary-add is a WORD-anchored,
+    /// exact-by-construction frame, and must never enter `MarkerSnapping`'s gap search
+    /// in the first place.
+    func testAddBoundaryOnAbuttingWordsIsNotSnapped() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+            ("three", 20_000, 30_000),
+            ("four", 30_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three", "four"])
+
+        let written = try MarkerCorrectionWriter.addBoundary(atSpanIndex: 2, spans: current.spans,
+                                                              captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 2's (\"three\") own start frame")
+
+        let after = await model().transcript(for: idA)
+        let paragraphs = try XCTUnwrap(after.paragraphs,
+                                       "the boundary-add must produce a real split, not vanish into a fused interval")
+        XCTAssertEqual(paragraphs.map(\.text), ["one two", "three four"],
+                       "the split must land exactly at word 2's own frame (20_000), never snapped to frame 0 "
+                       + "or anywhere else — abutting words leave no gap for MarkerSnapping to search at all")
+        XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
+                       "an exact, word-anchored frame is never approximate — nothing here was snapped")
     }
 }

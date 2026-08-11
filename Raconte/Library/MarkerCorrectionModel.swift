@@ -109,8 +109,10 @@ final class MarkerCorrectionModel {
         // defense, not the mechanism — kept because "boundaries never contains a
         // correction record" is worth stating twice given how directly it bit this
         // exact model during development (see the fixed regression this comment sits
-        // beside in git history).
-        let effective = MarkerCorrections.effectiveMarkers(markers)
+        // beside in git history). `isExact` is irrelevant here — that flag only
+        // matters to the snap step (`EntryTranscript.snappedMarkers`); this screen
+        // just reads `.marker`.
+        let effective = MarkerCorrections.effectiveMarkers(markers).map(\.marker)
         boundaries = effective
             .filter { $0.kind == .voice || $0.kind == .paragraph }
             .sorted { $0.frame < $1.frame }

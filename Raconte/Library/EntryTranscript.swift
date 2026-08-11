@@ -280,6 +280,20 @@ enum EntryTranscriptLoader {
     /// each attribution call site. "Nothing usable" now also covers a raw list that
     /// resolves to empty AFTER corrections (e.g. retracting the only marker) — the same
     /// rule an empty raw list already got, extended to the effective one.
+    ///
+    /// **Review Critical 1:** a boundary-add's synthesized marker (`isExact == true`)
+    /// must NEVER go through `MarkerSnapping.snap` — that function exists to correct
+    /// RAW TAP latency (design §6), and a word-anchored frame was never a tap at all;
+    /// it is a span's own bound, exact by construction. On real device data (abutting
+    /// in-record word intervals, the owner's own marker-session norm), snapping an
+    /// exact frame can silently move it to a DIFFERENT word or erase the split
+    /// entirely — reproduced and pinned in
+    /// `TranscriptAttributionLoadTests.testAddBoundaryOnAbuttingWordsIsNotSnapped`.
+    /// So the effective list is split: only the non-exact half (raw taps, including a
+    /// voice-corrected one — its FRAME is still the original raw tap's) goes through
+    /// `MarkerSnapping.snap`; an exact marker is wrapped directly as its own
+    /// `SnappedMarker` at its own frame, `approximate: false` — the honest answer,
+    /// since nothing was approximated.
     private static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
                                        sampleRate: Double) -> [MarkerSnapping.SnappedMarker]? {
         let markerLoad = MarkerLogReader.load(captureDirectory: captureDirectory)
@@ -291,7 +305,13 @@ enum EntryTranscriptLoader {
             guard !effective.isEmpty else { return nil }
             let intervals = MarkerSnapping.intervals(fromCommitted: committed)
             let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
-            return MarkerSnapping.snap(markers: effective, intervals: intervals, windowFrames: window)
+
+            let toSnap = effective.filter { !$0.isExact }.map(\.marker)
+            let snapped = MarkerSnapping.snap(markers: toSnap, intervals: intervals, windowFrames: window)
+            let exact = effective.filter(\.isExact).map { em in
+                MarkerSnapping.SnappedMarker(marker: em.marker, snappedFrame: em.marker.frame, approximate: false)
+            }
+            return snapped + exact
         }
     }
 

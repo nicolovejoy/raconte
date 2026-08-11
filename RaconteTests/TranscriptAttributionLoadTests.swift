@@ -427,4 +427,41 @@ final class TranscriptAttributionLoadTests: XCTestCase {
                     "retracting the only marker leaves nothing usable to attribute")
         XCTAssertEqual(retracted.text, "first part second part", "the underlying transcript text is unaffected")
     }
+
+    /// 6.4b, end to end: `MarkerCorrectionWriter.addBoundary` runs against the SAME
+    /// `current.spans` the spans-based attribution path (Task 5) reads, and the
+    /// resulting paragraph split lands where the picked word's own span starts — not
+    /// at the group's start, and not anywhere `MarkerSnapping` could move it (the
+    /// frame comes straight off a promoted `.inherited` span's exact bounds, not a
+    /// raw tap, so snapping's gap search never applies here). Three separate
+    /// `live.jsonl` records (not runs) so promotion yields three separate placeable
+    /// spans (`TranscriptRevisionStore.spans(fromCommitted:)`'s no-runs branch) — the
+    /// real chain, not a hand-built fixture, so a bug in how promotion assembles spans
+    /// would also be caught.
+    func testAddBoundaryEndToEndSplitsTheRenderedParagraphAtThePickedWord() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 20_000, 30_000),
+            ("three", 40_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three"], "sanity: one span per record")
+
+        let before = await model().transcript(for: idA)
+        XCTAssertNil(before.paragraphs, "no markers.jsonl at all yet — nothing to attribute")
+
+        let written = try MarkerCorrectionWriter.addBoundary(atSpanIndex: 1, spans: current.spans,
+                                                              captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 1's (\"two\") own start frame")
+
+        let after = await model().transcript(for: idA)
+        let paragraphs = try XCTUnwrap(after.paragraphs, "the boundary-add must have created something to attribute")
+        XCTAssertEqual(paragraphs.map(\.text), ["one", "two three"],
+                       "split lands before span 1, not before span 0 (the group's own start)")
+    }
 }

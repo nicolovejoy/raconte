@@ -36,6 +36,11 @@ struct EntryDetailView: View {
     @State private var editSaveFailed = false
     @State private var editSaveFailureReason = ""
     @State private var editorModel: TranscriptEditorModel
+    /// Marker correction is its OWN mode (T7 Task 6, ruling Q11) — a separate pushed
+    /// screen, never inline in the editor. Same "built once in init" reasoning as
+    /// `editorModel` above.
+    @State private var showingMarkerCorrection = false
+    @State private var markerCorrectionModel: MarkerCorrectionModel
 
     /// Sidecar writes that reported failure. Each names what didn't save — the same
     /// swallowed-`try?` family as `TrashView.permanentDeleteFailed`, which the owner hit
@@ -53,6 +58,8 @@ struct EntryDetailView: View {
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
+        _markerCorrectionModel = State(initialValue: MarkerCorrectionModel(captureID: item.captureID,
+                                                                           store: model))
     }
 
     var body: some View {
@@ -90,6 +97,20 @@ struct EntryDetailView: View {
                     editorModel.acknowledgeSaveFailure()
                     editSaveFailed = true
                 }
+                await model.rescan()
+                await refresh()
+            }
+        }
+        .navigationDestination(isPresented: $showingMarkerCorrection) {
+            MarkerCorrectionView(model: markerCorrectionModel)
+        }
+        // Every correction action writes and commits immediately (no draft, no debounce —
+        // see `MarkerCorrectionModel`'s doc comment), so unlike the editor there is nothing
+        // to finish on the way out; a refresh once the screen closes is enough for the
+        // transcript section to pick up the corrected attribution.
+        .onChange(of: showingMarkerCorrection) { _, shown in
+            guard !shown else { return }
+            Task {
                 await model.rescan()
                 await refresh()
             }
@@ -384,6 +405,12 @@ struct EntryDetailView: View {
             Button("Edit transcript…") { showingEditor = true }
                 .font(.caption)
                 .accessibilityIdentifier("detail.editButton")
+
+            // Its own mode, not inline here (T7 Task 6, ruling Q11) — retract a mis-tap,
+            // correct a voice at an existing boundary, or add one the owner never tapped.
+            Button("Correct markers…") { showingMarkerCorrection = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.correctMarkersButton")
 
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "

@@ -146,7 +146,12 @@ enum TranscriptAttribution {
     /// against: usable per `SpanAnchor.hasUsableBounds` AND non-zero-length. See the
     /// design note on `attribute(spans:snapped:)` above for why zero-length is excluded
     /// even though `.inherited` alone would say "usable".
-    private static func isPlaceableSpan(_ span: TranscriptSpan) -> Bool {
+    ///
+    /// Not `private` (T7 Task 6): `MarkerCorrectionWriter`'s boundary-add needs the
+    /// IDENTICAL "is this word offerable" rule — brief case 3 says a word whose span
+    /// has no usable bounds is not offerable, and that is exactly this predicate. Two
+    /// implementations of "placeable" would be free to silently disagree.
+    static func isPlaceableSpan(_ span: TranscriptSpan) -> Bool {
         guard span.anchor.hasUsableBounds,
               let start = span.frameStart, let end = span.frameEnd else { return false }
         return end > start
@@ -242,7 +247,13 @@ enum TranscriptAttribution {
                     isBreak = true
                 }
                 activeVoice = marker.marker.voice
-            case .unknown:
+            // T7 Task 6: correction kinds are resolved into effective `.voice`/
+            // `.paragraph` records by `MarkerCorrections.effectiveMarkers` before a
+            // marker list ever reaches attribution (see `isRenderable`'s doc comment
+            // above `spanBreakpoints`) — unreachable in production, kept only so an
+            // unfolded list (or an even-newer kind this build doesn't understand)
+            // fails safe instead of losing compiler exhaustiveness coverage.
+            case .correctionRetract, .correctionVoice, .correctionBoundaryAdd, .unknown:
                 continue
             }
 
@@ -305,10 +316,16 @@ enum TranscriptAttribution {
         return extracted
     }
 
+    /// T7 Task 6: correction kinds are never directly renderable — a fold step
+    /// (`MarkerCorrections.effectiveMarkers`) resolves them into equivalent `.voice`/
+    /// `.paragraph` records (or drops them, for a retract) before markers ever reach
+    /// this function. These three cases exist only so an unfolded list fails safe
+    /// (ignored, like `.unknown`) rather than the compiler's exhaustiveness check
+    /// silently going away.
     private static func isRenderable(_ kind: StructureMarker.Kind) -> Bool {
         switch kind {
         case .voice, .paragraph: return true
-        case .unknown: return false
+        case .correctionRetract, .correctionVoice, .correctionBoundaryAdd, .unknown: return false
         }
     }
 
@@ -366,7 +383,9 @@ enum TranscriptAttribution {
                     isBreak = true
                 }
                 activeVoice = marker.marker.voice
-            case .unknown:
+            // T7 Task 6: see `spanBreakpoints`'s identical case above — corrections are
+            // folded away before reaching here; this is fail-safe coverage only.
+            case .correctionRetract, .correctionVoice, .correctionBoundaryAdd, .unknown:
                 continue
             }
 

@@ -9,11 +9,21 @@ import Foundation
 /// tail, refuse-to-open-an-unreadable-log) a correction append needs applies
 /// identically to a capture-time tap. `open()` + `append()` + `close()` per call
 /// (corrections are rare, user-initiated events off the main flow, not a capture-time
-/// hot path where reusing one open handle across many writes matters) — and `open()`
-/// only ever runs immediately before a write actually happens, so this never creates
-/// an empty `transcript/markers.jsonl` on a capture that had none (the same
-/// create-on-first-append discipline `MarkerLogWriter.open()`'s own doc comment
-/// requires of every caller).
+/// hot path where reusing one open handle across many writes matters).
+///
+/// **Correction (review Minor 6):** `open()` DOES create `transcript/markers.jsonl`
+/// on disk immediately (`O_CREAT`, even for zero bytes) — it is not, in fact, lazy in
+/// the sense of waiting for a successful append. What actually protects a mis-tapped
+/// capture here is two things, neither of which is "this creates nothing": (1) the
+/// append immediately follows the open within the SAME `appendOne` call, so there is
+/// no caller-visible window where an empty file sits unattended; and (2) in every
+/// path this writer is actually reached through
+/// (`MarkerCorrectionModel`/`MarkerCorrectionView`), a `retract`/`correctVoice`
+/// requires an ALREADY-rendered boundary row (which only exists if `markers.jsonl`
+/// is already present) and `addBoundary` requires a readable `current` revision
+/// (which means `transcript/canonical-N.json` already exists) — so
+/// `holdsIrreplaceableArtifacts` is already `true` before any of these three actions
+/// can run at all. See the T7 Task 6 report for the full reachability argument.
 enum MarkerCorrectionWriter {
     /// Brief case 3: a word whose covering span has no usable bounds (`.none`/
     /// `.unknown` anchor, or a zero-length `.inherited` span — same test as

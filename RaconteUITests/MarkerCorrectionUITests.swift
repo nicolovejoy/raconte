@@ -90,9 +90,11 @@ final class MarkerCorrectionUITests: XCTestCase {
         XCTAssertEqual(wordThree.label, "three")
         press(wordThree)
 
-        // A successful boundary-add mints a NEW raw .paragraph record, so the
-        // boundary list grows back to one row (the retract above emptied it to zero
-        // paragraph rows, leaving only the voice row).
+        // A successful boundary-add appends a NEW `.correctionBoundaryAdd` record —
+        // raw taps stay immutable (locked decision 5) — which `MarkerCorrections
+        // .effectiveMarkers` folds into an effective `.paragraph` marker for
+        // rendering. So the boundary list grows back to one row (the retract above
+        // emptied it to zero paragraph rows, leaving only the voice row).
         waitUntil(15, "the boundary-add never produced a new row") {
             app.staticTexts["Paragraph break"].firstMatch.exists
         }

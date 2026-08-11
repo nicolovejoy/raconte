@@ -13,13 +13,16 @@ protocol MarkerCorrectionStore: AnyObject {
     /// readable current revision — nothing here to correct, same "nothing transcribed
     /// yet" state the editor's `.readOnlyNoTranscript` already names.
     func currentSpans(for captureID: String) async -> [TranscriptSpan]?
-    /// The RAW marker list, unfolded — everything on disk, taps and correction
-    /// records alike. `MarkerCorrectionModel.open()` runs this through
-    /// `MarkerCorrections.effectiveMarkers` itself before rendering `boundaries`
-    /// (never the raw list directly — a retract only ever APPENDS a
+    /// The marker log, THREE-answer honest (review Important 5 — the exact #11/§7
+    /// collapse the rest of the codebase refuses to make): absent, unreadable, or
+    /// present with its raw records. `MarkerCorrectionModel.open()` runs `.markers`
+    /// through `MarkerCorrections.effectiveMarkers` itself before rendering
+    /// `boundaries` (never the raw list directly — a retract only ever APPENDS a
     /// `.correctionRetract`, it never removes the original tap, so showing the raw
-    /// list would make a retracted row immortal).
-    func rawMarkers(for captureID: String) async -> [StructureMarker]
+    /// list would make a retracted row immortal) — but an `.unreadable` log must
+    /// render its OWN state, with no correction affordances at all, never silently
+    /// flattened to "no markers yet".
+    func markerLog(for captureID: String) async -> MarkerLogReader.LoadResult
     func retractMarker(seq: Int, captureID: String) async throws
     func correctVoice(frame: Int64, voice: String, captureID: String) async throws
     @discardableResult
@@ -53,6 +56,16 @@ final class MarkerCorrectionModel {
 
     /// One word (span) offered as a boundary-add target. `id` is the span's own index
     /// into `current.spans` — exactly what `MarkerCorrectionWriter.addBoundary` wants.
+    ///
+    /// **Honesty note (review Minor 9):** one row per SPAN, not per literal word.
+    /// `TranscriptRevisionStore.spans(fromCommitted:)` mints one span per TIMED RUN
+    /// (or, absent runs, one per whole record), and a run/record can hold more than
+    /// one word — the writer anchors to that span's own `frameStart` regardless
+    /// (brief: "take the frame at the start of the span COVERING the picked word"). In
+    /// practice this is one word per span the overwhelming majority of the time
+    /// (device transcription runs are short), but a multi-word span offers its span
+    /// START for every word inside it, not a per-word frame this codebase does not
+    /// have.
     struct WordRow: Identifiable, Equatable {
         var id: Int
         var text: String
@@ -62,6 +75,10 @@ final class MarkerCorrectionModel {
         /// enforces, so a tap here can never reach a rejection the UI didn't already
         /// predict.
         var isPlaceable: Bool
+        /// The span's own start frame, when placeable — `nil` otherwise. Lets
+        /// `addBoundary` refuse a duplicate add at an already-effective frame (review
+        /// Minor 7) without a second disk read.
+        var frameStart: Int64?
     }
 
     enum State: Equatable {
@@ -72,6 +89,14 @@ final class MarkerCorrectionModel {
         /// empty lists would be: an entry that DOES have spans but zero markers still
         /// offers the "add a boundary" word list, so that case is `.ready`.
         case nothingToCorrect
+        /// `markers.jsonl` exists and could not be read (review Important 5). Never
+        /// collapsed into `.nothingToCorrect` — that would tell the owner there is
+        /// nothing here when the truth is "something is here and we failed to read
+        /// it," the exact #11/§7 distinction the rest of the codebase already makes
+        /// for this same file. No correction affordances are offered: acting against
+        /// an unreadable log risks colliding `seq` values, the same reason
+        /// `MarkerLogWriter.open()` refuses to open one at all.
+        case unreadable(String)
     }
 
     private(set) var state: State = .loading
@@ -96,8 +121,20 @@ final class MarkerCorrectionModel {
         // shape `TranscriptEditorStore` uses), and Swift 6 strict concurrency refuses
         // to capture it into a concurrent child task even though the protocol itself
         // is `@MainActor`-isolated.
-        let markers = await store.rawMarkers(for: captureID)
+        let markerLog = await store.markerLog(for: captureID)
         let spans = await store.currentSpans(for: captureID)
+
+        // Review Important 5: an unreadable log is its OWN state, checked before
+        // anything else — never flattened into "no markers yet" (`.nothingToCorrect`)
+        // or silently treated as an empty list. No correction affordances follow.
+        if case .unreadable(let reason) = markerLog.source {
+            boundaries = []
+            words = []
+            state = .unreadable(reason)
+            return
+        }
+
+        let markers = markerLog.markers
 
         // MUST be the EFFECTIVE list, not the raw one: raw taps are immutable (locked
         // decision 5), so a retract never removes anything from `markers` — it only
@@ -124,8 +161,9 @@ final class MarkerCorrectionModel {
             return
         }
         words = spans.indices.map { index in
-            WordRow(id: index, text: spans[index].text,
-                    isPlaceable: TranscriptAttribution.isPlaceableSpan(spans[index]))
+            let placeable = TranscriptAttribution.isPlaceableSpan(spans[index])
+            return WordRow(id: index, text: spans[index].text, isPlaceable: placeable,
+                           frameStart: placeable ? spans[index].frameStart : nil)
         }
         state = .ready
     }
@@ -155,16 +193,35 @@ final class MarkerCorrectionModel {
     /// same "never trust that the UI already enforced it" reasoning as `writeDraft`'s
     /// own guards, and it is what lets `RaconteTests` pin the rejection without a
     /// SwiftUI harness.
+    ///
+    /// Review Important 5: the catch below used to map EVERY thrown error to the
+    /// "word not offerable" message, including a genuine I/O failure
+    /// (`MarkerLogError.unreadableExistingLog` and friends) that has nothing to do
+    /// with placeability — a real write failure was mis-explained as a placeability
+    /// rejection. Only `.noUsableBounds` gets that specific message now; anything
+    /// else gets the same generic failure message `retract`/`correctVoice` use.
+    ///
+    /// Review Minor 7: a duplicate add at a frame that's ALREADY an effective boundary
+    /// (e.g. tapping the same word twice, or a word whose frame an earlier add or a
+    /// raw tap already covers) is refused here — cheap, since `boundaries` is already
+    /// in memory from the last `open()` — rather than appending another
+    /// `.correctionBoundaryAdd` record that changes nothing but grows the log forever.
     func addBoundary(_ row: WordRow) async {
-        guard row.isPlaceable else {
+        guard row.isPlaceable, let frame = row.frameStart else {
             errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
+            return
+        }
+        guard !boundaries.contains(where: { $0.frame == frame }) else {
+            errorMessage = "There’s already a boundary at this word."
             return
         }
         do {
             try await store.addBoundary(atSpanIndex: row.id, captureID: captureID)
             await open()
-        } catch {
+        } catch MarkerCorrectionWriter.BoundaryAddError.noUsableBounds {
             errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
+        } catch {
+            errorMessage = "That couldn’t be saved. Try again."
         }
     }
 
@@ -186,11 +243,11 @@ extension LibraryScreenModel: MarkerCorrectionStore {
         }.value
     }
 
-    nonisolated func rawMarkers(for captureID: String) async -> [StructureMarker] {
+    nonisolated func markerLog(for captureID: String) async -> MarkerLogReader.LoadResult {
         let capturesRoot = self.capturesRoot
         return await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-            return MarkerLogReader.load(captureDirectory: directory).markers
+            return MarkerLogReader.load(captureDirectory: directory)
         }.value
     }
 

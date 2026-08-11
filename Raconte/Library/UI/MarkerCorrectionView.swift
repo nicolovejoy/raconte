@@ -16,6 +16,15 @@ struct MarkerCorrectionView: View {
                                        systemImage: "waveform.badge.exclamationmark",
                                        description: Text("This entry has no markers and nothing transcribed."))
                     .accessibilityIdentifier("markerCorrection.empty")
+            case .unreadable(let reason):
+                // Its own state (review Important 5) — never "nothing to correct".
+                // No correction affordances: acting against a log we failed to read
+                // risks colliding seq values, the same reason the writer refuses too.
+                ContentUnavailableView("Markers couldn’t be read",
+                                       systemImage: "exclamationmark.triangle",
+                                       description: Text("This entry’s marker log could not be read (\(reason)), "
+                                                         + "so nothing here can be corrected right now."))
+                    .accessibilityIdentifier("markerCorrection.unreadable")
             case .ready:
                 List {
                     Section("Boundaries") {

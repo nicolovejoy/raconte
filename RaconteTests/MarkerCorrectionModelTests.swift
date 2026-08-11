@@ -88,6 +88,24 @@ final class MarkerCorrectionModelTests: XCTestCase {
         XCTAssertTrue(model.words.isEmpty)
     }
 
+    /// Review Important 5: an unreadable log is its OWN state — never flattened into
+    /// `.nothingToCorrect` (which would tell the owner there is nothing here, when the
+    /// truth is "something is here and we failed to read it"). No affordances follow:
+    /// both lists stay empty even though spans (and, if it had been readable, markers)
+    /// exist.
+    func testUnreadableMarkerLogIsItsOwnStateNeverNothingToCorrect() async {
+        let store = FakeMarkerCorrectionStore()
+        store.forcedLogSource = .unreadable("permission denied")
+        store.spans = [TranscriptSpan(text: "hello", anchor: .exact, frameStart: 0, frameEnd: 10_000)]
+
+        let model = model(store)
+        await model.open()
+
+        XCTAssertEqual(model.state, .unreadable("permission denied"))
+        XCTAssertTrue(model.boundaries.isEmpty)
+        XCTAssertTrue(model.words.isEmpty, "no correction affordances over an unreadable log")
+    }
+
     // MARK: - retract
 
     /// Real disk behaviour (locked decision 5): a retract never removes the original
@@ -104,9 +122,6 @@ final class MarkerCorrectionModelTests: XCTestCase {
         await model.open()
         XCTAssertEqual(model.boundaries.count, 1)
 
-        store.onRetract = { seq in
-            store.markers.append(StructureMarker(seq: 4, frame: 0, kind: .correctionRetract, retractsSeq: seq))
-        }
         await model.retract(model.boundaries[0])
 
         XCTAssertEqual(store.retractedSeqs, [3])
@@ -179,6 +194,44 @@ final class MarkerCorrectionModelTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, MarkerCorrectionWriter.boundaryAddRejectionMessage())
     }
 
+    /// Review Minor 7: tapping the same word twice (or a word whose frame is already
+    /// covered by an existing raw tap) must not append a second, pointless correction
+    /// record — refused cheaply, in memory, before the store is ever called.
+    func testAddBoundaryRefusesADuplicateAtAnAlreadyEffectiveFrame() async {
+        let store = FakeMarkerCorrectionStore()
+        store.markers = []
+        store.spans = [TranscriptSpan(text: "one", anchor: .inherited, frameStart: 0, frameEnd: 10_000)]
+
+        let model = model(store)
+        await model.open()
+        await model.addBoundary(model.words[0])
+        XCTAssertEqual(store.addBoundaryCallCount, 1, "the first add goes through")
+
+        await model.addBoundary(model.words[0])
+        XCTAssertEqual(store.addBoundaryCallCount, 1, "the second, duplicate add must be refused before the store")
+        XCTAssertNotNil(model.errorMessage)
+    }
+
+    /// Review Important 5: a genuine I/O failure on the way to writing a boundary-add
+    /// (the store's underlying `MarkerCorrectionWriter.addBoundary` throwing something
+    /// OTHER than `.noUsableBounds` — an unreadable log, a POSIX write failure) must
+    /// NOT be mis-explained as "this word isn't offerable". The row IS placeable; the
+    /// WRITE failed for an unrelated reason, and the message must say so, not lie.
+    func testAddBoundaryIOFailureIsNotMisreportedAsNotPlaceable() async {
+        let store = FakeMarkerCorrectionStore()
+        store.markers = []
+        store.spans = [TranscriptSpan(text: "one", anchor: .inherited, frameStart: 0, frameEnd: 10_000)]
+        store.addBoundaryError = MarkerLogError.notOpen
+
+        let model = model(store)
+        await model.open()
+        await model.addBoundary(model.words[0])
+
+        XCTAssertNotEqual(model.errorMessage, MarkerCorrectionWriter.boundaryAddRejectionMessage(),
+                          "an I/O failure is not a placeability rejection — the row WAS placeable")
+        XCTAssertNotNil(model.errorMessage)
+    }
+
     /// `.correctionBoundaryAdd` is the RAW record the writer appends — it must never
     /// itself show up in `boundaries` (that list is raw `.voice`/`.paragraph` taps
     /// only, per `testCorrectionRecordsThemselvesAreNeverListedAsBoundaries`), so
@@ -201,6 +254,35 @@ final class MarkerCorrectionModelTests: XCTestCase {
         XCTAssertEqual(store.spansReadCount, 2, "addBoundary() must re-open (a second read), not just write")
         XCTAssertNil(model.errorMessage)
     }
+
+    /// Review Important 3, model-level regression: an add followed by a retract of
+    /// the row it just created must actually remove it on a REAL second `open()` —
+    /// not just record that the store methods were called. The fake now appends a
+    /// genuine `.correctionBoundaryAdd` record (matching what
+    /// `MarkerCorrectionWriter.addBoundary` really writes) rather than silently doing
+    /// nothing, which is exactly the blind spot the review named: nothing before this
+    /// exercised a second `open()` after an add, so the pre-fix ordering bug (a
+    /// retract could never cancel a boundary-add) had no model-level test to catch it.
+    func testAddThenRetractTheAddedRowActuallyRemovesItOnReopen() async {
+        let store = FakeMarkerCorrectionStore()
+        store.markers = []
+        store.spans = [
+            TranscriptSpan(text: "one", anchor: .inherited, frameStart: 0, frameEnd: 10_000),
+            TranscriptSpan(text: "two", anchor: .inherited, frameStart: 20_000, frameEnd: 30_000),
+        ]
+
+        let model = model(store)
+        await model.open()
+        XCTAssertTrue(model.boundaries.isEmpty, "nothing tapped yet")
+
+        await model.addBoundary(model.words[1])
+        XCTAssertEqual(model.boundaries.map(\.frame), [20_000], "the fold renders the addition as a real boundary row")
+
+        await model.retract(model.boundaries[0])
+        XCTAssertTrue(model.boundaries.isEmpty,
+                      "retracting the row the add just created must actually remove it, not append dead junk")
+        XCTAssertNil(model.errorMessage)
+    }
 }
 
 /// Records every call made against it so tests can assert on WHAT was written, not
@@ -211,6 +293,12 @@ final class FakeMarkerCorrectionStore: MarkerCorrectionStore {
     var markers: [StructureMarker] = []
     var spans: [TranscriptSpan]?
     private(set) var spansReadCount = 0
+    /// Overrides `markerLog`'s three-answer source independent of `markers` — a test
+    /// checking the `.unreadable` state sets this and leaves `markers` irrelevant
+    /// (the model must never read it once the source is unreadable). `nil` (the
+    /// default) means "derive from `markers`" — every existing test's `store.markers
+    /// = [...]` keeps working unchanged.
+    var forcedLogSource: MarkerLogSource?
 
     var retractError: (any Error)?
     var voiceCorrectionError: (any Error)?
@@ -221,9 +309,10 @@ final class FakeMarkerCorrectionStore: MarkerCorrectionStore {
     private(set) var addedSpanIndices: [Int] = []
     var addBoundaryCallCount: Int { addedSpanIndices.count }
 
-    /// Fires AFTER recording the call, so a test can simulate the write actually
-    /// taking effect before the model's own re-`open()` reads it back.
-    var onRetract: ((Int) -> Void)?
+    /// Assigns the next seq past whatever is already in `markers` — the same
+    /// "never collide" rule `MarkerLogWriter.nextSeq` follows, shared by both writer
+    /// methods below so an add-then-retract sequence gets two genuinely distinct seqs.
+    private func nextSeq() -> Int { (markers.map(\.seq).max() ?? -1) + 1 }
 
     nonisolated func currentSpans(for captureID: String) async -> [TranscriptSpan]? {
         await MainActor.run {
@@ -232,25 +321,44 @@ final class FakeMarkerCorrectionStore: MarkerCorrectionStore {
         }
     }
 
-    nonisolated func rawMarkers(for captureID: String) async -> [StructureMarker] {
-        await MainActor.run { markers }
+    nonisolated func markerLog(for captureID: String) async -> MarkerLogReader.LoadResult {
+        await MainActor.run {
+            if let forcedLogSource {
+                return MarkerLogReader.LoadResult(source: forcedLogSource, markers: [], completeLines: 0)
+            }
+            let source: MarkerLogSource = markers.isEmpty ? .absent : .present(Data())
+            return MarkerLogReader.LoadResult(source: source, markers: markers, completeLines: markers.count)
+        }
     }
 
+    /// Appends a REAL `.correctionRetract` record — mirrors what
+    /// `MarkerCorrectionWriter.retract` actually writes (review Important 3's named
+    /// blind spot: a fake that only records the call, never the record, can't
+    /// exercise a second `open()`'s fold, and hid the ordering bug that made a retract
+    /// unable to cancel a boundary-add).
     func retractMarker(seq: Int, captureID: String) async throws {
         if let retractError { throw retractError }
         retractedSeqs.append(seq)
-        onRetract?(seq)
+        markers.append(StructureMarker(seq: nextSeq(), frame: 0, kind: .correctionRetract, retractsSeq: seq))
     }
 
+    /// Appends a REAL `.correctionVoice` record — same reasoning as `retractMarker`
+    /// above, applied consistently rather than leaving this one method as the sole
+    /// remaining place a second `open()` couldn't observe a real effect.
     func correctVoice(frame: Int64, voice: String, captureID: String) async throws {
         if let voiceCorrectionError { throw voiceCorrectionError }
         voiceCorrections.append((frame, voice))
+        markers.append(StructureMarker(seq: nextSeq(), frame: frame, kind: .correctionVoice, voice: voice))
     }
 
+    /// Appends a REAL `.correctionBoundaryAdd` record — same reasoning as
+    /// `retractMarker` above.
     @discardableResult
     func addBoundary(atSpanIndex: Int, captureID: String) async throws -> Int64 {
         if let addBoundaryError { throw addBoundaryError }
         addedSpanIndices.append(atSpanIndex)
-        return spans?[atSpanIndex].frameStart ?? 0
+        let frame = spans?[atSpanIndex].frameStart ?? 0
+        markers.append(StructureMarker(seq: nextSeq(), frame: frame, kind: .correctionBoundaryAdd))
+        return frame
     }
 }

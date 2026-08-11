@@ -125,6 +125,46 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello ln said")
     }
 
+    /// **Review Important 4 (characterization only — no `TranscriptSplice` change):**
+    /// the REAL #38 retype is the CAPITALIZED "LN" — how the owner actually writes the
+    /// voice name in prose (`StructureMarker.Voice.littleNico` is the lowercase stored
+    /// ID; the doc comment above's own premise-check first (correctly) assumed
+    /// capitalized, before the ACTUAL issue wording turned out to be lowercase). At
+    /// that casing, "Ellen" and "LN" share ZERO characters (case-sensitive Myers
+    /// diff), so this does NOT take F17's touched-span path — it takes the
+    /// brand-new-text `.insertion` path instead. Today's actual behavior, pinned here
+    /// rather than left hidden: the retyped word becomes a ZERO-LENGTH `.inherited`
+    /// POINT at the PRECEDING span's end, and the replaced span's own `[10,20)` bounds
+    /// are DISCARDED entirely — not present anywhere in the output. So "LN" here
+    /// cannot anchor a 6.4b boundary-add (Task 5's placeability rule excludes
+    /// zero-length spans) and cannot start a paragraph of its own.
+    ///
+    /// **Not fixed here.** Whether a wholesale word replacement should instead inherit
+    /// the REPLACED span's full bounds (the same F17 treatment a partial edit gets) is
+    /// an owner ruling pending, not a Task 6 call — `TranscriptSplice`'s diff/lattice
+    /// is T6d-gated, mutation-verified code, and a correction-writer task is the wrong
+    /// place to change it unreviewed. This test exists so the suite SHOWS the gap: if
+    /// a future ruling changes the behavior, this test's name says exactly what should
+    /// flip, and it fails loudly instead of the change going unnoticed.
+    func testCapitalizedWholesaleRetypeCharacterizationPendingOwnerRuling() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello LN said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello LN said")
+        let retyped = try? XCTUnwrap(result.first { $0.text == "LN" })
+        let point = retyped ?? TranscriptSpan(text: "MISSING", anchor: .none)
+        XCTAssertEqual(point.anchor, .inherited)
+        XCTAssertEqual(point.frameStart, point.frameEnd,
+                       "today: a ZERO-LENGTH point, not the replaced span's interval — pending ruling")
+        XCTAssertEqual(point.frameStart, 10, "anchored to the PRECEDING span's end, not the replaced span's own start")
+        XCTAssertFalse(result.contains { $0.frameStart == 10 && $0.frameEnd == 20 },
+                       "the replaced span's [10,20) bounds are discarded entirely — not preserved anywhere")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

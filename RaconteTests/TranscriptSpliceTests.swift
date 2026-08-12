@@ -231,6 +231,103 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello LN said")
     }
 
+    // MARK: - Gate B Important 1: what the wholesale-replacement rule must NOT swallow
+    //
+    // §16.5's inherit rule is scoped to ONE retyped word: a run of removed characters
+    // covering ALL of exactly one span, immediately followed by newly typed text. Every
+    // qualifying clause had a positive test and NO negative one — Gate B loosened
+    // `pendingCharsSeen == parentSpans[spanIndex].text.count` to `>= 1` and all 1116 tests
+    // still passed, which is the §16.5 untruth generalized: a partial-span typo fix would
+    // silently claim the whole word's audio. One negative fixture per clause below.
+
+    /// (a) PARTIAL-span replacement — the loosening Gate B actually mutated in.
+    /// "Ellen" [10,20) is the leading span and only its first characters are replaced
+    /// (`XYZlen`); the typed text is NOT the heard word corrected, so it may not claim
+    /// [10,20).
+    ///
+    /// The leading position is what makes the two behaviours distinguishable at all: a
+    /// touched span's surviving fragment carries the PARENT'S FULL bounds (F17) and sits
+    /// immediately beside the insertion with no separator, so `combine` folds them into one
+    /// span — and the union of "point at the last usable end" with "full parent bounds" is
+    /// just the full parent bounds again, identical to the wrong answer. With nothing
+    /// anchored BEFORE it the insertion is `.none` (nothing to borrow), and `forcedMerge`
+    /// with a `.none` side is `.none`, so the frames the mutation fabricates show up as the
+    /// difference between `.none` and `.inherited [10,20)`.
+    func testPartialSpanReplacementNeverInheritsTheWholeSpansFrames() {
+        let p = parent([
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "XYZlen said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "XYZlen said")
+        guard let edited = result.first else { return XCTFail("no output spans") }
+        XCTAssertEqual(edited.text, "XYZlen")
+        XCTAssertEqual(edited.anchor, .none,
+                       "a partial replacement is not the heard word corrected — it may not "
+                       + "inherit the replaced span's measurement")
+        XCTAssertNil(edited.frameStart, "must not claim the replaced span's [10,20)")
+        XCTAssertNil(edited.frameEnd)
+        XCTAssertFalse(TranscriptAttribution.isPlaceableSpan(edited),
+                       "partially retyped text must not become placeable off frames nobody measured")
+    }
+
+    /// (b) A replacement that eats the join-SEPARATOR too (the taint rule). Deleting the
+    /// space before "Ellen" and retyping the word merges two things at once; §16.5 covers
+    /// one retyped word with its spacing intact, not a merge across a deleted boundary. The
+    /// typed "LN" stays an ordinary insertion — a zero-length point at the last usable end
+    /// (10, `hello`'s) — so the merged output ends at 10 and never stretches to "Ellen"'s
+    /// [10,20) end.
+    func testReplacementAcrossADeletedSeparatorNeverInheritsTheReplacedSpansFrames() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "helloLN said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "helloLN said")
+        guard let merged = result.first(where: { $0.text.contains("LN") }) else {
+            return XCTFail("no span carries the retyped text")
+        }
+        XCTAssertEqual(merged.frameEnd, 10,
+                       "the typed text anchors as a point at the last usable end, so the merged "
+                       + "span still ends where 'hello' did")
+        XCTAssertNotEqual(merged.frameEnd, 20,
+                          "must not stretch to the replaced span's end — the deleted separator "
+                          + "taints the run, and this is a merge, not a corrected word")
+    }
+
+    /// (c) A removal run spanning TWO spans. Deleting "bravo delta" and typing "XY" is not
+    /// a corrected word either, and the typed text must inherit NEITHER span's bounds — it
+    /// lands as an ordinary point at "alpha"'s end.
+    ///
+    /// **Two independent defenses, measured (Gate B fix wave).** `TranscriptText.join` puts
+    /// a separator between EVERY pair of non-empty spans, so a removal run that reaches a
+    /// second span has always crossed a separator first — the taint rule and the explicit
+    /// two-span disqualification (`TranscriptSplice.swift`'s `pendingSpan == spanIndex`
+    /// else-branch) BOTH cover this shape, and either alone is sufficient. Disabling just
+    /// one leaves this test green in both directions (measured, one mutation at a time);
+    /// disabling BOTH makes it fail here. So this fixture pins the pair, and neither branch
+    /// can be deleted along with the other without a red test.
+    func testARemovalRunSpanningTwoSpansNeverInheritsEitherSpansFrames() {
+        let p = parent([
+            exact("alpha", 0, 10),
+            exact("bravo", 10, 20),
+            exact("delta", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "alpha XY")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "alpha XY")
+        guard let typed = result.first(where: { $0.text.contains("XY") }) else {
+            return XCTFail("no span carries the typed text")
+        }
+        XCTAssertEqual(typed.frameStart, 10, "a zero-length point at 'alpha''s end")
+        XCTAssertEqual(typed.frameEnd, 10)
+        XCTAssertNotEqual(typed.frameEnd, 20, "must not inherit 'bravo''s [10,20)")
+        XCTAssertNotEqual(typed.frameEnd, 30, "must not inherit 'delta''s [20,30)")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

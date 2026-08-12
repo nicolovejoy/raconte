@@ -344,4 +344,46 @@ final class JournalCaptureContextTests: XCTestCase {
         XCTAssertEqual(after.originalDate, PartialDate(year: 1970),
                        "resume erased a backdate the live capture never set")
     }
+
+    // MARK: Voice labels (T7 Mark Voices, issue #56)
+
+    /// Mirrors `renameCurrentJournal`'s shape: the store call is the source of truth,
+    /// and the model patches its own `journals` array in place — no rescan required for
+    /// the change to be visible through `model.journals`.
+    func testSetCurrentJournalVoiceLabelsPersistsAndPatchesInPlace() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let id = try XCTUnwrap(model.selectedJournalID)
+
+        let succeeded = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa", "ln": "Nico"])
+        XCTAssertTrue(succeeded)
+
+        XCTAssertEqual(model.journals.first(where: { $0.id == id })?.voiceLabels,
+                       ["bn": "Grandpa", "ln": "Nico"],
+                       "model.journals must reflect the new labels without a rescan")
+
+        let onDisk = try await JournalStore(containerRoot: containerRoot).journal(id: id)
+        XCTAssertEqual(onDisk?.voiceLabels, ["bn": "Grandpa", "ln": "Nico"],
+                       "labels must be visible via journalStore.journal(id:)")
+    }
+
+    func testSetCurrentJournalVoiceLabelsFailureReturnsFalse() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let id = try XCTUnwrap(model.selectedJournalID)
+        let before = model.journals.first(where: { $0.id == id })?.voiceLabels
+
+        // `AtomicFile.replace` writes `journals.json.part` beside the target and renames
+        // it in — both need the *directory* writable, so the target file's own
+        // permissions are irrelevant here.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: containerRoot.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: containerRoot.path)
+        }
+
+        let succeeded = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa"])
+        XCTAssertFalse(succeeded)
+        XCTAssertEqual(model.journals.first(where: { $0.id == id })?.voiceLabels, before,
+                       "a failed write must not patch the in-memory journal either")
+    }
 }

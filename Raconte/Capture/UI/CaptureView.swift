@@ -353,6 +353,23 @@ final class CaptureScreenModel {
         if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
     }
 
+    /// Sets (or clears, via an empty dict) the current journal's voice labels
+    /// (T7 Mark Voices, issue #56). Same load/patch shape as `renameCurrentJournal`:
+    /// `journalStore` is the source of truth, and `journals[index]` is patched in place
+    /// so the change is visible through `journals` with no rescan. `labels` is passed
+    /// through to `JournalStore.setVoiceLabels`, which trims VALUES but not keys — the
+    /// sheet only ever constructs the "bn"/"ln" keys as literals, so no untrimmed key can
+    /// reach here today, but a future caller building keys dynamically would need to
+    /// trim/normalize them itself before calling this.
+    @discardableResult
+    func setCurrentJournalVoiceLabels(_ labels: [String: String]) async -> Bool {
+        guard let id = selectedJournalID,
+              let updated = try? await journalStore.setVoiceLabels(id: id, labels: labels)
+        else { return false }
+        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = updated }
+        return true
+    }
+
     /// Cover image for the currently selected journal, sourced from `library` —
     /// the same store/scan the Library screen reads (M3's one-data-path rule, applied
     /// to covers too).
@@ -849,6 +866,7 @@ struct JournalHeaderView: View {
     @State private var showingNewJournalPrompt = false
     @State private var showingRenamePrompt = false
     @State private var showingCoverPicker = false
+    @State private var showingVoiceLabels = false
     @State private var draftName = ""
 
     var body: some View {
@@ -881,6 +899,8 @@ struct JournalHeaderView: View {
                 if model.selectedJournalID != nil {
                     Button("Cover Photo…") { showingCoverPicker = true }
                         .accessibilityIdentifier("capture.coverPhotoMenuItem")
+                    Button("Voice Labels…") { showingVoiceLabels = true }
+                        .accessibilityIdentifier("capture.voiceLabelsMenuItem")
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -931,6 +951,15 @@ struct JournalHeaderView: View {
                     catch { return false }
                 },
                 onRemove: { await model.removeCurrentJournalCover() })
+            .foregroundStyle(Color.primary)
+        }
+        .sheet(isPresented: $showingVoiceLabels) {
+            // Same foreground reset as the cover sheet above — system sheet background.
+            JournalVoiceLabelsSheet(
+                journalName: model.selectedJournalName,
+                currentLabels: model.journals.first(where: { $0.id == model.selectedJournalID })?
+                    .voiceLabels ?? [:],
+                onSave: { labels in await model.setCurrentJournalVoiceLabels(labels) })
             .foregroundStyle(Color.primary)
         }
     }

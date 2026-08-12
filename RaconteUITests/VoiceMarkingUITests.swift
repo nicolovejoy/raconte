@@ -92,25 +92,22 @@ final class VoiceMarkingUITests: XCTestCase {
             .firstMatch.exists, "the old bn id must not still be present")
 
         // Back exits the mode (system Back = Done, by design) and the detail screen
-        // re-renders. `EntryDetailView.refresh()` (verified via a scratch probe during
-        // this task, then removed) DOES pick up the new voice — `transcript.paragraphs`
-        // is confirmed non-nil/count 1 post-flip — but with a single, unlabelled
-        // (no journal configured) paragraph, iOS's accessibility tree merges the
-        // paragraph's own identifier/label (`detail.transcript.paragraph.0`, and its
-        // `accessibilityLabel` override) into the OUTER `detail.transcript.text`
-        // element, which XCUITest then exposes with an auto-derived label ("one two
-        // three") rather than the explicit "LN: …" override — so neither identifier
-        // is independently queryable here. This is a genuine, PRE-EXISTING gap in
-        // `EntryDetailView`'s voice-accessibility wiring (Task 2's own deferred minor:
-        // "detail-view label wiring is currently wholly unpinned"), not something
-        // Task 6 introduced or is in scope to fix — flagged for the gate. What this
-        // test asserts instead: the detail screen re-renders the transcript at all
-        // (proving the screen didn't wedge), and re-entering Mark Voices shows the
-        // flip survived the round trip through disk and both screens' reads agree.
+        // repaints with the new voice — VoiceOver's label carries it even with no
+        // journal labels configured (falls back to the uppercased voice id). Task 6
+        // review finding 2: with exactly one paragraph, this used to be unreachable —
+        // iOS's accessibility tree merged the paragraph's own identifier/label into the
+        // outer `detail.transcript.text` element — fixed in `EntryDetailView` via
+        // `.accessibilityElement(children: .combine)` on the paragraph's `Group`, which
+        // forces it to be its own independently-exposed element regardless of sibling
+        // count.
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        let textElement = app.descendants(matching: .any).matching(identifier: "detail.transcript.text").firstMatch
-        XCTAssertTrue(textElement.waitForExistence(timeout: 15), "the detail transcript never re-rendered")
+        let paragraph = app.descendants(matching: .any).matching(identifier: "detail.transcript.paragraph.0").firstMatch
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "the detail transcript paragraph never appeared")
+        XCTAssertTrue(paragraph.label.hasPrefix("LN"),
+                      "expected the detail paragraph's a11y label to begin \"LN\", got \(paragraph.label)")
 
+        // Round trip: re-entering Mark Voices shows the flip survived, and both
+        // screens' reads agree.
         openMarkVoices(app)
         waitUntil(15, "the flip did not survive the round trip through the detail screen") {
             app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.0.ln")

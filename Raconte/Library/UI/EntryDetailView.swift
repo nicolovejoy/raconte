@@ -450,17 +450,38 @@ struct EntryDetailView: View {
                             // common case now that labels are opt-in. Applied only when
                             // a voice is actually in force; an unattributed paragraph
                             // keeps its default accessibility text (its own prose).
+                            //
+                            // Task 6 review Important 2: this used to be `.accessibility
+                            // Label` on the inner `Text` conditionally, inside a `Group`
+                            // with no element boundary of its own. With exactly one
+                            // paragraph — the common case pre-Mark-Voices, and post-flip
+                            // whenever a paragraph merges into its neighbour's voice —
+                            // iOS's accessibility tree flattened the whole `Group` (and
+                            // its explicit label) into the OUTER `detail.transcript.text`
+                            // `VStack`, exposing an auto-derived label from the raw
+                            // prose instead: VoiceOver lost the voice distinction on
+                            // exactly the entries this comment promises it must not.
+                            // Fixed two ways together: `.accessibilityElement(children:
+                            // .combine)` forces this `Group` to be its own
+                            // independently-exposed element regardless of sibling count
+                            // (paired with `.contain` on the outer `VStack`, below, so it
+                            // stops treating a single child as mergeable into itself);
+                            // and the label is now set directly on the `Group` itself,
+                            // unconditionally, rather than conditionally on the inner
+                            // `Text` — `.combine`'s own label-concatenation heuristic
+                            // was observed (via a UI test) to derive its label from the
+                            // `Text`'s literal content rather than an explicit override
+                            // set on a descendant, so the override has to sit on the
+                            // element boundary itself to reliably survive.
                             Group {
-                                if let voice = paragraph.voice {
-                                    attributedParagraph(paragraph, voiceLabels: voiceLabels)
-                                        .accessibilityLabel(
-                                            "\(VoiceDisplay.accessibilityName(forVoice: voice, voiceLabels: voiceLabels)): \(paragraph.text)")
-                                } else {
-                                    attributedParagraph(paragraph, voiceLabels: voiceLabels)
-                                }
+                                attributedParagraph(paragraph, voiceLabels: voiceLabels)
                             }
                                 .font(.system(.body, design: .serif))
                                 .textSelection(.enabled)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel(paragraph.voice.map {
+                                    "\(VoiceDisplay.accessibilityName(forVoice: $0, voiceLabels: voiceLabels)): \(paragraph.text)"
+                                } ?? paragraph.text)
                                 .accessibilityIdentifier(paragraph.hasApproximateBoundary
                                     ? "detail.transcript.paragraph.\(index).approximate"
                                     : "detail.transcript.paragraph.\(index)")
@@ -475,6 +496,16 @@ struct EntryDetailView: View {
                         }
                     }
                 }
+                // Task 6 review Important 2, continued: `.accessibilityElement(children:
+                // .combine)` on each paragraph's `Group` (above) makes THAT view its own
+                // element, but with only one paragraph this outer `VStack` still had
+                // exactly one accessibility-bearing child and no boundary of its own —
+                // iOS kept flattening past the `Group`'s boundary and exposing this
+                // `VStack`'s identifier/auto-label instead. `.contain` tells the system
+                // this view is a CONTAINER of its children's own elements, never a
+                // candidate to be merged down into one itself, regardless of how many
+                // paragraphs there are.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("detail.transcript.text")
             }
 

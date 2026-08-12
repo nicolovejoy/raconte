@@ -1,7 +1,7 @@
 import Foundation
 
 /// The disk seam the "Mark voices" screen writes through (T7 Mark Voices, issue #56,
-/// Task 5). Mirrors `MarkerCorrectionStore`'s shape: the read is a pure passthrough to
+/// Task 5). The read is a pure passthrough to
 /// `EntryTranscript.voiceMarkingLayout`, writes are plain `async throws` passthroughs to
 /// `MarkerCorrectionWriter`'s Task 1 voice-carrying methods.
 @MainActor
@@ -15,7 +15,7 @@ protocol VoiceMarkingStore: AnyObject {
 /// The mark-voices screen's whole behaviour (T7 Mark Voices, issue #56, Task 5). Owner
 /// ruling: an explicit mode — tap a paragraph to flip its voice, drag a range of words
 /// to mark a range — WYSIWYG, Done exits. `VoiceMarkingView` is a thin binding over
-/// this, per `MarkerCorrectionModel`/`MarkerCorrectionView`'s own precedent.
+/// this, the same thin-binding-over-a-model precedent every mode screen in this app follows.
 ///
 /// `VoiceMarkingPlan` (Task 4) is the pure planner: it turns a gesture into an ordered
 /// list of `Command`s. This model's whole job is executing that plan through the store,
@@ -152,6 +152,14 @@ final class VoiceMarkingModel {
             errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
             await open()
             return
+        } catch MarkerCorrectionWriter.BoundaryAddError.noUsableBounds {
+            // Review Important 5 (carried from the deleted `MarkerCorrectionModel`):
+            // the store's boundary-add refuses the SAME "this word has no timed
+            // position" way `.notMarkable` does — same honest refusal copy, not the
+            // generic save-failure message.
+            errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
+            await open()
+            return
         } catch {
             errorMessage = "That couldn’t be saved. Try again."
             await open()
@@ -163,8 +171,8 @@ final class VoiceMarkingModel {
     /// "These words are the other voice." `first`/`last` are global span indices (the
     /// same `Token.id` space `rows` renders) — the UI restricts its drag gesture to
     /// placeable tokens, but `VoiceMarkingPlan.markRange` re-checks rather than trusting
-    /// that restriction, same "never trust the caller already enforced it" rule as
-    /// `MarkerCorrectionModel.addBoundary`.
+    /// that restriction, same "never trust the caller already enforced it" rule
+    /// `flipParagraph`/`RevisionHistoryModel.revert` also follow.
     func markRange(first: Int, last: Int, to voice: String) async {
         guard !isWriting, first <= last else { return }
         isWriting = true
@@ -175,6 +183,14 @@ final class VoiceMarkingModel {
                                                            hasAnyVoiceMarker: hasAnyVoiceMarker)
             try await execute(commands)
         } catch VoiceMarkingPlan.PlanError.notMarkable {
+            errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
+            await open()
+            return
+        } catch MarkerCorrectionWriter.BoundaryAddError.noUsableBounds {
+            // Review Important 5 (carried from the deleted `MarkerCorrectionModel`):
+            // the store's boundary-add refuses the SAME "this word has no timed
+            // position" way `.notMarkable` does — same honest refusal copy, not the
+            // generic save-failure message.
             errorMessage = MarkerCorrectionWriter.boundaryAddRejectionMessage()
             await open()
             return

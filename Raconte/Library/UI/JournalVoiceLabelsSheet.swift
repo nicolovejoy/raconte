@@ -63,8 +63,8 @@ struct JournalVoiceLabelsSheet: View {
             }
         }
         .onAppear {
-            mainLabel = currentLabels["bn"] ?? ""
-            alternativeLabel = currentLabels["ln"] ?? ""
+            mainLabel = currentLabels[VoiceDisplay.mainVoice] ?? ""
+            alternativeLabel = currentLabels[VoiceDisplay.other(VoiceDisplay.mainVoice)] ?? ""
         }
     }
 
@@ -74,8 +74,8 @@ struct JournalVoiceLabelsSheet: View {
         var labels: [String: String] = [:]
         let main = mainLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let alternative = alternativeLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !main.isEmpty { labels["bn"] = main }
-        if !alternative.isEmpty { labels["ln"] = alternative }
+        if !main.isEmpty { labels[VoiceDisplay.mainVoice] = main }
+        if !alternative.isEmpty { labels[VoiceDisplay.other(VoiceDisplay.mainVoice)] = alternative }
         return labels
     }
 }

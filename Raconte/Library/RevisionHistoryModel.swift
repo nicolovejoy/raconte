@@ -1,7 +1,7 @@
 import Foundation
 
 /// The disk seam the revision-history panel reads/writes through (T7 Task 8). Mirrors
-/// `MarkerCorrectionStore`'s shape: the read is the SAME `chainSnapshot` every other T7
+/// `VoiceMarkingStore`'s shape: the read is the SAME `chainSnapshot` every other T7
 /// screen already uses (no new read — see `EntryChainSnapshot.orderedChain`'s doc
 /// comment), and `revert` is a plain `async throws` passthrough to
 /// `TranscriptRevisionStore.revert` via `LibraryScreenModel`.
@@ -167,7 +167,7 @@ final class RevisionHistoryModel {
     /// cannot silently drift from what the store actually enforces on disk.
     ///
     /// `row.canRevert` gates the CALLER (the view disables the row), not this method —
-    /// mirrors `MarkerCorrectionModel.addBoundary`'s "never trust that the UI already
+    /// mirrors `VoiceMarkingModel.markRange`'s "never trust that the UI already
     /// enforced it" reasoning, and lets a test drive a disallowed revert without a
     /// SwiftUI harness.
     func revert(_ row: Row) async {
@@ -226,5 +226,5 @@ final class RevisionHistoryModel {
 
 /// The history panel reads/writes through this model, never straight to
 /// `TranscriptRevisionStore` — same one-store-instance-per-file reasoning as
-/// `TranscriptEditorStore`/`MarkerCorrectionStore`'s conformances.
+/// `TranscriptEditorStore`/`VoiceMarkingStore`'s conformances.
 extension LibraryScreenModel: RevisionHistoryStore {}

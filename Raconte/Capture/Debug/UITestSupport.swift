@@ -84,20 +84,39 @@ enum UITestEntrySeed {
 /// `unmarkedCaptureID` is a SECOND seeded entry, same three words, with NO `markers
 /// .jsonl` at all — the "voices unmarked" case (`testMarkVoicesOnAnUnmarkedEntryOffers
 /// MarkingAndWrites`), which `hasAnyVoiceMarker == false` and `governingVoice`'s
-/// gap-case rule both need a genuinely marker-free fixture to exercise.
+/// gap-case rule both need a genuinely marker-free fixture to exercise. `mergeCaptureID`
+/// is a THIRD, documented at its declaration below.
 enum UITestVoiceMarkingSeed {
     static let captureID = "01KYX77KK5QM15915EZBVXTQZ6"
     static let unmarkedCaptureID = "01KYX77KK5QM15915EZBVXTQZ2"
+    /// A THIRD seeded entry (gate-review fix #1, the drag-path UI test): six words,
+    /// two voices already declared (bn at word 0, ln at word 3) so opening the screen
+    /// shows two paragraphs — flipping paragraph 0 into paragraph 1's voice (ln) then
+    /// merges them into ONE block on reload, the shape needed to drag a range WITHIN a
+    /// merged block rather than a freshly-opened one. Tail digit `0` (not `1`/`2`, both
+    /// already used for the two 3-word fixtures below) sorts LAST among the three under
+    /// `LibraryScreenModel.mostRecentlyCaptured`'s captureID-descending tiebreak, so it
+    /// always lands at recent row 2 and never disturbs the existing row 0/1 assumptions.
+    static let mergeCaptureID = "01KYX77KK5QM15915EZBVXTQZ0"
     static let words: [(text: String, start: Int64, end: Int64)] = [
         ("one", 0, 10_000),
         ("two", 20_000, 30_000),
         ("three", 40_000, 50_000),
+    ]
+    static let mergeWords: [(text: String, start: Int64, end: Int64)] = [
+        ("one", 0, 10_000),
+        ("two", 20_000, 30_000),
+        ("three", 40_000, 50_000),
+        ("four", 60_000, 70_000),
+        ("five", 80_000, 90_000),
+        ("six", 100_000, 110_000),
     ]
 
     static func seedIfRequested(capturesRoot: URL) {
         guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_MARKER_ENTRY"] != nil else { return }
         seedMarked(capturesRoot: capturesRoot)
         seedUnmarked(capturesRoot: capturesRoot)
+        seedMerge(capturesRoot: capturesRoot)
     }
 
     private static func seedMarked(capturesRoot: URL) {
@@ -125,7 +144,30 @@ enum UITestVoiceMarkingSeed {
         // No markers.jsonl written at all — the .absent case.
     }
 
-    private static func writeSpans(captureDirectory: URL, revisionID: String) {
+    /// bn at word 0, ln at word 3 (`mergeWords`' index 3, "four") — two paragraphs
+    /// (words 0-2 bn, words 3-5 ln) already on open, so `testDragMarksARangeWithinAMerged
+    /// Block` can flip paragraph 0 into ln and get one 6-word merged block before ever
+    /// touching the drag gesture under test.
+    private static func seedMerge(capturesRoot: URL) {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: mergeCaptureID)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+
+        writeSpans(captureDirectory: captureDirectory, revisionID: "01KYX77KK5QM15915EZBVXTQZ8",
+                  words: mergeWords)
+
+        let writer = MarkerLogWriter(captureDirectory: captureDirectory)
+        try? writer.open()
+        try? writer.append(StructureMarker(seq: 0, frame: 0, kind: .voice,
+                                           voice: StructureMarker.Voice.bigNico))
+        try? writer.append(StructureMarker(seq: 1, frame: mergeWords[3].start, kind: .voice,
+                                           voice: StructureMarker.Voice.littleNico))
+        try? writer.close()
+    }
+
+    private static func writeSpans(captureDirectory: URL, revisionID: String,
+                                   words: [(text: String, start: Int64, end: Int64)] = words) {
         let spans = words.map { word in
             TranscriptSpan(text: word.text, anchor: .inherited, frameStart: word.start, frameEnd: word.end)
         }

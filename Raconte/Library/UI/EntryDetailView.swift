@@ -42,7 +42,7 @@ struct EntryDetailView: View {
     @State private var showingVoiceMarking = false
     @State private var voiceMarkingModel: VoiceMarkingModel
     /// The whole undo story (T7 Task 8, ruling Q1) — a separate pushed screen, same
-    /// "built once in init" reasoning as `editorModel`/`markerCorrectionModel` above.
+    /// "built once in init" reasoning as `editorModel`/`voiceMarkingModel` above.
     @State private var showingRevisionHistory = false
     @State private var revisionHistoryModel: RevisionHistoryModel
 

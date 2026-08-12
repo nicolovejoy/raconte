@@ -298,27 +298,6 @@ final class LibraryScreenModel {
         await rescan()
     }
 
-    // MARK: - Voice labels (T7 Mark Voices, issue #56)
-
-    /// Sets (or clears, via an empty dict) a journal's voice labels. Same shape as
-    /// `moveEntry`/`setBackdate`: the store call is the source of truth, `rescan`
-    /// republishes every item's `journal` (labels are read off `item.journal?.voiceLabels`
-    /// at render time, not copied per item), and a store failure — an unknown journal id,
-    /// an unreadable/undecodable registry — reports `false` without pretending the
-    /// labels took.
-    @discardableResult
-    func setJournalVoiceLabels(_ journalID: String, labels: [String: String]) async -> Bool {
-        let succeeded: Bool
-        do {
-            _ = try await journalStore.setVoiceLabels(id: journalID, labels: labels)
-            succeeded = true
-        } catch {
-            succeeded = false
-        }
-        await rescan()
-        return succeeded
-    }
-
     // MARK: - Trash (M3 T5)
 
     /// Soft-delete: stamp `trashedAt`. The entry leaves the library list and the recents

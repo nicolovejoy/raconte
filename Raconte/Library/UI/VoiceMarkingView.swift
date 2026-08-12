@@ -3,9 +3,9 @@ import SwiftUI
 /// T7 Mark Voices, issue #56, Task 6 — the explicit "Mark voices" mode (owner ruling:
 /// tap a paragraph to flip its voice, drag a range of words to mark it, WYSIWYG, Done
 /// exits via the system Back button — same "back-arrow = Done" convention every other
-/// mode screen in this app already uses). Thin binding over `VoiceMarkingModel`, per
-/// `MarkerCorrectionView`'s own precedent: no logic here beyond gesture wiring, which
-/// itself defers its math to `TokenSelection` (pure, unit-tested).
+/// mode screen in this app already uses). Thin binding over `VoiceMarkingModel`, the
+/// same precedent every mode screen in this app follows: no logic here beyond gesture
+/// wiring, which itself defers its math to `TokenSelection` (pure, unit-tested).
 ///
 /// Three behaviours this view must NOT "fix" — all pinned by Task 4/5 fixtures:
 /// 1. Flipping a paragraph into its neighbour's voice merges them into one block on
@@ -159,7 +159,8 @@ private struct VoiceMarkingParagraphBlock: View {
                         .background((liveRange?.contains(token.id) ?? false)
                                     ? Color.accentColor.opacity(0.25) : Color.clear)
                         .onGeometryChange(for: CGRect.self) { proxy in
-                            proxy.frame(in: .named(coordinateSpaceName))
+                            let name = coordinateSpaceName
+                            return proxy.frame(in: .named(name))
                         } action: { newRect in
                             if let index = frames.firstIndex(where: { $0.id == token.id }) {
                                 frames[index].rect = newRect
@@ -204,6 +205,17 @@ private struct VoiceMarkingParagraphBlock: View {
                 currentID = nil
 
                 if startToken == endToken {
+                    // A genuine drag through the margins (both endpoints miss every
+                    // token — `TokenSelection.tokenIndex` returns nil past the last
+                    // placeable rect, not just between tokens) must NOT be read as a
+                    // flip: only a drag that stays within a small radius of its start
+                    // is a tap. `contentShape(Rectangle())` still lets a stationary tap
+                    // ANYWHERE in the block's whitespace flip it (translation ~0).
+                    if startToken == nil, endToken == nil {
+                        let dx = value.translation.width, dy = value.translation.height
+                        let tapThreshold: CGFloat = 10
+                        guard (dx * dx + dy * dy) <= tapThreshold * tapThreshold else { return }
+                    }
                     Task { await model.flipParagraph(row.id) }
                     return
                 }

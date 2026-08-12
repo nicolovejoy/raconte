@@ -4,10 +4,11 @@ import XCTest
 /// simulator: tap a paragraph to flip its voice and see the detail screen render the
 /// change, on both an already-marked entry and one with no markers at all.
 ///
-/// Both fixtures come from `UITestVoiceMarkingSeed` (`RACONTE_UITEST_SEED_MARKER_ENTRY`,
+/// All three fixtures come from `UITestVoiceMarkingSeed` (`RACONTE_UITEST_SEED_MARKER_ENTRY`,
 /// same env gate the old marker-correction screen used — CI wiring untouched): the
 /// marked entry (`captureID`) opens a `bn` voice at frame 0, the unmarked entry
-/// (`unmarkedCaptureID`) has no `markers.jsonl` at all. `UITestEntrySeed`'s fixture is
+/// (`unmarkedCaptureID`) has no `markers.jsonl` at all, and `mergeCaptureID` (six words,
+/// two voices) exists for the drag test below. `UITestEntrySeed`'s fixture is
 /// deliberately `.none`-anchored (no frames), so it cannot exercise a real flip.
 final class VoiceMarkingUITests: XCTestCase {
 
@@ -113,6 +114,74 @@ final class VoiceMarkingUITests: XCTestCase {
             app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.0.ln")
                 .firstMatch.exists
         }
+
+        XCTAssertFalse(app.alerts["Couldn’t save"].exists)
+    }
+
+    /// Gate-review fix #1 — the frames-identity fix at `VoiceMarkingParagraphBlock`'s
+    /// `.id(row.tokens.map(\.id))` (forces SwiftUI to rebuild the block, and reset its
+    /// `@State frames` rects, whenever the token set at a row index changes) had ZERO
+    /// automated coverage: deleting that line broke nothing in 1176 unit + 2 UI tests,
+    /// because neither existing UI test ever drags — both only tap-to-flip a paragraph
+    /// that stays a single row for the whole test. This is the only path that can
+    /// observe stale `frames`: flip paragraph 0 (bn, words "one two three") into
+    /// paragraph 1's voice (ln, "four five six") to force a MERGE into one 6-word row —
+    /// the merge changes row 0's token set out from under any `@State` SwiftUI decides
+    /// to keep — then drag across a range INSIDE that merged row and confirm only the
+    /// dragged words changed voice. Fixture: `UITestVoiceMarkingSeed.mergeCaptureID`,
+    /// recent row 2 (its captureID tail sorts last of the three seeded entries).
+    func testDragMarksARangeWithinAMergedBlock() throws {
+        let app = launchApp()
+        openSeededEntry(app, row: 2)
+        openMarkVoices(app)
+
+        // Precondition: two paragraphs on open, bn then ln — checked BEFORE the flip,
+        // since the flip below is exactly what merges them into one.
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.1.ln")
+            .firstMatch.waitForExistence(timeout: 15), "precondition: paragraph 1 must already be ln")
+        tapParagraph(app, identifier: "voiceMarking.paragraph.0.bn")
+
+        // The tap just now flipped paragraph 0 from bn toward ln — paragraph 1 was
+        // ALREADY ln, so this merges them into one 6-word row rather than leaving two.
+        waitUntil(15, "flipping paragraph 0 into paragraph 1's voice never merged them into one row") {
+            let merged = app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.0.ln")
+                .firstMatch
+            return merged.exists
+                && !app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.1.ln")
+                    .firstMatch.exists
+        }
+        // Every token in the row is its OWN accessibility element sharing the block's
+        // identifier (`voiceMarking.paragraph.0.ln` × 6, one per word) — `.firstMatch`
+        // above is just "one", a ~30pt-wide element, so a coordinate drag confined to
+        // ITS bounds never leaves the first word and reads as a tap, not a range. Anchor
+        // the drag on two DISTINCT words by their own text instead — "three" (index 2,
+        // last word of the pre-merge paragraph 0) to "four" (index 3, first word of the
+        // pre-merge paragraph 1) — which by construction spans the merge seam.
+        let three = app.staticTexts["three"].firstMatch
+        let four = app.staticTexts["four"].firstMatch
+        XCTAssertTrue(three.waitForExistence(timeout: 15), "the merged row's \"three\" token never appeared")
+        XCTAssertTrue(four.exists, "the merged row's \"four\" token never appeared")
+
+        let start = three.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = four.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.3, thenDragTo: end)
+
+        let confirm = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Mark as'")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 15), "no confirmation dialog appeared after the drag")
+        press(confirm)
+
+        // Only the dragged range changed: the merged 6-word ln row must now be THREE
+        // rows — ln, bn (the drag), ln — never two (drag didn't register as a range)
+        // and never more than three (the drag bled past its own endpoints).
+        waitUntil(15, "the drag never produced a 3-row ln/bn/ln split") {
+            app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.0.ln").firstMatch.exists
+                && app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.1.bn")
+                    .firstMatch.exists
+                && app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.2.ln")
+                    .firstMatch.exists
+        }
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "voiceMarking.paragraph.3.ln")
+            .firstMatch.exists, "must be exactly 3 rows — a 4th would mean the drag bled onto more words")
 
         XCTAssertFalse(app.alerts["Couldn’t save"].exists)
     }

@@ -1048,6 +1048,96 @@ final class TranscriptEditorModelTests: XCTestCase {
         XCTFail("closeDraft never reached the gate", file: file, line: line)
     }
 
+    /// Polls until the gated real-store `closeDraft` has actually suspended.
+    private func waitUntilRealCloseIsGated(_ store: GatedCloseEditorStore,
+                                           file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<10_000 {
+            if store.isCloseGated { return }
+            await Task.yield()
+        }
+        XCTFail("closeDraft never reached the gate", file: file, line: line)
+    }
+
+    // MARK: - Gate B Critical 1: a keystroke landing DURING this session's own close
+
+    /// Gate B Critical 1 (data loss, probe-confirmed). `done()`'s close branch used to clear
+    /// `hasUnsavedChanges` UNCONDITIONALLY after `closeDraft` returned. `closeDraft` is a long
+    /// suspension (it decodes the whole chain before it mints), and the keyboard is still live
+    /// while the screen dismisses — autocorrect, an IME commit, dictation, or one more typed
+    /// character all land in `text` while it is parked. That character was not in the minted
+    /// revision, and clearing the flag erased the only record it existed: `done()` returned
+    /// `true`, and the next `open()` fell through to `snapshot.currentText` and overwrote the
+    /// owner's visible words.
+    ///
+    /// NOT the `sessionID` race — this is ONE session throughout, which is why the token guard
+    /// three lines above cannot help. `flush()` has had the symmetric guard all along
+    /// (`if storedText == pending { hasUnsavedChanges = false }`); only `done()` lacked it.
+    ///
+    /// Against the REAL store, so the assertion is the one that matters: the CHAIN ends up
+    /// containing what the owner saw. A fake could only prove the test's own arithmetic.
+    func testAKeystrokeArrivingDuringThisSessionsCloseReachesTheChain() async throws {
+        try await store().append(revision("R0", text: "hello world"), captureID: captureID)
+        let gated = GatedCloseEditorStore(liveModel())
+        let debounce = ManualDebounce()
+        let model = editor(gated, debounce: debounce)
+        await model.open()
+
+        model.text = "hello world A"
+        model.textChanged()
+
+        gated.gateCloseDraft = true
+        let exit = Task { await model.done() }
+        await waitUntilRealCloseIsGated(gated)
+
+        // Autocorrect/IME/dictation commits one more character while the close is parked.
+        model.text = "hello world AB"
+        model.textChanged()
+
+        gated.releaseClose()
+        let saved = await exit.value
+
+        XCTAssertTrue(saved, "nothing failed — the close succeeded twice")
+        guard let current = currentRevision() else { return XCTFail("no current revision") }
+        XCTAssertEqual(TranscriptChain.plainText(current), "hello world AB",
+                       "the character typed during the close must be in the chain, not erased "
+                       + "by an unconditional hasUnsavedChanges = false")
+        XCTAssertFalse(model.hasUnsavedChanges, "everything visible really is on disk now")
+
+        await model.open()
+        XCTAssertEqual(model.text, "hello world AB",
+                       "re-entry must not revert to a current that predates the last keystroke")
+    }
+
+    /// The same race with the keystroke arriving through the TEXT BINDING ALONE — no
+    /// `textChanged()`, so `hasUnsavedChanges` is still `false` from the flush that just
+    /// succeeded. Pins that the fix is the TEXT comparison (`storedText != pending`), not a
+    /// flag check: a guard written as `if hasUnsavedChanges { ... }` would pass the test above
+    /// and lose the words here. Reachable on device because `.onChange(of:)` delivery is not
+    /// synchronous with the binding's write.
+    func testALateKeystrokeThatNeverArmedTheDebounceStillReachesTheChain() async throws {
+        try await store().append(revision("R0", text: "hello world"), captureID: captureID)
+        let gated = GatedCloseEditorStore(liveModel())
+        let model = editor(gated)
+        await model.open()
+
+        model.text = "hello world A"
+        model.textChanged()
+
+        gated.gateCloseDraft = true
+        let exit = Task { await model.done() }
+        await waitUntilRealCloseIsGated(gated)
+
+        model.text = "hello world AB"          // binding only — no textChanged()
+        XCTAssertFalse(model.hasUnsavedChanges, "precondition: the flag says everything is saved")
+
+        gated.releaseClose()
+        let saved = await exit.value
+
+        XCTAssertTrue(saved)
+        guard let current = currentRevision() else { return XCTFail("no current revision") }
+        XCTAssertEqual(TranscriptChain.plainText(current), "hello world AB")
+    }
+
     /// Gate A Critical 1, reproduced against the real store. The pop path discarded
     /// `finishIfNeeded()`'s Bool, so a save that refused was completely silent: the screen has
     /// already popped, so `.failed` can never render, and the only copy of the words was
@@ -1328,6 +1418,66 @@ final class ManualDebounce: EditorDebounce {
 /// A store the test drives directly, for the disagreements disk cannot express: a
 /// `chainSnapshot` that says `.editable` while `writeDraft`/`closeDraft` refuse.
 @MainActor
+/// Wraps a REAL store (`LibraryScreenModel`) and suspends the NEXT `closeDraft` at its
+/// entry until `releaseClose()`. Everything else passes straight through, so the chain on
+/// disk is minted by the real splice — which is the whole point: the Gate B Critical 1
+/// assertion is "the chain ends up containing what the owner saw", and only the real store
+/// can answer that.
+///
+/// Not a mode on `FakeEditorStore`: that type answers from an in-memory snapshot it never
+/// mints into, so `currentText` after a close is whatever the test set, not what the store
+/// produced — it cannot distinguish a re-flush that worked from one that did nothing.
+final class GatedCloseEditorStore: TranscriptEditorStore {
+    private let wrapped: any TranscriptEditorStore
+
+    /// Suspends the NEXT `closeDraft` only — one-shot, so a second close (the re-flush's)
+    /// runs through unimpeded, exactly as it would on device where the window is a real
+    /// suspension the owner's next keystroke happens to fall inside.
+    var gateCloseDraft = false
+    private var closeGate: CheckedContinuation<Void, Never>?
+    var isCloseGated: Bool { closeGate != nil }
+
+    private(set) var closeDraftCalls: [DraftCloseReason] = []
+    private(set) var writeDraftCalls: [String] = []
+
+    init(_ wrapped: any TranscriptEditorStore) { self.wrapped = wrapped }
+
+    func releaseClose() {
+        let gate = closeGate
+        closeGate = nil
+        gate?.resume()
+    }
+
+    func chainSnapshot(for captureID: String) async -> EntryChainSnapshot {
+        await wrapped.chainSnapshot(for: captureID)
+    }
+
+    func machineTranscript(for captureID: String) async -> String? {
+        await wrapped.machineTranscript(for: captureID)
+    }
+
+    func openDraft(for captureID: String) async -> TranscriptDraft? {
+        await wrapped.openDraft(for: captureID)
+    }
+
+    func writeDraft(captureID: String, text: String, now: Date) async throws {
+        writeDraftCalls.append(text)
+        try await wrapped.writeDraft(captureID: captureID, text: text, now: now)
+    }
+
+    @discardableResult
+    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
+        closeDraftCalls.append(reason)
+        if gateCloseDraft {
+            gateCloseDraft = false
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                closeGate = continuation
+            }
+        }
+        return try await wrapped.closeDraft(captureID: captureID, reason: reason, now: now)
+    }
+}
+
 final class FakeEditorStore: TranscriptEditorStore {
     var snapshot: EntryChainSnapshot
     var machineTranscriptText: String?

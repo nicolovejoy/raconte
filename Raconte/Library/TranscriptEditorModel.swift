@@ -398,9 +398,67 @@ final class TranscriptEditorModel {
         debounce.cancel()
         guard isEditable else { return true }
 
-        // Gated on THIS flush's own result, never on `state` — see `flush()`. A flush that
-        // genuinely failed still blocks the close: "retryable" must never become "closes
-        // over a draft that never saved".
+        guard await flushBeforeClose(session: session) else { return false }
+
+        // Gate B Critical 1 (data loss). `closeDraft` is a LONG suspension — it decodes the
+        // whole chain before it mints — and the keyboard is still live while the screen
+        // dismisses: autocorrect, an IME commit, dictation, or one more typed character all
+        // land in `storedText` while this is parked. That character is not in the revision the
+        // close just minted, and the old code then cleared `hasUnsavedChanges`
+        // UNCONDITIONALLY, erasing the only record it existed — `done()` returned `true` and
+        // the next `open()` fell through to `snapshot.currentText`, overwriting the owner's
+        // visible words. This is ONE session throughout, so the `sessionID` token below does
+        // not help; `flush()` has had the symmetric text comparison all along (:368).
+        //
+        // The response is a RE-FLUSH, not merely "leave the flag true": the detail screen
+        // renders the canonical chain, not `draft.json`, so a draft left open would show the
+        // owner a transcript missing their last keystroke until the 90 s `.recovered` close
+        // happened to run. Writing it and closing again puts what they saw INTO the chain.
+        // A second revision for one edit is honest here — the two revisions genuinely hold
+        // different text, unlike the double-close `finishIfNeeded` exists to prevent.
+        //
+        // Bounded by `maxCloseRounds`. If text somehow diverges on the last round too, the
+        // loop exits having just written a fresh draft: the words are durable on disk, the
+        // 90 s rule mints them, and `open()`'s unsaved-text preservation covers re-entry.
+        // Unbounded retrying is the worse failure — it would hold the screen open forever.
+        for _ in 0..<Self.maxCloseRounds {
+            let pending = storedText
+            do {
+                _ = try await store.closeDraft(captureID: captureID, reason: .sessionEnd, now: clock())
+            } catch {
+                guard sessionID == session else { return false }
+                let message = Self.saveFailureMessage(error)
+                state = .failed(message)
+                unreportedSaveFailure = message
+                return false
+            }
+            guard sessionID == session else { return true }
+            // The draft this session owned is gone either way — the next write opens a fresh
+            // one, re-snapshotting `parentID` off the revision the close just minted.
+            sessionDraftOpenedAt = nil
+            guard storedText != pending else {
+                hasUnsavedChanges = false
+                return true
+            }
+            // Deliberately set from the TEXT comparison, not read from the flag: a keystroke
+            // that arrived through the binding before `.onChange` delivered `textChanged()`
+            // leaves the flag `false` while the words are genuinely unsaved.
+            hasUnsavedChanges = true
+            guard await flushBeforeClose(session: session) else { return false }
+        }
+        return true
+    }
+
+    /// At most this many `closeDraft` rounds per `done()`. Two: one for the ordinary case, one
+    /// for a keystroke that landed inside the first close. A keystroke landing inside the
+    /// SECOND close as well is not a case a human hand can produce, and the fallback there
+    /// (durable draft + the 90 s close) loses nothing.
+    private static let maxCloseRounds = 2
+
+    /// `flush()` plus the exit-path bookkeeping a failure needs. Gated on THIS flush's own
+    /// result, never on `state` — see `flush()`. A flush that genuinely failed still blocks
+    /// the close: "retryable" must never become "closes over a draft that never saved".
+    private func flushBeforeClose(session: Int) async -> Bool {
         guard await flush() else {
             guard sessionID == session else { return false }
             unreportedSaveFailure = saveFailureReason ?? "The edit couldn’t be saved."
@@ -414,20 +472,7 @@ final class TranscriptEditorModel {
             debounce.cancel()
             return false
         }
-
-        do {
-            _ = try await store.closeDraft(captureID: captureID, reason: .sessionEnd, now: clock())
-            guard sessionID == session else { return true }
-            hasUnsavedChanges = false
-            sessionDraftOpenedAt = nil
-            return true
-        } catch {
-            guard sessionID == session else { return false }
-            let message = Self.saveFailureMessage(error)
-            state = .failed(message)
-            unreportedSaveFailure = message
-            return false
-        }
+        return true
     }
 
     /// "Navigating away IS Done" (ruling Q1), made literal — the pop path, taken by system

@@ -18,7 +18,8 @@ import Foundation
 /// append immediately follows the open within the SAME `appendOne` call, so there is
 /// no caller-visible window where an empty file sits unattended; and (2) in every
 /// path this writer is actually reached through
-/// (`MarkerCorrectionModel`/`MarkerCorrectionView`), a `retract`/`correctVoice`
+/// (`VoiceMarkingModel`/`VoiceMarkingView`, successors to the deleted marker-correction
+/// screen), a `retract`/`correctVoice`
 /// requires an ALREADY-rendered boundary row (which only exists if `markers.jsonl`
 /// is already present) and `addBoundary` requires a readable `current` revision
 /// (which means `transcript/canonical-N.json` already exists) — so

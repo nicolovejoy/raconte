@@ -9,8 +9,8 @@ import XCTest
 /// REAL raw `StructureMarker` records and re-derives its `voiceMarkingLayout` from them
 /// on every call via the real `MarkerCorrections`/`TranscriptAttribution` pipeline —
 /// never a synthetic answer that only records "a write happened" — so a second `open()`
-/// genuinely observes the fold, exactly like `MarkerCorrectionModelTests`' fake does for
-/// retract/correct/add.
+/// genuinely observes the fold, the same real-pipeline-fake discipline this codebase's
+/// other store-fake tests all follow.
 @MainActor
 final class VoiceMarkingModelTests: XCTestCase {
 
@@ -191,6 +191,29 @@ final class VoiceMarkingModelTests: XCTestCase {
                        "never the pre-gesture state, never the fully-flipped state")
     }
 
+    /// Gate-review fix (Important 5): the store's `addOpeningVoice`/`addVoiceBoundary`
+    /// can throw `.noUsableBounds` even after `VoiceMarkingPlan` accepted the gesture
+    /// (the plan validates against the SNAPSHOT it read; the write races real disk
+    /// state) — same "this word has no timed position" condition `.notMarkable`
+    /// refuses up front. The model must map it to the SAME honest rejection copy,
+    /// not the generic "couldn't be saved" catch-all a plain `Error` gets.
+    func testStoreThrownNoUsableBoundsSurfacesTheSameHonestRejectionMessage() async {
+        let store = FakeVoiceMarkingStore()
+        store.spans = words(6)
+        store.records = [StructureMarker(seq: 0, frame: 20_000, kind: .paragraph)]
+        store.failOnCallNumber = 1
+        store.failWithNoUsableBounds = true
+
+        let model = model(store)
+        await model.open()
+
+        await model.flipParagraph(1)
+
+        XCTAssertEqual(model.errorMessage, MarkerCorrectionWriter.boundaryAddRejectionMessage(),
+                        "a .noUsableBounds throw from the store must read as the same honest " +
+                        "refusal .notMarkable gets, not the generic save-failure message")
+    }
+
     // MARK: - .notMarkable refusal (constraint 2)
 
     /// A paragraph with no placeable span at all cannot anchor a flip —
@@ -304,7 +327,8 @@ final class VoiceMarkingModelTests: XCTestCase {
 }
 
 /// Records every call made against it so tests can assert on WHAT was written AND in
-/// what ORDER — mirrors `FakeMarkerCorrectionStore`'s role. Re-derives
+/// what ORDER — the same real-pipeline fake role `FakeRevisionHistoryStore`'s doc
+/// describes. Re-derives
 /// `voiceMarkingLayout` from real `records` through the real
 /// `MarkerCorrections.effectiveMarkers` + `TranscriptAttribution.attribute(spans:
 /// snapped:)` pipeline on every call (never a canned answer), so a second `open()`
@@ -335,6 +359,11 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
     /// them) — set to make the Nth write throw, everything before it succeeds and
     /// mutates `records` for real, everything after it never runs.
     var failOnCallNumber: Int?
+    /// When set alongside `failOnCallNumber`, the Nth write throws the real store's
+    /// `.noUsableBounds` refusal instead of the generic `writeFailed` — lets a test
+    /// distinguish the model's honest-refusal mapping (Review Important 5) from its
+    /// generic "couldn't be saved" catch-all.
+    var failWithNoUsableBounds = false
     private var callCount = 0
 
     /// Suspends the FIRST store write (across either method) on a real continuation
@@ -384,7 +413,10 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
         await maybeHold()
         writeLog.append(.boundary(spanIndex: spanIndex, voice: voice))
         callCount += 1
-        if failOnCallNumber == callCount { throw FakeVoiceMarkingStoreError.writeFailed }
+        if failOnCallNumber == callCount {
+            if failWithNoUsableBounds { throw MarkerCorrectionWriter.BoundaryAddError.noUsableBounds }
+            throw FakeVoiceMarkingStoreError.writeFailed
+        }
         let frame = spans[spanIndex].frameStart ?? 0
         records.append(StructureMarker(seq: nextSeq(), frame: frame, kind: .correctionBoundaryAdd, voice: voice))
         return frame
@@ -394,7 +426,10 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
         await maybeHold()
         writeLog.append(.opener(voice: voice))
         callCount += 1
-        if failOnCallNumber == callCount { throw FakeVoiceMarkingStoreError.writeFailed }
+        if failOnCallNumber == callCount {
+            if failWithNoUsableBounds { throw MarkerCorrectionWriter.BoundaryAddError.noUsableBounds }
+            throw FakeVoiceMarkingStoreError.writeFailed
+        }
         records.append(StructureMarker(seq: nextSeq(), frame: 0, kind: .correctionBoundaryAdd, voice: voice))
     }
 }

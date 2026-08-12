@@ -58,6 +58,13 @@ sharing infra (future: export one entry as static HTML).
 
 ## Milestones (build order is the risk management)
 
+**Status (2026-08-11) — this list is the original plan of record and is not kept current
+line-by-line; [docs/overview.md](overview.md) is.** M1 shipped. M2's live-transcript half
+shipped; its "editable canonical transcript" half is the T6 revision-chain store (shipped,
+PR #45 merged) plus the T7 editor built on top of it (branch `t7/editor-ui`, Gate B + PR
+still pending — see overview.md §5). M3 shipped (journals/library/trash; FTS5 search still
+pending, folded into M5 below rather than M3 as originally scoped). M4/M5 not started.
+
 1. **Indestructible local capture** — capture screen, AVAudioEngine, background mode, PCM
    segments, state machine, restart recovery, playback. NO transcription, NO sync, NO
    folders. Paranoid test protocol: lock screen, switch apps, pull headphones, Bluetooth,

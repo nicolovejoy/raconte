@@ -204,6 +204,67 @@ final class MarkerCorrectionsTests: XCTestCase {
                       "resolution is order-independent regardless of the add carrying a voice")
     }
 
+    // MARK: - Review Important 1 (Task 1 fix): .correctionVoice vs. a voice-carrying
+    // add at the same frame — precedence is "later record wins, by seq" (controller
+    // ruling, plan's D3 principle applied uniformly), never plain frame-match alone.
+    // A voice-carrying add synthesizes a `.voice` marker that a frame-keyed
+    // `.correctionVoice` can now collide with — frame 0 makes the collision a
+    // certainty, since `addOpeningVoice` always writes frame 0. The override must
+    // only apply when the correction's OWN seq is greater than the marker's.
+
+    /// An older `.correctionVoice` at a frame must NOT override a NEWER voice-carrying
+    /// add at that same frame — the add is the record written later and must win.
+    func testNewerVoiceCarryingAddOutranksAnOlderVoiceCorrectionAtTheSameFrame() throws {
+        let raw: [StructureMarker] = [
+            StructureMarker(seq: 0, frame: 0, kind: .correctionVoice, voice: "bn"),
+            StructureMarker(seq: 1, frame: 0, kind: .correctionBoundaryAdd, voice: "ln"),
+        ]
+
+        let effective = MarkerCorrections.effectiveMarkers(raw)
+
+        XCTAssertEqual(effective.count, 1)
+        let marker = try XCTUnwrap(effective.first)
+        XCTAssertEqual(marker.marker.kind, .voice)
+        XCTAssertEqual(marker.marker.voice, "ln",
+                       "the newer add's own voice must survive — an older correction at the same frame is stale")
+    }
+
+    /// A newer `.correctionVoice` at a frame DOES override an older voice-carrying add
+    /// at that same frame — the correction is the record written later and must win,
+    /// exactly the same rule as the test above with the seqs swapped.
+    func testNewerVoiceCorrectionOutranksAnOlderVoiceCarryingAddAtTheSameFrame() throws {
+        let raw: [StructureMarker] = [
+            StructureMarker(seq: 0, frame: 0, kind: .correctionBoundaryAdd, voice: "ln"),
+            StructureMarker(seq: 1, frame: 0, kind: .correctionVoice, voice: "bn"),
+        ]
+
+        let effective = MarkerCorrections.effectiveMarkers(raw)
+
+        XCTAssertEqual(effective.count, 1)
+        let marker = try XCTUnwrap(effective.first)
+        XCTAssertEqual(marker.marker.kind, .voice, "still synthesized .voice — the override changes voice, not kind")
+        XCTAssertEqual(marker.marker.voice, "bn", "the newer correction wins over the older add's own voice")
+    }
+
+    /// Existing behavior, pinned so the seq-precedence refactor cannot regress it: a
+    /// raw `.voice` tap followed by a later `.correctionVoice` at its frame is
+    /// corrected — this is the ordinary "fix a mis-heard voice at an existing
+    /// boundary" case (brief case 2) the fold has supported since Task 6.
+    func testLaterVoiceCorrectionStillOverridesAnEarlierRawVoiceTap() throws {
+        let raw: [StructureMarker] = [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn"),
+            StructureMarker(seq: 1, frame: 0, kind: .correctionVoice, voice: "ln"),
+        ]
+
+        let effective = MarkerCorrections.effectiveMarkers(raw)
+
+        XCTAssertEqual(effective.count, 1)
+        let marker = try XCTUnwrap(effective.first)
+        XCTAssertEqual(marker.marker.kind, .voice)
+        XCTAssertEqual(marker.marker.voice, "ln", "a later correction still overrides an earlier raw tap's voice")
+        XCTAssertFalse(marker.isExact, "the marker is still the raw tap's own frame — a correction only changes voice")
+    }
+
     // MARK: - 6.4b: boundary ADD by picked word — MarkerCorrectionWriter
 
     private var capturesRoot: URL!

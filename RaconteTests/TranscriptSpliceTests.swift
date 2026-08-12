@@ -82,6 +82,252 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(result[0].frameEnd, 20, "the fragment's frameEnd must be the PARENT's own, not a sub-range")
     }
 
+    // MARK: - T7 Task 6, #37: typed-word correction (out-of-vocab retype)
+
+    /// #37's real scenario, in issue #38's own words: "spoken 'LN' transcribes as
+    /// 'ellen' every time" — lowercase, mid-sentence, not the capitalized name. The
+    /// owner retypes it in the editor. This is what Task 4's splice already gives #37
+    /// for free — the acceptance test the brief asks for.
+    ///
+    /// **A premise check that mattered:** a capitalized "Ellen" -> "LN" pair shares NO
+    /// characters at all (character-level Myers diff, case-sensitive), so the whole
+    /// "Ellen" span would be wholly removed and "LN" would land via the BRAND-NEW-TEXT
+    /// path (`TranscriptSplice.swift`'s `.insertion` case) — a zero-length `.inherited`
+    /// POINT at the preceding span's end, not the replaced span's bounds at all. Probed
+    /// directly (`target.difference(from: source)`) before trusting either premise. The
+    /// ACTUAL scenario is lowercase — "ellen" and "ln" share their `l` and `n` — so the
+    /// diff finds a genuine two-character survivor (`ln`) inside the old five-character
+    /// run, which is exactly what makes this a TOUCHED span (F17's path), not a wholesale
+    /// replacement: the retyped word must land as an `.inherited` span over the touched
+    /// SPAN's own FULL parent bounds — not `.none` (the anchor would be lost entirely)
+    /// and not a synthesized sub-range (claiming more precision than the edit has;
+    /// nobody re-timed "ln" against the audio).
+    func testRetypingAnOutOfVocabWordProducesInheritedOverTheFullReplacedSpanBounds() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello ln said")
+
+        XCTAssertEqual(result, [
+            exact("hello", 0, 10, sourceRevisionID: parentID),
+            TranscriptSpan(text: "ln", anchor: .inherited, frameStart: 10, frameEnd: 20,
+                           sourceRevisionID: parentID),
+            exact("said", 20, 30, sourceRevisionID: parentID),
+        ])
+
+        let corrected = result[1]
+        XCTAssertEqual(corrected.text, "ln")
+        XCTAssertEqual(corrected.anchor, .inherited, "never .none — the touched span's provenance is kept")
+        XCTAssertEqual(corrected.frameStart, 10, "the TOUCHED span's own start, not a scrubbed or synthesized time")
+        XCTAssertEqual(corrected.frameEnd, 20, "the TOUCHED span's own end — the full bounds, never a sub-range")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello ln said")
+    }
+
+    /// **Splice-inherit ruling (design §16.5, owner 2026-08-11 — Task 9b).** The REAL
+    /// #37/#38 retype is the CAPITALIZED "LN" — how the owner actually writes the voice
+    /// name in prose (`StructureMarker.Voice.littleNico` is the lowercase stored ID).
+    /// At that casing, "Ellen" and "LN" share ZERO characters (case-sensitive Myers
+    /// diff), so this does NOT take F17's touched-span path — it takes the
+    /// brand-new-text `.insertion` path instead. This test used to pin the OLD
+    /// behavior (a zero-length `.inherited` point at the preceding span's end, the
+    /// replaced span's own `[10,20)` bounds discarded entirely) as a named,
+    /// deliberate gap awaiting an owner ruling on whether a wholesale replacement
+    /// should instead inherit the replaced span's own bounds.
+    ///
+    /// **The ruling landed 2026-08-11: it does.** The retyped word IS the heard word,
+    /// corrected — a zero-length anchor at the preceding span's end asserted something
+    /// untrue about where the word lives in the audio. Flipped here to pin the FIX:
+    /// running this test BEFORE the `TranscriptSplice` change (git stash the source
+    /// edit, keep this test) fails with `frameStart == frameEnd == 10` and no span
+    /// covering `[10,20)` — exactly the old assertions this test used to make. That
+    /// failure is Task 9b's RED evidence.
+    func testWholesaleZeroOverlapReplacementInheritsTheReplacedSpansFrames() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello LN said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello LN said")
+        let retyped = try? XCTUnwrap(result.first { $0.text == "LN" })
+        let corrected = retyped ?? TranscriptSpan(text: "MISSING", anchor: .none)
+        XCTAssertEqual(corrected.anchor, .inherited, "never .none — the replaced span's provenance is kept")
+        XCTAssertEqual(corrected.frameStart, 10,
+                       "inherits the REPLACED span's own start, not a zero-length point at some other span's end")
+        XCTAssertEqual(corrected.frameEnd, 20,
+                       "inherits the REPLACED span's own end — real bounds, not a point")
+        XCTAssertNotEqual(corrected.frameStart, corrected.frameEnd,
+                          "must be a real interval, not degenerately zero-length")
+        XCTAssertEqual(corrected.sourceRevisionID, parentID,
+                       "resolved explicitly, same rule as every other borrowed span")
+
+        // Task 5's placeability rule (TranscriptAttribution.isPlaceableSpan) requires
+        // usable, non-zero-length bounds — the whole point of the ruling is that "LN"
+        // can now anchor a 6.4b word-anchored boundary-add and start a paragraph.
+        XCTAssertTrue(TranscriptAttribution.isPlaceableSpan(corrected),
+                      "the corrected word must be placeable now that it carries real bounds")
+    }
+
+    /// Mutation guard (b): an implementation that grabs the PRECEDING span's frames
+    /// instead of the REPLACED span's own would still produce a non-zero-length
+    /// `.inherited` span and could slip past a looser assertion. "hello" is [0,10] and
+    /// "Ellen" is [10,20] — deliberately different bounds so the two are
+    /// distinguishable; this test fails if the wrong span's frames are inherited.
+    func testWholesaleReplacementInheritsTheReplacedSpanNotThePrecedingOne() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello LN said")
+        let corrected = try? XCTUnwrap(result.first { $0.text == "LN" })
+        XCTAssertEqual(corrected?.frameStart, 10, "the REPLACED span's [10,20) start, not the preceding span's [0,10) start")
+        XCTAssertEqual(corrected?.frameEnd, 20, "the REPLACED span's [10,20) end, not the preceding span's [0,10) end")
+        XCTAssertNotEqual(corrected?.frameStart, 0, "must not be the preceding span's start")
+    }
+
+    /// The replaced span need not have a preceding neighbour at all — a leading
+    /// wholesale replacement still inherits its own bounds rather than falling back to
+    /// `.none` for lack of a `lastUsableFrameEnd` to borrow.
+    func testLeadingWholesaleReplacementInheritsItsOwnBoundsWithNoPrecedingSpan() {
+        let p = parent([
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "LN said")
+        let corrected = try? XCTUnwrap(result.first { $0.text == "LN" })
+        XCTAssertEqual(corrected?.anchor, .inherited)
+        XCTAssertEqual(corrected?.frameStart, 10)
+        XCTAssertEqual(corrected?.frameEnd, 20)
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "LN said")
+    }
+
+    /// Review Important 2 (T7 Task 9b): the wholesale tag can fire on a REPLACED span
+    /// that itself has no usable bounds (e.g. an unattached machine span, or one
+    /// already degraded to `.none` by an earlier edit). There is nothing to inherit —
+    /// falling through to the PRECEDING span's `frameEnd` would anchor the correction
+    /// under a DIFFERENT word's provenance, the exact untruth §16.5 exists to remove.
+    /// Same principle as the sibling touched-span rule two cases above
+    /// (`testEditingAnUnanchoredSpanProducesNoneFragmentsNotFabricatedBounds`): no
+    /// usable bounds means `.none`, nil source — never borrowed from a neighbour.
+    func testWholesaleReplacementOfAnUnanchoredSpanIsNoneNotBorrowedFromThePrecedingSpan() {
+        let p = parent([
+            exact("hello", 0, 10),
+            TranscriptSpan(text: "Ellen", anchor: .none),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello LN said")
+        let retyped = try? XCTUnwrap(result.first { $0.text == "LN" })
+        let corrected = retyped ?? TranscriptSpan(text: "MISSING", anchor: .exact, frameStart: -1, frameEnd: -1)
+        XCTAssertEqual(corrected.anchor, .none, "nothing to inherit — the replaced span itself had no usable bounds")
+        XCTAssertNil(corrected.frameStart, "must not borrow the PRECEDING span's frameEnd (10)")
+        XCTAssertNil(corrected.frameEnd)
+        XCTAssertNil(corrected.sourceRevisionID, "must not borrow the preceding span's provenance")
+        XCTAssertFalse(TranscriptAttribution.isPlaceableSpan(corrected),
+                       "a span with no usable bounds must never be placeable")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello LN said")
+    }
+
+    // MARK: - Gate B Important 1: what the wholesale-replacement rule must NOT swallow
+    //
+    // §16.5's inherit rule is scoped to ONE retyped word: a run of removed characters
+    // covering ALL of exactly one span, immediately followed by newly typed text. Every
+    // qualifying clause had a positive test and NO negative one — Gate B loosened
+    // `pendingCharsSeen == parentSpans[spanIndex].text.count` to `>= 1` and all 1116 tests
+    // still passed, which is the §16.5 untruth generalized: a partial-span typo fix would
+    // silently claim the whole word's audio. One negative fixture per clause below.
+
+    /// (a) PARTIAL-span replacement — the loosening Gate B actually mutated in.
+    /// "Ellen" [10,20) is the leading span and only its first characters are replaced
+    /// (`XYZlen`); the typed text is NOT the heard word corrected, so it may not claim
+    /// [10,20).
+    ///
+    /// The leading position is what makes the two behaviours distinguishable at all: a
+    /// touched span's surviving fragment carries the PARENT'S FULL bounds (F17) and sits
+    /// immediately beside the insertion with no separator, so `combine` folds them into one
+    /// span — and the union of "point at the last usable end" with "full parent bounds" is
+    /// just the full parent bounds again, identical to the wrong answer. With nothing
+    /// anchored BEFORE it the insertion is `.none` (nothing to borrow), and `forcedMerge`
+    /// with a `.none` side is `.none`, so the frames the mutation fabricates show up as the
+    /// difference between `.none` and `.inherited [10,20)`.
+    func testPartialSpanReplacementNeverInheritsTheWholeSpansFrames() {
+        let p = parent([
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "XYZlen said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "XYZlen said")
+        guard let edited = result.first else { return XCTFail("no output spans") }
+        XCTAssertEqual(edited.text, "XYZlen")
+        XCTAssertEqual(edited.anchor, .none,
+                       "a partial replacement is not the heard word corrected — it may not "
+                       + "inherit the replaced span's measurement")
+        XCTAssertNil(edited.frameStart, "must not claim the replaced span's [10,20)")
+        XCTAssertNil(edited.frameEnd)
+        XCTAssertFalse(TranscriptAttribution.isPlaceableSpan(edited),
+                       "partially retyped text must not become placeable off frames nobody measured")
+    }
+
+    /// (b) A replacement that eats the join-SEPARATOR too (the taint rule). Deleting the
+    /// space before "Ellen" and retyping the word merges two things at once; §16.5 covers
+    /// one retyped word with its spacing intact, not a merge across a deleted boundary. The
+    /// typed "LN" stays an ordinary insertion — a zero-length point at the last usable end
+    /// (10, `hello`'s) — so the merged output ends at 10 and never stretches to "Ellen"'s
+    /// [10,20) end.
+    func testReplacementAcrossADeletedSeparatorNeverInheritsTheReplacedSpansFrames() {
+        let p = parent([
+            exact("hello", 0, 10),
+            exact("Ellen", 10, 20),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "helloLN said")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "helloLN said")
+        guard let merged = result.first(where: { $0.text.contains("LN") }) else {
+            return XCTFail("no span carries the retyped text")
+        }
+        XCTAssertEqual(merged.frameEnd, 10,
+                       "the typed text anchors as a point at the last usable end, so the merged "
+                       + "span still ends where 'hello' did")
+        XCTAssertNotEqual(merged.frameEnd, 20,
+                          "must not stretch to the replaced span's end — the deleted separator "
+                          + "taints the run, and this is a merge, not a corrected word")
+    }
+
+    /// (c) A removal run spanning TWO spans. Deleting "bravo delta" and typing "XY" is not
+    /// a corrected word either, and the typed text must inherit NEITHER span's bounds — it
+    /// lands as an ordinary point at "alpha"'s end.
+    ///
+    /// **Two independent defenses, measured (Gate B fix wave).** `TranscriptText.join` puts
+    /// a separator between EVERY pair of non-empty spans, so a removal run that reaches a
+    /// second span has always crossed a separator first — the taint rule and the explicit
+    /// two-span disqualification (`TranscriptSplice.swift`'s `pendingSpan == spanIndex`
+    /// else-branch) BOTH cover this shape, and either alone is sufficient. Disabling just
+    /// one leaves this test green in both directions (measured, one mutation at a time);
+    /// disabling BOTH makes it fail here. So this fixture pins the pair, and neither branch
+    /// can be deleted along with the other without a red test.
+    func testARemovalRunSpanningTwoSpansNeverInheritsEitherSpansFrames() {
+        let p = parent([
+            exact("alpha", 0, 10),
+            exact("bravo", 10, 20),
+            exact("delta", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "alpha XY")
+
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "alpha XY")
+        guard let typed = result.first(where: { $0.text.contains("XY") }) else {
+            return XCTFail("no span carries the typed text")
+        }
+        XCTAssertEqual(typed.frameStart, 10, "a zero-length point at 'alpha''s end")
+        XCTAssertEqual(typed.frameEnd, 10)
+        XCTAssertNotEqual(typed.frameEnd, 20, "must not inherit 'bravo''s [10,20)")
+        XCTAssertNotEqual(typed.frameEnd, 30, "must not inherit 'delta''s [20,30)")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

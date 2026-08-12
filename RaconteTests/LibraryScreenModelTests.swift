@@ -424,4 +424,120 @@ final class LibraryScreenModelTests: XCTestCase {
         let after = await model.transcript(for: idA)
         XCTAssertEqual(after.text, "hello there")
     }
+
+    // MARK: - T7 prereq #41: closeStaleDraftIfNeeded / transcript(for:) ordering
+
+    /// `EntryDetailView.refresh()` calls `model.recoverStaleDraftBeforeRead(captureID)`
+    /// BEFORE its transcript read (:92-98) — a recovered edit must be visible in the
+    /// very first read the screen shows, not on the next scan. Pins the same sequence at
+    /// the model layer the T6c test above uses, since the View itself isn't
+    /// unit-testable.
+    func testStaleDraftRecoveredBeforeTranscriptReadShowsTheRecoveredEditImmediately() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        try await model.revisionStore.append(
+            TranscriptRevision(id: "01R0000000000000000000000A", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_000),
+                               spans: [TranscriptSpan(text: "original machine text", anchor: .none)]),
+            captureID: idA)
+        // Ancient lastWriteAt — unambiguously stale under whatever real `Date()` the
+        // model call below uses internally, no injected clock required.
+        try await model.revisionStore.writeDraft(captureID: idA, text: "recovered edited text",
+                                                  now: Date(timeIntervalSince1970: 0))
+
+        // The exact sequence EntryDetailView.refresh() must follow: recover, THEN read.
+        await model.recoverStaleDraftBeforeRead(idA)
+        let transcript = await model.transcript(for: idA)
+
+        XCTAssertEqual(transcript.text, "recovered edited text",
+                       "a stale draft closed before the transcript read must be visible in that read")
+    }
+
+    /// Fix round 1, Important 1 (probe-confirmed by review): entry-open used to close
+    /// the stale draft BEFORE promoting, so the `.userEdit` the close minted was itself
+    /// the canonical file that trips `promoteIfNeeded`'s "any canonical file present"
+    /// skip (`TranscriptRevisionStore.swift` promotion skip order, rule 3) — the
+    /// `.machineLive` baseline could never enter the chain, permanently, since the skip
+    /// is unconditional. `recoverStaleDraftBeforeRead` must promote FIRST.
+    func testEntryOpenPromotesBeforeClosingAStaleDraftSoTheMachineBaselineIsNeverBlocked() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)))
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(TranscriptRecord(seq: 0, text: "machine baseline",
+                                           captureFrameStart: 0, captureFrameEnd: 20_000,
+                                           generator: "SpeechTranscriber", locale: "en_US"))
+        try writer.close()
+
+        let model = model()
+        // A stale draft, with NO canonical revisions on disk yet — the exact fixture
+        // the review probed with.
+        try await model.revisionStore.writeDraft(captureID: idA, text: "recovered edit",
+                                                  now: Date(timeIntervalSince1970: 0))
+
+        await model.recoverStaleDraftBeforeRead(idA)
+
+        let load = TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA))
+        let sources = TranscriptChain.ordered(load?.revisions ?? []).map(\.source)
+        XCTAssertEqual(sources, [.machineLive, .userEdit],
+                       "promotion must mint the machine baseline BEFORE the stale draft is closed on top of it")
+    }
+
+    /// Fix round 1, Important 2 (probe-confirmed by review): a draft-free capture — the
+    /// overwhelmingly common case — must take the nonisolated `hasDraft` fast path and do
+    /// NO store-actor work at all, so entry-open never queues behind an in-flight
+    /// launch-time corpus walk holding the revision-store actor (the exact regression the
+    /// T6c comment at `EntryDetailView.swift:99-104` already warns about for
+    /// `promoteIfNeeded`).
+    ///
+    /// **Gate B Important 2 — this test used to assert a tautology.** It checked only the
+    /// returned Bool, which IS `hasDraft`'s own answer, so it re-asserted its fixture:
+    /// moving `promoteIfNeeded` ABOVE the guard (reintroducing exactly the first-paint
+    /// regression this exists to prevent) left it green. The observable now is the
+    /// promotion's SIDE EFFECT — the fixture is a promotable capture with a `live.jsonl`
+    /// and nothing promoted, so any hop onto the store actor here mints the `.machineLive`
+    /// baseline and leaves a canonical chain behind. Not hopping is the only way the chain
+    /// stays absent. Timing is deliberately NOT the observable: that would be a flake, and
+    /// the store call either happened or it didn't.
+    func testEntryOpenWithNoDraftDoesNoStoreActorWorkAtAll() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)))
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(TranscriptRecord(seq: 0, text: "machine baseline",
+                                           captureFrameStart: 0, captureFrameEnd: 20_000,
+                                           generator: "SpeechTranscriber", locale: "en_US"))
+        try writer.close()
+        let model = model()
+
+        // Precondition: promotion WOULD have done something visible had it run — without
+        // this the assertion below would hold for a capture with nothing to promote.
+        XCTAssertEqual(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA))?
+            .revisions.count ?? 0, 0, "precondition: nothing promoted yet")
+
+        let hoppedTheActor = await model.recoverStaleDraftBeforeRead(idA)
+
+        XCTAssertFalse(hoppedTheActor, "a draft-free capture must take the nonisolated fast path")
+        XCTAssertEqual(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA))?
+            .revisions.count ?? 0, 0,
+                       "no store-actor work may run on the draft-free path — a minted revision "
+                       + "here means the actor was hopped before the guard")
+
+        // The other half of the same rule: the fast path must not be skipping work the
+        // DRAFT path owes. The same capture, once it has a draft, does promote.
+        try await model.revisionStore.writeDraft(captureID: idA, text: "an edit",
+                                                 now: Date(timeIntervalSince1970: 0))
+        let hoppedWithADraft = await model.recoverStaleDraftBeforeRead(idA)
+
+        XCTAssertTrue(hoppedWithADraft)
+        XCTAssertEqual(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA))?
+            .revisions.map(\.source), [.machineLive, .userEdit],
+                       "the draft path does pay the actor cost: it promotes, then closes the draft")
+    }
 }

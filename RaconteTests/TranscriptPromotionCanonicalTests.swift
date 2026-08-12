@@ -182,6 +182,49 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
         XCTAssertEqual(TranscriptChain.plainText(current), consolidated.committedText)
     }
 
+    /// T7 Task 9.1 — the counter-fixture to the byte-identity test above, and the piece
+    /// this branch's docs claimed but never pinned. The rendering plan's "no-marker
+    /// entries render byte-identically" (`docs/plans/2026-08-08-voice-attributed-
+    /// rendering-plan.md` step 3) holds for the common shape (boundary whitespace on
+    /// every run, as the test above proves) — but §15b.10 already names an accepted,
+    /// UNFIXED exception: "a run pair the analyzer splits *without* intervening
+    /// whitespace (e.g. `don't` → `don`/`'t`) still gains a separator on join." That
+    /// sentence was never backed by a test — only by the pure, PRE-promotion
+    /// `TranscriptAttributionTests.testNoMarkersYieldsOneUnattributedParagraphEqualToCommittedText`
+    /// fixture, which exercises `TranscriptAttribution.attribute(committed:)` directly
+    /// and never goes through promotion at all. This is the same shape carried all the
+    /// way through `spans(fromCommitted:)` + `TranscriptChain.plainText`, so the
+    /// residual is pinned where it actually bites: the post-promotion read every real,
+    /// already-promoted entry takes. Deliberately locks in CURRENT (imperfect) behavior,
+    /// not a regression — if §15b.10's named fix (compare `join(trimmedRunTexts)`
+    /// against `result.text`, fall back to the runless single-span shape when they
+    /// differ) ever lands, this assertion is expected to change alongside it.
+    func testAbuttingRunsWithNoBoundaryWhitespaceGainAnUnspokenSpaceOnPromotion() async throws {
+        try writeFinalAudio()
+        try writeLiveTranscript([
+            record("don't", 0, 20_000, runs: [
+                TranscriptRun(text: "don", captureFrameStart: 0, captureFrameEnd: 10_000),
+                TranscriptRun(text: "'t", captureFrameStart: 10_000, captureFrameEnd: 20_000),
+            ]),
+        ])
+
+        let outcome = await store().promoteIfNeeded(captureID: captureID)
+        guard case .promoted = outcome else { return XCTFail("expected .promoted, got \(outcome)") }
+
+        let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+        let consolidated = LiveTranscriptReader.consolidate(loaded.records)
+        XCTAssertEqual(consolidated.committedText, "don't",
+                       "the machine's own text has no internal space to begin with")
+
+        let chain = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)
+        let current = try XCTUnwrap(chain?.revisions.first)
+        XCTAssertEqual(TranscriptChain.plainText(current), "don 't",
+                       "known residual (§15b.10): promotion's rejoin inserts a separator " +
+                       "neither run carried — accepted, unfixed, watched for device data")
+        XCTAssertNotEqual(TranscriptChain.plainText(current), consolidated.committedText,
+                          "the byte-identical claim does NOT hold for this shape")
+    }
+
     // MARK: - 4.3 Promotion skip tests
 
     func testSkipsAlreadyTrashedCapture() async throws {

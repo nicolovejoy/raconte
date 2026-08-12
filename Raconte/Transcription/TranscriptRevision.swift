@@ -260,6 +260,25 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
     var characterCount: Int
     var firstLine: String
     var isForked: Bool
+    /// The row's ACTUAL preview (T7 Task 3 fix round 1, Important 3): whitespace-
+    /// collapsed across EVERY line — not just the first — and truncated with a visible
+    /// "…" via the same `EntrySnippet.make` the live.jsonl-fallback path already uses,
+    /// computed once here so the row never needs the full body to reproduce it.
+    /// `firstLine` above is UNCHANGED and stays first-line-only, 120 chars, no
+    /// ellipsis — it has its own consumer (`detachedMachineRevisions`'s history-panel
+    /// list item, §12.8), and this is a separate cache slot for the primary row
+    /// preview, not a redefinition of what `firstLine` means. Additive + LENIENT
+    /// (absent decodes to `firstLine` as a safe, if less accurate, stand-in) rather
+    /// than strict: this type decodes inside `TranscriptHead.init(from:)`'s `current`
+    /// field, which is already wrapped in `try?` — a required-field addition here
+    /// would make an old head's `current` silently decode to `nil` while the OUTER
+    /// `TranscriptHead`'s other fields still decode fine, corrupting the TRUST
+    /// condition itself (a head with no `current` but otherwise-matching bookkeeping
+    /// would wrongly look trustworthy) rather than just staling the preview. Self-heals
+    /// the same way every other cache miss in this format does: the next rebuild —
+    /// forced by any trust-invalidating event, or a real write — recomputes and
+    /// persists the accurate value.
+    var snippet: String
 
     init(id: String,
          fileNumber: Int,
@@ -267,7 +286,8 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
          createdAt: Date,
          characterCount: Int,
          firstLine: String,
-         isForked: Bool) {
+         isForked: Bool,
+         snippet: String) {
         self.id = id
         self.fileNumber = fileNumber
         self.source = source
@@ -275,15 +295,18 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
         self.characterCount = characterCount
         self.firstLine = firstLine
         self.isForked = isForked
+        self.snippet = snippet
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, fileNumber, source, createdAt, characterCount, firstLine, isForked
+        case id, fileNumber, source, createdAt, characterCount, firstLine, isForked, snippet
     }
 
-    /// Every field here is identity for the summary it names — there is no additive
-    /// field yet, so all are strict. `source` still decodes an unrecognized raw value
-    /// to `.unknown(raw)` rather than throwing (F10); only the *key* is required.
+    /// `id`/`fileNumber`/`source`/`createdAt`/`characterCount`/`firstLine`/`isForked`
+    /// are identity for the summary they name — strict. `source` still decodes an
+    /// unrecognized raw value to `.unknown(raw)` rather than throwing (F10); only the
+    /// *key* is required. `snippet` is the one additive, lenient field — see its own
+    /// doc comment for why leniency (not strictness) is the safe choice here.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -293,6 +316,7 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
         characterCount = try container.decode(Int.self, forKey: .characterCount)
         firstLine = try container.decode(String.self, forKey: .firstLine)
         isForked = try container.decode(Bool.self, forKey: .isForked)
+        snippet = (try? container.decodeIfPresent(String.self, forKey: .snippet)) ?? firstLine
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -304,6 +328,57 @@ struct TranscriptHeadSummary: Codable, Sendable, Equatable {
         try container.encode(characterCount, forKey: .characterCount)
         try container.encode(firstLine, forKey: .firstLine)
         try container.encode(isForked, forKey: .isForked)
+        try container.encode(snippet, forKey: .snippet)
+    }
+}
+
+/// One canonical revision file's number and its on-disk byte size, at the time this
+/// was recorded (T7 Task 3 fix round 1, Important 1) — the cheap integrity
+/// fingerprint `TranscriptRevisionStore.validatedHead`'s trust condition checks
+/// against a fresh stat before serving a cached `TranscriptHead` as-is. A file's NAME
+/// staying put is not proof its BYTES did — truncation, a partial/interrupted write,
+/// or a cloud-eviction placeholder all change size while leaving `revisionFiles`/
+/// `unreadableFiles` (both keyed on filename, never content) none the wiser.
+/// Deliberately does NOT catch same-size corruption — an accepted, owner-ruled
+/// residual gap (see `TranscriptRevisionStoreTests
+/// .testSameSizeCorruptionIsAnAcceptedGapNotCaughtByTheIntegrityCheck`).
+struct RevisionFileSize: Codable, Sendable, Equatable {
+    var file: Int
+    var byteSize: Int64
+
+    init(file: Int, byteSize: Int64) {
+        self.file = file
+        self.byteSize = byteSize
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case file, byteSize
+    }
+
+    /// Hand-written (T7 Task 3 fix round 2), matching this wire-format family's
+    /// additive-lenient / identity-strict convention (`TranscriptHead`,
+    /// `TranscriptHeadSummary`, `TranscriptRevision`) even though both fields here are
+    /// identity-strict TODAY and a synthesized decoder would behave identically right
+    /// now. The reason is the family's own repeated lesson (§11: Swift's synthesized
+    /// decoder ignores property defaults, which would have silently erased every
+    /// `live.jsonl` record rather than erroring): `[RevisionFileSize]` decodes inside
+    /// `TranscriptHead.init(from:)`'s `fileSizes` field, itself wrapped in `try?` for
+    /// leniency (fix round 1). A synthesized decoder here means the NEXT additive
+    /// field added to this type is strict by default with no decision point — a
+    /// single array element failing to decode blanks the WHOLE `fileSizes` array back
+    /// to `[]`, which is the exact "every head permanently untrusted" bug fix round 1
+    /// just fixed, arriving again silently. A hand-written `init(from:)` forces that
+    /// decision to be made explicitly, in this one place, when it matters.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        file = try container.decode(Int.self, forKey: .file)
+        byteSize = try container.decode(Int64.self, forKey: .byteSize)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(file, forKey: .file)
+        try container.encode(byteSize, forKey: .byteSize)
     }
 }
 
@@ -321,27 +396,39 @@ struct TranscriptHead: Codable, Sendable, Equatable {
     /// absent on a pre-existing `head.json` decodes to `false`, the only value such a
     /// head could have meant.
     var listingUnreadable: Bool
+    /// The integrity fingerprint (T7 Task 3 fix round 1, Important 1) — one entry per
+    /// file named in `revisionFiles`, readable or not. Additive + LENIENT (absent
+    /// decodes to `[]`, matching a head written before this field existed), but that
+    /// absence is DELIBERATELY treated as UNTRUSTED by
+    /// `TranscriptRevisionStore.sizesStillMatch` rather than as "nothing to check" —
+    /// the owner's explicit ruling: a head with no recorded sizes forces one rebuild,
+    /// which then persists the sizes and self-heals per §4.8's disposable-cache
+    /// philosophy, exactly like every other trust-invalidating cause already does.
+    var fileSizes: [RevisionFileSize]
 
     init(current: TranscriptHeadSummary?,
          revisionFiles: [Int],
          unreadableFiles: [Int],
          revisionCount: Int,
-         listingUnreadable: Bool = false) {
+         listingUnreadable: Bool = false,
+         fileSizes: [RevisionFileSize] = []) {
         self.current = current
         self.revisionFiles = revisionFiles
         self.unreadableFiles = unreadableFiles
         self.revisionCount = revisionCount
         self.listingUnreadable = listingUnreadable
+        self.fileSizes = fileSizes
     }
 
     private enum CodingKeys: String, CodingKey {
-        case current, revisionFiles, unreadableFiles, revisionCount, listingUnreadable
+        case current, revisionFiles, unreadableFiles, revisionCount, listingUnreadable, fileSizes
     }
 
-    /// `current` and `listingUnreadable` are the lenient fields — a brand-new capture
-    /// with no revisions yet has no current summary, and a head written before
-    /// `listingUnreadable` existed has no opinion on it; both must decode to their safe
-    /// default rather than throw. The three original bookkeeping arrays/count are
+    /// `current`, `listingUnreadable`, and `fileSizes` are the lenient fields — a
+    /// brand-new capture with no revisions yet has no current summary, a head written
+    /// before `listingUnreadable` existed has no opinion on it, and a head written
+    /// before `fileSizes` existed has none recorded; all three must decode to their
+    /// safe default rather than throw. The three original bookkeeping arrays/count are
     /// identity for a head file: a head record missing them is not a valid fixed point
     /// and must fail loudly.
     init(from decoder: any Decoder) throws {
@@ -351,6 +438,7 @@ struct TranscriptHead: Codable, Sendable, Equatable {
         unreadableFiles = try container.decode([Int].self, forKey: .unreadableFiles)
         revisionCount = try container.decode(Int.self, forKey: .revisionCount)
         listingUnreadable = (try? container.decodeIfPresent(Bool.self, forKey: .listingUnreadable)) ?? false
+        fileSizes = (try? container.decodeIfPresent([RevisionFileSize].self, forKey: .fileSizes)) ?? []
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -360,6 +448,7 @@ struct TranscriptHead: Codable, Sendable, Equatable {
         try container.encode(unreadableFiles, forKey: .unreadableFiles)
         try container.encode(revisionCount, forKey: .revisionCount)
         try container.encode(listingUnreadable, forKey: .listingUnreadable)
+        try container.encode(fileSizes, forKey: .fileSizes)
     }
 }
 

@@ -494,4 +494,209 @@ final class LibraryScannerTests: XCTestCase {
         let item = try XCTUnwrap(result.items.first)
         XCTAssertEqual(item.journal?.name, "1987")
     }
+
+    // MARK: T7 Task 3 (#40.1) — row summaries route through validatedHead, not loadChain
+
+    private func revisionStore() -> TranscriptRevisionStore { TranscriptRevisionStore(capturesRoot: capturesRoot) }
+
+    @discardableResult
+    private func writeRawCanonical(_ id: String, _ n: Int, _ json: String) throws -> URL {
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDir(id)),
+            withIntermediateDirectories: true)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDir(id), revision: n)
+        try Data(json.utf8).write(to: url)
+        return url
+    }
+
+    /// **3.1 — today's answer, pinned (renamed, fix round 1).** A row whose canonical
+    /// chain has one healthy revision (appended normally, so `head.json` is persisted
+    /// and trustworthy for that revision alone) plus a SECOND, corrupted sibling file
+    /// written directly (never through `append`). The file-number SET `head.json`
+    /// remembers (`[0]`) no longer matches the directory's (`[0, 1]`), so
+    /// `validatedHead` can NEVER trust the cache here regardless of anything else —
+    /// adding a file always changes the count. This test therefore only ever exercises
+    /// the REBUILD path, never the genuinely-trusted one (probe-confirmed by the
+    /// reviewer: disabling `validatedHead`'s entire trust branch left this passing).
+    /// Renamed from its original, misleading name/doc — see
+    /// `testTrustedHeadCacheStillFoldsInLiveLogDegradation` below for a fixture that
+    /// actually keeps the head trusted.
+    func testFileCountChangeForcesRebuildAndStillDegradesTheRow() async throws {
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try await revisionStore().append(
+            TranscriptRevision(id: "R0", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               spans: [TranscriptSpan(text: "healthy revision", anchor: .none)]),
+            captureID: idA)
+        try writeRawCanonical(idA, 1, "{ not valid json at all, corrupted")
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, "healthy revision")
+        XCTAssertTrue(item.degradations.contains(.revisionUnreadable),
+                     "an unreadable sibling must still degrade the row once the head cache can no longer be trusted")
+    }
+
+    /// **Important 1 (fix round 1) — the owner's exact probe.** In-place damage to
+    /// `canonical-0.json` — SAME filename, so the file-number SET the listing sees
+    /// never moves — must be caught by ALL THREE surfaces that read the chain: the
+    /// row, the detail screen, and the editor's read model. Before this fix, the row
+    /// (`.skip`, routed through `validatedHead`) silently kept serving `head.json`'s
+    /// cached, pre-damage answer while `.compute` and `EntryChainSnapshot` (which
+    /// always decode fresh) correctly saw the damage — three surfaces, three different
+    /// answers for the same bytes, reproduced independently by the reviewer.
+    func testInPlaceRevisionDamageDegradesRowDetailAndEditorConsistently() async throws {
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try await revisionStore().append(
+            TranscriptRevision(id: "R0", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               spans: [TranscriptSpan(text: "healthy revision text", anchor: .none)]),
+            captureID: idA)
+
+        // In-place damage: SAME filename, garbage bytes of a different length.
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDir(idA), revision: 0)
+        try Data("{ not valid json at all, corrupted in place".utf8).write(to: url)
+
+        // Row.
+        let item = try await firstItem()
+        XCTAssertTrue(item.degradations.contains(.revisionUnreadable), "the row must degrade")
+        XCTAssertNil(item.snippet, "no readable current revision left to preview")
+
+        // Detail screen (`.compute`).
+        let detail = EntryTranscriptLoader.load(captureDirectory: captureDir(idA), expectedRecords: nil,
+                                                 attribution: .compute(sampleRate: 48_000))
+        XCTAssertTrue(detail.degradations.contains(.revisionUnreadable), "the detail screen must degrade")
+
+        // Editor read model.
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDir(idA))
+        XCTAssertEqual(snapshot.editability, .readOnlyUnreadableRevision(file: 0),
+                       "the editor must refuse to edit over the same damage")
+    }
+
+    /// **Important 2 (fix round 1) — the genuinely trusted path's degradation
+    /// semantics.** Nothing about the canonical chain changes after it is persisted
+    /// (one healthy file, matching size) — the head stays TRUSTED for the whole test,
+    /// proven with the same distinguishing-marker technique 3.2 uses below. A head can
+    /// never itself carry `unreadableFiles` while trusted (I1: a head persisted with a
+    /// bad file is never trusted again), so the ONLY degradation reachable on the
+    /// genuinely-trusted path is `live.jsonl`'s own — and until this test, nothing
+    /// proved `liveLogDegradation` still runs there rather than being skipped on the
+    /// O(1) branch. Replaces the ORIGINAL, vacuous version of 3.1 above, which could
+    /// never reach this path at all (probe-confirmed by the reviewer).
+    func testTrustedHeadCacheStillFoldsInLiveLogDegradation() async throws {
+        let revision = TranscriptRevision(id: "R0", source: .machineLive,
+                                          createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                                          spans: [TranscriptSpan(text: "DECODED BODY MARKER", anchor: .none)])
+        let revisionURL = try writeRawCanonical(idA, 0, String(data: try CaptureCoding.encoder().encode(revision),
+                                                                encoding: .utf8)!)
+        let actualSize = try fileSize(revisionURL)
+
+        let cachedSummary = TranscriptHeadSummary(id: "R0", fileNumber: 0, source: .machineLive,
+                                                  createdAt: revision.createdAt, characterCount: 15,
+                                                  firstLine: "CACHED PREVIEW", isForked: false,
+                                                  snippet: "CACHED PREVIEW")
+        let head = TranscriptHead(current: cachedSummary, revisionFiles: [0], unreadableFiles: [],
+                                  revisionCount: 1, listingUnreadable: false,
+                                  fileSizes: [RevisionFileSize(file: 0, byteSize: actualSize)])
+        try CaptureCoding.encoder().encode(head)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDir(idA)))
+
+        // Independently truncated live.jsonl: the manifest claims 3 committed records,
+        // only 1 landed.
+        try writeTranscript(idA, [("one", 0, 4_800)])
+        let ref = TranscriptRef(generator: "SpeechTranscriber", locale: "en_US",
+                                committedRecords: 3, completedAt: Date(timeIntervalSince1970: 5))
+        try write(manifest(idA, transcript: ref), id: idA)
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, "CACHED PREVIEW", "must be served from the trusted cache, not decoded")
+        XCTAssertTrue(item.degradations.contains(.transcriptTruncated),
+                     "live.jsonl's own truncation must still surface even while the canonical head stays trusted")
+    }
+
+    /// **3.2 — mutation check for #40.1.** The row's snippet must come from the CACHED
+    /// `head.json` summary, never from decoding `canonical-0.json`'s own body — proven
+    /// with a deliberately inconsistent fixture: `head.json` is hand-written (matching
+    /// the actual file-number set, so `validatedHead` trusts it as-is) with a cached
+    /// `firstLine` that does NOT match what decoding the real revision body would
+    /// produce. If the row ever opened and decoded that file, its snippet would show the
+    /// decoded marker instead. Mutation: point `transcriptSummary`/`.skip` back at
+    /// `loadChain` -> this test fails (the decoded body wins, since `loadChain` ignores
+    /// `head.json` entirely).
+    func testRowSnippetComesFromTheHeadCacheNeverFromDecodingARevisionBody() async throws {
+        let revision = TranscriptRevision(id: "R0", source: .machineLive,
+                                          createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                                          spans: [TranscriptSpan(text: "DECODED BODY MARKER", anchor: .none)])
+        let revisionURL = try writeRawCanonical(idA, 0, String(data: try CaptureCoding.encoder().encode(revision),
+                                                                encoding: .utf8)!)
+        // Important 1 (fix round 1): the head is only trusted when its recorded size
+        // matches the file's ACTUAL on-disk size — a hand-crafted head with a stale or
+        // absent size would (correctly) be distrusted and rebuilt, defeating this
+        // fixture's whole point. Match it exactly.
+        let actualSize = try fileSize(revisionURL)
+
+        let cachedSummary = TranscriptHeadSummary(id: "R0", fileNumber: 0, source: .machineLive,
+                                                  createdAt: revision.createdAt,
+                                                  characterCount: 15, firstLine: "CACHED PREVIEW",
+                                                  isForked: false, snippet: "CACHED PREVIEW")
+        let head = TranscriptHead(current: cachedSummary, revisionFiles: [0], unreadableFiles: [],
+                                  revisionCount: 1, listingUnreadable: false,
+                                  fileSizes: [RevisionFileSize(file: 0, byteSize: actualSize)])
+        try CaptureCoding.encoder().encode(head)
+            .write(to: SegmentLayout.transcriptHeadURL(captureDirectory: captureDir(idA)))
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, "CACHED PREVIEW")
+        XCTAssertFalse((item.snippet ?? "").contains("DECODED"),
+                       "the row must never decode the revision body when the head cache is trustworthy")
+    }
+
+    // MARK: Important 3 (fix round 1) — the head-cache preview must match EntrySnippet
+
+    /// A cut preview must carry a visible truncation signal — matching
+    /// `EntrySnippet`'s own ellipsis+word-boundary rule exactly, the same rule the
+    /// live.jsonl-fallback path already uses. Regression: an earlier version cached
+    /// `firstLine` (120 chars, no ellipsis), so a long entry's row preview was ~37
+    /// characters shorter with the truncation signal silently gone.
+    func testRowSnippetFromHeadCacheIsVisiblyTruncatedWhenLong() async throws {
+        let longText = Array(repeating: "alpha bravo", count: 20).joined(separator: " ")
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try await revisionStore().append(
+            TranscriptRevision(id: "R0", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               spans: [TranscriptSpan(text: longText, anchor: .none)]),
+            captureID: idA)
+
+        let item = try await firstItem()
+        let snippet = try XCTUnwrap(item.snippet)
+        XCTAssertTrue(snippet.hasSuffix("…"), "a cut preview must carry a visible truncation signal")
+        XCTAssertEqual(snippet, EntrySnippet.make(from: longText),
+                       "must match the live.jsonl path's own truncation rule exactly")
+    }
+
+    /// A newline early in the text must not collapse the row's preview to just the
+    /// first line — Task 4 writes user-edited text containing newlines, and every
+    /// edited entry's row preview must keep showing what comes after. Regression: an
+    /// earlier version cached `firstLine` (first line only, cut at the first `\n`), so
+    /// this fixture's preview would have been just `"Short heading"`.
+    func testRowSnippetFromHeadCacheIncludesTextAfterAnEarlyNewline() async throws {
+        let text = "Short heading\nThe body of the entry runs on and says more interesting things"
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try await revisionStore().append(
+            TranscriptRevision(id: "R0", source: .machineLive,
+                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                               spans: [TranscriptSpan(text: text, anchor: .none)]),
+            captureID: idA)
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.snippet, EntrySnippet.make(from: text))
+        XCTAssertNotEqual(item.snippet, "Short heading", "must not collapse to the first line alone")
+        XCTAssertTrue(item.snippet?.contains("body of the entry") ?? false,
+                     "text after the newline must still appear in the preview")
+    }
+
+    private func fileSize(_ url: URL) throws -> Int64 {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let number = attrs[.size] as? NSNumber else { return 0 }
+        return number.int64Value
+    }
 }

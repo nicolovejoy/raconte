@@ -74,6 +74,31 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         SegmentLayout.markerLogURL(captureDirectory: captureDir(id))
     }
 
+    // MARK: - T7 Task 5 fixture helpers (promote + edit through the real store)
+
+    private func store() -> TranscriptRevisionStore { TranscriptRevisionStore(capturesRoot: capturesRoot) }
+
+    /// `TranscriptRevisionStore.promoteIfNeeded` requires durable audio to exist before
+    /// it will promote `live.jsonl` into revision zero — content doesn't matter, only
+    /// that the file is present (mirrors `TranscriptPromotionCanonicalTests`).
+    private func writeFinalAudio(_ id: String) throws {
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(id))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(id)))
+    }
+
+    /// Promotes `live.jsonl` into revision zero, then edits it via the REAL draft
+    /// lifecycle (`writeDraft` + `closeDraft`, which runs the real `TranscriptSplice`) —
+    /// so the current revision is genuinely `.userEdit`, not a hand-built fixture. This
+    /// is the exact shape the gate at `EntryTranscript.swift`'s `load` used to block.
+    @discardableResult
+    private func promoteThenEdit(_ id: String, editedText: String) async throws -> String? {
+        try writeFinalAudio(id)
+        _ = await store().promoteIfNeeded(captureID: id)
+        try await store().writeDraft(captureID: id, text: editedText, now: Date(timeIntervalSince1970: 2_000))
+        return try await store().closeDraft(captureID: id, reason: .sessionEnd, now: Date(timeIntervalSince1970: 2_100))
+    }
+
     // MARK: - End-to-end through the detail screen
 
     func testDetailTranscriptAttributesVoicesFromTheMarkerLog() async throws {
@@ -167,6 +192,65 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertNil(transcript.paragraphs)
     }
 
+    // MARK: - T7 Task 5: attribution survives an edit (the test that used to justify
+    // the `current.source == .machineLive` gate — brief step 5.4)
+
+    /// Before Task 5, this scenario is EXACTLY what the gate at `EntryTranscript.swift`
+    /// blocked: `current` is `.userEdit` (promoted, then one word retyped through the
+    /// real draft lifecycle), and markers exist — but the gate forced `paragraphs` to
+    /// `nil` unconditionally, discarding the owner's two-voice structure the moment he
+    /// made a single edit. This is the regression Task 5 removes.
+    func testEditedRevisionStillAttributesVoicesFromMarkers() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try await promoteThenEdit(idA, editedText: "intro words answer words")   // "reply" -> "answer"
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+
+        let transcript = await model().transcript(for: idA)
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs,
+                                       "an edited revision must still attribute voices, not fall back to nil")
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), [StructureMarker.Voice.bigNico, StructureMarker.Voice.littleNico])
+        XCTAssertTrue(paragraphs[0].text.contains("intro") && !paragraphs[0].text.contains("answer"))
+        XCTAssertTrue(paragraphs[1].text.contains("answer") && !paragraphs[1].text.contains("reply"))
+
+        // The paragraphs must still rejoin to exactly what the chain itself considers
+        // "current" — computed independently here, not hardcoded, so a bug that
+        // attributed over the WRONG revision's spans would still be caught.
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        let expectedText = TranscriptChain.plainText(current)
+        XCTAssertEqual(paragraphs.map(\.text).joined(separator: " "), expectedText)
+        XCTAssertEqual(transcript.text, expectedText, "text is the edited text, unaffected by attribution")
+    }
+
+    /// Baseline invariant either side of the gate's removal: an edited entry with NO
+    /// marker log still gets `paragraphs == nil` (design §7's absence rule), and `text`
+    /// is the edited plain text regardless. Genuinely useful as a regression guard once
+    /// the gate is gone: nothing about removing it may accidentally start synthesizing
+    /// paragraphs when there is no marker log to attribute from.
+    func testEditedEntryWithNoMarkerLogHasNilParagraphsAndTheEditedText() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try await promoteThenEdit(idA, editedText: "intro words answer words")
+        // No markers.jsonl written at all.
+
+        let transcript = await model().transcript(for: idA)
+
+        XCTAssertNil(transcript.paragraphs, "absent marker log must never render as single-voice, even edited")
+        XCTAssertEqual(transcript.text, "intro words answer words")
+    }
+
     // MARK: - Performance contract: the scanner never reads markers.jsonl
 
     func testLibraryScanDoesNotComputeAttribution() async throws {
@@ -257,5 +341,180 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         let paragraphs = try XCTUnwrap(transcript.paragraphs)
         XCTAssertEqual(paragraphs.count, 2, "the 48kHz fallback finds the gap, same as an explicit 48kHz manifest")
         XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary })
+    }
+
+    // MARK: - T7 Task 6: marker corrections, end to end through the real disk wire
+
+    /// 6.2: a `.correctionVoice` record at frame F can flip whether that boundary
+    /// counts as a paragraph break — a re-tap of the SAME voice makes no break
+    /// (`TranscriptAttribution.breakpoints`'s own re-tap rule), so two raw `.voice`
+    /// taps both saying "bn" render as ONE paragraph; correcting the second to "ln"
+    /// (the brief's "correct a voice at an EXISTING boundary" — the correction's
+    /// `frame` matches the raw tap's frame exactly) is what splits it into two. The
+    /// original tap bytes on disk must stay untouched — corrections are additive,
+    /// never a rewrite (locked decision 5).
+    func testVoiceCorrectionChangesTheParagraphSplitAndLeavesTheOriginalTapByteUnchanged() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn"),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: "bn"),   // same voice: no break yet
+        ])
+
+        let originalBytes = try Data(contentsOf: markerLogURL(idA))
+
+        let unsplit = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(unsplit.paragraphs).count, 1,
+                       "a re-tap of the same voice must not manufacture a split")
+
+        let writer = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer.open()
+        try writer.append(StructureMarker(seq: 0, frame: 30_000, kind: .correctionVoice, voice: "ln"))
+        try writer.close()
+
+        let afterBytes = try Data(contentsOf: markerLogURL(idA))
+        XCTAssertTrue(afterBytes.starts(with: originalBytes),
+                     "the two original tap lines must be byte-unchanged after the correction append")
+        XCTAssertGreaterThan(afterBytes.count, originalBytes.count, "the correction was actually appended")
+
+        let corrected = await model().transcript(for: idA)
+        let correctedParagraphs = try XCTUnwrap(corrected.paragraphs)
+        XCTAssertEqual(correctedParagraphs.count, 2,
+                       "the voice correction now disagrees with the still-active voice, splitting the paragraph")
+        XCTAssertEqual(correctedParagraphs.map(\.voice), ["bn", "ln"])
+        XCTAssertEqual(correctedParagraphs.map(\.text), ["intro words", "reply words"])
+    }
+
+    /// 6.3: a `.correctionRetract` removes the split a mis-tapped `.paragraph` marker
+    /// created; a retract of a nonexistent seq is ignored, not an error — a UI retract
+    /// action racing another retract (or acting on a stale row) must not crash or
+    /// silently remove the wrong thing.
+    func testRetractRemovesAMisTappedSplitAndIgnoresANonexistentTarget() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [
+            ("first part", 0, 96_000),
+            ("second part", 96_000, 192_000),
+        ])
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 96_000, kind: .paragraph)])
+
+        let split = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(split.paragraphs).count, 2, "the mis-tapped paragraph split, before retraction")
+
+        let writer1 = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer1.open()
+        // Retract of a seq that never existed: must be a no-op, not a throw and not a
+        // crash — and must not touch the real marker at seq 0.
+        try writer1.append(StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: 999))
+        try writer1.close()
+
+        let stillSplit = await model().transcript(for: idA)
+        XCTAssertEqual(try XCTUnwrap(stillSplit.paragraphs).count, 2,
+                      "a retract of a nonexistent seq must be ignored, not silently remove something else")
+
+        let writer2 = MarkerLogWriter(captureDirectory: captureDir(idA))
+        try writer2.open()
+        try writer2.append(StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: 0))
+        try writer2.close()
+
+        let retracted = await model().transcript(for: idA)
+        // Retracting the ONLY marker leaves nothing usable to attribute — design §7's
+        // "nothing usable in the log" rule, same one an empty marker log already gets —
+        // never collapsed to "single voice" nor left as the pre-retraction split.
+        XCTAssertNil(retracted.paragraphs,
+                    "retracting the only marker leaves nothing usable to attribute")
+        XCTAssertEqual(retracted.text, "first part second part", "the underlying transcript text is unaffected")
+    }
+
+    /// 6.4b, end to end: `MarkerCorrectionWriter.addBoundary` runs against the SAME
+    /// `current.spans` the spans-based attribution path (Task 5) reads, and the
+    /// resulting paragraph split lands where the picked word's own span starts — not
+    /// at the group's start. Three separate `live.jsonl` records (not runs) so
+    /// promotion yields three separate placeable spans
+    /// (`TranscriptRevisionStore.spans(fromCommitted:)`'s no-runs branch) — the real
+    /// chain, not a hand-built fixture, so a bug in how promotion assembles spans
+    /// would also be caught.
+    ///
+    /// **Correction (review Critical 2):** this fixture's words have real GAPS between
+    /// them (10_000-frame silences), so `MarkerSnapping`'s gap search is a coincidental
+    /// no-op here regardless of whether the boundary-add frame is protected from
+    /// snapping at all — the doc comment used to claim "snapping's gap search never
+    /// applies here" as if that were structural, which was false: it was an artifact
+    /// of this fixture's shape, not a property of the mechanism. The actual guarantee
+    /// (`EntryTranscript.snappedMarkers` marking a boundary-add's frame `isExact` and
+    /// routing it around `MarkerSnapping.snap` entirely) is pinned by the ADJACENT
+    /// test below, `testAddBoundaryOnAbuttingWordsIsNotSnapped`, using the shape that
+    /// actually discriminates: words with NO gap between them at all, which is the
+    /// device-observed norm for in-record runs.
+    func testAddBoundaryEndToEndSplitsTheRenderedParagraphAtThePickedWord() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 20_000, 30_000),
+            ("three", 40_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three"], "sanity: one span per record")
+
+        let before = await model().transcript(for: idA)
+        XCTAssertNil(before.paragraphs, "no markers.jsonl at all yet — nothing to attribute")
+
+        let written = try MarkerCorrectionWriter.addBoundary(atSpanIndex: 1, spans: current.spans,
+                                                              captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 1's (\"two\") own start frame")
+
+        let after = await model().transcript(for: idA)
+        let paragraphs = try XCTUnwrap(after.paragraphs, "the boundary-add must have created something to attribute")
+        XCTAssertEqual(paragraphs.map(\.text), ["one", "two three"],
+                       "split lands before span 1, not before span 0 (the group's own start)")
+    }
+
+    /// Review Critical 1 + 2: the reviewer's own probe, reproduced against the SHIPPED
+    /// code before the fix (quoted in the fix commit) — four ABUTTING word intervals
+    /// (`[0,10k][10k,20k][20k,30k][30k,50k]`, no gaps at all between any of them) is
+    /// the device-observed norm for in-record runs (owner's own marker-session data),
+    /// not an edge case. Before the fix: `MarkerSnapping.merged()` fuses all four into
+    /// one continuous `[0,50000]` "speech" interval with no gap anywhere; a
+    /// boundary-add's frame at word-start `20_000` then reads as "inside speech" (rule
+    /// 0 fails), finds no gap (rule 1), and snaps to a boundary or the raw frame
+    /// itself depending on window size — landing on frame 0 in the reviewer's probe,
+    /// which produced NO visible split at all (the resulting empty leading group gets
+    /// filtered). This is exactly what the brief's "must say so rather than silently
+    /// placing the boundary somewhere near" forbids: a boundary-add is a WORD-anchored,
+    /// exact-by-construction frame, and must never enter `MarkerSnapping`'s gap search
+    /// in the first place.
+    func testAddBoundaryOnAbuttingWordsIsNotSnapped() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+            ("three", 20_000, 30_000),
+            ("four", 30_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three", "four"])
+
+        let written = try MarkerCorrectionWriter.addBoundary(atSpanIndex: 2, spans: current.spans,
+                                                              captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 2's (\"three\") own start frame")
+
+        let after = await model().transcript(for: idA)
+        let paragraphs = try XCTUnwrap(after.paragraphs,
+                                       "the boundary-add must produce a real split, not vanish into a fused interval")
+        XCTAssertEqual(paragraphs.map(\.text), ["one two", "three four"],
+                       "the split must land exactly at word 2's own frame (20_000), never snapped to frame 0 "
+                       + "or anywhere else — abutting words leave no gap for MarkerSnapping to search at all")
+        XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
+                       "an exact, word-anchored frame is never approximate — nothing here was snapped")
     }
 }

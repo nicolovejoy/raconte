@@ -318,6 +318,15 @@ and rewriting the span array:
   carries one frame pair and §3.1 refuses to synthesize word alignment (F17). Deleted.
 - **Insertion** — a new span, `anchor: inherited`, frames = a zero-length point at the
   preceding attached span's `frameEnd`; `.none` if there is no preceding anchored span.
+  **Exception (§16.5, owner ruling 2026-08-11, as-built Task 9b):** when the inserted
+  text is a WHOLESALE, ZERO-CHARACTER-OVERLAP replacement of exactly one parent span
+  (every character of that span removed by the diff, nothing else mixed in, immediately
+  followed by the new text — e.g. "Ellen" -> "LN"), the new span inherits the REPLACED
+  span's own bounds instead of the zero-length point — a real, non-zero-length interval
+  when the replaced span had one, or `.none` (never the zero-length-point fallback) when
+  it didn't. The retyped word IS the heard word, corrected, not a new word spoken at a
+  single instant. Multi-span replacements, partial-span edits, and plain deletions with
+  nothing typed in their place all keep the rule as originally stated above.
 - **Deletion** — the span disappears. **Frames are not redistributed.** Unclaimed audio is
   honest; stretching a neighbour fabricates alignment.
 - **Move** — delete + insert, unless the editor reports a move, in which case frames and
@@ -1423,3 +1432,83 @@ reviewers disagreed, resolved explicitly: `TranscriptDraft.captureID` is **kept*
 1's nit that it duplicates the path, because review 2 (F7) needs the struct specified and a
 self-identifying draft is a cheap tripwire against a file that ends up in the wrong directory —
 the same reasoning that puts `captureID` in `manifest.json`, which the path also encodes.
+
+## 16. T7 as-built rulings (2026-08-11 — editor/history/marker-correction/audit-log)
+
+Same convention as §15/§15b: this subsection supersedes what it names; nothing here changes
+an encoded shape from §15/§15b's freeze except where a ruling says so explicitly. T7 built the
+editor (Task 4), voice-attribution-survives-edits (Task 5), marker correction (Task 6), the
+metadata audit log (Task 7), revision history + revert (Task 8), and the parked-minors/docs
+pass (Task 9) on `t7/editor-ui`.
+
+1. **Detached-label ruling (owner).** "Machine transcript, not applied" is reserved for
+   genuinely unapplied revisions — an entry's own rev0 is the foundation of later human edits,
+   not a revision sitting apart from them. The plan's `!isAttached` shorthand is superseded
+   **for that label only**; `TranscriptChain.isAttached` itself is unchanged. As built: the
+   detached set is every revision neither `current` nor in `ancestry(of: current)`
+   (`EntryChainSnapshot.swift:51,56`, `detachedMachineRevisions`'s computation at
+   `EntryChainSnapshot.swift:193-208`, `TranscriptChain.ancestry(of:among:)`). Task 8's
+   `orderedChain`/`ChainRevisionRow` (`EntryChainSnapshot.swift:20-23,65-70`) reuses the same
+   rule for the whole-chain history panel rather than re-deriving it.
+2. **Corrupt-sidecar ruling.** An unreadable `entry.json` gets its own editability case,
+   `.readOnlyMetadataUnreadable` (`EntryChainSnapshot.swift:40`, wired at `:132`), never
+   `.readOnlyTrashed` — same blocking behavior, but the entry is not in the trash and
+   labelling it so would make Restore/Delete Now affordances lie. Same principle as ruling 1
+   and as §15b's own corrupt-file rulings: never name a state with something untrue.
+3. **Launch-sweep ruling.** `persistHead`'s only production caller was `append`, and
+   `promoteIfNeeded` writes nothing once a chain exists (`.skippedAlreadyPromoted`) — so every
+   `head.json` on a device that predates this sweep stays distrusted forever
+   (`sizesStillMatch`'s size-integrity check has nothing to compare against) and #40's read-cost
+   win never reaches an existing entry. Fix: a launch-time sweep,
+   `TranscriptRevisionStore.stampUnstampedHeads()` / `stampHeadIfNeeded(captureID:)`
+   (`TranscriptRevisionStore.swift:466-495`), guarded by `!files.isEmpty`
+   (`TranscriptRevisionStore.swift:481`) so it never stamps a chainless capture — writing
+   `head.json` into an empty `transcript/` would flip `DirectorySnapshot
+   .holdsIrreplaceableArtifacts` false→true and make a mis-tapped capture permanently
+   undeletable, the same zero-byte-log hazard (rule 10) `MarkerLog.swift`/
+   `CaptureCoordinator.swift` already guard elsewhere.
+4. **Leading non-placeable span ruling (Task 5, owner).** A leading span that cannot be placed
+   against the marker timeline — no usable, non-zero-length frame bounds
+   (`TranscriptAttribution.isPlaceableSpan`) — renders `voice: nil`, never a guessed voice.
+   Guessing forward or backward from the nearest placeable span would assert something the
+   data does not support; `nil` is `EntryDetailView`'s existing "no voice marker in force"
+   answer, not a new state.
+5. **Splice-inherit ruling (owner, 2026-08-11) — as built, Task 9b.** A wholesale word
+   replacement with zero character overlap (the brief's own example, "Ellen" → "LN")
+   **inherits the replaced word's audio frames** — the retyped word IS the heard word,
+   corrected, not a new word spoken at a single instant. Before this task, the splice
+   discarded the replaced span's frames and anchored the replacement as a zero-length
+   `.inherited` point at the preceding span's end, which asserted something untrue about
+   where the word lives in the audio (and is why #37's own worked example — Swahili name
+   transcribed as "Ellen," corrected to "LN" — was disproved by probe during T7 planning).
+   As built: `TranscriptSplice.spans(parent:editedText:)`
+   (`TranscriptSplice.swift:50`) runs a precompute pass over the diff's positions/removed
+   offsets/insertions, independent of the pre-existing atom-building walk, that tags an
+   insertion run as a wholesale replacement only when a contiguous removal run covers
+   exactly one parent span's full text with nothing else interposed — no second span, no
+   removed separator, no surviving matched character (`wholesaleReplacements`,
+   `TranscriptSplice.swift:108-141`). The `.insertion` `RawUnit` case carries the tagged
+   span index through (`TranscriptSplice.swift:193,209`); the emit loop
+   (`TranscriptSplice.swift:330-353`) inherits the REPLACED span's own
+   `frameStart`/`frameEnd`/resolved `sourceRevisionID` when tagged and that span has
+   usable bounds, and — the review round's fix — falls to `.none` with nil source, never
+   the zero-length-point fallback, when the replaced span itself has nothing to inherit
+   (borrowing a DIFFERENT span's provenance would repeat the exact untruth this ruling
+   exists to remove, just aimed at a new victim). `TranscriptAttribution.isPlaceableSpan`
+   (unchanged) is the one placeability rule both the wholesale-inherited case and the
+   ordinary zero-length-point case answer to — a wholesale replacement is placeable
+   exactly when the span it replaced was. Multi-span replacements, partial-span edits, and
+   plain deletions with nothing typed in their place are untouched, byte-identical to
+   before. §3.3's Insertion row above carries the same exception.
+6. **Row-honesty ruling (Gate B, T6c — not previously written up in §15/§15b).** Rows route
+   through the O(1) `validatedHead` cache, but a trusted head could mask in-place damage to a
+   canonical file: the row would say healthy while the detail screen and editor both refused.
+   Fix: each canonical file's byte size is recorded in `head.json`
+   (`RevisionFileSize`/`byteSize`, `TranscriptRevisionStore.swift:120-128`) and `validatedHead`
+   distrusts the cache on any mismatch against a fresh `.fileSizeKey` stat
+   (`TranscriptRevisionStore.swift:326,367-388`) — nearly free, since the directory scan
+   already stats those files for #39. **Same-size corruption still slips through** — accepted
+   knowingly, and pinned by its own deliberately-named test,
+   `testSameSizeCorruptionIsAnAcceptedGapNotCaughtByTheIntegrityCheck`
+   (`RaconteTests/TranscriptRevisionStoreTests.swift:495`) — so a future reader finds a named,
+   intentional gap rather than rediscovering it as a bug.

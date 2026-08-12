@@ -193,6 +193,74 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertFalse(registryURL.path.hasPrefix(capturesRoot.path))
     }
 
+    // MARK: voiceLabels (T7 Mark Voices, issue #56)
+    //
+    // Additive and lenient, like `EntryMetadata.multiVoice`/`detectedDate`: every
+    // registry on disk predates this field, and a damaged label map must not take a
+    // journal's id/name/createdAt down with it. Encoded only when non-empty, so a
+    // journal nobody has labelled yet keeps producing exactly today's bytes.
+
+    func testVoiceLabelsAbsentDecodesEmpty() throws {
+        let registry = try JournalStore.load(url: writeRegistry(
+            #"{"journals":[{"id":"A","name":"N","createdAt":"1970-01-01T00:00:00.000Z"}]}"#))
+        XCTAssertEqual(registry.journals.first?.voiceLabels, [:])
+    }
+
+    func testVoiceLabelsRoundTrip() async throws {
+        let s = store(ids: ["J1"])
+        _ = try await s.create(name: "Untitled")
+        let updated = try await s.setVoiceLabels(id: "J1", labels: ["bn": "Grandpa", "ln": "Nico"])
+        XCTAssertEqual(updated.voiceLabels, ["bn": "Grandpa", "ln": "Nico"])
+
+        // A *fresh* store over the same file — the round trip is through disk.
+        let reread = try await JournalStore(containerRoot: containerRoot).list()
+        XCTAssertEqual(reread.first?.voiceLabels, ["bn": "Grandpa", "ln": "Nico"])
+    }
+
+    /// Extends `testEncodedShapeIsSingleLineWithSortedKeysAndISO8601Dates` above: a
+    /// default (unlabelled) journal's serialized bytes are UNCHANGED from before this
+    /// field existed — the exact same literal string that test already pins.
+    func testDefaultVoiceLabelsAreOmittedFromTheRegistryBytes() throws {
+        let registry = JournalRegistry(journals: [
+            Journal(id: "A", name: "1987 Journal", createdAt: Date(timeIntervalSince1970: 0))
+        ])
+        let text = String(decoding: try JournalStore.encode(registry), as: UTF8.self)
+        XCTAssertEqual(text,
+            #"{"journals":[{"createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"1987 Journal"}]}"#)
+        XCTAssertFalse(text.contains("voiceLabels"))
+    }
+
+    func testVoiceLabelsGarbageDecodesEmpty() throws {
+        let registry = try JournalStore.load(url: writeRegistry(
+            #"{"journals":[{"id":"A","name":"N","createdAt":"1970-01-01T00:00:00.000Z","voiceLabels":"oops"}]}"#))
+        XCTAssertEqual(registry.journals.first?.voiceLabels, [:])
+        XCTAssertEqual(registry.journals.first?.id, "A")
+    }
+
+    func testSetVoiceLabelsUnknownJournalThrows() async throws {
+        let s = store(ids: ["J1"])
+        _ = try await s.create(name: "Keep me")
+        let before = try Data(contentsOf: registryURL)
+        do {
+            _ = try await s.setVoiceLabels(id: "missing", labels: ["bn": "Grandpa"])
+            XCTFail("expected unknownJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .unknownJournal("missing"))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    func testSetVoiceLabelsTrimsAndDropsEmptyValues() async throws {
+        let s = store(ids: ["J1"])
+        _ = try await s.create(name: "Untitled")
+        let updated = try await s.setVoiceLabels(id: "J1", labels: [
+            "bn": "  Grandpa  ",
+            "ln": "   ",
+            "x-third": "",
+        ])
+        XCTAssertEqual(updated.voiceLabels, ["bn": "Grandpa"])
+    }
+
     // MARK: Atomic write
 
     func testWriteLeavesNoStrayPartFile() async throws {

@@ -41,6 +41,10 @@ struct EntryDetailView: View {
     /// `editorModel` above.
     @State private var showingMarkerCorrection = false
     @State private var markerCorrectionModel: MarkerCorrectionModel
+    /// The whole undo story (T7 Task 8, ruling Q1) — a separate pushed screen, same
+    /// "built once in init" reasoning as `editorModel`/`markerCorrectionModel` above.
+    @State private var showingRevisionHistory = false
+    @State private var revisionHistoryModel: RevisionHistoryModel
 
     /// Sidecar writes that reported failure. Each names what didn't save — the same
     /// swallowed-`try?` family as `TrashView.permanentDeleteFailed`, which the owner hit
@@ -60,6 +64,8 @@ struct EntryDetailView: View {
                                                                  store: model))
         _markerCorrectionModel = State(initialValue: MarkerCorrectionModel(captureID: item.captureID,
                                                                            store: model))
+        _revisionHistoryModel = State(initialValue: RevisionHistoryModel(captureID: item.captureID,
+                                                                          store: model))
     }
 
     var body: some View {
@@ -109,6 +115,19 @@ struct EntryDetailView: View {
         // to finish on the way out; a refresh once the screen closes is enough for the
         // transcript section to pick up the corrected attribution.
         .onChange(of: showingMarkerCorrection) { _, shown in
+            guard !shown else { return }
+            Task {
+                await model.rescan()
+                await refresh()
+            }
+        }
+        .navigationDestination(isPresented: $showingRevisionHistory) {
+            RevisionHistoryView(model: revisionHistoryModel)
+        }
+        // A revert changes `current` — refresh once the panel closes so the transcript
+        // section shows what reverting actually landed, same reasoning as the marker
+        // correction close above.
+        .onChange(of: showingRevisionHistory) { _, shown in
             guard !shown else { return }
             Task {
                 await model.rescan()
@@ -411,6 +430,12 @@ struct EntryDetailView: View {
             Button("Correct markers…") { showingMarkerCorrection = true }
                 .font(.caption)
                 .accessibilityIdentifier("detail.correctMarkersButton")
+
+            // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
+            // and no revert button, so this is the only way back.
+            Button("Revision history…") { showingRevisionHistory = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.revisionHistoryButton")
 
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "

@@ -220,6 +220,83 @@ final class VoiceMarkingPlanTests: XCTestCase {
         }
     }
 
+    // MARK: - Same-bounds splice fragments (review Important 1)
+
+    /// The shape: `TranscriptSplice` degrades a touched span into fragments that all carry
+    /// the PARENT span's FULL bounds, so two CONSECUTIVE placeable spans can share an
+    /// identical `[frameStart, frameEnd)` — exactly the array
+    /// `TranscriptAttributionTests`'
+    /// `testTwoPlaceableSpansSharingBoundsCutAfterTheFirstFragmentAndFlagItApproximate`
+    /// already pins on the read side.
+    private var sameBoundsFragments: [TranscriptSpan] {
+        [TranscriptSpan(text: "frag one", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+         TranscriptSpan(text: "frag two", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+         TranscriptSpan(text: "after", anchor: .exact, frameStart: 100_000, frameEnd: 200_000)]
+    }
+
+    /// A plan is written in span indices but lands on disk as FRAMES. A boundary aimed at
+    /// fragment two would be written at frame 0, and `placeableCutPosition` resolves frame
+    /// 0 to fragment ONE — so the marked voice would bleed onto text the owner never
+    /// selected. Refuse rather than mark the wrong words.
+    func testMarkRangeThrowsNotMarkableWhenAnEarlierSpanSharesTheAnchorsStartFrame() throws {
+        let spans = sameBoundsFragments
+
+        // The range STARTS on the second fragment: its frame belongs to the first.
+        XCTAssertThrowsError(try VoiceMarkingPlan.markRange(
+            1...1, to: ln, paragraphs: [para(nil, 0..<3, spans)],
+            spans: spans, hasAnyVoiceMarker: false)) {
+            XCTAssertEqual($0 as? VoiceMarkingPlan.PlanError, .notMarkable, "switch anchored on fragment two")
+        }
+
+        // The range ENDS on the first fragment, so the RESTORE lands on fragment two —
+        // the same collision, reached through the other emitted command.
+        XCTAssertThrowsError(try VoiceMarkingPlan.markRange(
+            0...0, to: ln, paragraphs: [para(bn, 0..<3, spans)],
+            spans: spans, hasAnyVoiceMarker: true)) {
+            XCTAssertEqual($0 as? VoiceMarkingPlan.PlanError, .notMarkable, "restore anchored on fragment two")
+        }
+
+        // The adversary: the same fragment RUN, with the colliding span removed, must
+        // still plan normally — the refusal is about colliding frames, not about splice
+        // fragments being untouchable.
+        let distinctFrames = [spans[0], spans[2]]
+        let legal = try VoiceMarkingPlan.markRange(0...0, to: ln,
+                                                   paragraphs: [para(bn, 0..<2, distinctFrames)],
+                                                   spans: distinctFrames, hasAnyVoiceMarker: true)
+        XCTAssertEqual(legal, [.addVoiceBoundary(spanIndex: 0, voice: ln),
+                               .addVoiceBoundary(spanIndex: 1, voice: bn)])
+    }
+
+    /// The sneakier consequence: with a paragraph break between the two fragments (the
+    /// read-side fixture cited above produces exactly that split), a flip plans a switch at
+    /// fragment one and a restore at fragment two — BOTH at frame 0, one cut. The restore
+    /// is written last, so it wins, and the flip silently does nothing while every write
+    /// reports success.
+    func testFlipThrowsNotMarkableWhenTheSwitchAndRestoreWouldLandOnTheSameCut() throws {
+        let spans = sameBoundsFragments
+        let paragraphs = [para(nil, 0..<1, spans), para(nil, 1..<3, spans)]
+
+        XCTAssertThrowsError(try VoiceMarkingPlan.flipParagraph(at: 0, paragraphs: paragraphs,
+                                                                spans: spans, hasAnyVoiceMarker: false)) {
+            XCTAssertEqual($0 as? VoiceMarkingPlan.PlanError, .notMarkable, "switch and restore share frame 0")
+        }
+
+        // Flipping the SECOND paragraph emits no restore at all, but anchors on fragment
+        // two, whose frame still belongs to fragment one — refused for the first reason.
+        XCTAssertThrowsError(try VoiceMarkingPlan.flipParagraph(at: 1, paragraphs: paragraphs,
+                                                                spans: spans, hasAnyVoiceMarker: false)) {
+            XCTAssertEqual($0 as? VoiceMarkingPlan.PlanError, .notMarkable, "anchor on fragment two")
+        }
+
+        // The adversary: a cut between the fragment RUN and what follows it collides with
+        // nothing, and must still plan.
+        let legal = try VoiceMarkingPlan.flipParagraph(
+            at: 0, paragraphs: [para(bn, 0..<2, spans), para(bn, 2..<3, spans)],
+            spans: spans, hasAnyVoiceMarker: true)
+        XCTAssertEqual(legal, [.addVoiceBoundary(spanIndex: 0, voice: ln),
+                               .addVoiceBoundary(spanIndex: 2, voice: bn)])
+    }
+
     // MARK: - markRange
 
     /// The three-way split: the marked words take the target voice, and the first
@@ -556,5 +633,61 @@ final class VoiceMarkingPlanApplyTests: XCTestCase {
                                        VoicedParagraph(voice: ln, text: "three four")],
                               hasAnyVoiceMarkerBefore: true,
                               after: [VoicedParagraph(voice: ln, text: "one two three four")])
+    }
+
+    /// Review Important 1, end to end on disk: the same-bounds splice-fragment shape
+    /// (`TranscriptSplice` fragments carrying the PARENT span's FULL bounds, the read-side
+    /// fixture in `TranscriptAttributionTests`), where a boundary aimed at fragment two
+    /// would be WRITTEN at fragment one's frame. The planner refuses — and because it
+    /// refuses before returning any commands at all, the marker log on disk is untouched:
+    /// no opener, no half-applied switch. A planner that validated per-command instead of
+    /// per-plan would leave the first one or two records behind forever (the log is
+    /// append-only).
+    func testMarkingRefusesOnSameBoundsSpliceFragmentsAndLeavesTheMarkerLogUntouched() async throws {
+        let id = "01HHHHHHHHHHHHHHHHHHHHHHHH"
+        try writeManifest(id)
+        try await store().append(
+            TranscriptRevision(id: "01HHHHHHHHHHHHHHHHHHHHHHHI", source: .userEdit,
+                               createdAt: Date(timeIntervalSince1970: 3_000),
+                               spans: [TranscriptSpan(text: "frag one", anchor: .inherited,
+                                                      frameStart: 0, frameEnd: 100_000),
+                                       TranscriptSpan(text: "frag two", anchor: .inherited,
+                                                      frameStart: 0, frameEnd: 100_000),
+                                       TranscriptSpan(text: "after", anchor: .exact,
+                                                      frameStart: 100_000, frameEnd: 200_000)],
+                               parentID: nil),
+            captureID: id)
+
+        // A legal, exact ¶ boundary add first, so the log is non-empty and its bytes can be
+        // compared rather than merely "still absent".
+        let spansBefore = try currentSpans(id)
+        try MarkerCorrectionWriter.addBoundary(atSpanIndex: 2, spans: spansBefore,
+                                               captureDirectory: captureDir(id))
+        let logURL = SegmentLayout.markerLogURL(captureDirectory: captureDir(id))
+        let bytesBefore = try Data(contentsOf: logURL)
+
+        guard case .ready(let spans, let paragraphs, let hasAnyVoiceMarker) =
+                EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(id), sampleRate: 48_000) else {
+            return XCTFail("expected .ready")
+        }
+        XCTAssertEqual(paragraphs.map(\.text), ["frag one frag two", "after"], "sanity: the shape is on disk")
+        XCTAssertFalse(hasAnyVoiceMarker)
+
+        // Marking from fragment two: without the refusal this plans an opener, a switch at
+        // frame 0 (which resolves to fragment ONE) and a restore — three appended records
+        // and "frag one" wrongly voiced.
+        XCTAssertThrowsError(try VoiceMarkingPlan.markRange(1...1, to: ln, paragraphs: paragraphs,
+                                                            spans: spans, hasAnyVoiceMarker: hasAnyVoiceMarker)) {
+            XCTAssertEqual($0 as? VoiceMarkingPlan.PlanError, .notMarkable)
+        }
+
+        XCTAssertEqual(try Data(contentsOf: logURL), bytesBefore,
+                       "a refused plan writes nothing — the append-only log is byte-identical")
+        guard case .ready(_, let paragraphsAfter, _) =
+                EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(id), sampleRate: 48_000) else {
+            return XCTFail("expected .ready after the refusal")
+        }
+        XCTAssertEqual(paragraphsAfter.map(\.voice), paragraphs.map(\.voice), "no voice was assigned")
+        XCTAssertEqual(paragraphsAfter.map(\.text), paragraphs.map(\.text))
     }
 }

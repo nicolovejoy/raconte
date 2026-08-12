@@ -371,6 +371,27 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(model.item(idB)).isBackdated)
     }
 
+    /// Mirrors `moveEntry`/`setBackdate`'s shape: store call, rescan, Bool result. Labels
+    /// live on the journal, not the entry, so this checks they surface through
+    /// `item.journal?.voiceLabels` after the rescan `setJournalVoiceLabels` itself
+    /// triggers — the same way a journal rename already appears on every item filed
+    /// under it.
+    func testSetJournalVoiceLabelsPersistsAndAppearsOnFiledItems() async throws {
+        try writeJournals([journal("J1", "1987")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+
+        let model = model()
+        await model.rescan()
+        XCTAssertNil(model.item(idA)?.journal?.voiceLabels["bn"])
+
+        let succeeded = await model.setJournalVoiceLabels("J1", labels: ["bn": "Grandpa"])
+        XCTAssertTrue(succeeded)
+        XCTAssertEqual(model.item(idA)?.journal?.voiceLabels, ["bn": "Grandpa"])
+
+        let failed = await model.setJournalVoiceLabels("nope", labels: ["bn": "X"])
+        XCTAssertFalse(failed)
+    }
+
     /// Precision persists with the backdate and resets when the backdate is cleared —
     /// there is nothing left for it to describe once `originalDate` is nil.
     func testSetBackdateCarriesPrecisionAndClearingResetsIt() async throws {

@@ -98,7 +98,7 @@ final class EntryMetadataStoreTests: XCTestCase {
                                      originalDate: PartialDate(year: 1986, month: 11, day: 6),
                                      trashedAt: Date(timeIntervalSince1970: 1_700_000_000.5))
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertEqual(readBack, metadata)
         let freshStore = try await EntryMetadataStore(capturesRoot: capturesRoot)
@@ -108,9 +108,9 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testUpdateChangesOneFieldAndPreservesTheRest() async throws {
         let s = store()
-        try await s.write(EntryMetadata(journalID: "J1",
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1",
                                         originalDate: PartialDate(year: 1970, month: 1, day: 1)),
-                          captureID: captureID)
+                          url: sidecarURL)
         let updated = try await s.update(captureID: captureID) {
             $0.trashedAt = Date(timeIntervalSince1970: 200)
         }
@@ -160,7 +160,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     // MARK: The default is a semantic, not a value
 
     func testNilOriginalDateIsNotMaterializedOnDisk() async throws {
-        try await store().write(EntryMetadata(journalID: "J1"), captureID: captureID)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
         let text = String(decoding: try Data(contentsOf: sidecarURL), as: UTF8.self)
         XCTAssertEqual(text, #"{"journalID":"J1"}"#)
         XCTAssertFalse(text.contains("originalDate"))
@@ -313,7 +313,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testMultiVoiceTrueRoundTrips() async throws {
         let metadata = EntryMetadata(journalID: "J1", multiVoice: true)
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertTrue(readBack.multiVoice)
         XCTAssertEqual(readBack, metadata)
@@ -341,7 +341,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testPrecisionRoundTrips() async throws {
         let metadata = EntryMetadata(originalDate: PartialDate(year: 1986, month: 11))
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertEqual(readBack, metadata)
         XCTAssertEqual(readBack.originalDate?.precision, .yearMonth)
@@ -395,8 +395,8 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testWriteIsAtomicAndLeavesNoPartFile() async throws {
         let s = store()
-        try await s.write(EntryMetadata(journalID: "first"), captureID: captureID)
-        try await s.write(EntryMetadata(journalID: "second"), captureID: captureID)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "first"), url: sidecarURL)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "second"), url: sidecarURL)
         let latest = try await s.read(captureID: captureID)
         XCTAssertEqual(latest.journalID, "second")
         XCTAssertFalse(FileManager.default.fileExists(
@@ -419,5 +419,109 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertEqual(sidecarURL.deletingLastPathComponent().standardizedFileURL,
                        SegmentLayout.manifestURL(captureDirectory: captureDirectory)
                            .deletingLastPathComponent().standardizedFileURL)
+    }
+
+    // MARK: T7 §7 — update diffs and appends to the audit log (steps 7.2, 7.4, 7.5)
+
+    /// 7.2 (part 1): `update` diffs before/after and appends exactly one record per
+    /// changed field, with the field's on-disk string encoding on both sides.
+    func testBackdateEditThroughUpdateAppendsExactlyOneRecordWithTheOnDiskEncodings() async throws {
+        try EntryMetadataStore.write(
+            EntryMetadata(originalDate: PartialDate(year: 1998, month: 3)), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) {
+            $0.setOriginalDate(PartialDate(year: 1998, month: 3, day: 4))
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        let record = try XCTUnwrap(log.records.first)
+        XCTAssertEqual(record.field, "originalDate")
+        XCTAssertEqual(record.from, "1998-03")
+        XCTAssertEqual(record.to, "1998-03-04")
+        XCTAssertEqual(record.cause, .userEdit)
+    }
+
+    /// 7.2 (part 2): the counterpart to the test above — a fixture where the mutation
+    /// changes nothing writes nothing. Non-degenerate against the test above: that one
+    /// proves a real change DOES append, so "always writes nothing" cannot pass both.
+    func testUpdateThatChangesNothingAppendsNothing() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records, [])
+    }
+
+    /// 7.4: the log file is pre-created and made unwritable so `EntryLogWriter.append`'s
+    /// `open()` fails with EACCES, while `entry.json` — a different file in the same
+    /// directory — stays writable. `update` must still succeed and the sidecar must
+    /// still carry the edit; only the log write is lost.
+    func testFailingAppendDoesNotFailTheMetadataWrite() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+        let logURL = SegmentLayout.entryLogURL(captureDirectory: captureDirectory)
+        FileManager.default.createFile(atPath: logURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: logURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                        ofItemAtPath: logURL.path) }
+        guard !FileManager.default.isWritableFile(atPath: logURL.path) else {
+            throw XCTSkip("running with privileges that bypass permission checks")
+        }
+
+        let updated = try await store().update(captureID: captureID) { $0.journalID = "J2" }
+        XCTAssertEqual(updated.journalID, "J2")
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.journalID, "J2")
+    }
+
+    /// 7.5: the capture directory is made unwritable so the sidecar's `AtomicFile.replace`
+    /// cannot create its `.part` file — `update` must throw before the mutation ever
+    /// takes effect, and no log record may exist afterward.
+    ///
+    /// The log file is pre-created (normal permissions) so this genuinely isolates
+    /// ordering rather than accidentally testing "both operations fail for the same
+    /// reason": appending to an ALREADY-EXISTING file needs only the file's own write
+    /// permission, not the directory's — POSIX only gates directory *entry* creation
+    /// (a new `.part`, a new `entry-log.jsonl`) behind directory write permission. So an
+    /// append-before-write bug would still succeed here even though the sidecar write
+    /// fails, and this test would catch it.
+    func testAppendNeverRunsWhenTheSidecarWriteFails() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+        // Pre-created with normal permissions, BEFORE the directory is locked down:
+        // appending to an already-existing file needs only the file's own write
+        // permission plus directory *search*, not directory *write* — so an
+        // append-before-write bug is still observable below even though the sidecar
+        // write is denied.
+        let logURL = SegmentLayout.entryLogURL(captureDirectory: captureDirectory)
+        FileManager.default.createFile(atPath: logURL.path, contents: Data())
+        // Throwaway scratch file, created here (before the lockdown) so it doesn't
+        // contaminate the real assertion below — used only to confirm the isolation
+        // actually holds on this filesystem.
+        let scratchURL = captureDirectory.appendingPathComponent("probe.tmp")
+        FileManager.default.createFile(atPath: scratchURL.path, contents: Data())
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: captureDirectory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                        ofItemAtPath: captureDirectory.path) }
+        guard !FileManager.default.isWritableFile(atPath: captureDirectory.path) else {
+            throw XCTSkip("running with privileges that bypass permission checks")
+        }
+        // Appending to a pre-existing, normally-permissioned file must succeed even
+        // with the directory locked down, or this test proves nothing about ordering.
+        let scratchFD = open(scratchURL.path, O_WRONLY | O_APPEND)
+        XCTAssertGreaterThanOrEqual(scratchFD, 0, "fixture assumption failed: appending to an " +
+            "existing file needs directory write too on this filesystem")
+        if scratchFD >= 0 { close(scratchFD) }
+
+        do {
+            _ = try await store().update(captureID: captureID) { $0.journalID = "J2" }
+            XCTFail("expected the sidecar write to fail")
+        } catch {
+            // expected — AtomicFile.replace could not create its .part file
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records, [], "append must never run when the sidecar write did not land")
     }
 }

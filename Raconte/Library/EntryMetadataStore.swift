@@ -48,14 +48,27 @@ actor EntryMetadataStore {
         try Self.read(url: url(captureID: captureID))
     }
 
-    func write(_ metadata: EntryMetadata, captureID: String) throws {
+    /// Private (T7 §7.2 rule B4): every production write goes through `update`, which is
+    /// the only place that can log the edit it makes. The static `write(_:url:)` seam
+    /// below stays public — tests use it to plant fixtures without going through
+    /// `update`'s diff-and-log machinery, and it is documented read/test-only.
+    private func write(_ metadata: EntryMetadata, captureID: String) throws {
         try Self.write(metadata, url: url(captureID: captureID))
     }
 
     /// Read, mutate, write — the only safe way to change one field without clobbering
     /// the others written by a different screen.
+    ///
+    /// T7 §7: also the one place `entry-log.jsonl` is written. Diffs `EntryMetadata`
+    /// before/after the mutation (`EntryLogRecord.diff`) and appends one record per
+    /// changed field, **strictly after** `write` returns (§7.2 rule 2 — the log never
+    /// claims an edit the sidecar does not hold; if `write` throws, this method returns
+    /// before the diff ever runs). Append failure is silent (§7.2 rule 4): this is
+    /// diagnostics, and `EntryDegradation` is scan-derived with nowhere to carry a
+    /// log-write failure.
     @discardableResult
     func update(captureID: String,
+                cause: EntryLogCause = .userEdit,
                 _ mutate: @Sendable (inout EntryMetadata) -> Void) throws -> EntryMetadata {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         var isDirectory: ObjCBool = false
@@ -63,10 +76,49 @@ actor EntryMetadataStore {
               isDirectory.boolValue else {
             throw EntryMetadataError.captureMissing
         }
-        var metadata = try read(captureID: captureID)
+        let before = try read(captureID: captureID)
+        var metadata = before
         mutate(&metadata)
         try write(metadata, captureID: captureID)
+
+        let changes = EntryLogRecord.diff(from: before, to: metadata, at: Date(), cause: cause)
+        for record in changes {
+            do {
+                try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+            } catch {
+                #if DEBUG
+                print("EntryLogWriter.append failed for \(captureID) field \(record.field): \(error)")
+                #endif
+            }
+        }
         return metadata
+    }
+
+    /// §7.1 nit: `EntryMetadata.setOriginalDate` rejecting a future date leaves nothing
+    /// for `update`'s diff to see — the value never changes — but the attempt itself is
+    /// informative, so it is logged directly here with `cause: .rejected` rather than
+    /// through `update`'s generic path. Returns `setOriginalDate`'s own Bool; callers
+    /// that used to discard it (e.g. `LibraryScreenModel.setBackdate`) now get it back.
+    @discardableResult
+    func setOriginalDate(_ date: PartialDate?, captureID: String, now: Date = Date(),
+                          calendar: Calendar = .gregorianCurrent) throws -> Bool {
+        if let date, date.isFuture(now: now, calendar: calendar) {
+            let before = try? read(captureID: captureID)
+            let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let record = EntryLogRecord(at: now, field: "originalDate",
+                                        from: before?.originalDate?.isoString, to: date.isoString,
+                                        cause: .rejected, origin: nil)
+            do {
+                try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+            } catch {
+                #if DEBUG
+                print("EntryLogWriter.append failed for \(captureID) field originalDate: \(error)")
+                #endif
+            }
+            return false
+        }
+        _ = try update(captureID: captureID) { $0.setOriginalDate(date, now: now, calendar: calendar) }
+        return true
     }
 
     // MARK: Pure seams (sync; no actor hop, so the format is testable on its own)

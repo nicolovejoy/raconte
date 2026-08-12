@@ -76,18 +76,92 @@ enum TranscriptSplice {
             }
         }
 
+        // MARK: - Precompute: which insertion runs are a WHOLESALE, ZERO-OVERLAP
+        // replacement of exactly one parent span (design §16 ruling 5, owner
+        // 2026-08-11 — Task 9b: "Ellen" -> "LN"). The retyped word IS the heard word,
+        // corrected, so the replacement inherits the REPLACED span's own frame bounds
+        // instead of the brand-new-text `.insertion` case's zero-length point.
+        //
+        // A capitalized "Ellen" -> "LN" pair shares no characters at all (case-sensitive
+        // Myers diff), so every character of "Ellen" lands in `removedOffsets` with
+        // nothing surviving as a matched atom — invisible to the atom walk below, which
+        // never needs to skip over it (a removed character produces no atom either way,
+        // so its removal can go unprocessed there for the rest of the function, e.g. when
+        // the insertion is the very last thing in the text). Detected here instead by
+        // walking `positions`/`targetChars` directly in lock-step: a run of removed
+        // characters that (a) belongs to exactly ONE span, (b) covers ALL of that span's
+        // characters, and (c) is immediately followed — no removed separator, no second
+        // span, no surviving matched character in between — by newly typed text pairs
+        // that insertion with the span it replaced. Anything looser (a partial-span edit,
+        // a merge of two spans, a pure deletion with nothing typed after) is deliberately
+        // left untagged and keeps today's behavior — the ruling is scoped to one retyped
+        // word, not a redesign of the diff classification.
+        var wholesaleReplacements: [Int: Int] = [:]  // insertion run's start target offset -> spanIndex
+        do {
+            var sIdx = 0
+            var tIdx = 0
+            var pendingActive = false
+            var pendingQualifies = false
+            var pendingSpan: Int?
+            var pendingCharsSeen = 0
+            while sIdx < positions.count || tIdx < targetChars.count {
+                if sIdx < positions.count, removedOffsets.contains(sIdx) {
+                    switch positions[sIdx].origin {
+                    case .span(let spanIndex, _):
+                        if !pendingActive {
+                            pendingActive = true
+                            pendingSpan = spanIndex
+                            pendingCharsSeen = 1
+                            pendingQualifies = true
+                        } else if pendingQualifies, pendingSpan == spanIndex {
+                            pendingCharsSeen += 1
+                        } else {
+                            pendingQualifies = false
+                        }
+                    case .separator:
+                        // A removed separator taints whatever run is forming — the ruling
+                        // covers one retyped word with its surrounding spacing intact, not
+                        // a merge across a deleted boundary.
+                        pendingActive = true
+                        pendingQualifies = false
+                    }
+                    sIdx += 1
+                } else if tIdx < targetChars.count, insertedAt[tIdx] != nil {
+                    if pendingActive, pendingQualifies, let spanIndex = pendingSpan,
+                       pendingCharsSeen == parentSpans[spanIndex].text.count {
+                        wholesaleReplacements[tIdx] = spanIndex
+                    }
+                    pendingActive = false
+                    pendingQualifies = false
+                    pendingSpan = nil
+                    pendingCharsSeen = 0
+                    tIdx += 1
+                } else {
+                    // A surviving matched character — nothing was typed in its place, so
+                    // any pending removal run before it is a plain deletion, not a
+                    // replacement.
+                    pendingActive = false
+                    pendingQualifies = false
+                    pendingSpan = nil
+                    pendingCharsSeen = 0
+                    sIdx += 1
+                    tIdx += 1
+                }
+            }
+        }
+
         // MARK: - Walk target positions into atoms carrying provenance (or "inserted").
         enum Atom {
             case spanChar(spanIndex: Int, char: Character)
             case separatorChar
-            case insertedChar(Character)
+            case insertedChar(Character, targetIndex: Int)
         }
         var atoms: [Atom] = []
         atoms.reserveCapacity(targetChars.count)
         var sourceIndex = 0
         for targetIndex in 0..<targetChars.count {
             if let inserted = insertedAt[targetIndex] {
-                atoms.append(.insertedChar(inserted))
+                atoms.append(.insertedChar(inserted, targetIndex: targetIndex))
                 continue
             }
             while removedOffsets.contains(sourceIndex) { sourceIndex += 1 }
@@ -107,7 +181,7 @@ enum TranscriptSplice {
         // atom, so a deletion in the middle of a surviving run coalesces automatically).
         enum RawUnit {
             case spanRun(spanIndex: Int, text: String, length: Int)
-            case insertion(text: String)
+            case insertion(text: String, wholesaleReplacedSpanIndex: Int?)
             case separator
         }
         var rawUnits: [RawUnit] = []
@@ -117,13 +191,13 @@ enum TranscriptSplice {
             case .separatorChar:
                 rawUnits.append(.separator)
                 i += 1
-            case .insertedChar:
+            case .insertedChar(_, let startOffset):
                 var text = ""
-                while i < atoms.count, case .insertedChar(let char) = atoms[i] {
+                while i < atoms.count, case .insertedChar(let char, _) = atoms[i] {
                     text.append(char)
                     i += 1
                 }
-                rawUnits.append(.insertion(text: text))
+                rawUnits.append(.insertion(text: text, wholesaleReplacedSpanIndex: wholesaleReplacements[startOffset]))
             case .spanChar(let spanIndex, _):
                 var text = ""
                 while i < atoms.count, case .spanChar(let idx, let char) = atoms[i], idx == spanIndex {
@@ -244,8 +318,19 @@ enum TranscriptSplice {
                     emit(TranscriptSpan(text: text, anchor: .none, confidence: nil, sourceRevisionID: nil))
                 }
 
-            case .insertion(let text):
-                if let frameEnd = lastUsableFrameEnd {
+            case .insertion(let text, let wholesaleReplacedSpanIndex):
+                if let spanIndex = wholesaleReplacedSpanIndex,
+                   parentSpans[spanIndex].anchor.hasUsableBounds,
+                   let frameStart = parentSpans[spanIndex].frameStart,
+                   let frameEnd = parentSpans[spanIndex].frameEnd {
+                    // Splice-inherit ruling (design §16.5, owner 2026-08-11 — Task 9b):
+                    // a wholesale zero-overlap replacement inherits the REPLACED span's
+                    // own bounds, not a zero-length point at some other span's end.
+                    emit(TranscriptSpan(text: text, anchor: .inherited,
+                                        frameStart: frameStart, frameEnd: frameEnd,
+                                        confidence: nil,
+                                        sourceRevisionID: parentSpans[spanIndex].resolvedSourceRevisionID(in: parent)))
+                } else if let frameEnd = lastUsableFrameEnd {
                     emit(TranscriptSpan(text: text, anchor: .inherited,
                                         frameStart: frameEnd, frameEnd: frameEnd,
                                         confidence: nil, sourceRevisionID: lastUsableSourceRevisionID))

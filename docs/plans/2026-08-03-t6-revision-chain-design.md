@@ -318,6 +318,15 @@ and rewriting the span array:
   carries one frame pair and §3.1 refuses to synthesize word alignment (F17). Deleted.
 - **Insertion** — a new span, `anchor: inherited`, frames = a zero-length point at the
   preceding attached span's `frameEnd`; `.none` if there is no preceding anchored span.
+  **Exception (§16.5, owner ruling 2026-08-11, as-built Task 9b):** when the inserted
+  text is a WHOLESALE, ZERO-CHARACTER-OVERLAP replacement of exactly one parent span
+  (every character of that span removed by the diff, nothing else mixed in, immediately
+  followed by the new text — e.g. "Ellen" -> "LN"), the new span inherits the REPLACED
+  span's own bounds instead of the zero-length point — a real, non-zero-length interval
+  when the replaced span had one, or `.none` (never the zero-length-point fallback) when
+  it didn't. The retyped word IS the heard word, corrected, not a new word spoken at a
+  single instant. Multi-span replacements, partial-span edits, and plain deletions with
+  nothing typed in their place all keep the rule as originally stated above.
 - **Deletion** — the span disappears. **Frames are not redistributed.** Unclaimed audio is
   honest; stretching a neighbour fabricates alignment.
 - **Move** — delete + insert, unless the editor reports a move, in which case frames and
@@ -1464,15 +1473,33 @@ pass (Task 9) on `t7/editor-ui`.
    Guessing forward or backward from the nearest placeable span would assert something the
    data does not support; `nil` is `EntryDetailView`'s existing "no voice marker in force"
    answer, not a new state.
-5. **Splice-inherit ruling (owner, 2026-08-11).** A wholesale word replacement with zero
-   character overlap (the brief's own example, "Ellen" → "LN") **inherits the replaced word's
-   audio frames** — the retyped word IS the heard word, corrected, not a new word spoken at a
-   single instant. Today's splice discards the replaced span's frames and anchors the
-   replacement as a zero-length `.inherited` point at the preceding span's end, which asserts
-   something untrue about where the word lives in the audio (and is why #37's own worked
-   example — Swahili name transcribed as "Ellen," corrected to "LN" — was disproved by probe
-   during T7 planning). Implementation is **Task 9b**, landing on this branch before Gate B;
-   this entry records the ruling, not the fix.
+5. **Splice-inherit ruling (owner, 2026-08-11) — as built, Task 9b.** A wholesale word
+   replacement with zero character overlap (the brief's own example, "Ellen" → "LN")
+   **inherits the replaced word's audio frames** — the retyped word IS the heard word,
+   corrected, not a new word spoken at a single instant. Before this task, the splice
+   discarded the replaced span's frames and anchored the replacement as a zero-length
+   `.inherited` point at the preceding span's end, which asserted something untrue about
+   where the word lives in the audio (and is why #37's own worked example — Swahili name
+   transcribed as "Ellen," corrected to "LN" — was disproved by probe during T7 planning).
+   As built: `TranscriptSplice.spans(parent:editedText:)`
+   (`TranscriptSplice.swift:50`) runs a precompute pass over the diff's positions/removed
+   offsets/insertions, independent of the pre-existing atom-building walk, that tags an
+   insertion run as a wholesale replacement only when a contiguous removal run covers
+   exactly one parent span's full text with nothing else interposed — no second span, no
+   removed separator, no surviving matched character (`wholesaleReplacements`,
+   `TranscriptSplice.swift:108-141`). The `.insertion` `RawUnit` case carries the tagged
+   span index through (`TranscriptSplice.swift:193,209`); the emit loop
+   (`TranscriptSplice.swift:330-353`) inherits the REPLACED span's own
+   `frameStart`/`frameEnd`/resolved `sourceRevisionID` when tagged and that span has
+   usable bounds, and — the review round's fix — falls to `.none` with nil source, never
+   the zero-length-point fallback, when the replaced span itself has nothing to inherit
+   (borrowing a DIFFERENT span's provenance would repeat the exact untruth this ruling
+   exists to remove, just aimed at a new victim). `TranscriptAttribution.isPlaceableSpan`
+   (unchanged) is the one placeability rule both the wholesale-inherited case and the
+   ordinary zero-length-point case answer to — a wholesale replacement is placeable
+   exactly when the span it replaced was. Multi-span replacements, partial-span edits, and
+   plain deletions with nothing typed in their place are untouched, byte-identical to
+   before. §3.3's Insertion row above carries the same exception.
 6. **Row-honesty ruling (Gate B, T6c — not previously written up in §15/§15b).** Rows route
    through the O(1) `validatedHead` cache, but a trusted head could mask in-place damage to a
    canonical file: the row would say healthy while the detail screen and editor both refused.

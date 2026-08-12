@@ -454,6 +454,70 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertEqual(log.records, [])
     }
 
+    /// Review finding (Important 2): `EntryLogRecord.diff` has six near-identical
+    /// branches, one per `EntryMetadata` field; only `journalID`/`originalDate` were
+    /// exercised above. One row per field, each in its own capture directory so no case
+    /// can see another's log. Mutation-checked below (transposing a field name).
+    func testEveryFieldChangeAppendsARecordWithTheRightNameAndEncodings() async throws {
+        struct Case {
+            let field: String
+            let seed: EntryMetadata
+            let mutate: @Sendable (inout EntryMetadata) -> Void
+            let from: String?
+            let to: String?
+        }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let cases: [Case] = [
+            Case(field: "journalID", seed: EntryMetadata(journalID: "J1"),
+                 mutate: { $0.journalID = "J2" }, from: "J1", to: "J2"),
+            Case(field: "originalDate", seed: EntryMetadata(originalDate: PartialDate(year: 1998, month: 3)),
+                 mutate: { $0.originalDate = PartialDate(year: 1998, month: 3, day: 4) },
+                 from: "1998-03", to: "1998-03-04"),
+            Case(field: "trashedAt", seed: EntryMetadata(),
+                 mutate: { $0.trashedAt = stamp }, from: nil,
+                 to: CaptureCoding.iso8601Formatter().string(from: stamp)),
+            Case(field: "detectedDate", seed: EntryMetadata(),
+                 mutate: { $0.detectedDate = PartialDate(year: 1999) }, from: nil, to: "1999"),
+            Case(field: "detectionRan", seed: EntryMetadata(),
+                 mutate: { $0.detectionRan = true }, from: "false", to: "true"),
+            Case(field: "multiVoice", seed: EntryMetadata(),
+                 mutate: { $0.multiVoice = true }, from: "false", to: "true"),
+        ]
+
+        for testCase in cases {
+            let id = "\(captureID)-\(testCase.field)"
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try EntryMetadataStore.write(testCase.seed,
+                                         url: SegmentLayout.entryMetadataURL(captureDirectory: dir))
+
+            _ = try await store().update(captureID: id) { testCase.mutate(&$0) }
+
+            let log = EntryLogReader.load(captureDirectory: dir)
+            XCTAssertEqual(log.records.count, 1, "\(testCase.field): expected exactly one record")
+            let record = try XCTUnwrap(log.records.first, testCase.field)
+            XCTAssertEqual(record.field, testCase.field, "\(testCase.field): field name")
+            XCTAssertEqual(record.from, testCase.from, "\(testCase.field): from")
+            XCTAssertEqual(record.to, testCase.to, "\(testCase.field): to")
+        }
+    }
+
+    /// Review finding (Important 2): no test asserted a multi-field mutation appends
+    /// multiple records in `EntryMetadata`'s declaration order. The mutate closure sets
+    /// `multiVoice` before `journalID` — the OPPOSITE of declaration order — so this is
+    /// non-degenerate against a differ that emitted records in mutation order instead.
+    func testTwoFieldMutationAppendsRecordsInDeclarationOrderNotMutationOrder() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) {
+            $0.multiVoice = true
+            $0.journalID = "J2"
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.map(\.field), ["journalID", "multiVoice"])
+    }
+
     /// 7.4: the log file is pre-created and made unwritable so `EntryLogWriter.append`'s
     /// `open()` fails with EACCES, while `entry.json` — a different file in the same
     /// directory — stays writable. `update` must still succeed and the sidecar must

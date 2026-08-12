@@ -462,6 +462,42 @@ final class TranscriptAttributionTests: XCTestCase {
         XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
     }
 
+    /// Gate B Minor 4 — the fixture `placeableCutPosition`'s doc comment deferred to Gate
+    /// B, now closed. Two CONSECUTIVE placeable spans sharing IDENTICAL `[0, 100_000)`
+    /// bounds is not a contrivance: it is the ordinary post-edit shape, because
+    /// `TranscriptSplice` degrades a touched span into `.inherited` fragments that each
+    /// carry the PARENT span's FULL bounds. With a marker strictly inside those shared
+    /// bounds, `firstIndex(where:)` finds the FIRST fragment, so "nearer the end" cuts
+    /// after THAT fragment — not after the run the fragments came from.
+    ///
+    /// Both halves of the comment's claim are asserted: the cut position (after fragment
+    /// one, so fragment two starts the second paragraph) and `structuralApprox` being set
+    /// regardless, so the imprecision is disclosed rather than silently claimed as exact.
+    /// Nothing tears mid-word either — each paragraph is whole span texts.
+    ///
+    /// Mutation this fixture uniquely catches (measured, Gate B fix wave):
+    /// `firstIndex(where:)` -> `lastIndex(where:)`. Every other interior-cut fixture has
+    /// exactly one span containing the frame, so first and last are the same span there and
+    /// none of them fail.
+    func testTwoPlaceableSpansSharingBoundsCutAfterTheFirstFragmentAndFlagItApproximate() {
+        let spans = [
+            TranscriptSpan(text: "frag one", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "frag two", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "after", anchor: .exact, frameStart: 100_000, frameEnd: 200_000),
+        ]
+        // 90_000 is strictly inside [0, 100_000) and nearer that interval's END, so the cut
+        // goes AFTER the span it landed in — which is fragment ONE, the first match.
+        let markers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.map(\.text), ["frag one", "frag two after"],
+                       "the cut lands after the FIRST same-bounds fragment, not after the run")
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary,
+                      "an interior cut is disclosed as approximate on both sides of it")
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
+    }
+
     /// A span with an `.unknown` anchor (a foreign/future anchoring scheme this build
     /// doesn't understand) is unplaceable even when it carries real, non-nil frame
     /// bounds — `SpanAnchor.hasUsableBounds` says no for `.unknown` specifically because

@@ -60,7 +60,12 @@ struct RevisionHistoryView: View {
         let size = ByteCountFormatter.string(fromByteCount: model.chainByteSize, countStyle: .file)
         let base = "\(model.revisionCount) revision\(model.revisionCount == 1 ? "" : "s"), \(size)."
         guard model.isGrowthElevated else { return base }
-        return base + " This entry has been edited a lot — consider whether older revisions are still worth keeping."
+        // Gate B Minor 1: it used to end "consider whether older revisions are still worth
+        // keeping", which asks the owner to make a decision he has no way to act on —
+        // nothing in the app can delete a revision, by design (#39's alarm is a REPORT, and
+        // pruning is a T8+ question). Stated as information, with no implied chore.
+        return base + " This entry has been edited a lot. Nothing is removed automatically, and every "
+            + "revision is kept — this is just so the growth isn’t invisible."
     }
 
     @ViewBuilder

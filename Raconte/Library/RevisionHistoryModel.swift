@@ -213,8 +213,13 @@ final class RevisionHistoryModel {
             // (an open draft later closing and outranking the revert's merge). Route
             // the owner to finish the edit — the editor's own Done is exactly what
             // clears this.
-            return "There are unsaved edits open for this entry. Finish or discard them in the editor first, "
-                + "then try reverting again."
+            //
+            // Gate B Minor 1: it used to say "finish or discard", and DISCARD is not a
+            // thing this app can do — design §2.5 has no discard and the editor has no
+            // cancel (ruling Q1), so the instruction named an affordance that does not
+            // exist. Done is the only thing that clears this from the editor.
+            return "There are unsaved edits open for this entry. Open it in the editor and tap Done to "
+                + "finish them, then try reverting again."
         }
     }
 }

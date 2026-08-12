@@ -581,7 +581,11 @@ final class TranscriptEditorModel {
         case .draftInProgress:
             // Never actually thrown by writeDraft/closeDraft either (same reasoning as
             // .revisionNotFound above — `revert` is the only caller).
-            return "There are unsaved edits open for this entry. Finish or discard them first."
+            // Gate B Minor 1: never offer "discard" — design §2.5 has no discard, and the
+            // editor deliberately has no cancel (ruling Q1). The two things that actually
+            // close a draft are Done and the 90 s idle close, so those are what this says.
+            return "There are unsaved edits open for this entry. Open it in the editor and tap "
+                + "Done to finish them first."
         }
     }
 

@@ -1078,8 +1078,8 @@ final class TranscriptEditorModelTests: XCTestCase {
     func testAKeystrokeArrivingDuringThisSessionsCloseReachesTheChain() async throws {
         try await store().append(revision("R0", text: "hello world"), captureID: captureID)
         let gated = GatedCloseEditorStore(liveModel())
-        let debounce = ManualDebounce()
-        let model = editor(gated, debounce: debounce)
+        let clock = TestClock(1_700_001_000)
+        let model = editor(gated, clock: clock)
         await model.open()
 
         model.text = "hello world A"
@@ -1092,6 +1092,13 @@ final class TranscriptEditorModelTests: XCTestCase {
         // Autocorrect/IME/dictation commits one more character while the close is parked.
         model.text = "hello world AB"
         model.textChanged()
+        // Time passes across a close, so the injected clock must too. Left frozen, BOTH
+        // minted revisions carry the same `createdAt` and `TranscriptChain.ordered` falls
+        // through to comparing ULIDs whose timestamp halves are also identical — leaving a
+        // random suffix to decide which one is `current`. That is a 50/50 flake in the test,
+        // not in the fix (found the hard way in the Gate B fix wave); real `Date()` separates
+        // two closes by microseconds.
+        clock.now = clock.now.addingTimeInterval(1)
 
         gated.releaseClose()
         let saved = await exit.value
@@ -1117,7 +1124,8 @@ final class TranscriptEditorModelTests: XCTestCase {
     func testALateKeystrokeThatNeverArmedTheDebounceStillReachesTheChain() async throws {
         try await store().append(revision("R0", text: "hello world"), captureID: captureID)
         let gated = GatedCloseEditorStore(liveModel())
-        let model = editor(gated)
+        let clock = TestClock(1_700_001_000)
+        let model = editor(gated, clock: clock)
         await model.open()
 
         model.text = "hello world A"
@@ -1129,6 +1137,7 @@ final class TranscriptEditorModelTests: XCTestCase {
 
         model.text = "hello world AB"          // binding only — no textChanged()
         XCTAssertFalse(model.hasUnsavedChanges, "precondition: the flag says everything is saved")
+        clock.now = clock.now.addingTimeInterval(1)   // see the sibling test: a frozen clock ties the order
 
         gated.releaseClose()
         let saved = await exit.value

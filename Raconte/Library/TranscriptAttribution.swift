@@ -183,10 +183,13 @@ enum TranscriptAttribution {
     /// (the splice round-trip keeps fragment texts space-aligned, so a cut between two
     /// same-bounds fragments lands on a real text boundary, never inside one), and the
     /// result is flagged `structuralApprox: true` either way, same as every other
-    /// interior cut — the imprecision is disclosed, not silently claimed as exact. Not
-    /// separately pinned by a test here (no `structuralApprox`-flagged case where two
-    /// placeable spans share bounds AND a marker lands strictly inside them) — left for
-    /// Gate B if a cheap fixture surfaces.
+    /// interior cut — the imprecision is disclosed, not silently claimed as exact.
+    ///
+    /// No longer an open question (Gate B Minor 4): this used to say "left for Gate B if a
+    /// cheap fixture surfaces". One did, and the shape turned out to be the ORDINARY
+    /// post-edit one rather than exotic — pinned by `TranscriptAttributionTests`'
+    /// `testTwoPlaceableSpansSharingBoundsCutAfterTheFirstFragmentAndFlagItApproximate`,
+    /// which is also the only fixture that fails if `firstIndex` becomes `lastIndex`.
     private static func placeableCutPosition(
         forFrame frame: Int64, spans: [TranscriptSpan], placeableIndices: [Int]
     ) -> (position: Int, structuralApprox: Bool) {

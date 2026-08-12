@@ -236,7 +236,7 @@ final class RevisionHistoryModelTests: XCTestCase {
     /// failure-message mapping every other store guard already uses (no new alert
     /// path). The real-store round trip (open draft → refuse → close → succeed) is
     /// `testRevertRefusesWhileADraftIsOpenAndSucceedsOnceItsClosed` below.
-    func testRevertDraftInProgressErrorMessage() async {
+    func testRevertDraftInProgressErrorMessage() async throws {
         let store = FakeRevisionHistoryStore()
         store.snapshot = snapshot(
             currentRevisionID: "CUR",
@@ -249,8 +249,12 @@ final class RevisionHistoryModelTests: XCTestCase {
                                                      createdAt: Date(), firstLine: "", isCurrent: false,
                                                      isDetached: false, canRevert: true))
 
-        XCTAssertEqual(model.errorMessage, "There are unsaved edits open for this entry. Finish or discard "
-                       + "them in the editor first, then try reverting again.")
+        // Gate B Minor 1: the message must not offer "discard" — §2.5 has no discard and the
+        // editor has no cancel (ruling Q1), so Done is the only instruction that is true.
+        XCTAssertEqual(model.errorMessage, "There are unsaved edits open for this entry. Open it in the "
+                       + "editor and tap Done to finish them, then try reverting again.")
+        XCTAssertFalse(try XCTUnwrap(model.errorMessage).contains("discard"),
+                       "there is no discard anywhere in this app to point the owner at")
     }
 
     // MARK: - 8.2/8.3/8.4 — real store, real guards (no parallel check in the model)

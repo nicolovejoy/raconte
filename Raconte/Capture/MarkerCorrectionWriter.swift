@@ -67,14 +67,52 @@ enum MarkerCorrectionWriter {
     @discardableResult
     static func addBoundary(atSpanIndex spanIndex: Int, spans: [TranscriptSpan],
                             captureDirectory: URL) throws -> Int64 {
+        let frame = try placeableFrame(atSpanIndex: spanIndex, spans: spans)
+        try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionBoundaryAdd),
+                     captureDirectory: captureDirectory)
+        return frame
+    }
+
+    /// Shared by `addBoundary` and `addVoiceBoundary` (Task 1, #56) — the identical
+    /// placeable-anchor rule (`TranscriptAttribution.isPlaceableSpan`, the picked span's
+    /// own `frameStart`, never the group's), factored out once so a voice-carrying add
+    /// can never silently disagree with a plain one about what is offerable.
+    private static func placeableFrame(atSpanIndex spanIndex: Int, spans: [TranscriptSpan]) throws -> Int64 {
         guard spans.indices.contains(spanIndex) else { throw BoundaryAddError.indexOutOfRange }
         let target = spans[spanIndex]
         guard TranscriptAttribution.isPlaceableSpan(target), let frame = target.frameStart else {
             throw BoundaryAddError.noUsableBounds
         }
-        try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionBoundaryAdd),
+        return frame
+    }
+
+    // MARK: - Task 1 (#56): voice-carrying boundary adds
+
+    /// Case 3, voice-carrying variant: identical to `addBoundary` (same picked-span
+    /// anchor, same placeable-anchor rejection via `placeableFrame`, shares the exact
+    /// rule rather than re-deriving it), but the persisted record also carries `voice`
+    /// — so `MarkerCorrections.effectiveMarkers` synthesizes a `.voice` marker instead
+    /// of a plain `.paragraph` one at this exact, word-anchored frame.
+    @discardableResult
+    static func addVoiceBoundary(atSpanIndex spanIndex: Int, spans: [TranscriptSpan],
+                                 voice: String, captureDirectory: URL) throws -> Int64 {
+        let frame = try placeableFrame(atSpanIndex: spanIndex, spans: spans)
+        try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionBoundaryAdd, voice: voice),
                      captureDirectory: captureDirectory)
         return frame
+    }
+
+    /// The "he tapped a voice before saying anything" case: a voice-carrying boundary
+    /// add anchored at frame 0, with no span requirement at all (unlike
+    /// `addVoiceBoundary`, there is no picked word to validate against — frame 0 is
+    /// always a legal anchor, the same frame `TranscriptAttribution`'s frame-0 opener
+    /// convention already gives special meaning to). Writes unconditionally, creating
+    /// `markers.jsonl` if it doesn't exist yet — there is no prerequisite readable state
+    /// to check first the way `addBoundary`/`addVoiceBoundary` have (a readable
+    /// `current` revision supplying `spans`).
+    static func addOpeningVoice(voice: String, captureDirectory: URL) throws {
+        try appendOne(StructureMarker(seq: 0, frame: 0, kind: .correctionBoundaryAdd, voice: voice),
+                     captureDirectory: captureDirectory)
     }
 
     /// A sentence for the UI (mirrors `TranscriptEditorModel.saveFailureMessage`'s

@@ -277,4 +277,83 @@ final class MarkerCorrectionsTests: XCTestCase {
         XCTAssertThrowsError(try MarkerCorrectionWriter.addBoundary(
             atSpanIndex: 5, spans: [span("only", .exact, 0, 100)], captureDirectory: captureDir))
     }
+
+    // MARK: - Task 1 (#56): voice-carrying boundary adds — the writer
+
+    /// Mirror of `testAddBoundaryAnchorsToThePickedSpansOwnStartFrameNotTheGroupStart`
+    /// (`:180`) with a voice: `addVoiceBoundary` anchors to the picked span's own start
+    /// frame (never the group's) and the persisted record carries the voice.
+    func testAddVoiceBoundaryAppendsOneRecordCarryingTheVoiceAtTheSpansOwnStartFrame() throws {
+        let spans = [
+            span("one", .inherited, 0, 10_000),
+            span("two", .inherited, 20_000, 30_000),
+            span("three", .inherited, 40_000, 50_000),
+        ]
+
+        let written = try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: 1, spans: spans,
+                                                                   voice: "ln", captureDirectory: captureDir)
+
+        XCTAssertEqual(written, 20_000, "must be span 1's own start, not span 0's (the group's start)")
+
+        let onDisk = MarkerLogReader.load(captureDirectory: captureDir).markers
+        guard onDisk.count == 1, let record = onDisk.first else {
+            return XCTFail("expected exactly one record on disk, got \(onDisk.count)")
+        }
+        XCTAssertEqual(record.kind, .correctionBoundaryAdd)
+        XCTAssertEqual(record.frame, 20_000)
+        XCTAssertEqual(record.voice, "ln", "the written record must carry the voice")
+    }
+
+    /// Mirror of `testAddBoundaryRejectsAWordWithNoUsableBoundsAndWritesNothing` (`:202`)
+    /// — `addVoiceBoundary` shares the identical placeable-anchor rule, so a
+    /// non-placeable span is rejected and writes nothing, same as the voiceless writer.
+    func testAddVoiceBoundaryRejectsANonPlaceableSpanAndWritesNothing() throws {
+        let spans = [
+            span("typed", .none, nil, nil),
+            span("point", .inherited, 10_000, 10_000),   // zero-length: an insertion point
+        ]
+
+        for index in [0, 1] {
+            XCTAssertThrowsError(try MarkerCorrectionWriter.addVoiceBoundary(
+                atSpanIndex: index, spans: spans, voice: "ln", captureDirectory: captureDir)) { error in
+                guard case MarkerCorrectionWriter.BoundaryAddError.noUsableBounds = error else {
+                    return XCTFail("expected .noUsableBounds for span \(index), got \(error)")
+                }
+            }
+        }
+
+        XCTAssertEqual(MarkerLogReader.load(captureDirectory: captureDir).source, .absent,
+                       "a rejected voice boundary-add must leave markers.jsonl untouched")
+    }
+
+    /// `addOpeningVoice` anchors at frame 0 with no span requirement at all — the "he
+    /// tapped a voice before saying anything" case (task-1-brief.md).
+    func testAddOpeningVoiceAppendsAVoiceCarryingAddAtFrameZero() throws {
+        try MarkerCorrectionWriter.addOpeningVoice(voice: "bn", captureDirectory: captureDir)
+
+        let onDisk = MarkerLogReader.load(captureDirectory: captureDir).markers
+        guard onDisk.count == 1, let record = onDisk.first else {
+            return XCTFail("expected exactly one record on disk, got \(onDisk.count)")
+        }
+        XCTAssertEqual(record.kind, .correctionBoundaryAdd)
+        XCTAssertEqual(record.frame, 0)
+        XCTAssertEqual(record.voice, "bn")
+    }
+
+    /// `addOpeningVoice` must work on an entry that has no `markers.jsonl` yet at all —
+    /// unlike `addVoiceBoundary`/`addBoundary`, it has no prerequisite readable state to
+    /// check first (no spans needed), so it must create the log rather than requiring one.
+    func testAddOpeningVoiceOnAnEntryWithNoMarkerFileCreatesTheLog() throws {
+        XCTAssertEqual(MarkerLogReader.load(captureDirectory: captureDir).source, .absent,
+                       "sanity: no markers.jsonl before the call")
+
+        try MarkerCorrectionWriter.addOpeningVoice(voice: "bn", captureDirectory: captureDir)
+
+        let loaded = MarkerLogReader.load(captureDirectory: captureDir)
+        guard case .present = loaded.source else {
+            return XCTFail("expected .present, got \(loaded.source)")
+        }
+        XCTAssertEqual(loaded.markers.count, 1, "one decodable record after the call")
+        XCTAssertEqual(loaded.markers[0].voice, "bn")
+    }
 }

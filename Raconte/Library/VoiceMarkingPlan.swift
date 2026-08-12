@@ -192,8 +192,14 @@ enum VoiceMarkingPlan {
     /// all-empty-text paragraph is filtered out of the list, so a span index can fall in
     /// no surviving range at all, and the voice governing it is still the one that was in
     /// force when that gap began.
-    private static func governingVoice(atSpanIndex index: Int,
-                                       paragraphs: [TranscriptAttribution.Paragraph]) -> String? {
+    ///
+    /// Not `private` (Task 5 review, standing branch rule "never copy a shared
+    /// primitive"): `VoiceMarkingModel.alternativeVoice(forRangeStartingAt:)` needs the
+    /// IDENTICAL lookup — the plan uses it to pick the restore voice, the model uses it
+    /// to pick the voice its confirmation button OFFERS, and a second copy could silently
+    /// drift (the button offering "ln" while the plan restores something else).
+    static func governingVoice(atSpanIndex index: Int,
+                               paragraphs: [TranscriptAttribution.Paragraph]) -> String? {
         var voice: String?
         for paragraph in paragraphs {
             guard let range = paragraph.spanRange, range.lowerBound <= index else { continue }

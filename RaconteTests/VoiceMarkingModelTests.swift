@@ -229,6 +229,78 @@ final class VoiceMarkingModelTests: XCTestCase {
         XCTAssertEqual(model.alternativeVoice(forRangeStartingAt: 1), ln, "governed by bn -> offers ln")
         XCTAssertEqual(model.alternativeVoice(forRangeStartingAt: 4), bn, "governed by ln -> offers bn")
     }
+
+    // MARK: - hasApproximateBoundary (review finding 1)
+
+    /// `ParagraphRow.hasApproximateBoundary` must carry EACH paragraph's own flag, not a
+    /// constant — cardinality >= 2 (one `true`, one `false`) in one fixture, per the
+    /// plan's standing rule against single-value fixtures indistinguishable from a
+    /// hardcoded answer (the exact shape that let Task 3's `hasAnyVoiceMarker`
+    /// hardcoded-`true` survive 1155 tests). Built via `forcedLayout` directly — a real
+    /// approximate boundary is a `MarkerSnapping` outcome the fake's own derivation
+    /// doesn't reproduce (it always snaps exact, see its doc comment), so this pins the
+    /// MODEL's field mapping in isolation from that unrelated concern.
+    func testOpenCarriesEachParagraphsOwnApproximateBoundaryFlag() async {
+        let store = FakeVoiceMarkingStore()
+        let spans = words(4)
+        let paragraphs = [
+            TranscriptAttribution.Paragraph(voice: nil, text: "w0 w1",
+                                            hasApproximateBoundary: false, spanRange: 0..<2),
+            TranscriptAttribution.Paragraph(voice: nil, text: "w2 w3",
+                                            hasApproximateBoundary: true, spanRange: 2..<4),
+        ]
+        store.forcedLayout = .ready(spans: spans, paragraphs: paragraphs, hasAnyVoiceMarker: false)
+
+        let model = model(store)
+        await model.open()
+
+        XCTAssertEqual(model.rows.map(\.hasApproximateBoundary), [false, true],
+                       "each row must carry ITS OWN paragraph's flag, not a constant")
+    }
+
+    // MARK: - In-flight guard (review finding 3)
+
+    /// The concrete failure the review named: a second gesture entering while the first
+    /// is still suspended on a store `await` must be a no-op, not a second concurrent
+    /// write racing the first's. The fake holds its FIRST store call open (via a
+    /// continuation) until released, so this test can deterministically observe "the
+    /// second gesture's store calls happened DURING the hold" rather than relying on
+    /// incidental scheduling.
+    func testASecondGestureDuringAnInFlightWriteIsANoOp() async {
+        let store = FakeVoiceMarkingStore()
+        store.spans = words(6)
+        store.records = [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: bn),
+            StructureMarker(seq: 1, frame: 20_000, kind: .paragraph),
+            StructureMarker(seq: 2, frame: 40_000, kind: .paragraph),
+        ]
+
+        let model = model(store)
+        await model.open()
+        XCTAssertEqual(model.rows.map(\.voice), [bn, bn, bn], "precondition: three bn paragraphs")
+
+        store.holdWrites = true
+        async let first: Void = model.flipParagraph(0)
+        while !store.isHolding { await Task.yield() }
+
+        // The first gesture's own store call is suspended inside the hold right now —
+        // its FIRST command hasn't even been recorded yet. A second gesture arriving
+        // in this window must be entirely refused.
+        await model.markRange(first: 2, last: 3, to: ln)
+        XCTAssertEqual(store.writeLog, [],
+                       "the second gesture must never reach the store while the first is in flight")
+
+        store.releaseHold()
+        _ = await first
+
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(store.writeLog, [
+            .boundary(spanIndex: 0, voice: ln),
+            .boundary(spanIndex: 2, voice: bn),
+        ], "only the first gesture's own commands were ever written")
+        XCTAssertEqual(model.rows.map(\.voice), [ln, bn, bn],
+                       "the second gesture's mark-range must have had zero effect")
+    }
 }
 
 /// Records every call made against it so tests can assert on WHAT was written AND in
@@ -265,6 +337,30 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
     var failOnCallNumber: Int?
     private var callCount = 0
 
+    /// Suspends the FIRST store write (across either method) on a real continuation
+    /// until `releaseHold()` is called — lets a test deterministically park a gesture
+    /// mid-flight (review finding 3) instead of relying on incidental scheduling.
+    /// Self-consuming: only ever the first call holds, so the gesture that owns it can
+    /// complete its later commands normally once released.
+    var holdWrites = false
+    private(set) var isHolding = false
+    private var holdContinuation: CheckedContinuation<Void, Never>?
+
+    private func maybeHold() async {
+        guard holdWrites else { return }
+        holdWrites = false
+        isHolding = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            holdContinuation = continuation
+        }
+        isHolding = false
+    }
+
+    func releaseHold() {
+        holdContinuation?.resume()
+        holdContinuation = nil
+    }
+
     private func nextSeq() -> Int { (records.map(\.seq).max() ?? -1) + 1 }
 
     func voiceMarkingLayout(for captureID: String) async -> EntryTranscript.VoiceMarkingLayout {
@@ -285,6 +381,7 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
 
     @discardableResult
     func addVoiceBoundary(atSpanIndex spanIndex: Int, voice: String, captureID: String) async throws -> Int64 {
+        await maybeHold()
         writeLog.append(.boundary(spanIndex: spanIndex, voice: voice))
         callCount += 1
         if failOnCallNumber == callCount { throw FakeVoiceMarkingStoreError.writeFailed }
@@ -294,6 +391,7 @@ final class FakeVoiceMarkingStore: VoiceMarkingStore {
     }
 
     func addOpeningVoice(voice: String, captureID: String) async throws {
+        await maybeHold()
         writeLog.append(.opener(voice: voice))
         callCount += 1
         if failOnCallNumber == callCount { throw FakeVoiceMarkingStoreError.writeFailed }

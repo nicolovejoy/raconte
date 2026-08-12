@@ -35,16 +35,32 @@ Opus Gate B), opened PR #52, **Nico merged**. Worktree + t7 branch deleted; fres
 - Issues: #37 #39 #41 closed, #51 filed. Four harness drops (2 machine-sleeps), all
   recovered by same-agent resume, zero work lost.
 
+**TestFlight CLI setup (2026-08-12, same session — 95% done, ONE fix from first upload):**
+bundle ID `org.pianohouseproject.raconte` registered (`KJ4D33V27R` — dev builds were on the
+team wildcard, which can never ship); profile `raconte appstore` (`78D2Z6JR83`) minted
+against team cert `89FGBW89NS`, installed both dirs; `scripts/ExportOptions.plist` +
+`docs/testflight-deploy.md` committed (`8ea16c4a`); ASC app record created by owner as
+**"Raconte Journal"**; Release archive SUCCEEDED (no optimizer crash). **Upload failed on
+validation: `UISupportedInterfaceOrientations` missing** — the app declares no orientations.
+Fix: add the key (iPhone: portrait; iPad needs all four for multitasking, or opt out) via
+project.yml info properties, `xcodegen generate`, re-archive, re-run the exportArchive
+command in docs/testflight-deploy.md. Everything else is proven working.
+
 **Next steps:**
-1. **Owner smoke test on the phone** (build installed this session — steps in PR #52 body:
-   edit round-trip, late-keystroke-at-Done survival, revert, "Ellen"→"LN" correction).
-2. **TestFlight CLI decision** — musicforge's recipe (handoff channel, 2026-08-10) carries
-   over nearly whole: team cert exists, ASC API key exists; raconte needs an ASC app
-   record + one provisioning-profile POST + ExportOptions.plist. Recommended: do the
-   manual-CLI version first; defer Actions-triggered CD.
-3. Capture-landing implementation plan (fully specced; carries #27 gated by #35).
-4. Photo-snapshot implementation plan (design approved).
-5. #38 SDK recon; #44 device live.jsonl pull; consider coverage gating in CI (Gate B reco).
+1. **Give the owner the smoke test in EXPLICIT detail** (owner ask): small batches — not
+   too many steps at once — each step with exact taps and a stated pass/fail criterion.
+   Content: edit round-trip, late-keystroke-at-Done survival, revert from history,
+   "Ellen"→"LN" wholesale correction, approximate-boundary asterisk (outside selection).
+   Build already on the phone (`ea0ea4dc`).
+2. **Finish TestFlight upload** — one Info.plist fix, see block above.
+3. **Repo-privacy audit (owner ask, subagent):** verify this repo being PUBLIC is
+   appropriate — audit history + tree for anything private (owner's journal content in
+   fixtures?, device identifiers, team/signing IDs, API key IDs, paths) and report
+   whether real safety exists for private files despite the public repo. Note: docs/ and
+   CLAUDE.md carry team ID + ASC key ID + device UDID — assess, don't assume harmless.
+4. Capture-landing implementation plan (fully specced; carries #27 gated by #35).
+5. Photo-snapshot plan (approved); #38 SDK recon; #44 live.jsonl pull; coverage gating in
+   CI (Gate B reco).
 
 ## Session 2026-08-10 → 08-11 (laptop — T7 Tasks 4-6 + GATE A done; 986 → 1073 tests; Task 7 next)
 

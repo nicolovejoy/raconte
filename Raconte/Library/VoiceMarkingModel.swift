@@ -88,6 +88,18 @@ final class VoiceMarkingModel {
     private var paragraphs: [TranscriptAttribution.Paragraph] = []
     private var hasAnyVoiceMarker = false
 
+    /// Guards `flipParagraph`/`markRange` against a second gesture entering while the
+    /// first is still suspended on a store `await` (Task 5 review, finding 3):
+    /// MainActor re-entrancy means a second tap between the first gesture's plan and
+    /// its `open()` reload would plan against the SAME pre-gesture `paragraphs`
+    /// snapshot the first gesture is busy invalidating, and later-seq-wins on an
+    /// append-only log means the interleaved write can land as a silent no-op (a
+    /// paragraph that reads as unflipped, no error shown) rather than a visible
+    /// conflict. The model never trusts the UI to have disabled its own affordances
+    /// during the write — same "never trust the caller already enforced it" rule as
+    /// every other guard in this file.
+    private var isWriting = false
+
     init(captureID: String, store: any VoiceMarkingStore) {
         self.captureID = captureID
         self.store = store
@@ -128,7 +140,9 @@ final class VoiceMarkingModel {
     /// on an append-only log is APPEND order, and later-seq-wins is what makes the
     /// restore actually win over the switch for the paragraphs after it).
     func flipParagraph(_ rowID: Int) async {
-        guard paragraphs.indices.contains(rowID) else { return }
+        guard !isWriting, paragraphs.indices.contains(rowID) else { return }
+        isWriting = true
+        defer { isWriting = false }
         do {
             let commands = try VoiceMarkingPlan.flipParagraph(at: rowID, paragraphs: paragraphs,
                                                                spans: spans,
@@ -152,7 +166,9 @@ final class VoiceMarkingModel {
     /// that restriction, same "never trust the caller already enforced it" rule as
     /// `MarkerCorrectionModel.addBoundary`.
     func markRange(first: Int, last: Int, to voice: String) async {
-        guard first <= last else { return }
+        guard !isWriting, first <= last else { return }
+        isWriting = true
+        defer { isWriting = false }
         do {
             let commands = try VoiceMarkingPlan.markRange(first...last, to: voice,
                                                            paragraphs: paragraphs, spans: spans,
@@ -171,16 +187,13 @@ final class VoiceMarkingModel {
     }
 
     /// The voice the confirmation button offers for a range starting at `tokenID`: the
-    /// OTHER of whichever voice currently governs that position (the last paragraph
-    /// starting at or before it — the same "gap inherits the voice before it" rule
-    /// `VoiceMarkingPlan`'s own governing-voice lookup uses), falling back to the main
-    /// voice when nothing governs yet.
+    /// OTHER of whichever voice currently governs that position. Calls
+    /// `VoiceMarkingPlan.governingVoice` directly (Task 5 review: this used to be a
+    /// byte-identical private copy of that lookup — the plan uses it to pick the
+    /// RESTORE voice, this offers it as the confirmation choice, and a second copy
+    /// could silently drift) rather than re-deriving the gap-case rule here.
     func alternativeVoice(forRangeStartingAt tokenID: Int) -> String {
-        var governing: String?
-        for paragraph in paragraphs {
-            guard let range = paragraph.spanRange, range.lowerBound <= tokenID else { continue }
-            governing = paragraph.voice
-        }
+        let governing = VoiceMarkingPlan.governingVoice(atSpanIndex: tokenID, paragraphs: paragraphs)
         return VoiceDisplay.other(governing ?? VoiceDisplay.mainVoice)
     }
 

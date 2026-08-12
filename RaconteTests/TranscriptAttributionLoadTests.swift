@@ -654,4 +654,72 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertEqual(markingParagraphs.map(\.voice), readingParagraphs.map(\.voice))
         XCTAssertTrue(hasAnyVoiceMarker)
     }
+
+    /// Review Important 1 (task-3-report re-review): `hasAnyVoiceMarker` was pinned in
+    /// only one direction — `testVoiceMarkingLayoutReadyOnAnEntryWithNoMarkerFile`
+    /// exercises the `.absent` branch, which passes a LITERAL `false`
+    /// (`EntryTranscript.swift:109`), never the COMPUTED value at `:394`
+    /// (`effective.contains { $0.marker.kind == .voice }`). This fixture forces the
+    /// `.present` branch with a non-empty effective list that contains NO `.voice`
+    /// kind at all — a `.paragraph`-only marker log — so `hasAnyVoiceMarker` can only
+    /// read `false` here if the computed fold actually ran and found nothing voiced.
+    /// Hardcoding `hasAnyVoiceMarker = true` at `:394` fails this test (see task-3
+    /// report's mutation-check evidence).
+    func testVoiceMarkingLayoutParagraphOnlyMarkersComputeHasAnyVoiceMarkerFalse() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("first part", 0, 96_000),
+            ("second part", 96_000, 192_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 96_000, kind: .paragraph)])
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertEqual(paragraphs.count, 2, "the paragraph marker itself still splits — the log is genuinely used")
+        XCTAssertFalse(hasAnyVoiceMarker,
+                       "a present, non-empty marker log with only .paragraph markers carries no voice "
+                       + "signal — this must come from the computed fold, not the .absent branch's literal false")
+    }
+
+    /// Review Important 1's second half: the spec clause "voice-carrying boundary adds
+    /// count" toward `hasAnyVoiceMarker`. `MarkerCorrections.effectiveMarkers` folds a
+    /// voice-carrying `.correctionBoundaryAdd` into a SYNTHESIZED `.voice` record
+    /// (`MarkerCorrections.swift`'s Task 1 rule) — there is no raw `.voice` tap and no
+    /// `.correctionVoice` anywhere on disk, only the one boundary-add. If
+    /// `hasAnyVoiceMarker` were computed off raw records instead of the fold's output,
+    /// this would wrongly read `false`.
+    func testVoiceMarkingLayoutVoiceCarryingBoundaryAddAloneComputesHasAnyVoiceMarkerTrue() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two"], "sanity: one span per record")
+
+        // The ONLY marker record ever written: no raw .voice tap, no addOpeningVoice,
+        // no .correctionVoice — just the single voice-carrying boundary-add.
+        let written = try MarkerCorrectionWriter.addVoiceBoundary(
+            atSpanIndex: 1, spans: current.spans, voice: StructureMarker.Voice.littleNico,
+            captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 10_000, "span 1's (\"two\") own start frame")
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertEqual(paragraphs.map(\.text), ["one", "two"], "sanity: the add actually split the paragraph")
+        XCTAssertTrue(hasAnyVoiceMarker,
+                     "a voice-carrying boundary-add is the ONLY voice signal in this log, and must still count")
+    }
 }

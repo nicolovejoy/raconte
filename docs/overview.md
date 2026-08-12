@@ -178,11 +178,16 @@ remembers which audio frames it came from, with an honesty grade:
 Edits can only *degrade* precision (exact → inherited → none), never invent it.
 The one exception: accepting a machine revision adopts its measured anchors
 verbatim. This is what will make tap-a-word-to-play-the-audio honest (#13).
-One more exception, owner-ruled and landing as **Task 9b** (still in flight): a
-wholesale word replacement with zero character overlap ("Ellen" → "LN") will
-**inherit** the replaced word's frames rather than degrading to a zero-length
-`none` point — the retyped word IS the heard word, corrected, and a zero-length
-anchor asserts something untrue about where it lives in the audio.
+One more exception, owner-ruled and shipped (Task 9b): retyping a whole word
+with no letters in common ("Ellen" → "LN") **inherits the replaced word's own
+frames**. It used to land as a zero-length **inherited** point pinned at the end
+of the *previous* word — a real instant, but the wrong one, claiming the
+correction happened where the word before it stopped. The retyped word IS the
+heard word, corrected, so it keeps that word's stretch of audio. This is
+narrowly scoped on purpose: a partial fix inside a word, an edit that swallows
+the space beside it, or a deletion spanning two words all stay ordinary edits
+and claim nothing. And if the word being replaced had no frames of its own,
+neither does the replacement — it never borrows a neighbour's.
 
 **Marker correction (T7 Task 6).** Mis-tapped voice/paragraph markers are fixed
 in their own mode, not inline in the editor: retract a stray tap, correct a

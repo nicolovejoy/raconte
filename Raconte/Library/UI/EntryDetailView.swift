@@ -382,11 +382,13 @@ struct EntryDetailView: View {
     /// (`TranscriptAttribution.isItalic(voice:)`) as a stand-in for the
     /// print-vs-cursive distinction his physical journals use — no per-voice typeface
     /// yet. **`hasApproximateBoundary` affordance (T7 Task 9.3):** a paragraph adjacent
-    /// to an approximate cut gets a small, subtle trailing mark
-    /// (`attributedParagraph(_:)` below) — a hint, not an error state; the split itself
-    /// is never wrong, only its exact position within a word-gap is uncertain. Reads
-    /// whatever `TranscriptAttribution` already computed; nothing here re-derives
-    /// marker/correction state.
+    /// to an approximate cut gets a small, subtle trailing mark — a hint, not an error
+    /// state; the split itself is never wrong, only its exact position within a word-gap
+    /// is uncertain. The mark sits BESIDE the paragraph's selectable text, not inside it
+    /// (Gate B Minor 2), so copying the prose never picks up an asterisk nobody typed and
+    /// VoiceOver gets a labelled element instead of a bare "star". Reads whatever
+    /// `TranscriptAttribution` already computed; nothing here re-derives marker/correction
+    /// state.
     ///
     /// **Parked (T7 Task 9.2, ruled — Q12): cross-paragraph text selection.**
     /// `.textSelection(.enabled)` is per-`Text`, one call per paragraph below, so a drag
@@ -429,12 +431,28 @@ struct EntryDetailView: View {
                         // "detail.transcript.paragraph.<i>" breaks. The suffix is additive,
                         // giving a future UI test something concrete to assert on without a
                         // snapshot harness.
-                        attributedParagraph(paragraph)
-                            .font(.system(.body, design: .serif))
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier(paragraph.hasApproximateBoundary
-                                ? "detail.transcript.paragraph.\(index).approximate"
-                                : "detail.transcript.paragraph.\(index)")
+                        // Gate B Minor 2: the approximate-boundary mark is a SIBLING of the
+                        // selectable text, never concatenated into it. Concatenated, copying
+                        // a paragraph yielded "…prose *" — a character the owner never wrote,
+                        // pasted into wherever he was quoting himself — and VoiceOver read a
+                        // bare "star" after the prose with nothing to say what it meant. As a
+                        // sibling the text copies clean and the mark carries its own label.
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            attributedParagraph(paragraph)
+                                .font(.system(.body, design: .serif))
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier(paragraph.hasApproximateBoundary
+                                    ? "detail.transcript.paragraph.\(index).approximate"
+                                    : "detail.transcript.paragraph.\(index)")
+                            if paragraph.hasApproximateBoundary {
+                                Text("*")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .accessibilityLabel("approximate boundary")
+                                    .accessibilityIdentifier(
+                                        "detail.transcript.paragraph.\(index).approximateMark")
+                            }
+                        }
                     }
                 }
                 .accessibilityIdentifier("detail.transcript.text")
@@ -474,20 +492,22 @@ struct EntryDetailView: View {
     /// `TranscriptAttribution.isItalic(voice:)` says so. Unattributed paragraphs
     /// (`voice == nil`) get no prefix and are never italic.
     ///
-    /// **`hasApproximateBoundary` affordance (T7 Task 9.3):** a trailing space + small
-    /// asterisk, `.tertiary` foreground and `.caption2` size — deliberately quieter than
-    /// the voice label (`.secondary`/semibold), so it reads as a footnote-style hint,
-    /// not a warning. Consumes `paragraph.hasApproximateBoundary` exactly as
-    /// `TranscriptAttribution` computed it (raw taps, snapping, and Task 6's marker
-    /// corrections are all already folded in upstream — see
-    /// `EntryTranscript.snappedMarkers`) — no marker/correction state is re-derived
-    /// here. `Text` concatenation keeps each segment's own explicit modifiers
+    /// **`hasApproximateBoundary` is NOT rendered here (Gate B Minor 2).** The small
+    /// asterisk used to be concatenated onto the end of this `Text`, which put a character
+    /// the owner never wrote inside the SELECTABLE run — copying a paragraph yielded
+    /// "…prose *" — and gave VoiceOver a bare "star" to read. It now lives beside this text
+    /// as a sibling in the call site's `HStack`, with its own accessibility label, so this
+    /// function returns exactly the owner's words. Still consumed exactly as
+    /// `TranscriptAttribution` computed it (raw taps, snapping and Task 6's marker
+    /// corrections are folded in upstream — see `EntryTranscript.snappedMarkers`); nothing
+    /// here re-derives marker/correction state.
+    ///
+    /// `Text` concatenation keeps each segment's own explicit modifiers
     /// (font/color/italic) regardless of the outer `.font(.system(.body, design:
-    /// .serif))` the call site applies, the same mechanism the voice label already
-    /// relies on.
+    /// .serif))` the call site applies, which is the mechanism the voice label relies on.
     private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph) -> Text {
         let body = Text(paragraph.text)
-        var combined: Text
+        let combined: Text
         if let voice = paragraph.voice {
             let label = Text("\(TranscriptAttribution.displayName(forVoice: voice)): ")
                 .fontWeight(.semibold)
@@ -495,10 +515,6 @@ struct EntryDetailView: View {
             combined = label + body
         } else {
             combined = body
-        }
-        if paragraph.hasApproximateBoundary {
-            let hint = Text(" *").font(.caption2).foregroundStyle(.tertiary)
-            combined = combined + hint
         }
         return TranscriptAttribution.isItalic(voice: paragraph.voice) ? combined.italic() : combined
     }

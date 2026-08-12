@@ -562,4 +562,96 @@ final class TranscriptAttributionLoadTests: XCTestCase {
                        "a voice-carrying add is exact, word-anchored, and must never be snapped — "
                        + "same guarantee as a plain boundary-add")
     }
+
+    // MARK: - Task 3 (#56): EntryTranscript.voiceMarkingLayout
+
+    /// The key departure from the reading path (task-3-brief.md): an entry with NO
+    /// markers.jsonl at all is still `.ready` — marking mode exists precisely for
+    /// entries with no markers yet. One nil-voice paragraph spanning every span,
+    /// `hasAnyVoiceMarker == false`.
+    func testVoiceMarkingLayoutReadyOnAnEntryWithNoMarkerFile() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        // No markers.jsonl written at all.
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(let spans, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertFalse(spans.isEmpty, "a promoted entry has real spans to mark onto")
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertNil(paragraphs[0].voice)
+        XCTAssertEqual(paragraphs[0].text, "hello there")
+        XCTAssertFalse(hasAnyVoiceMarker)
+    }
+
+    /// An unreadable `markers.jsonl` is its own answer — distinct from "no log at all" —
+    /// so marking mode refuses rather than silently offering to mark on top of taps that
+    /// are still really there on disk.
+    func testVoiceMarkingLayoutUnreadableMarkerLogIsItsOwnAnswer() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn")])
+
+        let logURL = markerLogURL(idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: logURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: logURL.path) }
+        try XCTSkipIf(FileManager.default.isReadableFile(atPath: logURL.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .markersUnreadable = layout else {
+            return XCTFail("expected .markersUnreadable, got \(layout)")
+        }
+    }
+
+    /// No promotion at all (no `transcript/` canonical chain) — marking needs a
+    /// revision's own spans, and unlike the reading path there is no live.jsonl
+    /// fallback: `.unavailable`, not a degraded read of the machine transcript.
+    func testVoiceMarkingLayoutUnavailableWithoutACanonicalRevision() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        // Deliberately no store().promoteIfNeeded(captureID:) call.
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        XCTAssertEqual(layout, .unavailable)
+    }
+
+    /// WYSIWYG guarantee: the SAME fixture through the reading path
+    /// (`EntryTranscriptLoader.load(..., attribution: .compute)`) and through
+    /// `voiceMarkingLayout` must produce identical paragraph texts and voices — marking
+    /// mode must show exactly what the detail screen already renders, not a
+    /// differently-computed approximation of it.
+    func testVoiceMarkingLayoutParagraphsMatchTheReadingPath() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+
+        let reading = EntryTranscriptLoader.load(captureDirectory: captureDir(idA), expectedRecords: nil,
+                                                 attribution: .compute(sampleRate: 48_000))
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let markingParagraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        let readingParagraphs = try XCTUnwrap(reading.paragraphs)
+        XCTAssertEqual(markingParagraphs.map(\.text), readingParagraphs.map(\.text))
+        XCTAssertEqual(markingParagraphs.map(\.voice), readingParagraphs.map(\.voice))
+        XCTAssertTrue(hasAnyVoiceMarker)
+    }
 }

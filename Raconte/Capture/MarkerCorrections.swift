@@ -57,7 +57,18 @@ enum MarkerCorrections {
                 // one — so a later `.correctionRetract` can target this exact
                 // synthesized marker the same way it targets any raw tap (review
                 // Important 3).
-                additions.append(StructureMarker(seq: marker.seq, frame: marker.frame, kind: .paragraph))
+                //
+                // Task 1 (#56): a boundary-add that carries a voice synthesizes a
+                // `.voice` marker instead of `.paragraph` — the record is now doing
+                // double duty as both a paragraph break AND a voice assignment at a
+                // word-anchored, exact frame. A nil voice keeps today's behavior
+                // (plain `.paragraph`) byte-for-byte — the compat pin in
+                // `MarkerCorrectionsTests.testVoicelessBoundaryAddStillSynthesizesAParagraphMarker`.
+                if let voice = marker.voice {
+                    additions.append(StructureMarker(seq: marker.seq, frame: marker.frame, kind: .voice, voice: voice))
+                } else {
+                    additions.append(StructureMarker(seq: marker.seq, frame: marker.frame, kind: .paragraph))
+                }
             case .voice, .paragraph, .unknown:
                 break
             }

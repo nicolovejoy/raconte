@@ -149,6 +149,61 @@ final class MarkerCorrectionsTests: XCTestCase {
         XCTAssertEqual(byFrame[20_000], true, "the boundary-add's own synthesized marker")
     }
 
+    // MARK: - Task 1 (#56): voice-carrying boundary adds — the fold
+
+    /// A `.correctionBoundaryAdd` that carries a voice synthesizes a `.voice` marker
+    /// (task-1-brief.md), not the plain `.paragraph` every boundary-add produced before
+    /// this task — the whole point of teaching the record to carry a voice at all.
+    func testVoiceCarryingBoundaryAddSynthesizesAVoiceMarker() throws {
+        let raw: [StructureMarker] = [
+            StructureMarker(seq: 2, frame: 20_000, kind: .correctionBoundaryAdd, voice: "ln"),
+        ]
+
+        let effective = MarkerCorrections.effectiveMarkers(raw)
+
+        XCTAssertEqual(effective.count, 1)
+        let marker = try XCTUnwrap(effective.first)
+        XCTAssertEqual(marker.marker.kind, .voice, "a voice-carrying add must synthesize .voice, not .paragraph")
+        XCTAssertEqual(marker.marker.voice, "ln")
+        XCTAssertEqual(marker.marker.seq, 2, "the correction record's own seq, same as any boundary-add")
+        XCTAssertTrue(marker.isExact, "still a synthesized, word-anchored frame — never re-snapped")
+    }
+
+    /// The compat pin: a nil-voice boundary-add folds exactly as before this task —
+    /// `.paragraph`, no voice. Task 6's existing behavior must survive untouched.
+    func testVoicelessBoundaryAddStillSynthesizesAParagraphMarker() throws {
+        let raw: [StructureMarker] = [
+            StructureMarker(seq: 2, frame: 20_000, kind: .correctionBoundaryAdd),
+        ]
+
+        let effective = MarkerCorrections.effectiveMarkers(raw)
+
+        XCTAssertEqual(effective.count, 1)
+        let marker = try XCTUnwrap(effective.first)
+        XCTAssertEqual(marker.marker.kind, .paragraph)
+        XCTAssertNil(marker.marker.voice)
+        XCTAssertTrue(marker.isExact)
+    }
+
+    /// Mirror of `testRetractCancelsABoundaryAddRegardlessOfAppendOrder` (`:113`) with a
+    /// voice on the add — a retract must cancel a voice-carrying boundary-add exactly
+    /// as it cancels a plain one, regardless of append order.
+    func testRetractCancelsAVoiceCarryingAddRegardlessOfAppendOrder() {
+        let addThenRetract: [StructureMarker] = [
+            StructureMarker(seq: 0, frame: 20_000, kind: .correctionBoundaryAdd, voice: "ln"),
+            StructureMarker(seq: 1, frame: 0, kind: .correctionRetract, retractsSeq: 0),
+        ]
+        XCTAssertTrue(MarkerCorrections.effectiveMarkers(addThenRetract).isEmpty,
+                      "a retract targeting a voice-carrying boundary-add's own seq must cancel it")
+
+        let retractThenAdd: [StructureMarker] = [
+            StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: 1),
+            StructureMarker(seq: 1, frame: 20_000, kind: .correctionBoundaryAdd, voice: "ln"),
+        ]
+        XCTAssertTrue(MarkerCorrections.effectiveMarkers(retractThenAdd).isEmpty,
+                      "resolution is order-independent regardless of the add carrying a voice")
+    }
+
     // MARK: - 6.4b: boundary ADD by picked word — MarkerCorrectionWriter
 
     private var capturesRoot: URL!

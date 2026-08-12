@@ -120,8 +120,10 @@ Voices are a per-journal "Two voices" toggle, remembered across launches.
 Paragraph marking works regardless of the toggle.
 
 Rendering: the detail screen cuts the transcript into paragraphs at every
-paragraph tap and every voice switch — `BN:` prose in italic, `LN:` regular.
-Entries with no markers render exactly as before.
+paragraph tap and every voice switch. **Default is no labels** — the main
+voice renders italic, the alternative regular (matches his two-handwriting-
+styles paper convention). Labels (e.g. "BN", "LN") are opt-in, set per
+journal. Entries with no markers render exactly as before.
 
 Details: [markers design](plans/2026-08-05-capture-structure-markers-design.md),
 [voice rendering](plans/2026-08-08-voice-attributed-rendering-plan.md)
@@ -189,12 +191,21 @@ the space beside it, or a deletion spanning two words all stay ordinary edits
 and claim nothing. And if the word being replaced had no frames of its own,
 neither does the replacement — it never borrows a neighbour's.
 
-**Marker correction (T7 Task 6).** Mis-tapped voice/paragraph markers are fixed
-in their own mode, not inline in the editor: retract a stray tap, correct a
-voice at an existing boundary, or add a boundary that was never tapped at all
-(anchored to a word you pick in the text). Raw taps on disk are never touched —
-corrections append to `markers.jsonl` as their own record kind, and every
-reader folds them in before snapping/attribution runs.
+**Mark voices (issue #56, replaces "Correct markers").** A separate, explicit
+mode: tap a paragraph to flip which voice it is, or drag across a run of
+words to mark just that range. Everything renders live as you mark it
+(WYSIWYG); Done exits. Unmarked text is implicitly the main voice — you only
+mark the parts that are the *other* one, so a fresh entry with no markers at
+all is still a valid starting point to mark onto. Raw taps on disk are never
+touched: every marking action is an append to `markers.jsonl` (a voice-
+carrying boundary, or an "opening voice" record at frame 0 for text before
+the first mark), and later appends at the same spot simply win over earlier
+ones — no retract, no correct, no read-modify-write. The one thing marking
+mode can refuse: a rare post-edit shape where two words share identical audio
+frames makes a boundary ambiguous — the app declines rather than guess which
+word you meant. Retracting a stray tap and adding a bare paragraph break
+(no voice) have no UI for now — the old capability still exists in the format,
+just not wired to this screen yet.
 
 **Revision history + revert (T7 Task 8).** A separate screen lists the WHOLE
 chain — current, its ancestors, and every detached machine revision, clearly
@@ -213,7 +224,7 @@ current), **decline** it (recorded, stays visible off to the side), or later
 revisions; nothing is ever destroyed.
 
 Details: [T6 design](plans/2026-08-03-t6-revision-chain-design.md) (§15/§15b =
-T6 as-built rulings, §16 = T7 as-built rulings),
+T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
 [T6 build plan](plans/2026-08-08-revision-chain-implementation-plan.md),
 [T7 build plan](plans/2026-08-09-t7-editor-ui-plan.md)
 

@@ -150,6 +150,13 @@ private struct VoiceMarkingParagraphBlock: View {
                     .foregroundStyle(.secondary)
             }
             TokenFlowLayout(horizontalSpacing: 4, verticalSpacing: 6) {
+                // Hoisted OUT of the closure below: `coordinateSpaceName` is a
+                // main-actor-isolated property access, so reading `self.coordinateSpaceName`
+                // from inside a `Sendable` closure (as `onGeometryChange`'s transform
+                // closure is) is flagged by the compiler even when the read is the
+                // closure's first statement — the closure still captures `self` to get
+                // there. Capturing this plain `String` local instead captures no `self`.
+                let coordinateSpaceName = coordinateSpaceName
                 ForEach(row.tokens) { token in
                     Text(token.text)
                         .font(.system(.body, design: .serif))
@@ -159,8 +166,7 @@ private struct VoiceMarkingParagraphBlock: View {
                         .background((liveRange?.contains(token.id) ?? false)
                                     ? Color.accentColor.opacity(0.25) : Color.clear)
                         .onGeometryChange(for: CGRect.self) { proxy in
-                            let name = coordinateSpaceName
-                            return proxy.frame(in: .named(name))
+                            proxy.frame(in: .named(coordinateSpaceName))
                         } action: { newRect in
                             if let index = frames.firstIndex(where: { $0.id == token.id }) {
                                 frames[index].rect = newRect

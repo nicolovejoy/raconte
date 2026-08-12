@@ -599,6 +599,17 @@ final class LibraryScreenModel {
     func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
         try await revisionStore.closeDraft(captureID: captureID, reason: reason, now: now)
     }
+
+    // MARK: - Revision history passthrough (T7 Task 8)
+
+    /// Thin passthrough — the revision-history panel's revert action. Every guard
+    /// (missing/trashed capture, §15b.15 degraded-chain refusal, `.notMachineLineage`)
+    /// lives once, inside `TranscriptRevisionStore.revert`, never duplicated here.
+    /// Returns the minted revision's id.
+    @discardableResult
+    func revert(captureID: String, toRevisionID: String, now: Date) async throws -> String {
+        try await revisionStore.revert(captureID: captureID, toRevisionID: toRevisionID, now: now)
+    }
 }
 
 /// The editor writes through this model, never straight to `TranscriptRevisionStore` — one

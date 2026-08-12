@@ -205,6 +205,32 @@ final class TranscriptSpliceTests: XCTestCase {
         XCTAssertEqual(TranscriptText.join(result.map(\.text)), "LN said")
     }
 
+    /// Review Important 2 (T7 Task 9b): the wholesale tag can fire on a REPLACED span
+    /// that itself has no usable bounds (e.g. an unattached machine span, or one
+    /// already degraded to `.none` by an earlier edit). There is nothing to inherit —
+    /// falling through to the PRECEDING span's `frameEnd` would anchor the correction
+    /// under a DIFFERENT word's provenance, the exact untruth §16.5 exists to remove.
+    /// Same principle as the sibling touched-span rule two cases above
+    /// (`testEditingAnUnanchoredSpanProducesNoneFragmentsNotFabricatedBounds`): no
+    /// usable bounds means `.none`, nil source — never borrowed from a neighbour.
+    func testWholesaleReplacementOfAnUnanchoredSpanIsNoneNotBorrowedFromThePrecedingSpan() {
+        let p = parent([
+            exact("hello", 0, 10),
+            TranscriptSpan(text: "Ellen", anchor: .none),
+            exact("said", 20, 30),
+        ])
+        let result = TranscriptSplice.spans(parent: p, editedText: "hello LN said")
+        let retyped = try? XCTUnwrap(result.first { $0.text == "LN" })
+        let corrected = retyped ?? TranscriptSpan(text: "MISSING", anchor: .exact, frameStart: -1, frameEnd: -1)
+        XCTAssertEqual(corrected.anchor, .none, "nothing to inherit — the replaced span itself had no usable bounds")
+        XCTAssertNil(corrected.frameStart, "must not borrow the PRECEDING span's frameEnd (10)")
+        XCTAssertNil(corrected.frameEnd)
+        XCTAssertNil(corrected.sourceRevisionID, "must not borrow the preceding span's provenance")
+        XCTAssertFalse(TranscriptAttribution.isPlaceableSpan(corrected),
+                       "a span with no usable bounds must never be placeable")
+        XCTAssertEqual(TranscriptText.join(result.map(\.text)), "hello LN said")
+    }
+
     func testDeletionLeavesFramesUnclaimedNoNeighbourStretching() {
         let p = parent([
             exact("hello", 0, 10),

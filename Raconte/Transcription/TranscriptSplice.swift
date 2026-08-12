@@ -319,17 +319,29 @@ enum TranscriptSplice {
                 }
 
             case .insertion(let text, let wholesaleReplacedSpanIndex):
-                if let spanIndex = wholesaleReplacedSpanIndex,
-                   parentSpans[spanIndex].anchor.hasUsableBounds,
-                   let frameStart = parentSpans[spanIndex].frameStart,
-                   let frameEnd = parentSpans[spanIndex].frameEnd {
-                    // Splice-inherit ruling (design §16.5, owner 2026-08-11 — Task 9b):
-                    // a wholesale zero-overlap replacement inherits the REPLACED span's
-                    // own bounds, not a zero-length point at some other span's end.
-                    emit(TranscriptSpan(text: text, anchor: .inherited,
-                                        frameStart: frameStart, frameEnd: frameEnd,
-                                        confidence: nil,
-                                        sourceRevisionID: parentSpans[spanIndex].resolvedSourceRevisionID(in: parent)))
+                if let spanIndex = wholesaleReplacedSpanIndex {
+                    let replacedSpan = parentSpans[spanIndex]
+                    if replacedSpan.anchor.hasUsableBounds,
+                       let frameStart = replacedSpan.frameStart,
+                       let frameEnd = replacedSpan.frameEnd {
+                        // Splice-inherit ruling (design §16.5, owner 2026-08-11 — Task
+                        // 9b): a wholesale zero-overlap replacement inherits the
+                        // REPLACED span's own bounds, not a zero-length point at some
+                        // other span's end.
+                        emit(TranscriptSpan(text: text, anchor: .inherited,
+                                            frameStart: frameStart, frameEnd: frameEnd,
+                                            confidence: nil,
+                                            sourceRevisionID: replacedSpan.resolvedSourceRevisionID(in: parent)))
+                    } else {
+                        // The REPLACED span itself has nothing to inherit — same
+                        // principle as the touched-span rule just above (`.none`, nil
+                        // source when the parent span has no usable bounds). Falling
+                        // through to `lastUsableFrameEnd` here would anchor the
+                        // correction at a DIFFERENT span's end under that span's
+                        // borrowed provenance — exactly the untruth §16.5 exists to
+                        // remove, just aimed at a new victim.
+                        emit(TranscriptSpan(text: text, anchor: .none, confidence: nil, sourceRevisionID: nil))
+                    }
                 } else if let frameEnd = lastUsableFrameEnd {
                     emit(TranscriptSpan(text: text, anchor: .inherited,
                                         frameStart: frameEnd, frameEnd: frameEnd,

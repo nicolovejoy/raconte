@@ -111,7 +111,7 @@ final class EntryMetadataStoreTests: XCTestCase {
         try EntryMetadataStore.write(EntryMetadata(journalID: "J1",
                                                     originalDate: PartialDate(year: 1970, month: 1, day: 1)),
                                      url: sidecarURL)
-        let updated = try await s.update(captureID: captureID) {
+        let (updated, _) = try await s.update(captureID: captureID) {
             $0.trashedAt = Date(timeIntervalSince1970: 200)
         }
         XCTAssertEqual(updated.journalID, "J1")
@@ -123,7 +123,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     }
 
     func testUpdateOnAnAbsentSidecarStartsFromDefaults() async throws {
-        let updated = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
         XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
@@ -152,7 +152,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     /// must fail, because getting this wrong breaks journal filing on the capture path.
     func testUpdateStillWritesWhenTheDirectoryExistsWithNoSidecar() async throws {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
-        let updated = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
         XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
@@ -469,7 +469,7 @@ final class EntryMetadataStoreTests: XCTestCase {
             throw XCTSkip("running with privileges that bypass permission checks")
         }
 
-        let updated = try await store().update(captureID: captureID) { $0.journalID = "J2" }
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J2" }
         XCTAssertEqual(updated.journalID, "J2")
         let persisted = try await store().read(captureID: captureID)
         XCTAssertEqual(persisted.journalID, "J2")
@@ -568,5 +568,55 @@ final class EntryMetadataStoreTests: XCTestCase {
         let log = EntryLogReader.load(captureDirectory: captureDirectory)
         XCTAssertEqual(log.records.count, 1)
         XCTAssertEqual(log.records.first?.cause, .userEdit)
+    }
+
+    // MARK: Review finding (Important 1) — the answer must come from the model, never a guess
+
+    /// `update`'s generic `T` is the mutate closure's own return value, handed back
+    /// verbatim — not re-derived from the before/after diff, not re-derived from the
+    /// closure's argument, nothing state-based that could coincidentally agree with the
+    /// closure's real answer on today's inputs and silently drift later. A contrived
+    /// string (not something guessable from `EntryMetadata`'s state) makes that concrete.
+    func testUpdateReturnsTheMutateClosuresOwnResultVerbatim() async throws {
+        try EntryMetadataStore.write(EntryMetadata.defaults, url: sidecarURL)
+
+        let (metadata, result) = try await store().update(captureID: captureID) { md -> String in
+            md.journalID = "J9"
+            return "closure-returned-this-exact-string"
+        }
+
+        XCTAssertEqual(metadata.journalID, "J9")
+        XCTAssertEqual(result, "closure-returned-this-exact-string")
+    }
+
+    /// Review finding (Important 1): `setOriginalDate`'s `accepted` answer must always
+    /// agree with what actually landed in the sidecar — never predicted ahead of the
+    /// model, never a hardcoded literal disconnected from what `EntryMetadata
+    /// .setOriginalDate` really decided. Runs both the accepted and rejected cases (each
+    /// in its own capture directory, so neither result can bleed into the other) and
+    /// checks the invariant directly against re-read disk state rather than against a
+    /// second, independently-computed expectation.
+    func testSetOriginalDatesAcceptedAnswerAlwaysMatchesWhatLandedInTheSidecar() async throws {
+        struct Case { let name: String; let candidate: PartialDate }
+        let cases: [Case] = [
+            Case(name: "accepted", candidate: PartialDate(year: 2026, month: 6, day: 15)),
+            Case(name: "rejected", candidate: PartialDate(year: 2027)),
+        ]
+
+        for testCase in cases {
+            let id = "\(captureID)-\(testCase.name)"
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = SegmentLayout.entryMetadataURL(captureDirectory: dir)
+            try EntryMetadataStore.write(EntryMetadata.defaults, url: url)
+
+            let accepted = try await store().setOriginalDate(
+                testCase.candidate, captureID: id, now: referenceNow, calendar: referenceCalendar)
+            let persisted = try EntryMetadataStore.read(url: url)
+
+            XCTAssertEqual(accepted, persisted.originalDate == testCase.candidate,
+                           "\(testCase.name): the store's answer must match whether the " +
+                           "sidecar actually holds the attempted date, not a guess made ahead of it")
+        }
     }
 }

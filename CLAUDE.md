@@ -1,5 +1,59 @@
 # CLAUDE.md
 
+## Session 2026-08-12 afternoon (laptop — owner smoke + #56 designed AND half-built; 1124 → 1171 tests on branch)
+
+Owner ran the smoke test live and the session pivoted into the thing it surfaced.
+
+- **Owner smoke feedback → issues #53-#56 filed.** #53 capture controls move as live
+  transcript grows (named requirement for capture-landing build); #54 prev/next entry
+  navigation (design discussion); #55 detail-screen bubble-button hierarchy (future);
+  **#56 voice-attribution editing unusable** — the T7 "Correct markers" screen is
+  machine-shaped, entries without voices can't get them, and an edit visibly shifted
+  BN/LN attribution (unreproduced — get the entry/edit from owner if it recurs).
+  Confirmed for owner: back-arrow = Done is by design; mini not showing entries is
+  expected (no sync until M4).
+- **#56 designed in-session, owner ruled everything** (all on the issue): paragraph is
+  the unit but sentence-level exchanges exist; **default-voice model** (unmarked = main
+  voice, mark only the secondary; generalizes to tertiary); **display per journal —
+  default NO labels**, main voice italic / alternative regular (his journals use two
+  hands, no labels), labels opt-in per journal; **explicit "Mark voices" mode** (tap
+  paragraph flips, drag words marks a range, WYSIWYG, Done exits) replacing Correct
+  markers; owner tests on macOS laptop when built.
+- **Plan committed** (`docs/plans/2026-08-12-mark-voices-plan.md`, `24bfc8df`): 8 tasks +
+  gate. Everything reduces to two append-only records (frame-0 opening-voice add +
+  voice-carrying boundary add) planned by pure `VoiceMarkingPlan`; later-seq-wins makes
+  re-marking pure appends, no retract/correct.
+- **SDD loop ran Tasks 1-4 to complete** (Sonnet implementers, Opus for Task 4 + all task
+  reviews; every task exactly one fix round — the T7 pattern holds). Branch
+  `feat/mark-voices` (worktree `/Users/nico/src/raconte-mv`, base `24bfc8df`) at
+  `40e9a650`, PUSHED, 1171 unit tests green. Review kills, all probe/fixture-confirmed:
+  Task 1 — old `.correctionVoice` silently overrode newer voice adds at same frame (now
+  seq-based precedence, 3 directions pinned); Task 3 — `hasAnyVoiceMarker` hardcoded
+  `true` survived all 1155 tests (now pinned both ways, two distinct mutations); Task 4
+  worst — **splice fragments share identical frames, so a flip could silently self-cancel
+  and a range-mark could bleed voice onto unselected words**; ruled refuse-`.notMarkable`
+  via whole-plan frame-ambiguity validation, disk fixture pins log-byte-identical refusal.
+- **Ledger is the authoritative resume point**:
+  `/Users/nico/src/raconte-mv/.superpowers/sdd/2026-08-12-mark-voices-plan/progress.md` —
+  carries a RESUME POINT block (next: Task 5), per-task deferred minors for the gate,
+  what Tasks 5/6/7 dispatches must carry (non-atomic plan execution → model reloads +
+  surfaces honestly; refusal is a reachable UI state — disable affordance up front;
+  flip-into-neighbour-voice merges paragraphs; leading non-placeable text stays
+  voiceless), and an owner product question (capture toggle shows LN/BN, ignores
+  journal labels).
+
+**Next steps:**
+1. **Resume the #56 SDD loop at Task 5** — read the worktree ledger first; Tasks 5-8
+   remain (model, marking UI, labels sheet, gate + PR + **macOS build for owner test**,
+   which he explicitly wants to run on this laptop).
+2. **TestFlight upload** — still one Info.plist fix away (orientations key; recipe in
+   docs/testflight-deploy.md).
+3. **Repo-privacy audit** (owner ask, subagent) — unchanged from last handoff.
+4. Owner smoke follow-ups when scheduled: #53 capture-control stability, #54 prev/next
+   design discussion, #55 bubble hierarchy (explicitly "future").
+5. Capture-landing implementation plan; photo-snapshot plan; #38 SDK recon; #44
+   live.jsonl pull.
+
 ## Session 2026-08-11 → 08-12 (laptop — T7 FINISHED AND MERGED; 1073 → 1124 tests; PR #52)
 
 Ran the SDD loop from Task 7 to the end unattended (Sonnet implementers, Opus reviews,

@@ -331,6 +331,31 @@ final class LiveTranscriptStoreTests: XCTestCase {
                        SegmentLayout.entryMetadataURL(captureDirectory: captureDir).deletingLastPathComponent())
     }
 
+    /// T7 §7 rule 10 (the zero-byte-log trap): writing `entry-log.jsonl` must never flip
+    /// `holdsIrreplaceableArtifacts` false→true for a capture that otherwise holds
+    /// nothing — that would make a mis-tapped capture permanently undeletable, the exact
+    /// hazard `MarkerLog`/`CaptureCoordinator` already guard against for `transcript/`.
+    /// Verified directly against `DirectorySnapshot.gather` rather than asserted in a
+    /// comment (a Task 6 review found exactly that kind of overclaiming comment): the
+    /// walk that computes `transcriptPresent` only looks inside `transcript/`, and
+    /// `entry-log.jsonl` lives beside `entry.json` at the capture root, so it is
+    /// structurally invisible to every input `holdsIrreplaceableArtifacts` reads.
+    func testEntryLogAloneDoesNotFlipHoldsIrreplaceableArtifacts() throws {
+        try Data("{}".utf8).write(to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir))
+        try EntryLogWriter.append(
+            EntryLogRecord(at: Date(), field: "journalID", from: nil, to: "J1",
+                          cause: .userEdit, origin: nil),
+            captureDirectory: captureDir)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.entryLogURL(captureDirectory: captureDir).path))
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertFalse(capture.transcriptPresent)
+        XCTAssertFalse(capture.holdsIrreplaceableArtifacts,
+                       "entry-log.jsonl alone must not make a mis-tapped capture undeletable")
+    }
+
     func testCanonicalRevisionNeverMistakesHeadOrDraftForARevision() {
         XCTAssertNil(SegmentLayout.canonicalRevision(fromFileName: "head.json"))
         XCTAssertNil(SegmentLayout.canonicalRevision(fromFileName: "draft.json"))

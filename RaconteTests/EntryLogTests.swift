@@ -85,4 +85,17 @@ final class EntryLogTests: XCTestCase {
         XCTAssertEqual(loaded.records, [first, second],
                        "a torn tail must be fused with a bare newline, not fused onto the new record")
     }
+
+    // MARK: 7.7 — Mirror field-count tripwire, beside the differ
+
+    /// A tripwire, not a style check (copies `RecoveryExecutorTests
+    /// .testManifestFieldCountIsPinnedSoNewFieldsGetCarriedOver`'s pattern).
+    /// `EntryLogRecord.diff(from:to:)` enumerates `EntryMetadata`'s fields by hand, so a
+    /// field added to `EntryMetadata` is invisible to the differ by default and no
+    /// existing test notices. If this fails: add the new field's case to
+    /// `EntryLogRecord.diff`, then bump the count here.
+    func testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged() {
+        XCTAssertEqual(Mirror(reflecting: EntryMetadata.defaults).children.count, 6,
+                       "EntryMetadata gained or lost a field — see EntryLogRecord.diff(from:to:)")
+    }
 }

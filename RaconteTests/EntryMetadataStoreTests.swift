@@ -524,4 +524,49 @@ final class EntryMetadataStoreTests: XCTestCase {
         let log = EntryLogReader.load(captureDirectory: captureDirectory)
         XCTAssertEqual(log.records, [], "append must never run when the sidecar write did not land")
     }
+
+    // MARK: 7.8 — cause: .rejected (§7.1 nit)
+
+    /// A future backdate is refused by `EntryMetadata.setOriginalDate` — nothing for
+    /// `update`'s diff to see, since the value never changes — but the attempt itself is
+    /// logged directly, with `cause: .rejected`. The sidecar is untouched.
+    func testRejectedFutureBackdateIsLoggedWithCauseRejected() async throws {
+        try EntryMetadataStore.write(EntryMetadata(originalDate: PartialDate(year: 1998, month: 6)),
+                                     url: sidecarURL)
+
+        let accepted = try await store().setOriginalDate(
+            PartialDate(year: 2027), captureID: captureID, now: referenceNow, calendar: referenceCalendar)
+        XCTAssertFalse(accepted)
+
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.originalDate, PartialDate(year: 1998, month: 6),
+                       "a rejected attempt must not reach the sidecar")
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        let record = try XCTUnwrap(log.records.first)
+        XCTAssertEqual(record.field, "originalDate")
+        XCTAssertEqual(record.from, "1998-06")
+        XCTAssertEqual(record.to, "2027")
+        XCTAssertEqual(record.cause, .rejected)
+    }
+
+    /// The counterpart: an accepted backdate through the same entry point still goes
+    /// through `update`'s generic diff, cause `.userEdit`, non-degenerate against the
+    /// rejected case above (both use `setOriginalDate`; only the date differs).
+    func testAcceptedBackdateThroughSetOriginalDateLogsUserEdit() async throws {
+        try EntryMetadataStore.write(EntryMetadata.defaults, url: sidecarURL)
+
+        let accepted = try await store().setOriginalDate(
+            PartialDate(year: 2026, month: 6, day: 15), captureID: captureID,
+            now: referenceNow, calendar: referenceCalendar)
+        XCTAssertTrue(accepted)
+
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.originalDate, PartialDate(year: 2026, month: 6, day: 15))
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        XCTAssertEqual(log.records.first?.cause, .userEdit)
+    }
 }

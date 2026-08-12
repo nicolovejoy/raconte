@@ -16,7 +16,16 @@ enum TranscriptSplice {
     ///   usable bounds to begin with (`.none`/`.unknown`) degrades its fragments to
     ///   `.none` instead, since there is nothing to inherit;
     /// - newly typed text becomes an `.inherited` zero-length point at the nearest
-    ///   preceding OUTPUT span with usable bounds (`.none` if there is none);
+    ///   preceding OUTPUT span with usable bounds (`.none` if there is none) — UNLESS
+    ///   it is a WHOLESALE, ZERO-CHARACTER-OVERLAP replacement of exactly one parent
+    ///   span (every one of that span's characters removed by the diff, nothing else
+    ///   mixed in, immediately followed by the new text — design §16.5, owner ruling
+    ///   2026-08-11, Task 9b: "Ellen" -> "LN"), in which case it inherits the REPLACED
+    ///   span's own bounds instead — the retyped word IS the heard word, corrected, not
+    ///   a new word spoken at a single instant. If the replaced span itself has no
+    ///   usable bounds, there is nothing to inherit and the result is `.none` (same rule
+    ///   as the touched-span case above) — never the zero-length-point fallback, which
+    ///   would borrow a DIFFERENT span's provenance;
     /// - a wholly deleted span simply produces no output — frames are never redistributed
     ///   to a neighbour;
     /// - `TranscriptText.join` (rule 8) inserts a synthetic separator between array

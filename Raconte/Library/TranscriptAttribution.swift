@@ -92,18 +92,28 @@ enum TranscriptAttribution {
     ///
     /// A span can only be placed against a marker frame when its anchor claims usable
     /// bounds AND those bounds are non-zero-length — `.none`/`.unknown` never carry
-    /// frames at all, and a zero-length `.inherited` span is `TranscriptSplice`'s own
-    /// marker for "text typed here, inheriting a POINT, not a measured interval" (its own
-    /// doc comment: "newly typed text becomes an `.inherited` zero-length point"). Such a
-    /// span inherits the voice of the nearest PRECEDING placeable span and can never
-    /// itself start a paragraph: every cut this function computes lands immediately
-    /// BEFORE the next placeable span (`fullSpanIndex(forPlaceablePosition:...)` below),
-    /// which by construction sweeps every non-placeable span between it and the
-    /// PREVIOUS placeable span into the group that just ended, never the one that's
-    /// about to start. A run of non-placeable spans with nothing placeable before them
-    /// at all (leading the array) has nowhere to inherit FROM either — the earliest
-    /// possible cut is still no earlier than the first placeable span, so they land in
-    /// the very first group by the same structural reason.
+    /// frames at all, and a zero-length `.inherited` span is one of the ways
+    /// `TranscriptSplice` anchors ordinary newly-typed text: a POINT borrowed from the
+    /// nearest preceding span, not a measured interval. That is no longer the WHOLE
+    /// story since design §16.5 / Task 9b (2026-08-11): a wholesale, zero-character-
+    /// overlap replacement of exactly one parent span (e.g. "Ellen" -> "LN") inherits
+    /// the REPLACED span's own bounds instead — a real, non-zero-length interval, and
+    /// placeable exactly when that replaced span itself was (if it wasn't, the
+    /// replacement degrades to `.none`, the same rule as any other unanchored span, not
+    /// to the zero-length-point fallback). So placeability is not a proxy for "was this
+    /// text typed or measured" — it is exactly and only "does this span carry a real,
+    /// non-degenerate interval," however that interval was produced.
+    ///
+    /// A span landing on the zero-length-point side inherits the voice of the nearest
+    /// PRECEDING placeable span and can never itself start a paragraph: every cut this
+    /// function computes lands immediately BEFORE the next placeable span
+    /// (`fullSpanIndex(forPlaceablePosition:...)` below), which by construction sweeps
+    /// every non-placeable span between it and the PREVIOUS placeable span into the
+    /// group that just ended, never the one that's about to start. A run of
+    /// non-placeable spans with nothing placeable before them at all (leading the
+    /// array) has nowhere to inherit FROM either — the earliest possible cut is still
+    /// no earlier than the first placeable span, so they land in the very first group
+    /// by the same structural reason.
     ///
     /// Text assembly is `TranscriptText.join` per group — the SAME rule
     /// `TranscriptChain.plainText` uses over a revision's spans — so a no-marker call

@@ -517,4 +517,49 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
                        "an exact, word-anchored frame is never approximate — nothing here was snapped")
     }
+
+    // MARK: - Task 1 (#56): voice-carrying boundary adds, end to end
+
+    /// `MarkerCorrectionWriter.addOpeningVoice` + `.addVoiceBoundary` running against a
+    /// real promoted chain, loaded through `EntryTranscriptLoader.load(...,
+    /// attribution: .compute(...))` — the same abutting-words fixture as
+    /// `testAddBoundaryOnAbuttingWordsIsNotSnapped` above (device-observed norm for
+    /// in-record runs), so this also re-proves the voice-carrying add is never snapped:
+    /// with no gap anywhere in the four-word run, a snapped frame would land on frame 0
+    /// or a wrong word, not the picked one.
+    func testVoiceCarryingAddEndToEndChangesTheRenderedVoice() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+            ("three", 20_000, 30_000),
+            ("four", 30_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three", "four"])
+
+        try MarkerCorrectionWriter.addOpeningVoice(voice: StructureMarker.Voice.bigNico,
+                                                   captureDirectory: captureDir(idA))
+        let written = try MarkerCorrectionWriter.addVoiceBoundary(
+            atSpanIndex: 2, spans: current.spans, voice: StructureMarker.Voice.littleNico,
+            captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 2's (\"three\") own start frame")
+
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDir(idA), expectedRecords: nil,
+                                                    attribution: .compute(sampleRate: 48_000))
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs)
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), [StructureMarker.Voice.bigNico, StructureMarker.Voice.littleNico])
+        XCTAssertEqual(paragraphs.map(\.text), ["one two", "three four"])
+        XCTAssertEqual(paragraphs.map(\.text).joined(separator: " "), "one two three four",
+                       "the two paragraphs rejoin to exactly the original text")
+        XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
+                       "a voice-carrying add is exact, word-anchored, and must never be snapped — "
+                       + "same guarantee as a plain boundary-add")
+    }
 }

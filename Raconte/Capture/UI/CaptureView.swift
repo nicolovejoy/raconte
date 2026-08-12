@@ -523,7 +523,10 @@ final class CaptureScreenModel {
         // clobbered by the copy read out here.
         guard var probe = try? await entryMetadataStore.read(captureID: captureID),
               SpokenDateDetection.apply(to: &probe, transcriptText: text) else { return }
-        _ = try? await entryMetadataStore.update(captureID: captureID) { metadata in
+        // T7 §7: labelled .detection (not the update(_:) default .userEdit) so the audit
+        // log reflects what actually wrote this — the room's spoken date, not the owner's
+        // hand.
+        _ = try? await entryMetadataStore.update(captureID: captureID, cause: .detection) { metadata in
             SpokenDateDetection.apply(to: &metadata, transcriptText: text)
         }
     }

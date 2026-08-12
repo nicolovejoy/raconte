@@ -262,17 +262,18 @@ final class LibraryScreenModel {
 
     /// Set, change, or clear (`date == nil`) the backdate. `precision` is ignored when
     /// clearing — `EntryMetadata.effectivePrecision` is meaningless without a date, so
-    /// there is nothing to reset it to. Returns `false` on a store failure — see
-    /// `moveEntry`.
+    /// there is nothing to reset it to. Returns `false` on a store failure OR when
+    /// `EntryMetadata.setOriginalDate` refuses a future date — both are genuine "did not
+    /// happen" outcomes now that `EntryMetadataStore.setOriginalDate` (T7 §7.1 nit) stops
+    /// discarding that Bool and logs the rejected attempt instead. See `moveEntry` for
+    /// the store-failure half.
     @discardableResult
     func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async -> Bool {
         let calendar = Calendar.gregorianCurrent
+        let partial = date.map { PartialDate(from: $0, precision: precision, calendar: calendar) }
         let succeeded: Bool
         do {
-            _ = try await entryMetadataStore.update(captureID: captureID) {
-                $0.setOriginalDate(date.map { PartialDate(from: $0, precision: precision, calendar: calendar) })
-            }
-            succeeded = true
+            succeeded = try await entryMetadataStore.setOriginalDate(partial, captureID: captureID)
         } catch {
             succeeded = false
         }

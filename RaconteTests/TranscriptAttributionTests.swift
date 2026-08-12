@@ -172,7 +172,16 @@ final class TranscriptAttributionTests: XCTestCase {
         let nearEndMarkers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
         let nearEndParagraphs = TranscriptAttribution.attribute(committed: nearEnd, snapped: nearEndMarkers)
         XCTAssertEqual(nearEndParagraphs.map(\.text), ["word", "next"])
+        // T7 Task 9.3: `hasApproximateBoundary`'s own contract (see the span-path sibling
+        // pair, `testMarkerStrictlyInsideAPlaceableSpanNearer{Start,End}IsApproximate`) is
+        // that the imprecision belongs to the CUT, not to one side of it — the flag must
+        // land on BOTH paragraphs adjacent to an interior cut. This piece-based path
+        // (`cutIndex(forFrame:pieces:)`) had that contract implemented since Task 1 but
+        // never asserted on the second side; only the span path (`placeableCutPosition`,
+        // added in Task 5's fix round) had a two-sided pin. Symmetric here too.
         XCTAssertTrue(nearEndParagraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(nearEndParagraphs[1].hasApproximateBoundary,
+                      "the cut's imprecision belongs to both paragraphs it separates, not just the first")
     }
 
     func testRecordWithAnyUntimedRunIsNeverSplitInternally() {
@@ -202,6 +211,10 @@ final class TranscriptAttributionTests: XCTestCase {
 
         XCTAssertEqual(paragraphs.map(\.text), ["word", "next"])
         XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        // T7 Task 9.3: symmetric — this source of `approximate` is the marker's OWN
+        // snap-imprecision flag (not a structural interior-cut), so pin it lands on
+        // both sides too, distinct from the structural case above.
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
     }
 
     func testUnknownKindMarkersAreIgnoredForRendering() {

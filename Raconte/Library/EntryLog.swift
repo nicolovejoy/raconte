@@ -56,6 +56,51 @@ struct EntryLogRecord: Codable, Sendable, Equatable {
     var origin: String?
 }
 
+extension EntryLogRecord {
+    /// Field-by-field diff between two `EntryMetadata` values (§7.2 rule 1), one record
+    /// per changed field, in `EntryMetadata`'s declaration order. Each `from`/`to` is the
+    /// field's on-disk string encoding — §7.1's one typing rule for every field.
+    ///
+    /// `EntryMetadata` has **six** fields (`journalID`, `originalDate`, `trashedAt`,
+    /// `detectedDate`, `detectionRan`, `multiVoice` — `EntryMetadata.swift:47/57/61/76/
+    /// 87/97`). If this ever silently stops covering all of them, nothing here notices —
+    /// this function has no way to see a field it wasn't written to check. The guard
+    /// against that drift is `testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged`
+    /// (`EntryLogTests.swift`), a `Mirror`-based count pinned at 6: if it fires, add the
+    /// new field's case below before bumping the count.
+    static func diff(from before: EntryMetadata, to after: EntryMetadata,
+                      at: Date, cause: EntryLogCause) -> [EntryLogRecord] {
+        var records: [EntryLogRecord] = []
+        func add(_ field: String, _ from: String?, _ to: String?) {
+            records.append(EntryLogRecord(at: at, field: field, from: from, to: to,
+                                          cause: cause, origin: nil))
+        }
+        if before.journalID != after.journalID {
+            add("journalID", before.journalID, after.journalID)
+        }
+        if before.originalDate != after.originalDate {
+            add("originalDate", before.originalDate?.isoString, after.originalDate?.isoString)
+        }
+        if before.trashedAt != after.trashedAt {
+            add("trashedAt", before.trashedAt.map(encodeDate), after.trashedAt.map(encodeDate))
+        }
+        if before.detectedDate != after.detectedDate {
+            add("detectedDate", before.detectedDate?.isoString, after.detectedDate?.isoString)
+        }
+        if before.detectionRan != after.detectionRan {
+            add("detectionRan", String(before.detectionRan), String(after.detectionRan))
+        }
+        if before.multiVoice != after.multiVoice {
+            add("multiVoice", String(before.multiVoice), String(after.multiVoice))
+        }
+        return records
+    }
+
+    private static func encodeDate(_ date: Date) -> String {
+        CaptureCoding.iso8601Formatter().string(from: date)
+    }
+}
+
 enum EntryLogError: Error, Equatable {
     case posix(operation: String, code: Int32)
     /// A record encoded to something containing a raw newline, which JSONL cannot

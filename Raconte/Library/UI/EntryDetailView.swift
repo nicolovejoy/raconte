@@ -381,9 +381,23 @@ struct EntryDetailView: View {
     /// a separate caption line, and BN paragraphs render in italic
     /// (`TranscriptAttribution.isItalic(voice:)`) as a stand-in for the
     /// print-vs-cursive distinction his physical journals use — no per-voice typeface
-    /// yet. Still deferred: an affordance for `hasApproximateBoundary` (requirement 4's
-    /// explicit v1 decision — an approximate cut renders exactly like a precise one;
-    /// the flag exists so a later pass can add a badge without re-deriving anything).
+    /// yet. **`hasApproximateBoundary` affordance (T7 Task 9.3):** a paragraph adjacent
+    /// to an approximate cut gets a small, subtle trailing mark
+    /// (`attributedParagraph(_:)` below) — a hint, not an error state; the split itself
+    /// is never wrong, only its exact position within a word-gap is uncertain. Reads
+    /// whatever `TranscriptAttribution` already computed; nothing here re-derives
+    /// marker/correction state.
+    ///
+    /// **Parked (T7 Task 9.2, ruled — Q12): cross-paragraph text selection.**
+    /// `.textSelection(.enabled)` is per-`Text`, one call per paragraph below, so a drag
+    /// that starts in one paragraph and ends in another selects nothing past the first
+    /// paragraph's boundary — a real regression against the old single flattened
+    /// `Text(text)` (still visible in the `.plain` case above, where selection spans the
+    /// whole transcript). Per-paragraph rendering is what makes voice labels and italics
+    /// possible per paragraph in the first place, and SwiftUI's `Text` has no API for
+    /// "select across these siblings" short of a custom text view. Explicitly not fixed
+    /// in T7 — noted here so the next reader finds a documented trade, not a bug to
+    /// rediscover.
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
@@ -410,10 +424,17 @@ struct EntryDetailView: View {
             case .attributed(let paragraphs):
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
+                        // The base identifier is unchanged for the common (non-approximate)
+                        // case — nothing that already greps for
+                        // "detail.transcript.paragraph.<i>" breaks. The suffix is additive,
+                        // giving a future UI test something concrete to assert on without a
+                        // snapshot harness.
                         attributedParagraph(paragraph)
                             .font(.system(.body, design: .serif))
                             .textSelection(.enabled)
-                            .accessibilityIdentifier("detail.transcript.paragraph.\(index)")
+                            .accessibilityIdentifier(paragraph.hasApproximateBoundary
+                                ? "detail.transcript.paragraph.\(index).approximate"
+                                : "detail.transcript.paragraph.\(index)")
                     }
                 }
                 .accessibilityIdentifier("detail.transcript.text")
@@ -452,9 +473,21 @@ struct EntryDetailView: View {
     /// only way to mix styling within one line — then italicized as a whole when
     /// `TranscriptAttribution.isItalic(voice:)` says so. Unattributed paragraphs
     /// (`voice == nil`) get no prefix and are never italic.
+    ///
+    /// **`hasApproximateBoundary` affordance (T7 Task 9.3):** a trailing space + small
+    /// asterisk, `.tertiary` foreground and `.caption2` size — deliberately quieter than
+    /// the voice label (`.secondary`/semibold), so it reads as a footnote-style hint,
+    /// not a warning. Consumes `paragraph.hasApproximateBoundary` exactly as
+    /// `TranscriptAttribution` computed it (raw taps, snapping, and Task 6's marker
+    /// corrections are all already folded in upstream — see
+    /// `EntryTranscript.snappedMarkers`) — no marker/correction state is re-derived
+    /// here. `Text` concatenation keeps each segment's own explicit modifiers
+    /// (font/color/italic) regardless of the outer `.font(.system(.body, design:
+    /// .serif))` the call site applies, the same mechanism the voice label already
+    /// relies on.
     private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph) -> Text {
         let body = Text(paragraph.text)
-        let combined: Text
+        var combined: Text
         if let voice = paragraph.voice {
             let label = Text("\(TranscriptAttribution.displayName(forVoice: voice)): ")
                 .fontWeight(.semibold)
@@ -462,6 +495,10 @@ struct EntryDetailView: View {
             combined = label + body
         } else {
             combined = body
+        }
+        if paragraph.hasApproximateBoundary {
+            let hint = Text(" *").font(.caption2).foregroundStyle(.tertiary)
+            combined = combined + hint
         }
         return TranscriptAttribution.isItalic(voice: paragraph.voice) ? combined.italic() : combined
     }

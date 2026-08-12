@@ -37,6 +37,20 @@ struct CaptureSnapshot: Equatable {
     var liveTranscriptByteSize: Int?
     /// Revision numbers of the `canonical-<n>.json` files present, ascending.
     var canonicalRevisions: [Int]
+    /// Sum of on-disk byte sizes of every listed `canonical-<n>.json` file — readable or
+    /// not — `nil` when there are none (`transcript/` absent, unreadable, or holding
+    /// only `live.jsonl`), mirroring `liveTranscriptByteSize`'s "nil if absent"
+    /// convention (T7 Task 3 ruling 1: `Int?` here, NOT harmonized with
+    /// `EntryChainSnapshot.chainByteSize`'s `Int64`, which matches a different
+    /// neighbourhood). Counts EXACTLY the same file set `chainByteSize` does — same
+    /// underlying `TranscriptRevisionStore.canonicalFilesByteSize` call, same
+    /// exclusion of `head.json`/`draft.json` — so the diagnostics screen (which reads
+    /// this, off the cheap corpus-wide scan) and the revision-history panel (which
+    /// reads `chainByteSize`, off a per-entry `EntryChainSnapshot`) never disagree
+    /// about one entry's chain size (#39). No revision body is decoded to compute
+    /// this — a directory listing (already done by this walk) plus file sizes only,
+    /// same as every other stat `DirectorySnapshot` gathers.
+    var revisionsByteSize: Int?
     /// Resolved capture format (manifest → any sidecar → default). Carries a
     /// filled-in `bytesPerFrame` so the planner needs no format defaults.
     var format: AudioFormatDescriptor
@@ -53,6 +67,7 @@ struct CaptureSnapshot: Equatable {
          transcriptDirUnreadable: Bool = false,
          liveTranscriptByteSize: Int? = nil,
          canonicalRevisions: [Int] = [],
+         revisionsByteSize: Int? = nil,
          format: AudioFormatDescriptor) {
         self.captureID = captureID
         self.directory = directory
@@ -66,6 +81,7 @@ struct CaptureSnapshot: Equatable {
         self.transcriptDirUnreadable = transcriptDirUnreadable
         self.liveTranscriptByteSize = liveTranscriptByteSize
         self.canonicalRevisions = canonicalRevisions.sorted()
+        self.revisionsByteSize = revisionsByteSize
         self.format = format
     }
 
@@ -224,6 +240,11 @@ extension DirectorySnapshot {
         let liveURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
         let liveSize: Int? = fm.fileExists(atPath: liveURL.path) ? fileSize(liveURL) : nil
         let canonicalRevisions = transcriptNames.compactMap(SegmentLayout.canonicalRevision(fromFileName:))
+        // #39/#40 Task 3: same file set `EntryChainSnapshot.chainByteSize` sums (see
+        // `TranscriptRevisionStore.canonicalFilesByteSize`'s doc comment) — no revision
+        // body decoded, just the sizes of the files this walk already listed.
+        let revisionsByteSize: Int? = canonicalRevisions.isEmpty ? nil : Int(
+            TranscriptRevisionStore.canonicalFilesByteSize(captureDirectory: directory, files: canonicalRevisions))
         // Deliberately "any file at all", not "a file we can name".
         //
         // Issue #8's guard reads this, and §3's rule is "never delete a capture
@@ -249,6 +270,7 @@ extension DirectorySnapshot {
             transcriptDirUnreadable: transcriptDirUnreadable,
             liveTranscriptByteSize: liveSize,
             canonicalRevisions: canonicalRevisions,
+            revisionsByteSize: revisionsByteSize,
             format: format)
     }
 

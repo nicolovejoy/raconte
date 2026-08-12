@@ -24,6 +24,27 @@ struct EntryDetailView: View {
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
+    /// The editor is a full-screen push, not a sheet (T7 Task 4, ruling Q9). Its model is
+    /// built once, in `init`, rather than inside the destination builder: a builder that
+    /// re-mints it on every body evaluation would restart the editing session under the
+    /// owner's cursor, and a builder that could return nothing would push a blank page
+    /// (issue #32's lesson).
+    @State private var showingEditor = false
+    /// A save the editor refused on its way out (Gate A Critical 1). The editor's own screen
+    /// has already popped by then, so the detail screen is the only surface left that can say
+    /// so — the same reason `trashFailed`/`moveFailed`/`backdateFailed` live here.
+    @State private var editSaveFailed = false
+    @State private var editSaveFailureReason = ""
+    @State private var editorModel: TranscriptEditorModel
+    /// Marker correction is its OWN mode (T7 Task 6, ruling Q11) — a separate pushed
+    /// screen, never inline in the editor. Same "built once in init" reasoning as
+    /// `editorModel` above.
+    @State private var showingMarkerCorrection = false
+    @State private var markerCorrectionModel: MarkerCorrectionModel
+    /// The whole undo story (T7 Task 8, ruling Q1) — a separate pushed screen, same
+    /// "built once in init" reasoning as `editorModel`/`markerCorrectionModel` above.
+    @State private var showingRevisionHistory = false
+    @State private var revisionHistoryModel: RevisionHistoryModel
 
     /// Sidecar writes that reported failure. Each names what didn't save — the same
     /// swallowed-`try?` family as `TrashView.permanentDeleteFailed`, which the owner hit
@@ -34,10 +55,17 @@ struct EntryDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    @MainActor
     init(model: LibraryScreenModel, item: EntryListItem) {
         self.model = model
         self.captureID = item.captureID
         _item = State(initialValue: item)
+        _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
+                                                                 store: model))
+        _markerCorrectionModel = State(initialValue: MarkerCorrectionModel(captureID: item.captureID,
+                                                                           store: model))
+        _revisionHistoryModel = State(initialValue: RevisionHistoryModel(captureID: item.captureID,
+                                                                          store: model))
     }
 
     var body: some View {
@@ -55,6 +83,57 @@ struct EntryDetailView: View {
         }
         .navigationTitle(item.formattedEffectiveDate())
         .task { await refresh() }
+        .navigationDestination(isPresented: $showingEditor) {
+            TranscriptEditorView(model: editorModel)
+        }
+        // The editor writes through the store directly and deliberately does NOT rescan on
+        // every debounce fire; the library rows catch up once, here, when it closes.
+        .onChange(of: showingEditor) { _, shown in
+            guard !shown else { return }
+            Task {
+                // BEFORE the reload, not after: on Back the editor's own `onDisappear` starts
+                // its close concurrently, and a rescan that overtook it would re-render the
+                // PRE-edit transcript — the owner backs out and watches the edit vanish, with
+                // the stale-draft sweep no help (it will not touch a seconds-old draft).
+                // `finishIfNeeded()` is idempotent, so whichever path gets here first wins and
+                // the other is a no-op.
+                if !(await editorModel.finishIfNeeded()),
+                   let reason = editorModel.unreportedSaveFailure {
+                    editSaveFailureReason = reason
+                    editorModel.acknowledgeSaveFailure()
+                    editSaveFailed = true
+                }
+                await model.rescan()
+                await refresh()
+            }
+        }
+        .navigationDestination(isPresented: $showingMarkerCorrection) {
+            MarkerCorrectionView(model: markerCorrectionModel)
+        }
+        // Every correction action writes and commits immediately (no draft, no debounce —
+        // see `MarkerCorrectionModel`'s doc comment), so unlike the editor there is nothing
+        // to finish on the way out; a refresh once the screen closes is enough for the
+        // transcript section to pick up the corrected attribution.
+        .onChange(of: showingMarkerCorrection) { _, shown in
+            guard !shown else { return }
+            Task {
+                await model.rescan()
+                await refresh()
+            }
+        }
+        .navigationDestination(isPresented: $showingRevisionHistory) {
+            RevisionHistoryView(model: revisionHistoryModel)
+        }
+        // A revert changes `current` — refresh once the panel closes so the transcript
+        // section shows what reverting actually landed, same reasoning as the marker
+        // correction close above.
+        .onChange(of: showingRevisionHistory) { _, shown in
+            guard !shown else { return }
+            Task {
+                await model.rescan()
+                await refresh()
+            }
+        }
         // No `deinit` on `CapturePlayback` stops the audio, and a `@State` value outlives
         // the pop by however long SwiftUI holds it — without this, backing out of a
         // playing entry keeps playing.
@@ -79,6 +158,19 @@ struct EntryDetailView: View {
         } message: {
             Text("The change didn’t save. Try again.")
         }
+        .alert("Your edit didn’t save", isPresented: $editSaveFailed) {
+            // Offered first because it is the only thing that recovers the words: the editor
+            // model lives as long as this screen, so re-entering still has them (`open()`
+            // preserves unsaved text). Leaving this entry is what loses them.
+            Button("Back to my edit") { showingEditor = true }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            // This copy is only true because `open()` keeps unsaved words on re-entry even
+            // when the entry has become read-only — otherwise the button offered here would
+            // be the thing that erased them (re-review Important).
+            Text("\(editSaveFailureReason)\n\nYour words are still here, unsaved. Reopen the "
+                 + "editor to see them and try again — they’ll be lost if you leave this entry.")
+        }
         .alert("Couldn’t save the backdate", isPresented: $backdateFailed) {
             Button("OK") { backdateFailed = false }
         } message: {
@@ -91,6 +183,16 @@ struct EntryDetailView: View {
     /// entry used to do both synchronously while the screen was on screen.
     private func refresh() async {
         if let latest = model.item(captureID) { item = latest }
+        // T7 prereq #41 (fix round 1: Important 1 + 2, one fix): a draft-free capture —
+        // the overwhelmingly common case — must never hop the revision-store actor
+        // before the read below, so it can't queue behind an in-flight launch corpus
+        // walk (the exact regression the T6c comment three lines down already warns
+        // about). Only when a draft exists does this pay the actor cost, and then it
+        // promotes BEFORE closing: closing first would mint a `.userEdit` that
+        // permanently blocks the `.machineLive` baseline from ever entering the chain
+        // (`promoteIfNeeded` skips unconditionally once any canonical file exists). See
+        // `LibraryScreenModel.recoverStaleDraftBeforeRead`.
+        await model.recoverStaleDraftBeforeRead(captureID)
         transcript = await model.transcript(for: captureID)
         // T6c: promote AFTER the first read, not before — `promoteCorpus()` runs the
         // whole corpus with no yield on the actor, so promoting first would make
@@ -279,9 +381,25 @@ struct EntryDetailView: View {
     /// a separate caption line, and BN paragraphs render in italic
     /// (`TranscriptAttribution.isItalic(voice:)`) as a stand-in for the
     /// print-vs-cursive distinction his physical journals use — no per-voice typeface
-    /// yet. Still deferred: an affordance for `hasApproximateBoundary` (requirement 4's
-    /// explicit v1 decision — an approximate cut renders exactly like a precise one;
-    /// the flag exists so a later pass can add a badge without re-deriving anything).
+    /// yet. **`hasApproximateBoundary` affordance (T7 Task 9.3):** a paragraph adjacent
+    /// to an approximate cut gets a small, subtle trailing mark — a hint, not an error
+    /// state; the split itself is never wrong, only its exact position within a word-gap
+    /// is uncertain. The mark sits BESIDE the paragraph's selectable text, not inside it
+    /// (Gate B Minor 2), so copying the prose never picks up an asterisk nobody typed and
+    /// VoiceOver gets a labelled element instead of a bare "star". Reads whatever
+    /// `TranscriptAttribution` already computed; nothing here re-derives marker/correction
+    /// state.
+    ///
+    /// **Parked (T7 Task 9.2, ruled — Q12): cross-paragraph text selection.**
+    /// `.textSelection(.enabled)` is per-`Text`, one call per paragraph below, so a drag
+    /// that starts in one paragraph and ends in another selects nothing past the first
+    /// paragraph's boundary — a real regression against the old single flattened
+    /// `Text(text)` (still visible in the `.plain` case above, where selection spans the
+    /// whole transcript). Per-paragraph rendering is what makes voice labels and italics
+    /// possible per paragraph in the first place, and SwiftUI's `Text` has no API for
+    /// "select across these siblings" short of a custom text view. Explicitly not fixed
+    /// in T7 — noted here so the next reader finds a documented trade, not a bug to
+    /// rediscover.
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Transcript")
@@ -308,14 +426,55 @@ struct EntryDetailView: View {
             case .attributed(let paragraphs):
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
-                        attributedParagraph(paragraph)
-                            .font(.system(.body, design: .serif))
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("detail.transcript.paragraph.\(index)")
+                        // The base identifier is unchanged for the common (non-approximate)
+                        // case — nothing that already greps for
+                        // "detail.transcript.paragraph.<i>" breaks. The suffix is additive,
+                        // giving a future UI test something concrete to assert on without a
+                        // snapshot harness.
+                        // Gate B Minor 2: the approximate-boundary mark is a SIBLING of the
+                        // selectable text, never concatenated into it. Concatenated, copying
+                        // a paragraph yielded "…prose *" — a character the owner never wrote,
+                        // pasted into wherever he was quoting himself — and VoiceOver read a
+                        // bare "star" after the prose with nothing to say what it meant. As a
+                        // sibling the text copies clean and the mark carries its own label.
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            attributedParagraph(paragraph)
+                                .font(.system(.body, design: .serif))
+                                .textSelection(.enabled)
+                                .accessibilityIdentifier(paragraph.hasApproximateBoundary
+                                    ? "detail.transcript.paragraph.\(index).approximate"
+                                    : "detail.transcript.paragraph.\(index)")
+                            if paragraph.hasApproximateBoundary {
+                                Text("*")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .accessibilityLabel("approximate boundary")
+                                    .accessibilityIdentifier(
+                                        "detail.transcript.paragraph.\(index).approximateMark")
+                            }
+                        }
                     }
                 }
                 .accessibilityIdentifier("detail.transcript.text")
             }
+
+            // The detail screen stays the reader: it gains an Edit affordance and nothing
+            // else. The transcript above is never editable in place.
+            Button("Edit transcript…") { showingEditor = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.editButton")
+
+            // Its own mode, not inline here (T7 Task 6, ruling Q11) — retract a mis-tap,
+            // correct a voice at an existing boundary, or add one the owner never tapped.
+            Button("Correct markers…") { showingMarkerCorrection = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.correctMarkersButton")
+
+            // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
+            // and no revert button, so this is the only way back.
+            Button("Revision history…") { showingRevisionHistory = true }
+                .font(.caption)
+                .accessibilityIdentifier("detail.revisionHistoryButton")
 
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "
@@ -332,6 +491,20 @@ struct EntryDetailView: View {
     /// only way to mix styling within one line — then italicized as a whole when
     /// `TranscriptAttribution.isItalic(voice:)` says so. Unattributed paragraphs
     /// (`voice == nil`) get no prefix and are never italic.
+    ///
+    /// **`hasApproximateBoundary` is NOT rendered here (Gate B Minor 2).** The small
+    /// asterisk used to be concatenated onto the end of this `Text`, which put a character
+    /// the owner never wrote inside the SELECTABLE run — copying a paragraph yielded
+    /// "…prose *" — and gave VoiceOver a bare "star" to read. It now lives beside this text
+    /// as a sibling in the call site's `HStack`, with its own accessibility label, so this
+    /// function returns exactly the owner's words. Still consumed exactly as
+    /// `TranscriptAttribution` computed it (raw taps, snapping and Task 6's marker
+    /// corrections are folded in upstream — see `EntryTranscript.snappedMarkers`); nothing
+    /// here re-derives marker/correction state.
+    ///
+    /// `Text` concatenation keeps each segment's own explicit modifiers
+    /// (font/color/italic) regardless of the outer `.font(.system(.body, design:
+    /// .serif))` the call site applies, which is the mechanism the voice label relies on.
     private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph) -> Text {
         let body = Text(paragraph.text)
         let combined: Text

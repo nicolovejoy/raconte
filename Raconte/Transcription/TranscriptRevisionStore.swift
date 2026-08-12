@@ -32,6 +32,21 @@ enum TranscriptRevisionStoreError: Error, Equatable {
     /// `mkdir` rather than let `createDirectory(withIntermediateDirectories:)` silently
     /// resurrect a tree the owner already deleted.
     case captureMissing
+    /// `revert`'s target id (T7 Task 8) named no revision in the readable chain — the
+    /// panel offering a stale row (the chain moved since it last opened) or a caller
+    /// passing a bad id directly.
+    case revisionNotFound(String)
+    /// `revert`'s guard (T7 Task 8, review Important 3): a draft exists for this
+    /// capture. Reverting while a draft is open risks a silent reversal —
+    /// `closeDraft` (fired later by `closeStaleDrafts`, or the editor's own Done) mints
+    /// a `.userEdit` parented on PRE-revert `current` with a fresh `createdAt`, which
+    /// outranks the revert's merge in `(createdAt, id)` order and snaps `current` back
+    /// to the pre-revert text — no bytes lost, but the panel's one undo action would be
+    /// silently undone. Refuse rather than degrade, the same "refuse, don't guess"
+    /// discipline every other write guard here already holds to. The owner finishes or
+    /// discards the draft first (`EntryChainSnapshot.openDraft` is documented as
+    /// "Task 8's 'unsaved' marker" precisely for this collision).
+    case draftInProgress
 }
 
 /// The two numbers §2.5 invents for the draft lifecycle, injectable so tests don't wait
@@ -92,6 +107,44 @@ actor TranscriptRevisionStore {
         return .present(files: files)
     }
 
+    /// Per-file on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS
+    /// under one capture's `transcript/` — readable or not (a corrupt revision still
+    /// occupies real bytes). Skips (rather than zero-fills) a file that can't be
+    /// stat'd at all, e.g. it vanished between the caller's listing and this call — an
+    /// absent entry reads as "unknown," never as a false 0.
+    ///
+    /// The ONE implementation both `canonicalFilesByteSize` (the byte-size STAT,
+    /// #39/#40) and `sizesStillMatch` (the integrity check, T7 Task 3 fix round 1,
+    /// Important 1) build from — so the storage stat and the trust condition can never
+    /// silently drift on what "this file's size" means. Uses
+    /// `URL.resourceValues(forKeys: [.fileSizeKey])`, not
+    /// `FileManager.attributesOfItem` (cheaper — no full attribute-dictionary
+    /// allocation per file — and load-bearing now that a size disagreement drives a
+    /// real trust decision, not merely a decorative display number).
+    nonisolated static func canonicalFileSizes(captureDirectory: URL, files: [Int]) -> [RevisionFileSize] {
+        files.compactMap { file in
+            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
+            return RevisionFileSize(file: file, byteSize: Int64(size))
+        }
+    }
+
+    /// Sum of on-disk byte sizes for the given `canonical-<n>.json` file NUMBERS under
+    /// one capture's `transcript/` — readable or not. The single implementation
+    /// `EntryChainSnapshot.chainByteSize` and `DirectorySnapshot`'s
+    /// `revisionsByteSize` (#39, Task 3) both call, so the editor's revision-history
+    /// panel and the corpus-wide diagnostics screen can never silently disagree about
+    /// what "one entry's chain size" means, even though each computes its own
+    /// independent `files` listing to pass in (the panel via
+    /// `TranscriptRevisionStore.listing`, the diagnostics screen via a stat-only
+    /// directory walk `DirectorySnapshot` already does). No revision body is
+    /// decoded — built on `canonicalFileSizes`, which is a directory listing (the
+    /// caller's job) plus one stat per file.
+    nonisolated static func canonicalFilesByteSize(captureDirectory: URL, files: [Int]) -> Int64 {
+        canonicalFileSizes(captureDirectory: captureDirectory, files: files)
+            .reduce(Int64(0)) { $0 + $1.byteSize }
+    }
+
     // MARK: - Loading
 
     struct ChainLoad: Sendable, Equatable {
@@ -122,7 +175,14 @@ actor TranscriptRevisionStore {
     /// readable or not"); routing it into `unreadableFiles` instead would trip the I1
     /// trust condition and reproduce C1's exact symptom (a head that can never be
     /// trusted again, because `unreadableFiles` would never be empty).
-    private nonisolated static func rawLoad(
+    ///
+    /// Not `private` (T7 Task 2 fix round 1, Important 3): `EntryChainSnapshot` needs
+    /// per-revision file numbers for every revision it may show, not just `current`'s —
+    /// something `loadChain` structurally can't provide — and reimplementing this
+    /// decode-and-dedupe walk a second time is exactly how the C1/N1 duplicate-file-
+    /// number rules end up with two implementations and only one carrying the fix.
+    /// `internal` (module-default) rather than adding a new public API surface.
+    nonisolated static func rawLoad(
         captureDirectory: URL
     ) -> (numbered: [(file: Int, revision: TranscriptRevision)], unreadableFiles: [Int],
           dedupedFiles: [Int], listingUnreadable: Bool)? {
@@ -184,27 +244,57 @@ actor TranscriptRevisionStore {
         // fine) or the I1 trust condition would never be satisfiable again for this
         // capture.
         let revisionFiles = (raw.numbered.map(\.file) + raw.unreadableFiles + raw.dedupedFiles).sorted()
+        let forked = TranscriptChain.forkedHumanLineage(ordered)
 
         let summary: TranscriptHeadSummary? = TranscriptChain.current(ordered).flatMap { revision in
             guard let fileNumber = fileNumberByID[revision.id] else { return nil }
-            let plain = TranscriptChain.plainText(revision)
-            let firstLineFull = plain.split(separator: "\n", maxSplits: 1,
-                                            omittingEmptySubsequences: false).first
-                .map(String.init) ?? plain
-            return TranscriptHeadSummary(id: revision.id,
-                                         fileNumber: fileNumber,
-                                         source: revision.source,
-                                         createdAt: revision.createdAt,
-                                         characterCount: plain.count,
-                                         firstLine: String(firstLineFull.prefix(120)),
-                                         isForked: TranscriptChain.forkedHumanLineage(ordered))
+            return Self.headSummary(for: revision, fileNumber: fileNumber, isForked: forked)
         }
 
         return TranscriptHead(current: summary,
                               revisionFiles: revisionFiles,
                               unreadableFiles: raw.unreadableFiles,
                               revisionCount: ordered.count,
-                              listingUnreadable: raw.listingUnreadable)
+                              listingUnreadable: raw.listingUnreadable,
+                              // Important 1 (T7 Task 3 fix round 1): every file this
+                              // rebuild just re-derived a fresh answer for gets its
+                              // size stamped too, so the NEXT `validatedHead` call can
+                              // trust this head without decoding anything, until a
+                              // byte actually changes.
+                              fileSizes: Self.canonicalFileSizes(captureDirectory: captureDirectory,
+                                                                 files: revisionFiles))
+    }
+
+    /// One `TranscriptHeadSummary` for a revision + the file number it lives in — the
+    /// digest `head.json`'s `current` caches (first line truncated to 120 chars, plus
+    /// the full-text-derived `snippet` — see that field's own doc comment). Not
+    /// `private` (T7 Task 2 fix round 1, Important 3): `EntryChainSnapshot` mints the
+    /// same shape for every entry in `detachedMachineRevisions`, and a second
+    /// independent implementation is exactly how a future field (or a truncation-rule
+    /// change) drifts between the two. `isForked` is chain-wide (design §4.2), computed
+    /// once by the caller over the WHOLE `ordered` chain and threaded through here
+    /// rather than recomputed per revision.
+    nonisolated static func headSummary(for revision: TranscriptRevision, fileNumber: Int,
+                                        isForked: Bool) -> TranscriptHeadSummary {
+        let plain = TranscriptChain.plainText(revision)
+        let firstLineFull = plain.split(separator: "\n", maxSplits: 1,
+                                        omittingEmptySubsequences: false).first
+            .map(String.init) ?? plain
+        return TranscriptHeadSummary(id: revision.id,
+                                     fileNumber: fileNumber,
+                                     source: revision.source,
+                                     createdAt: revision.createdAt,
+                                     characterCount: plain.count,
+                                     firstLine: String(firstLineFull.prefix(120)),
+                                     isForked: isForked,
+                                     // Important 3 (T7 Task 3 fix round 1): the ROW's
+                                     // actual preview — the SAME `EntrySnippet.make`
+                                     // the live.jsonl-fallback path already uses, over
+                                     // the FULL plain text (every line, not just the
+                                     // first) — so a truncated preview is visibly
+                                     // truncated and a multi-line transcript doesn't
+                                     // collapse to its opening line.
+                                     snippet: EntrySnippet.make(from: plain) ?? "")
     }
 
     /// Best-effort read of the persisted `head.json`, or `nil` if it's absent or
@@ -219,18 +309,20 @@ actor TranscriptRevisionStore {
     /// The scanner's read path — `head.json`'s entire purpose (design §4.3): an O(1)
     /// cache, not a decorative one. When the store's own (cheap, decode-free) listing
     /// has exactly the same file numbers the persisted head says it does, AND that head
-    /// admits no unreadable files of its own (Gate A finding I1), the cache is trusted
+    /// admits no unreadable files of its own (Gate A finding I1), AND every one of
+    /// those files' bytes still match the size recorded when the head was persisted
+    /// (T7 Task 3 fix round 1, Important 1 — `sizesStillMatch`), the cache is trusted
     /// as-is — no revision body is opened or decoded. A head persisted while some file
     /// was undecodable is never trusted, even once the file-number set matches again:
     /// otherwise a head cached during damage would keep serving the same stale
     /// `current`/`unreadableFiles` forever after the underlying file becomes readable —
     /// trusting the cache would silently mask a recovery the reader should see. On a
-    /// mismatch, an absent/corrupt/damage-admitting head, or an unreadable
-    /// `transcript/`, this falls back to `rebuildHead`, which decodes the whole chain
-    /// (still zero writes — an in-memory rebuild every call is fine; the property F6
-    /// protects is write-freedom, not the O(1) path staying engaged forever). A
-    /// stale-but-still-wrong head is left on disk for `persistHead` to fix, not patched
-    /// inline here.
+    /// mismatch, an absent/corrupt/damage-admitting head, a size disagreement, or an
+    /// unreadable `transcript/`, this falls back to `rebuildHead`, which decodes the
+    /// whole chain (still zero writes — an in-memory rebuild every call is fine; the
+    /// property F6 protects is write-freedom, not the O(1) path staying engaged
+    /// forever). A stale-but-still-wrong head is left on disk for `persistHead` to fix,
+    /// not patched inline here.
     nonisolated static func validatedHead(captureDirectory: URL) -> TranscriptHead? {
         switch listing(captureDirectory: captureDirectory) {
         case .absent:
@@ -240,14 +332,65 @@ actor TranscriptRevisionStore {
             // (an unreadable directory has no bodies to decode).
             return rebuildHead(captureDirectory: captureDirectory)
         case .present(let files):
-            if let persisted = readPersistedHead(captureDirectory: captureDirectory),
-               !persisted.listingUnreadable,
-               persisted.unreadableFiles.isEmpty,
-               persisted.revisionFiles.sorted() == files.sorted() {
-                return persisted
+            if let trusted = Self.trustedPersistedHead(captureDirectory: captureDirectory, files: files) {
+                return trusted
             }
             return rebuildHead(captureDirectory: captureDirectory)
         }
+    }
+
+    /// The O(1) trust check itself, returning the persisted head when — and only
+    /// when — it can be trusted exactly as-is. Split out of `validatedHead` (T7 Task 3
+    /// fix round 2) so "is this head trustworthy right now" has exactly ONE
+    /// implementation: the read path (`validatedHead`, above) and the launch-time
+    /// stamping sweep (`stampUnstampedHeads`, below — the write path that decides
+    /// whether a capture needs a fresh `persistHead` call at all) both call this
+    /// rather than re-deriving the rule. `nil` for every reason `validatedHead` would
+    /// otherwise fall back to `rebuildHead`.
+    private nonisolated static func trustedPersistedHead(captureDirectory: URL, files: [Int]) -> TranscriptHead? {
+        guard let persisted = readPersistedHead(captureDirectory: captureDirectory),
+              !persisted.listingUnreadable,
+              persisted.unreadableFiles.isEmpty,
+              persisted.revisionFiles.sorted() == files.sorted(),
+              Self.sizesStillMatch(persisted: persisted, captureDirectory: captureDirectory) else {
+            return nil
+        }
+        return persisted
+    }
+
+    /// The trust condition's integrity check (T7 Task 3 fix round 1, Important 1): a
+    /// cheap defense against truncation, a partial write, or cloud-eviction damage that
+    /// leaves a canonical file's NAME in place while its BYTES change — the exact blind
+    /// spot `revisionFiles`/`unreadableFiles` share, since both are keyed on filename
+    /// alone and neither is re-checked once a head is otherwise trusted. Every file
+    /// `persisted.revisionFiles` names must have a recorded size in
+    /// `persisted.fileSizes` that matches a FRESH stat of that file right now (no body
+    /// decoded — `canonicalFileSizes` is the one implementation, shared with the
+    /// storage stat).
+    ///
+    /// A head persisted before `fileSizes` existed has NONE recorded for anything —
+    /// `recorded.count` (0) will never equal `persisted.revisionFiles.count` (>0 for
+    /// any capture with a chain), so this returns `false` for it: MISSING sizes read as
+    /// "does not match," never as "nothing to disagree with." Trusting an unstamped
+    /// head here would silently accept the exact damage this check exists to catch —
+    /// the owner's explicit ruling. The forced rebuild that follows recomputes and
+    /// stamps sizes for the next read (self-heals, §4.8's disposable-cache philosophy).
+    ///
+    /// Deliberately does NOT catch same-size corruption — an accepted, owner-ruled
+    /// residual gap, pinned by its own test rather than left to read as an oversight.
+    private nonisolated static func sizesStillMatch(persisted: TranscriptHead, captureDirectory: URL) -> Bool {
+        let recorded = Dictionary(persisted.fileSizes.map { ($0.file, $0.byteSize) },
+                                  uniquingKeysWith: { first, _ in first })
+        guard recorded.count == persisted.revisionFiles.count else { return false }
+        for file in persisted.revisionFiles {
+            guard let expectedSize = recorded[file] else { return false }
+            let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: file)
+            guard let actualSize = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  Int64(actualSize) == expectedSize else {
+                return false
+            }
+        }
+        return true
     }
 
     /// The only head writer. Recomputes and atomically replaces `head.json`. A no-op
@@ -286,6 +429,66 @@ actor TranscriptRevisionStore {
         let data = try CaptureCoding.encoder().encode(head)
         try AtomicFile.replace(at: SegmentLayout.transcriptHeadURL(captureDirectory: captureDirectory),
                                writing: data)
+    }
+
+    // MARK: - Corpus head stamping (T7 Task 3 fix round 2)
+
+    /// The launch-time sweep the owner ruled for: without it, Task 3's whole win
+    /// never reaches a single entry that existed before this fix shipped.
+    /// `persistHead` has exactly one production caller — `append` — and
+    /// `promoteIfNeeded` writes nothing once a chain already exists
+    /// (`.skippedAlreadyPromoted`), so every `head.json` on a device today predates
+    /// `fileSizes` and is — correctly, per fix round 1's ruling — distrusted forever
+    /// by `sizesStillMatch`. Left unswept, every row read for every already-promoted
+    /// entry keeps paying the full chain decode `validatedHead`'s O(1) path exists to
+    /// avoid, permanently: reproduced by the reviewer as three consecutive row reads
+    /// against an unstamped head each returning the decoded body, head still
+    /// unstamped afterwards.
+    ///
+    /// A NO-OP for a capture whose head is already trustworthy (`trustedPersistedHead`
+    /// — the SAME check `validatedHead` uses, not a second implementation): never
+    /// rewrites `head.json` on a launch that changed nothing, which would be churn on
+    /// the owner's real data and would defeat the point of caching at all. Thin
+    /// plumbing over `persistHead` for everything else, so the trashed/missing-capture
+    /// guards (§15.4, Gate A finding C2/I3) are enforced exactly once, there — this
+    /// sweep adds no guard logic of its own. `.absent`/`.unreadable` listings are
+    /// skipped outright: neither has a chain worth stamping, and `validatedHead`
+    /// never even consults `head.json` for either case, so stamping one would help
+    /// nothing. `.present([])` — `transcript/` exists but holds no `canonical-<n>.json`
+    /// (a capture whose `live.jsonl` promotion skipped, or a `transcript/` left empty
+    /// by a crash between its `createDirectory` and first write) — is ALSO skipped
+    /// (fix round 3): there is no chain to stamp there either, and writing `head.json`
+    /// into an otherwise-empty `transcript/` would flip
+    /// `DirectorySnapshot.holdsIrreplaceableArtifacts` from false to true, making a
+    /// mis-tapped capture permanently undeletable — the exact zero-byte-log hazard
+    /// (rule 10) `MarkerLog.swift`/`CaptureCoordinator.swift` both already guard
+    /// against elsewhere.
+    func stampUnstampedHeads() async {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
+            return
+        }
+        for id in ids.sorted() {
+            await stampHeadIfNeeded(captureID: id)
+        }
+    }
+
+    /// Sibling to `stampUnstampedHeads`, scoped to one capture — matches this file's
+    /// existing corpus-pass/per-capture pairing (`promoteCorpus`/`promoteIfNeeded`,
+    /// `closeStaleDrafts`/`closeStaleDraftIfNeeded`), kept `private` since the sweep
+    /// is the only caller today.
+    private func stampHeadIfNeeded(captureID: String) async {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        guard case .present(let files) = Self.listing(captureDirectory: captureDirectory), !files.isEmpty else {
+            return
+        }
+        guard Self.trustedPersistedHead(captureDirectory: captureDirectory, files: files) == nil else {
+            return
+        }
+        // `persistHead` already enforces every guard this write needs (trashed,
+        // missing capture, unreadable sidecar) — swallowed here the same way
+        // `append`'s own `persistHead` call swallows it (C1-trigger): a stamping
+        // failure must never abort the rest of the corpus sweep.
+        try? await persistHead(captureID: captureID)
     }
 
     // MARK: - Append
@@ -393,10 +596,26 @@ actor TranscriptRevisionStore {
     /// Best-effort read of `draft.json`, or `nil` if it's absent or doesn't decode.
     /// Mirrors `readPersistedHead`: an undecodable draft is treated the same as no
     /// draft rather than as an error — there is nothing safe to close or overwrite.
-    private nonisolated static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
+    ///
+    /// Not `private` (T7 Task 2 fix round 1, Important 3), same reasoning as
+    /// `draftExists` (T7 prereq #41): `EntryChainSnapshot.openDraft` reuses this exact
+    /// read rather than a second copy of the same absent/undecodable-collapse rule.
+    nonisolated static func readDraft(captureDirectory: URL) -> TranscriptDraft? {
         let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? CaptureCoding.decoder().decode(TranscriptDraft.self, from: data)
+    }
+
+    /// Cheap existence check for `draft.json` — no decode, no actor hop (T7 prereq #41,
+    /// fix round 1, Important 2). `LibraryScreenModel.hasDraft(_:)` uses this so
+    /// entry-open can skip the actor entirely for a draft-free capture, the
+    /// overwhelmingly common case, rather than queueing behind an in-flight corpus walk
+    /// that's holding the actor (the exact regression the T6c comment on
+    /// `EntryDetailView.refresh()`'s promote call already warns about).
+    nonisolated static func draftExists(capturesRoot: URL, captureID: String) -> Bool {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let url = SegmentLayout.transcriptDraftURL(captureDirectory: captureDirectory)
+        return FileManager.default.fileExists(atPath: url.path)
     }
 
     /// §6.4's propagation rule, captured once at draft-open time (the parent revision
@@ -457,20 +676,48 @@ actor TranscriptRevisionStore {
     /// in which case a draft matching current is still recorded (harmless: `closeDraft`
     /// treats a draft equal to current as "close to nothing" regardless of when it was
     /// written).
-    func writeDraft(captureID: String, text: String, now: Date) throws {
+    ///
+    /// **#40.2 (T7 Task 3) — bounding the per-write cost.** `readableOrderedRevisions`
+    /// below runs UNCONDITIONALLY, on every write, and MUST: it is where §15b.15's
+    /// degraded-chain refusal actually throws, and a file reads as "unreadable"
+    /// precisely because its decode failed — keeping the refusal while skipping the
+    /// decode is not possible; the issue's own wording invited exactly that mistake and
+    /// it is wrong (see the brief). What this task DOES skip: `TranscriptChain
+    /// .plainText`'s flatten of `current` plus the `text != currentText` comparison,
+    /// when `transcript/` already exists — because the guard they feed lets the write
+    /// through unconditionally once that's true, so the comparison's result is
+    /// structurally never read. (`TranscriptChain.current(ordered)` itself stays
+    /// unconditional: it is a pure, decode-free, in-memory walk over `ordered` — no
+    /// I/O, no allocation of a joined string — and is still needed below to snapshot a
+    /// brand-new draft's `parentID`/`basedOnMachineID` even when `transcript/` already
+    /// holds a promoted revision with no draft opened against it yet, the single most
+    /// common first-keystroke case. Only the genuinely costly flatten+compare is gated.)
+    /// The whole-chain DECODE itself (inside `readableOrderedRevisions`) still runs on
+    /// every write — filed as #50 rather than improvised here: a body-free readability
+    /// check is a design change to the chain's format/contract (needs its own
+    /// fingerprinting scheme in `head.json`), not a drop-in optimization.
+    func writeDraft(captureID: String, text: String, now: Date,
+                    currentTextComparisonRan: (@Sendable () -> Void)? = nil) throws {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
-        // Critical 2: refuse rather than silently splice against a chain missing its
-        // true tip.
+        // Critical 2 / §15b.15: refuse rather than silently splice against a chain
+        // missing its true tip. Unconditional — see doc comment above.
         let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
         let current = TranscriptChain.current(ordered)
-        let currentText = current.map(TranscriptChain.plainText) ?? ""
 
         let transcriptDirectory = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)
         let transcriptDirectoryExists = FileManager.default.fileExists(atPath: transcriptDirectory.path)
-        guard text != currentText || transcriptDirectoryExists else {
-            return
+
+        // #40.2: the flatten + comparison are moot once transcript/ already exists —
+        // `currentTextComparisonRan` is a test-only seam (mirrors `append`'s
+        // `beforeWrite`) proving that skip actually happens.
+        if !transcriptDirectoryExists {
+            currentTextComparisonRan?()
+            let currentText = current.map(TranscriptChain.plainText) ?? ""
+            guard text != currentText else {
+                return
+            }
         }
 
         try FileManager.default.createDirectory(at: transcriptDirectory, withIntermediateDirectories: true)
@@ -566,30 +813,110 @@ actor TranscriptRevisionStore {
     /// Stale-draft pass for launch + entry-open (rule 9, §4.6 — NEVER the scan): closes
     /// every capture's draft whose `lastWriteAt` is older than `policy.sessionEndSeconds`
     /// with reason `.recovered`. Skips a capture with no draft, a fresh draft, or
-    /// `trashedAt != nil`; one bad capture's failure never aborts the rest of the pass.
+    /// `trashedAt != nil`; one bad capture's failure never aborts the rest of the pass
+    /// (`closeStaleDraftIfNeeded` never throws, so a per-capture failure can only ever
+    /// surface as `nil`, which the loop below simply ignores). The corpus walk owns
+    /// nothing but the directory enumeration and that never-abort property; every rule
+    /// about WHICH capture is stale and closeable lives once in `closeStaleDraftIfNeeded`.
     func closeStaleDrafts(now: Date) async {
         guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
             return
         }
         for id in ids.sorted() {
-            let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
-            var isCaptureDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
-                  isCaptureDirectory.boolValue else {
-                continue
-            }
-            let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
-            guard let metadata = try? EntryMetadataStore.read(url: sidecarURL), !metadata.isTrashed else {
-                continue
-            }
-            guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
-                continue
-            }
-            guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
-                continue
-            }
-            _ = try? closeDraft(captureID: id, reason: .recovered, now: now)
+            _ = await closeStaleDraftIfNeeded(captureID: id, now: now)
         }
+    }
+
+    /// Sibling to `closeStaleDrafts(now:)`, same rules, scoped to one capture (T7 prereq
+    /// #41): the entry-open call site (`EntryDetailView.refresh()`) needs to recover just
+    /// the capture it's opening, not pay for a corpus walk on every screen open.
+    ///
+    /// Returns the minted revision id, or `nil` in every one of: no draft on disk, the
+    /// draft is fresher than `policy.sessionEndSeconds`, the capture is missing or
+    /// trashed, `closeDraft` itself threw (a degraded chain, §15b.15 — the draft stays
+    /// on disk untouched, nothing is minted, and there is no caller here to show an
+    /// error to), OR `closeDraft`'s own §2.5 no-op (`draft.text == current`'s text —
+    /// `closeDraft`'s F7 crash-duplicate branch). That last case is the ONE `nil` that
+    /// does NOT leave `draft.json` in place: it deletes the (now-redundant) draft file
+    /// and mints nothing, same as every other `nil` in effect but different on disk. A
+    /// caller must not read `nil` as "draft.json still exists" (fix round 1, Minor 1).
+    @discardableResult
+    func closeStaleDraftIfNeeded(captureID: String, now: Date) async -> String? {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isCaptureDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isCaptureDirectory),
+              isCaptureDirectory.boolValue else {
+            return nil
+        }
+        let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        guard let metadata = try? EntryMetadataStore.read(url: sidecarURL), !metadata.isTrashed else {
+            return nil
+        }
+        guard let draft = Self.readDraft(captureDirectory: captureDirectory) else {
+            return nil
+        }
+        guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
+            return nil
+        }
+        return try? closeDraft(captureID: captureID, reason: .recovered, now: now)
+    }
+
+    // MARK: - Revert (T7 Task 8, design §6.5)
+
+    /// Mints a `.merge` revision restoring an earlier MACHINE revision's spans verbatim
+    /// — `TranscriptMerge.revert`'s first production caller, reached from the
+    /// revision-history panel (`LibraryScreenModel.revert` is a thin passthrough to
+    /// this). Guarded exactly like `closeDraft`, in the same order: `guardWritable`
+    /// (missing/trashed capture) first, then `readableOrderedRevisions` — §15b.15's
+    /// degraded-chain refusal — BEFORE any mint, so a revert can never silently drop
+    /// content from a revision file this device failed to read, the same reason a draft
+    /// close refuses on the identical chain shape.
+    ///
+    /// `toRevisionID` must name a revision presently in the readable chain
+    /// (`.revisionNotFound` otherwise — the panel's row went stale, or a caller passed
+    /// a bad id). `TranscriptMerge.revert` itself throws `TranscriptMergeError
+    /// .notMachineLineage` if that revision is human-lineage (Task 1's caller-side
+    /// precondition on `basedOnMachineID`, exercised here for the first time in
+    /// production) — deliberately NOT re-checked here first: one guard, one place,
+    /// never a parallel copy that could drift from it.
+    ///
+    /// Returns the minted revision's id.
+    @discardableResult
+    func revert(captureID: String, toRevisionID: String, now: Date) throws -> String {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try guardWritable(captureDirectory: captureDirectory)
+
+        // Review Important 3: refuse rather than let an open draft silently reverse
+        // this revert later (see `.draftInProgress`'s own doc comment for the exact
+        // mechanism). Cheap check, placed right after `guardWritable` — same
+        // "cheapest/safest guard first" ordering the rest of this file already uses —
+        // and before the chain read, since there is nothing to gain from reading the
+        // chain only to refuse afterward.
+        if Self.readDraft(captureDirectory: captureDirectory) != nil {
+            throw TranscriptRevisionStoreError.draftInProgress
+        }
+
+        // Critical 2 / §15b.15, same as writeDraft/closeDraft: refuse rather than
+        // revert against — or even locate the target revision within — a chain missing
+        // its true tip.
+        let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
+        guard let machine = ordered.first(where: { $0.id == toRevisionID }) else {
+            throw TranscriptRevisionStoreError.revisionNotFound(toRevisionID)
+        }
+        // `TranscriptChain.current` returns `nil` only when `ordered` is empty
+        // (`ordered.last { … }` over nothing) — which the `machine` lookup just above
+        // already ruled out (a non-empty chain, since it contains `machine`). Guarded
+        // anyway rather than force-unwrapped: no unsafe assumption across the actor
+        // boundary for a branch that should be unreachable.
+        guard let current = TranscriptChain.current(ordered) else {
+            throw TranscriptRevisionStoreError.revisionNotFound(toRevisionID)
+        }
+
+        let revision = try TranscriptMerge.revert(current: current, toMachine: machine,
+                                                   id: ULID.make(now: now), createdAt: now,
+                                                   deviceID: DeviceIdentity.stable())
+        try append(revision, captureID: captureID)
+        return revision.id
     }
 
     // MARK: - Promotion (T6c, design §5.1/§5.2)

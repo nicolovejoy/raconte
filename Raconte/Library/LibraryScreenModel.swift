@@ -89,6 +89,18 @@ final class LibraryScreenModel {
     /// (per model instance), never on every `rescan()`.
     private var corpusPromotionRan = false
 
+    /// Guards `closeStaleDraftsOnce()` (T7 prereq #41), same reasoning as
+    /// `corpusPromotionRan`: `closeStaleDraftIfNeeded` is individually idempotent, so
+    /// this guard is a cost saver against a second `bootstrap()` re-walking the whole
+    /// corpus, not a correctness one.
+    private var staleDraftsClosedRan = false
+
+    /// Guards `stampUnstampedHeadsOnce()` (T7 Task 3 fix round 2), same reasoning as
+    /// `corpusPromotionRan`: `stampUnstampedHeads` is itself a no-op per-capture once
+    /// a head is trustworthy, so this guard is a cost saver against a second
+    /// `bootstrap()` re-walking the whole corpus, not a correctness one.
+    private var headStampRan = false
+
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
@@ -110,7 +122,15 @@ final class LibraryScreenModel {
         if let id = ProcessInfo.processInfo.environment["RACONTE_UITEST_ID"] {
             // Container root derived, not overridden — the harness keys the container
             // and `captures/` sits beneath it, exactly as in the shipping layout.
-            return LibraryScreenModel(capturesRoot: UITestHarnessRoot.capturesRoot(id: id))
+            let capturesRoot = UITestHarnessRoot.capturesRoot(id: id)
+            // T7 Task 4.6: an entry with a real chain to edit, since nothing is ever
+            // transcribed under the synthetic harness. No-op unless asked for.
+            UITestEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
+            // T7 Task 6.5: a second entry with real frame-bounded spans + existing
+            // taps, since the editor's fixture above is deliberately frameless. No-op
+            // unless asked for.
+            UITestMarkerCorrectionSeed.seedIfRequested(capturesRoot: capturesRoot)
+            return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif
         return LibraryScreenModel(capturesRoot: CaptureScreenModel.defaultCapturesRoot())
@@ -242,17 +262,18 @@ final class LibraryScreenModel {
 
     /// Set, change, or clear (`date == nil`) the backdate. `precision` is ignored when
     /// clearing — `EntryMetadata.effectivePrecision` is meaningless without a date, so
-    /// there is nothing to reset it to. Returns `false` on a store failure — see
-    /// `moveEntry`.
+    /// there is nothing to reset it to. Returns `false` on a store failure OR when
+    /// `EntryMetadata.setOriginalDate` refuses a future date — both are genuine "did not
+    /// happen" outcomes now that `EntryMetadataStore.setOriginalDate` (T7 §7.1 nit) stops
+    /// discarding that Bool and logs the rejected attempt instead. See `moveEntry` for
+    /// the store-failure half.
     @discardableResult
     func setBackdate(_ captureID: String, to date: Date?, precision: DatePrecision = .day) async -> Bool {
         let calendar = Calendar.gregorianCurrent
+        let partial = date.map { PartialDate(from: $0, precision: precision, calendar: calendar) }
         let succeeded: Bool
         do {
-            _ = try await entryMetadataStore.update(captureID: captureID) {
-                $0.setOriginalDate(date.map { PartialDate(from: $0, precision: precision, calendar: calendar) })
-            }
-            succeeded = true
+            succeeded = try await entryMetadataStore.setOriginalDate(partial, captureID: captureID)
         } catch {
             succeeded = false
         }
@@ -377,6 +398,81 @@ final class LibraryScreenModel {
         await revisionStore.promoteIfNeeded(captureID: captureID)
     }
 
+    /// The launch pass (T7 Task 3 fix round 2, owner ruling): stamp every promoted
+    /// capture's `head.json` with the size fingerprint fix round 1's trust condition
+    /// requires — without this, Task 3's whole win reaches no entry that existed
+    /// before this fix shipped, since `persistHead`'s only other caller (`append`)
+    /// never runs again once a chain exists. Called fire-and-forget from
+    /// `CaptureScreenModel.bootstrap()`, same shape as `promoteCorpusOnce()`, placed
+    /// right after it and BEFORE `closeStaleDraftsOnce()` — a capture must be promoted
+    /// before its head is worth stamping (an unpromoted capture has no chain, so
+    /// `stampUnstampedHeads` skips it outright regardless of ordering here, but
+    /// stamping before promotion would just mean re-walking it a second time this
+    /// same launch once promotion lands). `stampUnstampedHeads` is itself per-capture
+    /// idempotent (a no-op once trustworthy), so this guard is a cost saver, not a
+    /// correctness one.
+    func stampUnstampedHeadsOnce() async {
+        guard !headStampRan else { return }
+        headStampRan = true
+        await revisionStore.stampUnstampedHeads()
+    }
+
+    /// The launch pass (T7 prereq #41): close every capture's stale draft (rule 9,
+    /// §4.6), so an edit abandoned mid-sitting on a prior session is recovered into a
+    /// real revision rather than left dangling in `draft.json` forever. Called
+    /// fire-and-forget from `CaptureScreenModel.bootstrap()`, same shape as
+    /// `promoteCorpusOnce()` and placed right after it in source order — after
+    /// promotion, before the sweep.
+    func closeStaleDraftsOnce() async {
+        guard !staleDraftsClosedRan else { return }
+        staleDraftsClosedRan = true
+        await revisionStore.closeStaleDrafts(now: Date())
+    }
+
+    /// Thin passthrough for the entry-open call site (`EntryDetailView.refresh()`, T7
+    /// prereq #41): close THIS capture's stale draft, if any, before the transcript read
+    /// that follows it — a recovered edit must be visible in the text the screen shows
+    /// immediately, not only after the next launch's corpus-wide pass.
+    @discardableResult
+    func closeStaleDraftIfNeeded(_ captureID: String) async -> String? {
+        await revisionStore.closeStaleDraftIfNeeded(captureID: captureID, now: Date())
+    }
+
+    /// Cheap, `nonisolated` existence check for this capture's `draft.json` — no actor
+    /// hop (T7 prereq #41, fix round 1, Important 2). `capturesRoot` is itself
+    /// `nonisolated let`, so this reads straight off disk without touching
+    /// `revisionStore`'s actor at all.
+    nonisolated func hasDraft(_ captureID: String) -> Bool {
+        TranscriptRevisionStore.draftExists(capturesRoot: capturesRoot, captureID: captureID)
+    }
+
+    /// The entry-open pre-read sequence (`EntryDetailView.refresh()`, T7 prereq #41,
+    /// fix round 1: Important 1 + Important 2 share one fix, per review ruling).
+    ///
+    /// A draft-free capture — the overwhelmingly common case — takes the `hasDraft`
+    /// fast path and returns `false` immediately with NO actor hop, preserving the
+    /// exact non-blocking property the T6c comment on the promote-after-read call in
+    /// `EntryDetailView.refresh()` already defends: an entry opened during the launch
+    /// corpus walk must never queue behind it.
+    ///
+    /// Only when a draft exists do we pay the actor cost, and then order matters:
+    /// `promoteIfNeeded` MUST run before `closeStaleDraftIfNeeded`. Closing a stale
+    /// draft mints a `.userEdit` revision, and `promoteIfNeeded` unconditionally skips
+    /// (`.skippedAlreadyPromoted`) the moment ANY canonical file exists — so closing
+    /// first would make that `.userEdit` permanently block the `.machineLive` baseline
+    /// from ever entering the chain (Important 1, probe-confirmed). Promoting first
+    /// matches launch's own order (`promoteCorpusOnce()` then `closeStaleDraftsOnce()`).
+    ///
+    /// Returns whether the actor was hopped — purely so this ordering is directly
+    /// observable by a test without relying on timing.
+    @discardableResult
+    func recoverStaleDraftBeforeRead(_ captureID: String) async -> Bool {
+        guard hasDraft(captureID) else { return false }
+        await promoteIfNeeded(captureID)
+        await closeStaleDraftIfNeeded(captureID)
+        return true
+    }
+
     // MARK: - Transcript (detail screen)
 
     /// The detail screen's view of one capture's transcript: full text plus the same
@@ -427,4 +523,95 @@ final class LibraryScreenModel {
         return ManifestFacts(committedRecords: manifest.transcript?.committedRecords,
                              sampleRate: Double(manifest.format.sampleRate))
     }
+
+    // MARK: - Chain snapshot (T7 Task 2)
+
+    /// The editor's read model — also the revision-history panel's and the storage
+    /// stat's (T7 Task 2, #39). One new disk read, deliberately kept separate from
+    /// `transcript(for:)`/`EntryTranscript`: the row/scan path must never pay for it
+    /// (#40.1, Task 3), so this is called only from a user action (editor open, history
+    /// panel, diagnostics) — never from `LibraryScanner` or row construction.
+    ///
+    /// `nonisolated async`, the same shape as `transcript(for:)`: the read itself
+    /// (`EntryChainSnapshot.build`) is synchronous and needs no actor of its own — every
+    /// primitive it touches (`TranscriptRevisionStore.listing`, `EntryMetadataStore
+    /// .read(url:)`, `TranscriptChain.*`) is `nonisolated static`/pure — so this
+    /// deliberately does NOT hop onto `revisionStore`'s actor. `Task.detached` only
+    /// keeps the handful of small file reads off whatever actor/thread the caller is on.
+    nonisolated func chainSnapshot(for captureID: String) async -> EntryChainSnapshot {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                           captureID: captureID)
+            return EntryChainSnapshot.build(captureDirectory: directory)
+        }.value
+    }
+
+    // MARK: - Editor draft passthroughs (T7 Task 4)
+
+    /// The un-edited machine transcript, for the editor's degraded-chain refusal (T7 plan
+    /// ruling Q5): a chain we cannot read still gets its `live.jsonl` text offered
+    /// read-only, labeled as the machine transcript rather than as "the transcript".
+    ///
+    /// Reads `live.jsonl` and NOTHING else (`EntryTranscriptLoader.machineLiveText`). It used
+    /// to ride `transcript(for:)`, which was wrong in a way only a two-revision fixture could
+    /// show (Gate A finding I3): that path prefers the canonical chain's `current` and falls
+    /// back to the log only when no revision is readable, so a chain with one damaged file and
+    /// one readable `.userEdit` returned the owner's OWN EDIT under this heading.
+    ///
+    /// `nil` for an absent or unreadable log, and for a readable log with nothing in it:
+    /// the editor has nothing to offer in any of those cases, and an empty box under a
+    /// "here is the machine transcript" heading would claim otherwise.
+    nonisolated func machineTranscript(for captureID: String) async -> String? {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            EntryTranscriptLoader.machineLiveText(
+                captureDirectory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                                 captureID: captureID))
+        }.value
+    }
+
+    /// `transcript/draft.json` as it is on disk right now — the editor's only way to notice
+    /// that a `refresh()`-driven `closeStaleDraftIfNeeded` closed the draft beneath an open
+    /// editing session. Calls the store's own shared `readDraft` primitive rather than a
+    /// second copy of the absent/undecodable-collapse rule.
+    nonisolated func openDraft(for captureID: String) async -> TranscriptDraft? {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                           captureID: captureID)
+            return TranscriptRevisionStore.readDraft(captureDirectory: directory)
+        }.value
+    }
+
+    /// Thin passthrough. Deliberately does NOT `rescan()`: this runs on every debounce fire
+    /// (every 2 s of typing), and a whole-corpus scan per keystroke-burst is exactly the
+    /// cost `chainSnapshot` was kept off the scan path to avoid. The library rows are
+    /// refreshed once, by the detail screen, after the editor closes.
+    func writeDraft(captureID: String, text: String, now: Date) async throws {
+        try await revisionStore.writeDraft(captureID: captureID, text: text, now: now)
+    }
+
+    /// Thin passthrough. Returns the minted revision id, or `nil` when the draft matched
+    /// `current` and was simply deleted (design §2.5) — the editor treats both as success;
+    /// only a THROW means nothing was saved.
+    @discardableResult
+    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
+        try await revisionStore.closeDraft(captureID: captureID, reason: reason, now: now)
+    }
+
+    // MARK: - Revision history passthrough (T7 Task 8)
+
+    /// Thin passthrough — the revision-history panel's revert action. Every guard
+    /// (missing/trashed capture, §15b.15 degraded-chain refusal, `.notMachineLineage`)
+    /// lives once, inside `TranscriptRevisionStore.revert`, never duplicated here.
+    /// Returns the minted revision's id.
+    @discardableResult
+    func revert(captureID: String, toRevisionID: String, now: Date) async throws -> String {
+        try await revisionStore.revert(captureID: captureID, toRevisionID: toRevisionID, now: now)
+    }
 }
+
+/// The editor writes through this model, never straight to `TranscriptRevisionStore` — one
+/// store instance per file, app-wide (see `entryMetadataStore`'s own note).
+extension LibraryScreenModel: TranscriptEditorStore {}

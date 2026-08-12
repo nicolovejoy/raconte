@@ -48,25 +48,94 @@ actor EntryMetadataStore {
         try Self.read(url: url(captureID: captureID))
     }
 
-    func write(_ metadata: EntryMetadata, captureID: String) throws {
+    /// Private (T7 §7.2 rule B4): every production write goes through `update`, which is
+    /// the only place that can log the edit it makes. The static `write(_:url:)` seam
+    /// below stays public — tests use it to plant fixtures without going through
+    /// `update`'s diff-and-log machinery, and it is documented read/test-only.
+    private func write(_ metadata: EntryMetadata, captureID: String) throws {
         try Self.write(metadata, url: url(captureID: captureID))
     }
 
     /// Read, mutate, write — the only safe way to change one field without clobbering
     /// the others written by a different screen.
+    ///
+    /// Generic over `T`, the mutate closure's own return value (review finding,
+    /// T7 gate): callers that need to know what the mutation actually decided — e.g.
+    /// `setOriginalDate` below, which needs `EntryMetadata.setOriginalDate`'s accept/
+    /// reject Bool — get it back from the model itself rather than having to predict it
+    /// by re-implementing the model's own predicate outside the actor (the standing
+    /// branch rule: call existing internals, never re-implement them). Existing
+    /// `Void`-returning call sites are unaffected in behavior; they just now receive
+    /// `(EntryMetadata, Void)` instead of a bare `EntryMetadata` and either discard it
+    /// (`_ = try await ...`) or destructure `let (updated, _) = ...`.
+    ///
+    /// T7 §7: also the one place `entry-log.jsonl` is written. Diffs `EntryMetadata`
+    /// before/after the mutation (`EntryLogRecord.diff`) and appends one record per
+    /// changed field, **strictly after** `write` returns (§7.2 rule 2 — the log never
+    /// claims an edit the sidecar does not hold; if `write` throws, this method returns
+    /// before the diff ever runs). Append failure is silent (§7.2 rule 4): this is
+    /// diagnostics, and `EntryDegradation` is scan-derived with nowhere to carry a
+    /// log-write failure.
     @discardableResult
-    func update(captureID: String,
-                _ mutate: @Sendable (inout EntryMetadata) -> Void) throws -> EntryMetadata {
+    func update<T>(captureID: String,
+                   cause: EntryLogCause = .userEdit,
+                   _ mutate: @Sendable (inout EntryMetadata) -> T) throws -> (EntryMetadata, T) {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             throw EntryMetadataError.captureMissing
         }
-        var metadata = try read(captureID: captureID)
-        mutate(&metadata)
+        let before = try read(captureID: captureID)
+        var metadata = before
+        let result = mutate(&metadata)
         try write(metadata, captureID: captureID)
-        return metadata
+
+        let changes = EntryLogRecord.diff(from: before, to: metadata, at: Date(), cause: cause)
+        for record in changes {
+            do {
+                try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+            } catch {
+                #if DEBUG
+                print("EntryLogWriter.append failed for \(captureID) field \(record.field): \(error)")
+                #endif
+            }
+        }
+        return (metadata, result)
+    }
+
+    /// §7.1 nit: `EntryMetadata.setOriginalDate` rejecting a future date leaves nothing
+    /// for `update`'s diff to see — the value never changes — but the attempt itself is
+    /// informative, so `cause: .rejected` is logged directly here.
+    ///
+    /// The accepted/rejected answer is `update`'s own `T` — `EntryMetadata
+    /// .setOriginalDate`'s real Bool, threaded straight through the mutate closure —
+    /// **never re-derived**. An earlier version of this method duplicated
+    /// `setOriginalDate`'s `isFuture` guard to decide up front and then always returned a
+    /// literal `true` for the accepted path; the two answers agreed only because nothing
+    /// yet gives `EntryMetadata.setOriginalDate` a second reason to refuse. Getting the
+    /// answer from the model itself means this method cannot drift from it, by
+    /// construction, no matter how many rejection reasons `setOriginalDate` grows.
+    @discardableResult
+    func setOriginalDate(_ date: PartialDate?, captureID: String, now: Date = Date(),
+                          calendar: Calendar = .gregorianCurrent) throws -> Bool {
+        let (metadata, accepted) = try update(captureID: captureID) { md in
+            md.setOriginalDate(date, now: now, calendar: calendar)
+        }
+        guard !accepted else { return true }
+
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let record = EntryLogRecord(at: now, field: "originalDate",
+                                    from: metadata.originalDate?.isoString, to: date?.isoString,
+                                    cause: .rejected, origin: nil)
+        do {
+            try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+        } catch {
+            #if DEBUG
+            print("EntryLogWriter.append failed for \(captureID) field originalDate: \(error)")
+            #endif
+        }
+        return false
     }
 
     // MARK: Pure seams (sync; no actor hop, so the format is testable on its own)

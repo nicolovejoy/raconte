@@ -36,7 +36,8 @@ final class TranscriptRevisionCodingTests: XCTestCase {
                               createdAt: Date(timeIntervalSince1970: 1_700_000_000),
                               characterCount: 42,
                               firstLine: "hello",
-                              isForked: false)
+                              isForked: false,
+                              snippet: "hello world")
     }
 
     private func fullHead() -> TranscriptHead {
@@ -44,7 +45,10 @@ final class TranscriptRevisionCodingTests: XCTestCase {
                        revisionFiles: [1, 2, 3],
                        unreadableFiles: [],
                        revisionCount: 3,
-                       listingUnreadable: true)
+                       listingUnreadable: true,
+                       fileSizes: [RevisionFileSize(file: 1, byteSize: 100),
+                                   RevisionFileSize(file: 2, byteSize: 200),
+                                   RevisionFileSize(file: 3, byteSize: 300)])
     }
 
     private func fullDraft() -> TranscriptDraft {
@@ -88,6 +92,19 @@ final class TranscriptRevisionCodingTests: XCTestCase {
     func testSpanMissingTextThrows() {
         let json = "{\"anchor\":\"exact\"}".data(using: .utf8)!
         XCTAssertThrowsError(try CaptureCoding.decoder().decode(TranscriptSpan.self, from: json))
+    }
+
+    /// T7 Task 3 fix round 2: `RevisionFileSize` moved off a synthesized `Codable` to
+    /// a hand-written one, matching this family's identity-strict convention for its
+    /// two fields today — pins that the switch didn't accidentally loosen anything.
+    func testRevisionFileSizeMissingByteSizeThrows() {
+        let json = "{\"file\":0}".data(using: .utf8)!
+        XCTAssertThrowsError(try CaptureCoding.decoder().decode(RevisionFileSize.self, from: json))
+    }
+
+    func testRevisionFileSizeMissingFileThrows() {
+        let json = "{\"byteSize\":42}".data(using: .utf8)!
+        XCTAssertThrowsError(try CaptureCoding.decoder().decode(RevisionFileSize.self, from: json))
     }
 
     func testRevisionMissingIDThrows() {
@@ -188,6 +205,34 @@ final class TranscriptRevisionCodingTests: XCTestCase {
         """.data(using: .utf8)!
         let head = try CaptureCoding.decoder().decode(TranscriptHead.self, from: json)
         XCTAssertFalse(head.listingUnreadable)
+    }
+
+    /// T7 Task 3 fix round 1, Important 1 (additive field): a `head.json` written
+    /// before `fileSizes` existed has none recorded — must decode to `[]`, not throw.
+    /// `validatedHead`'s trust condition is what turns that empty array into
+    /// "untrusted" (a decode-level concern is not the same as a trust-level one) —
+    /// pinned separately in `TranscriptRevisionStoreTests`.
+    func testHeadMissingFileSizesDecodesEmpty() throws {
+        let json = """
+        {"revisionFiles":[1],"unreadableFiles":[],"revisionCount":1}
+        """.data(using: .utf8)!
+        let head = try CaptureCoding.decoder().decode(TranscriptHead.self, from: json)
+        XCTAssertEqual(head.fileSizes, [])
+    }
+
+    /// T7 Task 3 fix round 1, Important 3 (additive field): a `head.json`'s `current`
+    /// summary written before `snippet` existed has no opinion on it — must decode to
+    /// `firstLine` as a safe stand-in, not throw (which would silently null out
+    /// `current` entirely via `TranscriptHead`'s `try?` wrapper — see `snippet`'s own
+    /// doc comment for why that's the specific hazard leniency avoids here).
+    func testHeadSummaryMissingSnippetDecodesToFirstLine() throws {
+        let json = """
+        {"id":"R0","fileNumber":0,"source":"machineLive",
+         "createdAt":"2024-01-01T00:00:00.000Z",
+         "characterCount":5,"firstLine":"hello","isForked":false}
+        """.data(using: .utf8)!
+        let summary = try CaptureCoding.decoder().decode(TranscriptHeadSummary.self, from: json)
+        XCTAssertEqual(summary.snippet, "hello")
     }
 
     // MARK: - 1.3 Unknown-enum rule (F10)

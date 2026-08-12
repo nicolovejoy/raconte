@@ -273,6 +273,34 @@ final class LiveTranscriptStoreTests: XCTestCase {
         XCTAssertTrue(capture.transcriptPresent)
     }
 
+    /// #39, T7 Task 3 ruling 1: `Int?`, non-nil once real canonical files exist —
+    /// counting BOTH bytes ("{}" is 2 bytes each), matching `canonicalRevisions`' own
+    /// two-file fixture above so the byte count is directly checkable, not just > 0.
+    func testGatherPopulatesRevisionsByteSize() throws {
+        let dir = SegmentLayout.transcriptDirectory(captureDirectory: captureDir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("canonical-2.json"))
+        try Data("{}".utf8).write(to: dir.appendingPathComponent("canonical-11.json"))
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertEqual(capture.revisionsByteSize, 4, "two 2-byte \"{}\" files")
+    }
+
+    /// `transcript/` present (so `live.jsonl` alone counts as `transcriptPresent`) but
+    /// holding no canonical revision files at all — `revisionsByteSize` stays nil,
+    /// mirroring `liveTranscriptByteSize`'s own "nil if absent" convention, not 0.
+    func testRevisionsByteSizeIsNilWhenNoCanonicalFilesExist() throws {
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir)
+        try writer.open()
+        try writer.append(record("one", 0, 4_800))
+        try writer.close()
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertNil(capture.revisionsByteSize)
+    }
+
     func testAnEmptyTranscriptDirectoryIsNotPresent() throws {
         try FileManager.default.createDirectory(
             at: SegmentLayout.transcriptDirectory(captureDirectory: captureDir),
@@ -281,6 +309,7 @@ final class LiveTranscriptStoreTests: XCTestCase {
         let capture = try XCTUnwrap(snapshot.captures.first)
         XCTAssertFalse(capture.transcriptPresent)
         XCTAssertNil(capture.liveTranscriptByteSize)
+        XCTAssertNil(capture.revisionsByteSize)
     }
 
     // MARK: T6a — SegmentLayout head/draft/entry-log paths
@@ -300,6 +329,31 @@ final class LiveTranscriptStoreTests: XCTestCase {
         XCTAssertEqual(entryLog, captureDir.appendingPathComponent("entry-log.jsonl"))
         XCTAssertEqual(entryLog.deletingLastPathComponent(),
                        SegmentLayout.entryMetadataURL(captureDirectory: captureDir).deletingLastPathComponent())
+    }
+
+    /// T7 §7 rule 10 (the zero-byte-log trap): writing `entry-log.jsonl` must never flip
+    /// `holdsIrreplaceableArtifacts` false→true for a capture that otherwise holds
+    /// nothing — that would make a mis-tapped capture permanently undeletable, the exact
+    /// hazard `MarkerLog`/`CaptureCoordinator` already guard against for `transcript/`.
+    /// Verified directly against `DirectorySnapshot.gather` rather than asserted in a
+    /// comment (a Task 6 review found exactly that kind of overclaiming comment): the
+    /// walk that computes `transcriptPresent` only looks inside `transcript/`, and
+    /// `entry-log.jsonl` lives beside `entry.json` at the capture root, so it is
+    /// structurally invisible to every input `holdsIrreplaceableArtifacts` reads.
+    func testEntryLogAloneDoesNotFlipHoldsIrreplaceableArtifacts() throws {
+        try Data("{}".utf8).write(to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir))
+        try EntryLogWriter.append(
+            EntryLogRecord(at: Date(), field: "journalID", from: nil, to: "J1",
+                          cause: .userEdit, origin: nil),
+            captureDirectory: captureDir)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.entryLogURL(captureDirectory: captureDir).path))
+
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot)
+        let capture = try XCTUnwrap(snapshot.captures.first)
+        XCTAssertFalse(capture.transcriptPresent)
+        XCTAssertFalse(capture.holdsIrreplaceableArtifacts,
+                       "entry-log.jsonl alone must not make a mis-tapped capture undeletable")
     }
 
     func testCanonicalRevisionNeverMistakesHeadOrDraftForARevision() {

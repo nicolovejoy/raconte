@@ -172,7 +172,16 @@ final class TranscriptAttributionTests: XCTestCase {
         let nearEndMarkers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
         let nearEndParagraphs = TranscriptAttribution.attribute(committed: nearEnd, snapped: nearEndMarkers)
         XCTAssertEqual(nearEndParagraphs.map(\.text), ["word", "next"])
+        // T7 Task 9.3: `hasApproximateBoundary`'s own contract (see the span-path sibling
+        // pair, `testMarkerStrictlyInsideAPlaceableSpanNearer{Start,End}IsApproximate`) is
+        // that the imprecision belongs to the CUT, not to one side of it — the flag must
+        // land on BOTH paragraphs adjacent to an interior cut. This piece-based path
+        // (`cutIndex(forFrame:pieces:)`) had that contract implemented since Task 1 but
+        // never asserted on the second side; only the span path (`placeableCutPosition`,
+        // added in Task 5's fix round) had a two-sided pin. Symmetric here too.
         XCTAssertTrue(nearEndParagraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(nearEndParagraphs[1].hasApproximateBoundary,
+                      "the cut's imprecision belongs to both paragraphs it separates, not just the first")
     }
 
     func testRecordWithAnyUntimedRunIsNeverSplitInternally() {
@@ -202,6 +211,10 @@ final class TranscriptAttributionTests: XCTestCase {
 
         XCTAssertEqual(paragraphs.map(\.text), ["word", "next"])
         XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        // T7 Task 9.3: symmetric — this source of `approximate` is the marker's OWN
+        // snap-imprecision flag (not a structural interior-cut), so pin it lands on
+        // both sides too, distinct from the structural case above.
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
     }
 
     func testUnknownKindMarkersAreIgnoredForRendering() {
@@ -263,6 +276,275 @@ final class TranscriptAttributionTests: XCTestCase {
         let paragraphs = TranscriptAttribution.attribute(committed: [], snapped: markers)
 
         XCTAssertEqual(paragraphs, [])
+    }
+
+    // MARK: - T7 Task 5: attribution over a revision's SPANS (survives an edit)
+
+    /// Brief step 5.1: rev0 promoted (both spans `.exact`), then one word retyped —
+    /// TranscriptSplice degrades a touched span to `.inherited`, carrying the PARENT
+    /// span's full frame bounds forward (design §3.3), never `.exact` again. Attribution
+    /// must still place the marker correctly and label both paragraphs, proving it reads
+    /// spans generally rather than only ever-`.exact` machine output.
+    func testEditedInheritedSpanKeepsVoiceAttributionAcrossTheEdit() {
+        let spans = [
+            TranscriptSpan(text: "bn opener", anchor: .exact, frameStart: 0, frameEnd: 96_000),
+            // Stands in for "ln reply" retyped to "ln answer": the whole span touched,
+            // degraded to `.inherited` but keeping the ORIGINAL span's frame bounds —
+            // exactly TranscriptSplice's rule for a fully-replaced run.
+            TranscriptSpan(text: "ln answer", anchor: .inherited, frameStart: 96_000, frameEnd: 192_000),
+        ]
+        let markers = [
+            snapped(mark(0, seq: 0, kind: .voice, voice: StructureMarker.Voice.bigNico), at: 0),
+            snapped(mark(96_000, seq: 1, kind: .voice, voice: StructureMarker.Voice.littleNico), at: 96_000),
+        ]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), ["bn", "ln"])
+        XCTAssertEqual(paragraphs.map(\.text), ["bn opener", "ln answer"])
+    }
+
+    /// The same scenario driven through the REAL splice engine (not a hand-built
+    /// `.inherited` fixture), so the pipeline `TranscriptSplice` → `TranscriptAttribution`
+    /// is exercised end-to-end at the pure-function level. Assertions are deliberately
+    /// robust to exactly how the character diff fragments the touched span (that is
+    /// `TranscriptSplice`'s concern, pinned by its own tests) — this only checks the
+    /// properties Task 5 owns: voice count/order, which words land on which side, and
+    /// that the paragraphs still rejoin to the revision's own `plainText`.
+    func testRealSplicedEditStillAttributesVoicesCorrectly() {
+        let parent = TranscriptRevision(
+            id: "R0", source: .machineLive, createdAt: Date(timeIntervalSince1970: 1_000),
+            spans: [
+                TranscriptSpan(text: "bn opener", anchor: .exact, frameStart: 0, frameEnd: 96_000),
+                TranscriptSpan(text: "ln reply", anchor: .exact, frameStart: 96_000, frameEnd: 192_000),
+            ])
+        let editedText = "bn opener ln answer"   // "reply" retyped to "answer"
+        let editedSpans = TranscriptSplice.spans(parent: parent, editedText: editedText)
+        XCTAssertEqual(TranscriptText.join(editedSpans.map(\.text)), editedText,
+                       "TranscriptSplice's own round-trip guarantee — sanity check on the fixture")
+
+        let markers = [
+            snapped(mark(0, seq: 0, kind: .voice, voice: StructureMarker.Voice.bigNico), at: 0),
+            snapped(mark(96_000, seq: 1, kind: .voice, voice: StructureMarker.Voice.littleNico), at: 96_000),
+        ]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: editedSpans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), ["bn", "ln"])
+        XCTAssertTrue(paragraphs[0].text.contains("opener") && !paragraphs[0].text.contains("answer"))
+        XCTAssertTrue(paragraphs[1].text.contains("answer") && !paragraphs[1].text.contains("reply"))
+        XCTAssertEqual(paragraphs.map(\.text).joined(separator: " "), editedText,
+                       "paragraphs rejoin to exactly the edited plain text")
+    }
+
+    /// Brief step 5.2: a `.none`-anchored span (typed from nothing — no frame bounds at
+    /// all) sitting between two `.exact` spans must join the PRECEDING paragraph, never
+    /// open one of its own. The wrong answer (a 3rd, "typed"-only paragraph, or "typed"
+    /// silently dropped) is representable here, so this is non-degenerate.
+    func testNoneAnchoredSpanJoinsThePrecedingParagraphAndNeverOpensANewOne() {
+        let spans = [
+            TranscriptSpan(text: "kept before", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "typed", anchor: .none),
+            TranscriptSpan(text: "kept after", anchor: .exact, frameStart: 50_000, frameEnd: 100_000),
+        ]
+        let markers = [snapped(mark(50_000, seq: 0, kind: .paragraph), at: 50_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs[0].text, "kept before typed")
+        XCTAssertEqual(paragraphs[1].text, "kept after")
+    }
+
+    /// A zero-length `.inherited` insertion point (TranscriptSplice's own rule for newly
+    /// typed text with a preceding usable span to inherit from — frameStart == frameEnd)
+    /// is UNPLACEABLE the same way `.none` is (brief's explicit "and zero-length
+    /// `.inherited` insertion points" clause) — distinct from the `.none` case above,
+    /// since `anchor.hasUsableBounds` alone would say yes here.
+    func testZeroLengthInheritedInsertionPointIsNotPlaceable() {
+        let spans = [
+            TranscriptSpan(text: "kept before", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "typed", anchor: .inherited, frameStart: 50_000, frameEnd: 50_000),
+            TranscriptSpan(text: "kept after", anchor: .exact, frameStart: 50_000, frameEnd: 100_000),
+        ]
+        let markers = [snapped(mark(50_000, seq: 0, kind: .paragraph), at: 50_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs[0].text, "kept before typed")
+        XCTAssertEqual(paragraphs[1].text, "kept after")
+    }
+
+    /// A run of non-placeable spans with NOTHING preceding them (no placeable span
+    /// exists earlier in the array) has no voice to inherit either — there is no
+    /// "nearest preceding placeable span." A frame-0 voice marker's cut lands
+    /// immediately before the first REAL placeable span (`kept`); the leading `.none`
+    /// span stays in its own group, carrying `nil` (never the marker's voice, which it
+    /// has no actual evidence for) — the stronger reading of "never allowed to start a
+    /// paragraph on its own evidence": it must never be attributed a voice it didn't
+    /// earn, not even by being folded into whichever voice happens to follow it.
+    /// RULED (controller, T7 Task 5 review): a deliberate deviation from the brief's
+    /// literal "inherit the nearest preceding placeable span" wording for exactly this
+    /// no-predecessor edge case, accepted because it follows the owner's thrice-affirmed
+    /// never-label-untrue principle — attributing a voice with no evidence is exactly
+    /// what that principle forbids. Not drift; leave as-is.
+    func testLeadingNonPlaceableSpanWithNothingToInheritStaysUnvoiced() {
+        let spans = [
+            TranscriptSpan(text: "typed opening", anchor: .none),
+            TranscriptSpan(text: "kept", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+        ]
+        let markers = [snapped(mark(0, seq: 0, kind: .voice, voice: StructureMarker.Voice.bigNico), at: 0)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), [nil, "bn"])
+        XCTAssertEqual(paragraphs.map(\.text), ["typed opening", "kept"])
+    }
+
+    /// Review finding (task-5-report re-review): the interior-cut branch of
+    /// `placeableCutPosition` — a marker frame landing STRICTLY inside a placeable
+    /// span's `[frameStart, frameEnd)`, with room on both sides — was exercised by ZERO
+    /// span-path tests; every prior fixture put the marker at 0, exactly at a span
+    /// boundary, or in a gap between spans. This is also the ONLY source of
+    /// `structuralApprox: true` on the span path, so `hasApproximateBoundary` was
+    /// entirely unpinned there too.
+    ///
+    /// Marker at 70_000 inside "word"'s `[50_000, 150_000)`: 20_000 from the start,
+    /// 80_000 to the end — nearer the start, so the cut lands BEFORE the span
+    /// (`insideAt`, not `insideAt + 1`). Deliberately a TWO-span fixture, not one: with
+    /// only one placeable span, "cut before" and "cut after" both leave one side of the
+    /// cut empty (filtered) and produce the SAME single surviving paragraph — a
+    /// direction bug would be invisible. Here the wrong direction pulls "word" into the
+    /// FIRST paragraph instead of starting the second one, which the mutation check
+    /// below confirms actually fails on this fixture (unlike an earlier, single-span
+    /// draft of this test, which did not).
+    func testMarkerStrictlyInsideAPlaceableSpanNearerTheStartIsApproximate() {
+        let spans = [
+            TranscriptSpan(text: "before", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "word", anchor: .exact, frameStart: 50_000, frameEnd: 150_000),
+        ]
+        let markers = [snapped(mark(70_000, seq: 0, kind: .paragraph), at: 70_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.text), ["before", "word"])
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
+    }
+
+    /// Companion to the "nearer the start" test above: marker at 90_000 inside "word"'s
+    /// [0, 100_000) — 90_000 from the start, 10_000 to the end — nearer the end, so the
+    /// cut lands AFTER the span (`insideAt + 1`). A second span ("next") makes the cut
+    /// DIRECTION observable: this fixture asserts BOTH the resulting cut position (which
+    /// span lands in which paragraph) AND that the boundary is flagged approximate on
+    /// BOTH sides of it (`Paragraph.hasApproximateBoundary`'s own contract — the
+    /// imprecision belongs to the cut, not to one side of it). Distinct fixture from
+    /// `testMarkerInsideASingleRunCutsAtTheNearerEdge` (the committed/`Piece`-based
+    /// sibling test) — that one pins `cutIndex(forFrame:pieces:)`; this one pins the
+    /// separate `placeableCutPosition` implementation for the span path.
+    func testMarkerStrictlyInsideAPlaceableSpanNearerTheEndIsApproximate() {
+        let spans = [
+            TranscriptSpan(text: "word", anchor: .exact, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "next", anchor: .exact, frameStart: 100_000, frameEnd: 200_000),
+        ]
+        let markers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.text), ["word", "next"])
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary)
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
+    }
+
+    /// Gate B Minor 4 — the fixture `placeableCutPosition`'s doc comment deferred to Gate
+    /// B, now closed. Two CONSECUTIVE placeable spans sharing IDENTICAL `[0, 100_000)`
+    /// bounds is not a contrivance: it is the ordinary post-edit shape, because
+    /// `TranscriptSplice` degrades a touched span into `.inherited` fragments that each
+    /// carry the PARENT span's FULL bounds. With a marker strictly inside those shared
+    /// bounds, `firstIndex(where:)` finds the FIRST fragment, so "nearer the end" cuts
+    /// after THAT fragment — not after the run the fragments came from.
+    ///
+    /// Both halves of the comment's claim are asserted: the cut position (after fragment
+    /// one, so fragment two starts the second paragraph) and `structuralApprox` being set
+    /// regardless, so the imprecision is disclosed rather than silently claimed as exact.
+    /// Nothing tears mid-word either — each paragraph is whole span texts.
+    ///
+    /// Mutation this fixture uniquely catches (measured, Gate B fix wave):
+    /// `firstIndex(where:)` -> `lastIndex(where:)`. Every other interior-cut fixture has
+    /// exactly one span containing the frame, so first and last are the same span there and
+    /// none of them fail.
+    func testTwoPlaceableSpansSharingBoundsCutAfterTheFirstFragmentAndFlagItApproximate() {
+        let spans = [
+            TranscriptSpan(text: "frag one", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "frag two", anchor: .inherited, frameStart: 0, frameEnd: 100_000),
+            TranscriptSpan(text: "after", anchor: .exact, frameStart: 100_000, frameEnd: 200_000),
+        ]
+        // 90_000 is strictly inside [0, 100_000) and nearer that interval's END, so the cut
+        // goes AFTER the span it landed in — which is fragment ONE, the first match.
+        let markers = [snapped(mark(90_000, seq: 0, kind: .paragraph), at: 90_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.map(\.text), ["frag one", "frag two after"],
+                       "the cut lands after the FIRST same-bounds fragment, not after the run")
+        XCTAssertTrue(paragraphs[0].hasApproximateBoundary,
+                      "an interior cut is disclosed as approximate on both sides of it")
+        XCTAssertTrue(paragraphs[1].hasApproximateBoundary)
+    }
+
+    /// A span with an `.unknown` anchor (a foreign/future anchoring scheme this build
+    /// doesn't understand) is unplaceable even when it carries real, non-nil frame
+    /// bounds — `SpanAnchor.hasUsableBounds` says no for `.unknown` specifically because
+    /// frames under a scheme this build can't interpret aren't safe to test a marker
+    /// frame against, even though a naive nil-check on `frameStart`/`frameEnd` alone
+    /// would not catch this (the field being present is not the same as it being
+    /// trustworthy for THIS anchor).
+    /// The marker frame sits exactly at the foreign span's own `frameStart` — the one
+    /// position where its placeability actually changes the outcome: if `.unknown`
+    /// wrongly counted as placeable, the cut would land BEFORE the foreign span
+    /// (grouping it with "kept after"); correctly excluded, the cut skips past it to the
+    /// next REAL placeable span, grouping "foreign" with "kept before" instead.
+    func testUnknownAnchoredSpanWithRealFramesIsNotPlaceable() {
+        let spans = [
+            TranscriptSpan(text: "kept before", anchor: .exact, frameStart: 0, frameEnd: 20_000),
+            TranscriptSpan(text: "foreign", anchor: .unknown("futureScheme"),
+                           frameStart: 20_000, frameEnd: 40_000),
+            TranscriptSpan(text: "kept after", anchor: .exact, frameStart: 40_000, frameEnd: 60_000),
+        ]
+        let markers = [snapped(mark(20_000, seq: 0, kind: .paragraph), at: 20_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs[0].text, "kept before foreign")
+        XCTAssertEqual(paragraphs[1].text, "kept after")
+    }
+
+    /// Brief step 5.3 (pure half): the whole-record join rule generalises to a
+    /// whole-SPAN join rule — with no markers at all, one paragraph must reproduce
+    /// `TranscriptChain.plainText(revision)` byte-for-byte, the same `TranscriptText
+    /// .join` rule `plainText` itself uses. Mutation-checked (see task report): a
+    /// different separator in `spanParagraph`'s join breaks this.
+    func testNoMarkersOverSpansReproducesPlainTextByteForByte() {
+        let spans = [
+            TranscriptSpan(text: "hello there", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "general kenobi", anchor: .inherited, frameStart: 50_000, frameEnd: 100_000),
+        ]
+        let revision = TranscriptRevision(id: "R0", source: .userEdit,
+                                          createdAt: Date(timeIntervalSince1970: 2_000), spans: spans)
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: [])
+
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertNil(paragraphs[0].voice)
+        XCTAssertEqual(paragraphs[0].text, TranscriptChain.plainText(revision))
+        XCTAssertEqual(paragraphs[0].text, "hello there general kenobi")
     }
 
     func testDisplayNameUppercasesTheOpaqueVoiceID() {

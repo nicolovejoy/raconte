@@ -31,6 +31,92 @@ enum UITestHarnessRoot {
     }
 }
 
+/// A pre-made entry with a real revision chain, for the editor's UI test (T7 Task 4.6).
+///
+/// The synthetic harness records real audio but installs `NoOpPCMSink` as its tee branch, so
+/// nothing is ever transcribed under UI test and every recorded entry is
+/// `.readOnlyNoTranscript` — an editor flow cannot be built out of one. Seeding a canonical
+/// revision directly is the smallest honest fixture: `promoteIfNeeded` sees a non-empty
+/// chain and skips (`.skippedAlreadyPromoted`, so no `final/recording.m4a` is needed), the
+/// scanner shows a row because a non-empty `transcript/` is durable content, and playback
+/// degrades to `.none` exactly as it already does for a capture with no audio.
+///
+/// Env-gated (`RACONTE_UITEST_SEED_ENTRY`) so every existing capture flow is untouched, and
+/// idempotent so a relaunch on the same id does not append a second revision.
+enum UITestEntrySeed {
+    static let captureID = "01KYX77KK5QM15915EZBVXTQZ4"
+    static let text = "the machine heard these words"
+
+    static func seedIfRequested(capturesRoot: URL) {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_ENTRY"] != nil else { return }
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: captureID)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+
+        let revision = TranscriptRevision(id: "01KYX77KK5QM15915EZBVXTQZ5",
+                                          source: .machineLive,
+                                          createdAt: Date(),
+                                          spans: [TranscriptSpan(text: text, anchor: .none)])
+        try? FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        guard let data = try? CaptureCoding.encoder().encode(revision) else { return }
+        try? data.write(to: url)
+    }
+}
+
+/// A pre-made entry with real frame-bounded spans PLUS an existing `markers.jsonl`, for
+/// the marker-correction screen's UI test (T7 Task 6.5). `UITestEntrySeed`'s single span
+/// is `.none`-anchored (no frames at all — it never needed any for the editor), so it
+/// cannot exercise anything here: every word in it is non-placeable, and there is
+/// nothing for a raw `.voice`/`.paragraph` tap to snap against. A SEPARATE capture id and
+/// its own env gate (`RACONTE_UITEST_SEED_MARKER_ENTRY`) rather than changing the shared
+/// fixture — the editor's own UI tests assert the exact seeded text and span shape.
+///
+/// Three separate spans (`.inherited`, real bounds — the same shape promotion gives a
+/// capture with no runs, design §4.2) rather than one multi-run span, so each word is
+/// independently placeable and the boundary-add test has more than one word to pick
+/// between. Two pre-existing raw taps: a `.voice` opener (offers voice-correction) and a
+/// `.paragraph` mid-way (offers retraction) — the third word carries no tap at all, so
+/// it is the boundary-add target.
+enum UITestMarkerCorrectionSeed {
+    static let captureID = "01KYX77KK5QM15915EZBVXTQZ6"
+    static let words: [(text: String, start: Int64, end: Int64)] = [
+        ("one", 0, 10_000),
+        ("two", 20_000, 30_000),
+        ("three", 40_000, 50_000),
+    ]
+
+    static func seedIfRequested(capturesRoot: URL) {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_MARKER_ENTRY"] != nil else { return }
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: captureID)
+        let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+
+        let spans = words.map { word in
+            TranscriptSpan(text: word.text, anchor: .inherited, frameStart: word.start, frameEnd: word.end)
+        }
+        let revision = TranscriptRevision(id: "01KYX77KK5QM15915EZBVXTQZ7",
+                                          source: .machineLive,
+                                          createdAt: Date(),
+                                          spans: spans)
+        try? FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        guard let data = try? CaptureCoding.encoder().encode(revision) else { return }
+        try? data.write(to: url)
+
+        let writer = MarkerLogWriter(captureDirectory: captureDirectory)
+        try? writer.open()
+        try? writer.append(StructureMarker(seq: 0, frame: 0, kind: .voice,
+                                           voice: StructureMarker.Voice.bigNico))
+        try? writer.append(StructureMarker(seq: 1, frame: 20_000, kind: .paragraph))
+        try? writer.close()
+    }
+}
+
 extension CaptureScreenModel {
     /// `library` is threaded through (M3 T4.5) rather than dropped: `ContentView`'s
     /// `navigationDestination(for: LibraryDestination.self)` reads its OWN

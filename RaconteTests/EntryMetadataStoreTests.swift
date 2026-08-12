@@ -98,7 +98,7 @@ final class EntryMetadataStoreTests: XCTestCase {
                                      originalDate: PartialDate(year: 1986, month: 11, day: 6),
                                      trashedAt: Date(timeIntervalSince1970: 1_700_000_000.5))
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertEqual(readBack, metadata)
         let freshStore = try await EntryMetadataStore(capturesRoot: capturesRoot)
@@ -108,10 +108,10 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testUpdateChangesOneFieldAndPreservesTheRest() async throws {
         let s = store()
-        try await s.write(EntryMetadata(journalID: "J1",
-                                        originalDate: PartialDate(year: 1970, month: 1, day: 1)),
-                          captureID: captureID)
-        let updated = try await s.update(captureID: captureID) {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1",
+                                                    originalDate: PartialDate(year: 1970, month: 1, day: 1)),
+                                     url: sidecarURL)
+        let (updated, _) = try await s.update(captureID: captureID) {
             $0.trashedAt = Date(timeIntervalSince1970: 200)
         }
         XCTAssertEqual(updated.journalID, "J1")
@@ -123,7 +123,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     }
 
     func testUpdateOnAnAbsentSidecarStartsFromDefaults() async throws {
-        let updated = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
         XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
@@ -152,7 +152,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     /// must fail, because getting this wrong breaks journal filing on the capture path.
     func testUpdateStillWritesWhenTheDirectoryExistsWithNoSidecar() async throws {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
-        let updated = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
         XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
@@ -160,7 +160,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     // MARK: The default is a semantic, not a value
 
     func testNilOriginalDateIsNotMaterializedOnDisk() async throws {
-        try await store().write(EntryMetadata(journalID: "J1"), captureID: captureID)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
         let text = String(decoding: try Data(contentsOf: sidecarURL), as: UTF8.self)
         XCTAssertEqual(text, #"{"journalID":"J1"}"#)
         XCTAssertFalse(text.contains("originalDate"))
@@ -313,7 +313,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testMultiVoiceTrueRoundTrips() async throws {
         let metadata = EntryMetadata(journalID: "J1", multiVoice: true)
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertTrue(readBack.multiVoice)
         XCTAssertEqual(readBack, metadata)
@@ -341,7 +341,7 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testPrecisionRoundTrips() async throws {
         let metadata = EntryMetadata(originalDate: PartialDate(year: 1986, month: 11))
         let s = store()
-        try await s.write(metadata, captureID: captureID)
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
         let readBack = try await s.read(captureID: captureID)
         XCTAssertEqual(readBack, metadata)
         XCTAssertEqual(readBack.originalDate?.precision, .yearMonth)
@@ -395,8 +395,8 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testWriteIsAtomicAndLeavesNoPartFile() async throws {
         let s = store()
-        try await s.write(EntryMetadata(journalID: "first"), captureID: captureID)
-        try await s.write(EntryMetadata(journalID: "second"), captureID: captureID)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "first"), url: sidecarURL)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "second"), url: sidecarURL)
         let latest = try await s.read(captureID: captureID)
         XCTAssertEqual(latest.journalID, "second")
         XCTAssertFalse(FileManager.default.fileExists(
@@ -419,5 +419,268 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertEqual(sidecarURL.deletingLastPathComponent().standardizedFileURL,
                        SegmentLayout.manifestURL(captureDirectory: captureDirectory)
                            .deletingLastPathComponent().standardizedFileURL)
+    }
+
+    // MARK: T7 §7 — update diffs and appends to the audit log (steps 7.2, 7.4, 7.5)
+
+    /// 7.2 (part 1): `update` diffs before/after and appends exactly one record per
+    /// changed field, with the field's on-disk string encoding on both sides.
+    func testBackdateEditThroughUpdateAppendsExactlyOneRecordWithTheOnDiskEncodings() async throws {
+        try EntryMetadataStore.write(
+            EntryMetadata(originalDate: PartialDate(year: 1998, month: 3)), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) {
+            $0.setOriginalDate(PartialDate(year: 1998, month: 3, day: 4))
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        let record = try XCTUnwrap(log.records.first)
+        XCTAssertEqual(record.field, "originalDate")
+        XCTAssertEqual(record.from, "1998-03")
+        XCTAssertEqual(record.to, "1998-03-04")
+        XCTAssertEqual(record.cause, .userEdit)
+    }
+
+    /// 7.2 (part 2): the counterpart to the test above — a fixture where the mutation
+    /// changes nothing writes nothing. Non-degenerate against the test above: that one
+    /// proves a real change DOES append, so "always writes nothing" cannot pass both.
+    func testUpdateThatChangesNothingAppendsNothing() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records, [])
+    }
+
+    /// Review finding (Important 2): `EntryLogRecord.diff` has six near-identical
+    /// branches, one per `EntryMetadata` field; only `journalID`/`originalDate` were
+    /// exercised above. One row per field, each in its own capture directory so no case
+    /// can see another's log. Mutation-checked below (transposing a field name).
+    func testEveryFieldChangeAppendsARecordWithTheRightNameAndEncodings() async throws {
+        struct Case {
+            let field: String
+            let seed: EntryMetadata
+            let mutate: @Sendable (inout EntryMetadata) -> Void
+            let from: String?
+            let to: String?
+        }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let cases: [Case] = [
+            Case(field: "journalID", seed: EntryMetadata(journalID: "J1"),
+                 mutate: { $0.journalID = "J2" }, from: "J1", to: "J2"),
+            Case(field: "originalDate", seed: EntryMetadata(originalDate: PartialDate(year: 1998, month: 3)),
+                 mutate: { $0.originalDate = PartialDate(year: 1998, month: 3, day: 4) },
+                 from: "1998-03", to: "1998-03-04"),
+            Case(field: "trashedAt", seed: EntryMetadata(),
+                 mutate: { $0.trashedAt = stamp }, from: nil,
+                 to: CaptureCoding.iso8601Formatter().string(from: stamp)),
+            Case(field: "detectedDate", seed: EntryMetadata(),
+                 mutate: { $0.detectedDate = PartialDate(year: 1999) }, from: nil, to: "1999"),
+            Case(field: "detectionRan", seed: EntryMetadata(),
+                 mutate: { $0.detectionRan = true }, from: "false", to: "true"),
+            Case(field: "multiVoice", seed: EntryMetadata(),
+                 mutate: { $0.multiVoice = true }, from: "false", to: "true"),
+        ]
+
+        for testCase in cases {
+            let id = "\(captureID)-\(testCase.field)"
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try EntryMetadataStore.write(testCase.seed,
+                                         url: SegmentLayout.entryMetadataURL(captureDirectory: dir))
+
+            _ = try await store().update(captureID: id) { testCase.mutate(&$0) }
+
+            let log = EntryLogReader.load(captureDirectory: dir)
+            XCTAssertEqual(log.records.count, 1, "\(testCase.field): expected exactly one record")
+            let record = try XCTUnwrap(log.records.first, testCase.field)
+            XCTAssertEqual(record.field, testCase.field, "\(testCase.field): field name")
+            XCTAssertEqual(record.from, testCase.from, "\(testCase.field): from")
+            XCTAssertEqual(record.to, testCase.to, "\(testCase.field): to")
+        }
+    }
+
+    /// Review finding (Important 2): no test asserted a multi-field mutation appends
+    /// multiple records in `EntryMetadata`'s declaration order. The mutate closure sets
+    /// `multiVoice` before `journalID` — the OPPOSITE of declaration order — so this is
+    /// non-degenerate against a differ that emitted records in mutation order instead.
+    func testTwoFieldMutationAppendsRecordsInDeclarationOrderNotMutationOrder() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+
+        _ = try await store().update(captureID: captureID) {
+            $0.multiVoice = true
+            $0.journalID = "J2"
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.map(\.field), ["journalID", "multiVoice"])
+    }
+
+    /// 7.4: the log file is pre-created and made unwritable so `EntryLogWriter.append`'s
+    /// `open()` fails with EACCES, while `entry.json` — a different file in the same
+    /// directory — stays writable. `update` must still succeed and the sidecar must
+    /// still carry the edit; only the log write is lost.
+    func testFailingAppendDoesNotFailTheMetadataWrite() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+        let logURL = SegmentLayout.entryLogURL(captureDirectory: captureDirectory)
+        FileManager.default.createFile(atPath: logURL.path, contents: Data())
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: logURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644],
+                                                        ofItemAtPath: logURL.path) }
+        guard !FileManager.default.isWritableFile(atPath: logURL.path) else {
+            throw XCTSkip("running with privileges that bypass permission checks")
+        }
+
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J2" }
+        XCTAssertEqual(updated.journalID, "J2")
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.journalID, "J2")
+    }
+
+    /// 7.5: the capture directory is made unwritable so the sidecar's `AtomicFile.replace`
+    /// cannot create its `.part` file — `update` must throw before the mutation ever
+    /// takes effect, and no log record may exist afterward.
+    ///
+    /// The log file is pre-created (normal permissions) so this genuinely isolates
+    /// ordering rather than accidentally testing "both operations fail for the same
+    /// reason": appending to an ALREADY-EXISTING file needs only the file's own write
+    /// permission, not the directory's — POSIX only gates directory *entry* creation
+    /// (a new `.part`, a new `entry-log.jsonl`) behind directory write permission. So an
+    /// append-before-write bug would still succeed here even though the sidecar write
+    /// fails, and this test would catch it.
+    func testAppendNeverRunsWhenTheSidecarWriteFails() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+        // Pre-created with normal permissions, BEFORE the directory is locked down:
+        // appending to an already-existing file needs only the file's own write
+        // permission plus directory *search*, not directory *write* — so an
+        // append-before-write bug is still observable below even though the sidecar
+        // write is denied.
+        let logURL = SegmentLayout.entryLogURL(captureDirectory: captureDirectory)
+        FileManager.default.createFile(atPath: logURL.path, contents: Data())
+        // Throwaway scratch file, created here (before the lockdown) so it doesn't
+        // contaminate the real assertion below — used only to confirm the isolation
+        // actually holds on this filesystem.
+        let scratchURL = captureDirectory.appendingPathComponent("probe.tmp")
+        FileManager.default.createFile(atPath: scratchURL.path, contents: Data())
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: captureDirectory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                        ofItemAtPath: captureDirectory.path) }
+        guard !FileManager.default.isWritableFile(atPath: captureDirectory.path) else {
+            throw XCTSkip("running with privileges that bypass permission checks")
+        }
+        // Appending to a pre-existing, normally-permissioned file must succeed even
+        // with the directory locked down, or this test proves nothing about ordering.
+        let scratchFD = open(scratchURL.path, O_WRONLY | O_APPEND)
+        XCTAssertGreaterThanOrEqual(scratchFD, 0, "fixture assumption failed: appending to an " +
+            "existing file needs directory write too on this filesystem")
+        if scratchFD >= 0 { close(scratchFD) }
+
+        do {
+            _ = try await store().update(captureID: captureID) { $0.journalID = "J2" }
+            XCTFail("expected the sidecar write to fail")
+        } catch {
+            // expected — AtomicFile.replace could not create its .part file
+        }
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records, [], "append must never run when the sidecar write did not land")
+    }
+
+    // MARK: 7.8 — cause: .rejected (§7.1 nit)
+
+    /// A future backdate is refused by `EntryMetadata.setOriginalDate` — nothing for
+    /// `update`'s diff to see, since the value never changes — but the attempt itself is
+    /// logged directly, with `cause: .rejected`. The sidecar is untouched.
+    func testRejectedFutureBackdateIsLoggedWithCauseRejected() async throws {
+        try EntryMetadataStore.write(EntryMetadata(originalDate: PartialDate(year: 1998, month: 6)),
+                                     url: sidecarURL)
+
+        let accepted = try await store().setOriginalDate(
+            PartialDate(year: 2027), captureID: captureID, now: referenceNow, calendar: referenceCalendar)
+        XCTAssertFalse(accepted)
+
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.originalDate, PartialDate(year: 1998, month: 6),
+                       "a rejected attempt must not reach the sidecar")
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        let record = try XCTUnwrap(log.records.first)
+        XCTAssertEqual(record.field, "originalDate")
+        XCTAssertEqual(record.from, "1998-06")
+        XCTAssertEqual(record.to, "2027")
+        XCTAssertEqual(record.cause, .rejected)
+    }
+
+    /// The counterpart: an accepted backdate through the same entry point still goes
+    /// through `update`'s generic diff, cause `.userEdit`, non-degenerate against the
+    /// rejected case above (both use `setOriginalDate`; only the date differs).
+    func testAcceptedBackdateThroughSetOriginalDateLogsUserEdit() async throws {
+        try EntryMetadataStore.write(EntryMetadata.defaults, url: sidecarURL)
+
+        let accepted = try await store().setOriginalDate(
+            PartialDate(year: 2026, month: 6, day: 15), captureID: captureID,
+            now: referenceNow, calendar: referenceCalendar)
+        XCTAssertTrue(accepted)
+
+        let persisted = try await store().read(captureID: captureID)
+        XCTAssertEqual(persisted.originalDate, PartialDate(year: 2026, month: 6, day: 15))
+
+        let log = EntryLogReader.load(captureDirectory: captureDirectory)
+        XCTAssertEqual(log.records.count, 1)
+        XCTAssertEqual(log.records.first?.cause, .userEdit)
+    }
+
+    // MARK: Review finding (Important 1) — the answer must come from the model, never a guess
+
+    /// `update`'s generic `T` is the mutate closure's own return value, handed back
+    /// verbatim — not re-derived from the before/after diff, not re-derived from the
+    /// closure's argument, nothing state-based that could coincidentally agree with the
+    /// closure's real answer on today's inputs and silently drift later. A contrived
+    /// string (not something guessable from `EntryMetadata`'s state) makes that concrete.
+    func testUpdateReturnsTheMutateClosuresOwnResultVerbatim() async throws {
+        try EntryMetadataStore.write(EntryMetadata.defaults, url: sidecarURL)
+
+        let (metadata, result) = try await store().update(captureID: captureID) { md -> String in
+            md.journalID = "J9"
+            return "closure-returned-this-exact-string"
+        }
+
+        XCTAssertEqual(metadata.journalID, "J9")
+        XCTAssertEqual(result, "closure-returned-this-exact-string")
+    }
+
+    /// Review finding (Important 1): `setOriginalDate`'s `accepted` answer must always
+    /// agree with what actually landed in the sidecar — never predicted ahead of the
+    /// model, never a hardcoded literal disconnected from what `EntryMetadata
+    /// .setOriginalDate` really decided. Runs both the accepted and rejected cases (each
+    /// in its own capture directory, so neither result can bleed into the other) and
+    /// checks the invariant directly against re-read disk state rather than against a
+    /// second, independently-computed expectation.
+    func testSetOriginalDatesAcceptedAnswerAlwaysMatchesWhatLandedInTheSidecar() async throws {
+        struct Case { let name: String; let candidate: PartialDate }
+        let cases: [Case] = [
+            Case(name: "accepted", candidate: PartialDate(year: 2026, month: 6, day: 15)),
+            Case(name: "rejected", candidate: PartialDate(year: 2027)),
+        ]
+
+        for testCase in cases {
+            let id = "\(captureID)-\(testCase.name)"
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = SegmentLayout.entryMetadataURL(captureDirectory: dir)
+            try EntryMetadataStore.write(EntryMetadata.defaults, url: url)
+
+            let accepted = try await store().setOriginalDate(
+                testCase.candidate, captureID: id, now: referenceNow, calendar: referenceCalendar)
+            let persisted = try EntryMetadataStore.read(url: url)
+
+            XCTAssertEqual(accepted, persisted.originalDate == testCase.candidate,
+                           "\(testCase.name): the store's answer must match whether the " +
+                           "sidecar actually holds the attempted date, not a guess made ahead of it")
+        }
     }
 }

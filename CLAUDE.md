@@ -1,5 +1,51 @@
 # CLAUDE.md
 
+## Session 2026-08-11 → 08-12 (laptop — T7 FINISHED AND MERGED; 1073 → 1124 tests; PR #52)
+
+Ran the SDD loop from Task 7 to the end unattended (Sonnet implementers, Opus reviews,
+Opus Gate B), opened PR #52, **Nico merged**. Worktree + t7 branch deleted; fresh main
+(`ea0ea4dc`) built and wirelessly installed on the phone — **owner smoke test pending**
+(steps in PR #52's body). Every task needed exactly one fix round.
+
+- **Task 7 (audit log §7)**: prior session's skeleton kept, its stubbed torn-tail fuse
+  caught by RED (lost BOTH records). Review: store predicted the model's rejection answer
+  instead of reading it — `update` now generic over the closure's return.
+- **Task 8 (history panel + revert)**: review Critical — `canRevert` required `isDetached`,
+  which NO v1 chain can produce: the Revert button was structurally unreachable, panel
+  inert. Also: panel ignored `editability`; revert-while-draft-open was silently reversed
+  by the later draft close (now a store-level `.draftInProgress` refusal).
+- **Task 9 (§16 docs)**: all six rulings recorded + verified citation-by-citation. Review
+  Critical: commit body said `close #37` as prose — the exact `47d3f37a` accident again;
+  amended + force-pushed. **Watch commit BODIES, not just subjects.**
+- **Task 9b (splice-inherit, owner ruling §16.5)**: zero-overlap replacement inherits the
+  replaced word's frames; #37 closed. Review fix: unusable-bounds fallback now `.none`,
+  never borrowed provenance.
+- **GATE B (with fixes)**: found the branch's worst bug — `done()` cleared
+  `hasUnsavedChanges` unconditionally after `closeDraft`, so a keystroke landing during
+  the close await (autocorrect/dictation/typing through dismissal) was lost forever while
+  Done reported success; probed 4 ways, fixed with a bounded re-flush loop. Also: Task 9b's
+  wholesale condition mutated to `>=1` survived all 1116 tests (three negative fixtures
+  added). **Structural answer on 13 vacuous-fixture instances** (memory:
+  vacuous-fixtures-need-an-adversary): same agent authors property+fixture+mutation = no
+  adversary. Recos for next build: coverage gating on changed lines; mutation named in the
+  brief as INPUT; cardinality ≥2 fixtures.
+- **New trap** (memory: frozen-clock-two-mints-coin-flip-order): frozen TestClock + two
+  mints ⇒ `createdAt` tie ⇒ random ULID order — 50/50 flaky tests. Advance the clock
+  between mints. #51 filed for the production-side ordering question.
+- Issues: #37 #39 #41 closed, #51 filed. Four harness drops (2 machine-sleeps), all
+  recovered by same-agent resume, zero work lost.
+
+**Next steps:**
+1. **Owner smoke test on the phone** (build installed this session — steps in PR #52 body:
+   edit round-trip, late-keystroke-at-Done survival, revert, "Ellen"→"LN" correction).
+2. **TestFlight CLI decision** — musicforge's recipe (handoff channel, 2026-08-10) carries
+   over nearly whole: team cert exists, ASC API key exists; raconte needs an ASC app
+   record + one provisioning-profile POST + ExportOptions.plist. Recommended: do the
+   manual-CLI version first; defer Actions-triggered CD.
+3. Capture-landing implementation plan (fully specced; carries #27 gated by #35).
+4. Photo-snapshot implementation plan (design approved).
+5. #38 SDK recon; #44 device live.jsonl pull; consider coverage gating in CI (Gate B reco).
+
 ## Session 2026-08-10 → 08-11 (laptop — T7 Tasks 4-6 + GATE A done; 986 → 1073 tests; Task 7 next)
 
 Resumed the T7 SDD loop at Task 4 (Fable controller, Opus implementer for Task 4 per owner

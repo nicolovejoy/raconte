@@ -532,5 +532,29 @@ final class VoiceMarkingPlanApplyTests: XCTestCase {
                               hasAnyVoiceMarkerBefore: true,
                               after: [VoicedParagraph(voice: bn, text: "one two"),
                                       VoicedParagraph(voice: bn, text: "three four")])
+
+        // 7. The consequence the controller (Task 5/6) has to show the owner: flipping a
+        //    paragraph INTO the voice its neighbour already declares leaves the neighbour's
+        //    voice marker changing nothing, and a voice marker that changes nothing is not
+        //    a paragraph break — so the two paragraphs RE-RENDER AS ONE. Voices are still
+        //    exactly what was asked for and the text is untouched; it is the visible
+        //    paragraph split that goes away. Nothing is lost: both records are still on
+        //    disk, and flipping the merged paragraph back re-separates them, because the
+        //    older marker starts disagreeing with the active voice again. A break made by
+        //    a ¶ marker (fixture 2) or by a raw tap is unaffected — those break
+        //    unconditionally.
+        let merging = "01GGGGGGGGGGGGGGGGGGGGGGGG"
+        try await promoted(merging, [("one", 0, 10_000), ("two", 20_000, 30_000),
+                                     ("three", 40_000, 50_000), ("four", 60_000, 70_000)])
+        let mergingSpans = try currentSpans(merging)
+        try MarkerCorrectionWriter.addOpeningVoice(voice: bn, captureDirectory: captureDir(merging))
+        try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: 2, spans: mergingSpans, voice: ln,
+                                                    captureDirectory: captureDir(merging))
+        try assertPlanApplies("flipping into the neighbour's voice merges the paragraphs", id: merging,
+                              gesture: .flip(paragraph: 0),
+                              before: [VoicedParagraph(voice: bn, text: "one two"),
+                                       VoicedParagraph(voice: ln, text: "three four")],
+                              hasAnyVoiceMarkerBefore: true,
+                              after: [VoicedParagraph(voice: ln, text: "one two three four")])
     }
 }

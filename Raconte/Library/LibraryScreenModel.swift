@@ -636,3 +636,48 @@ final class LibraryScreenModel {
 /// The editor writes through this model, never straight to `TranscriptRevisionStore` — one
 /// store instance per file, app-wide (see `entryMetadataStore`'s own note).
 extension LibraryScreenModel: TranscriptEditorStore {}
+
+/// The mark-voices screen writes through this model, never straight to
+/// `MarkerCorrectionWriter`/`EntryTranscript.voiceMarkingLayout` — one store instance
+/// per file, app-wide, same reasoning as `MarkerCorrectionStore`'s conformance
+/// (`MarkerCorrectionModel.swift`). Lives here rather than in `VoiceMarkingModel.swift`
+/// because it needs `manifestFacts`, `private` to this file.
+extension LibraryScreenModel: VoiceMarkingStore {
+    nonisolated func voiceMarkingLayout(for captureID: String) async -> EntryTranscript.VoiceMarkingLayout {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let facts = Self.manifestFacts(captureDirectory: directory)
+            return EntryTranscript.voiceMarkingLayout(captureDirectory: directory, sampleRate: facts.sampleRate)
+        }.value
+    }
+
+    /// Re-reads `current`'s spans (via the same `currentSpans` `MarkerCorrectionStore`
+    /// already implements) rather than trusting a caller-supplied array — the screen's
+    /// own `spans` could be one action stale (another marking session, or the editor,
+    /// changed the chain since this screen last opened), and writing against a stale
+    /// span array could anchor to the wrong frame silently. Same rule as
+    /// `MarkerCorrectionStore.addBoundary(atSpanIndex:captureID:)`.
+    @discardableResult
+    func addVoiceBoundary(atSpanIndex spanIndex: Int, voice: String, captureID: String) async throws -> Int64 {
+        guard let spans = await currentSpans(for: captureID) else {
+            throw MarkerCorrectionWriter.BoundaryAddError.noUsableBounds
+        }
+        let capturesRoot = self.capturesRoot
+        return try await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            return try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: spanIndex, spans: spans,
+                                                                voice: voice, captureDirectory: directory)
+        }.value
+    }
+
+    /// No span prerequisite (see `MarkerCorrectionWriter.addOpeningVoice`'s own doc
+    /// comment) — writes unconditionally at frame 0.
+    func addOpeningVoice(voice: String, captureID: String) async throws {
+        let capturesRoot = self.capturesRoot
+        try await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            try MarkerCorrectionWriter.addOpeningVoice(voice: voice, captureDirectory: directory)
+        }.value
+    }
+}

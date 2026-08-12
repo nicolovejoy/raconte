@@ -380,43 +380,74 @@ final class EntryChainSnapshotTests: XCTestCase {
                        "the history panel and the diagnostics screen must never disagree about one entry's chain size")
     }
 
-    // MARK: - currentSummary (T7 Task 8)
+    // MARK: - orderedChain (T7 Task 8, fix round 1)
 
-    /// `currentSummary` must carry the same identity/derived fields
-    /// `detachedMachineRevisions`' elements do for THEIR revisions — both are minted by
-    /// the same `TranscriptRevisionStore.headSummary`, never a second implementation.
-    func testCurrentSummaryMatchesCurrentRevision() async throws {
-        try await store().append(revision("R0", text: "hello world"), captureID: captureID)
+    /// The panel's whole content list: EVERY revision, `(createdAt, id)` order, each
+    /// labeled machine vs human by its own `source`, and marked detached ONLY when
+    /// genuinely orphaned — never re-derived by a caller (Task 8's own view consumes
+    /// this as-is).
+    ///
+    /// Non-degenerate fixture (standing rule), all three properties at once:
+    /// - **Ordering**: appended in an order where FILE NUMBER does not match
+    ///   `createdAt` order (DETACHED is file 0 but the middle revision by time; ROOT is
+    ///   file 1 but the earliest), so file-number order (or insertion order) would
+    ///   produce a different sequence than the real `(createdAt, id)` order.
+    /// - **Labeling**: three DIFFERENT sources (`.machineLive`, `.machineRetranscribe`,
+    ///   `.userEdit`) so a transposed or hardcoded label is representable.
+    /// - **Detachment**: ROOT is `current`'s own ancestor (must NOT be detached — the
+    ///   whole point of the fix round 1, Task 2 owner ruling) AND DETACHED is genuinely
+    ///   orphaned (must BE detached) — both poles present in one fixture, so marking
+    ///   either one wrong is representable.
+    func testOrderedChainOrdersLabelsAndMarksDetachmentOverTheWholeChain() async throws {
+        try await store().append(revision("DETACHED", source: .machineRetranscribe, secondsOffset: 20,
+                                          text: "detached"), captureID: captureID)              // file 0
+        try await store().append(revision("ROOT", source: .machineLive, secondsOffset: 0,
+                                          text: "root"), captureID: captureID)                  // file 1
+        try await store().append(revision("CUR", source: .userEdit, secondsOffset: 30,
+                                          parentID: "ROOT", text: "current"), captureID: captureID) // file 2
 
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
-        XCTAssertEqual(snapshot.currentSummary?.id, "R0")
-        XCTAssertEqual(snapshot.currentSummary?.source, .machineLive)
-        XCTAssertEqual(snapshot.currentSummary?.firstLine, "hello world")
+        XCTAssertEqual(snapshot.currentRevisionID, "CUR")
+        XCTAssertEqual(snapshot.orderedChain.map { $0.summary.id }, ["ROOT", "DETACHED", "CUR"],
+                       "(createdAt, id) order — ROOT is earliest by time despite being file 1, "
+                       + "not file-number order (which would be DETACHED, ROOT, CUR)")
+        XCTAssertEqual(snapshot.orderedChain.map { $0.summary.source },
+                       [.machineLive, .machineRetranscribe, .userEdit],
+                       "each row labeled by its OWN revision's source")
+        XCTAssertEqual(snapshot.orderedChain.map(\.isDetached), [false, true, false],
+                       "ROOT is CUR's own ancestor (not detached); DETACHED is genuinely orphaned "
+                       + "(detached); CUR is current (never detached)")
+        XCTAssertEqual(snapshot.orderedChain.map { $0.summary.fileNumber }, [1, 0, 2],
+                       "each row still carries its OWN file number after reordering by time")
     }
 
-    /// The file-number pin specifically: `current` is NOT file 0 here (an earlier
-    /// revision occupies it) — a hardcoded `fileNumber: 0`, or one copied from the
-    /// wrong revision, is representable and would fail this test.
-    func testCurrentSummaryFileNumberIsCurrentsOwnNotTheChainsFirstFile() async throws {
-        try await store().append(revision("R_ROOT", text: "first"), captureID: captureID) // file 0
-        try await store().append(revision("R0", source: .userEdit, secondsOffset: 10,
-                                          parentID: "R_ROOT", text: "second"), captureID: captureID) // file 1
+    /// `detachedMachineRevisions` (Task 2's original, narrower field) must be exactly
+    /// the `orderedChain` rows with `isDetached == true` — a FILTER of the same list,
+    /// never a second independent computation that could disagree with it.
+    func testDetachedMachineRevisionsIsExactlyTheDetachedSubsetOfOrderedChain() async throws {
+        try await store().append(revision("DETACHED", source: .machineRetranscribe, secondsOffset: 20,
+                                          text: "detached"), captureID: captureID)
+        try await store().append(revision("ROOT", source: .machineLive, secondsOffset: 0,
+                                          text: "root"), captureID: captureID)
+        try await store().append(revision("CUR", source: .userEdit, secondsOffset: 30,
+                                          parentID: "ROOT", text: "current"), captureID: captureID)
 
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
-        XCTAssertEqual(snapshot.currentRevisionID, "R0")
-        XCTAssertEqual(snapshot.currentSummary?.fileNumber, 1,
-                       "current's own file number (1), not the chain's first file (0)")
+        XCTAssertEqual(snapshot.detachedMachineRevisions.map(\.id),
+                       snapshot.orderedChain.filter(\.isDetached).map { $0.summary.id })
+        XCTAssertEqual(snapshot.detachedMachineRevisions.map(\.id), ["DETACHED"])
     }
 
     /// Every branch that collapses `currentRevisionID` to `nil` must leave
-    /// `currentSummary` `nil` too — it is derived FROM `current`, never independently.
-    func testCurrentSummaryIsNilWhenThereIsNoCurrentRevision() throws {
+    /// `orderedChain` empty too — it is derived from the same readable chain, never
+    /// independently.
+    func testOrderedChainIsEmptyWhenThereIsNoCurrentRevision() throws {
         let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
 
         XCTAssertNil(snapshot.currentRevisionID)
-        XCTAssertNil(snapshot.currentSummary)
+        XCTAssertEqual(snapshot.orderedChain, [])
     }
 
     // MARK: - Sidecar-unreadable edge case (beyond the 5 required fixtures)

@@ -16,7 +16,15 @@ import XCTest
 @MainActor
 final class RevisionHistoryModelTests: XCTestCase {
 
-    // MARK: - 8.1 buildRows: ordering, labeling, detached marking (pure, no disk)
+    // MARK: - 8.1 buildRows: mapping EntryChainSnapshot.orderedChain -> Row (pure, no disk)
+    //
+    // Fix round 1: ordering, source-labeling, and per-revision detachment are computed
+    // ONCE by `EntryChainSnapshot.build` — pinned with mutation evidence in
+    // `EntryChainSnapshotTests.testOrderedChainOrdersLabelsAndMarksDetachmentOverTheWholeChain`.
+    // `buildRows` here is a thin MAP over whatever the snapshot handed it, so these
+    // tests are about the mapping itself: that nothing here re-sorts, and that
+    // `isCurrent` is computed correctly by identity (a `ChainRevisionRow` carries no
+    // current flag of its own).
 
     private func summary(_ id: String, source: RevisionSource, secondsOffset: Double,
                          fileNumber: Int, text: String = "text") -> TranscriptHeadSummary {
@@ -25,75 +33,90 @@ final class RevisionHistoryModelTests: XCTestCase {
                               characterCount: text.count, firstLine: text, isForked: false, snippet: text)
     }
 
-    private func snapshot(current: TranscriptHeadSummary?,
-                          detached: [TranscriptHeadSummary]) -> EntryChainSnapshot {
-        EntryChainSnapshot(editability: .editable, currentRevisionID: current?.id,
-                           currentText: "", currentSource: current?.source,
-                           revisionCount: detached.count + (current != nil ? 1 : 0),
-                           isForked: false, openDraft: nil,
-                           detachedMachineRevisions: detached, currentSummary: current,
-                           chainByteSize: 0)
+    private func chainRow(_ id: String, source: RevisionSource, secondsOffset: Double,
+                          fileNumber: Int, isDetached: Bool,
+                          text: String = "text") -> EntryChainSnapshot.ChainRevisionRow {
+        EntryChainSnapshot.ChainRevisionRow(
+            summary: summary(id, source: source, secondsOffset: secondsOffset, fileNumber: fileNumber, text: text),
+            isDetached: isDetached)
     }
 
-    /// Non-degenerate fixture (standing rule): two detached machine revisions appended
-    /// out of chronological order (`M_LATE` before `M_EARLY` in the array), plus a
-    /// human `current` whose `createdAt` sits BETWEEN them. A wrong ordering —
-    /// insertion order, file-number order, or "current always first/last" — is
-    /// representable here and would produce a different row order than the real
-    /// `(createdAt, id)` chain order, so this test can actually fail.
-    func testBuildRowsOrdersByCreatedAtAcrossCurrentAndDetachedTogether() {
-        let mEarly = summary("M_EARLY", source: .machineLive, secondsOffset: 0, fileNumber: 0, text: "raw")
-        let current = summary("CUR", source: .userEdit, secondsOffset: 20, fileNumber: 2, text: "edited")
-        let mLate = summary("M_LATE", source: .machineRetranscribe, secondsOffset: 30, fileNumber: 3, text: "late")
-
-        let snap = snapshot(current: current, detached: [mLate, mEarly])
-        let rows = RevisionHistoryModel.buildRows(from: snap)
-
-        XCTAssertEqual(rows.map(\.id), ["M_EARLY", "CUR", "M_LATE"],
-                       "(createdAt, id) order across current AND detached together, not insertion order")
+    private func snapshot(currentRevisionID: String?,
+                          orderedChain: [EntryChainSnapshot.ChainRevisionRow]) -> EntryChainSnapshot {
+        EntryChainSnapshot(editability: .editable, currentRevisionID: currentRevisionID,
+                           currentText: "", currentSource: nil,
+                           revisionCount: orderedChain.count, isForked: false, openDraft: nil,
+                           detachedMachineRevisions: orderedChain.filter(\.isDetached).map(\.summary),
+                           orderedChain: orderedChain, chainByteSize: 0)
     }
 
-    /// Labeling: each row's `source` matches its own revision, `isCurrent`/`isDetached`
-    /// are mutually exclusive across the two row shapes this panel ever shows, and
-    /// §12.8's "not applied" label (`isDetached`) is reserved for the detached rows —
-    /// never `current`, even when `current` itself is machine-sourced (pinned
-    /// separately below, since this fixture's current is human).
-    func testBuildRowsLabelsEachRowMachineVsHumanAndMarksOnlyDetachedRows() {
-        let mEarly = summary("M_EARLY", source: .machineLive, secondsOffset: 0, fileNumber: 0)
-        let current = summary("CUR", source: .userEdit, secondsOffset: 20, fileNumber: 2)
+    /// `buildRows` must not re-sort — ordering is `EntryChainSnapshot.build`'s job,
+    /// pinned separately. Fixture deliberately NOT in `(createdAt, id)` order (`Z`
+    /// before `A` in the array, but `Z`'s `createdAt` is LATER than `A`'s): if
+    /// `buildRows` re-sorted by `(createdAt, id)` (the old, now-removed behavior), the
+    /// output would flip to `["A", "Z"]`.
+    func testBuildRowsPreservesTheSnapshotsOrderedChainOrderVerbatim() {
+        let rows = [
+            chainRow("Z", source: .machineLive, secondsOffset: 10, fileNumber: 0, isDetached: true),
+            chainRow("A", source: .userEdit, secondsOffset: 0, fileNumber: 1, isDetached: false),
+        ]
+        let snap = snapshot(currentRevisionID: "A", orderedChain: rows)
 
-        let snap = snapshot(current: current, detached: [mEarly])
-        let rows = RevisionHistoryModel.buildRows(from: snap)
+        let built = RevisionHistoryModel.buildRows(from: snap)
 
-        let currentRow = try? XCTUnwrap(rows.first { $0.id == "CUR" })
-        let detachedRow = try? XCTUnwrap(rows.first { $0.id == "M_EARLY" })
-        XCTAssertEqual(currentRow?.source, .userEdit)
-        XCTAssertTrue(currentRow?.isCurrent ?? false)
-        XCTAssertFalse(currentRow?.isDetached ?? true, "current must never carry the 'not applied' label")
-        XCTAssertEqual(detachedRow?.source, .machineLive)
-        XCTAssertFalse(detachedRow?.isCurrent ?? true)
-        XCTAssertTrue(detachedRow?.isDetached ?? false)
+        XCTAssertEqual(built.map(\.id), ["Z", "A"], "buildRows must not re-sort orderedChain")
+    }
+
+    /// Labeling and detachment pass through unchanged; `isCurrent` is computed HERE, by
+    /// identity against `currentRevisionID`. The load-bearing case is ROOT: an
+    /// ATTACHED-BUT-NOT-CURRENT row (an ancestor of current, `isDetached == false`) —
+    /// a fixture with only "current" and "detached" rows (the old shape) could never
+    /// represent this third case, and a bug like `isCurrent = !isDetached` would wrongly
+    /// mark ROOT current too.
+    func testBuildRowsLabelsSourceAndComputesIsCurrentByIdentityNotByDetachment() {
+        let rows = [
+            chainRow("ROOT", source: .machineLive, secondsOffset: 0, fileNumber: 0, isDetached: false),
+            chainRow("DETACHED", source: .machineRetranscribe, secondsOffset: 10, fileNumber: 1, isDetached: true),
+            chainRow("CUR", source: .userEdit, secondsOffset: 20, fileNumber: 2, isDetached: false),
+        ]
+        let snap = snapshot(currentRevisionID: "CUR", orderedChain: rows)
+
+        let built = RevisionHistoryModel.buildRows(from: snap)
+
+        let root = try? XCTUnwrap(built.first { $0.id == "ROOT" })
+        let detached = try? XCTUnwrap(built.first { $0.id == "DETACHED" })
+        let current = try? XCTUnwrap(built.first { $0.id == "CUR" })
+        XCTAssertEqual(root?.source, .machineLive)
+        XCTAssertEqual(root?.isCurrent, false, "an ancestor of current is not current")
+        XCTAssertEqual(root?.isDetached, false, "an ancestor of current is not detached")
+        XCTAssertEqual(detached?.source, .machineRetranscribe)
+        XCTAssertEqual(detached?.isCurrent, false)
+        XCTAssertEqual(detached?.isDetached, true)
+        XCTAssertEqual(current?.source, .userEdit)
+        XCTAssertEqual(current?.isCurrent, true)
+        XCTAssertEqual(current?.isDetached, false)
     }
 
     /// Revert eligibility: offered for a detached MACHINE row, refused for current
     /// itself even when current is machine-sourced (the flag under test is
     /// `isDetached`, not merely `!isHumanLineage` — a fixture where current is machine
-    /// makes that distinction representable; a human-`current` fixture like the tests
-    /// above would pass under either rule).
+    /// makes that distinction representable).
     func testBuildRowsOffersRevertOnlyForDetachedMachineRowsNeverForCurrentEvenWhenMachineSourced() {
-        let machineCurrent = summary("CUR", source: .machineLive, secondsOffset: 0, fileNumber: 0)
-        let detachedMachine = summary("M1", source: .machineRetranscribe, secondsOffset: 10, fileNumber: 1)
+        let rows = [
+            chainRow("CUR", source: .machineLive, secondsOffset: 0, fileNumber: 0, isDetached: false),
+            chainRow("M1", source: .machineRetranscribe, secondsOffset: 10, fileNumber: 1, isDetached: true),
+        ]
+        let snap = snapshot(currentRevisionID: "CUR", orderedChain: rows)
 
-        let snap = snapshot(current: machineCurrent, detached: [detachedMachine])
-        let rows = RevisionHistoryModel.buildRows(from: snap)
+        let built = RevisionHistoryModel.buildRows(from: snap)
 
-        XCTAssertEqual(rows.first { $0.id == "CUR" }?.canRevert, false,
+        XCTAssertEqual(built.first { $0.id == "CUR" }?.canRevert, false,
                        "current must never offer revert, even when it is itself machine-sourced")
-        XCTAssertEqual(rows.first { $0.id == "M1" }?.canRevert, true)
+        XCTAssertEqual(built.first { $0.id == "M1" }?.canRevert, true)
     }
 
-    func testBuildRowsOnAChainWithNoCurrentAndNoDetachedIsEmpty() {
-        let snap = snapshot(current: nil, detached: [])
+    func testBuildRowsOnAnEmptyOrderedChainIsEmpty() {
+        let snap = snapshot(currentRevisionID: nil, orderedChain: [])
         XCTAssertEqual(RevisionHistoryModel.buildRows(from: snap), [])
     }
 
@@ -101,8 +124,9 @@ final class RevisionHistoryModelTests: XCTestCase {
 
     func testOpenSurfacesRevisionCountChainByteSizeAndIsForkedFromTheSnapshot() async {
         let store = FakeRevisionHistoryStore()
-        store.snapshot = snapshot(current: summary("CUR", source: .userEdit, secondsOffset: 0, fileNumber: 0),
-                                  detached: [])
+        store.snapshot = snapshot(
+            currentRevisionID: "CUR",
+            orderedChain: [chainRow("CUR", source: .userEdit, secondsOffset: 0, fileNumber: 0, isDetached: false)])
         store.snapshot.revisionCount = 7
         store.snapshot.chainByteSize = 12_345
         store.snapshot.isForked = true
@@ -121,7 +145,7 @@ final class RevisionHistoryModelTests: XCTestCase {
     /// of these two assertions.
     func testGrowthAlarmElevatedAtAndAboveThresholdNotBelowIt() async {
         let store = FakeRevisionHistoryStore()
-        store.snapshot = snapshot(current: nil, detached: [])
+        store.snapshot = snapshot(currentRevisionID: nil, orderedChain: [])
         store.snapshot.revisionCount = RevisionGrowthAlarm.threshold - 1
         let model = RevisionHistoryModel(captureID: "cap", store: store)
         await model.open()
@@ -136,9 +160,10 @@ final class RevisionHistoryModelTests: XCTestCase {
 
     func testRevertSuccessCallsTheStoreWithTheRowsIDAndReopens() async {
         let store = FakeRevisionHistoryStore()
-        let mEarly = summary("M1", source: .machineLive, secondsOffset: 0, fileNumber: 0)
-        store.snapshot = snapshot(current: summary("CUR", source: .userEdit, secondsOffset: 10, fileNumber: 1),
-                                  detached: [mEarly])
+        store.snapshot = snapshot(currentRevisionID: "CUR", orderedChain: [
+            chainRow("CUR", source: .userEdit, secondsOffset: 10, fileNumber: 1, isDetached: false),
+            chainRow("M1", source: .machineLive, secondsOffset: 0, fileNumber: 0, isDetached: true),
+        ])
         let model = RevisionHistoryModel(captureID: "cap", store: store)
         await model.open()
         let row = try! XCTUnwrap(model.rows.first { $0.id == "M1" })
@@ -146,8 +171,9 @@ final class RevisionHistoryModelTests: XCTestCase {
         // After a successful revert, the store's OWN chain has moved on — a fresh
         // snapshot with a new current and no more detached M1 — proving `revert`
         // re-reads rather than assuming what it just wrote.
-        store.snapshot = snapshot(current: summary("MG1", source: .merge, secondsOffset: 20, fileNumber: 2),
-                                  detached: [])
+        store.snapshot = snapshot(
+            currentRevisionID: "MG1",
+            orderedChain: [chainRow("MG1", source: .merge, secondsOffset: 20, fileNumber: 2, isDetached: false)])
         await model.revert(row)
 
         XCTAssertEqual(store.revertCalls.count, 1)
@@ -159,9 +185,10 @@ final class RevisionHistoryModelTests: XCTestCase {
 
     func testRevertFailureSetsAnErrorMessageAndLeavesRowsUnchanged() async {
         let store = FakeRevisionHistoryStore()
-        let mEarly = summary("M1", source: .machineLive, secondsOffset: 0, fileNumber: 0)
-        store.snapshot = snapshot(current: summary("CUR", source: .userEdit, secondsOffset: 10, fileNumber: 1),
-                                  detached: [mEarly])
+        store.snapshot = snapshot(currentRevisionID: "CUR", orderedChain: [
+            chainRow("CUR", source: .userEdit, secondsOffset: 10, fileNumber: 1, isDetached: false),
+            chainRow("M1", source: .machineLive, secondsOffset: 0, fileNumber: 0, isDetached: true),
+        ])
         let model = RevisionHistoryModel(captureID: "cap", store: store)
         await model.open()
         let row = try! XCTUnwrap(model.rows.first { $0.id == "M1" })
@@ -178,8 +205,9 @@ final class RevisionHistoryModelTests: XCTestCase {
 
     func testRevertNotMachineLineageErrorMessage() async {
         let store = FakeRevisionHistoryStore()
-        store.snapshot = snapshot(current: summary("CUR", source: .userEdit, secondsOffset: 0, fileNumber: 0),
-                                  detached: [])
+        store.snapshot = snapshot(
+            currentRevisionID: "CUR",
+            orderedChain: [chainRow("CUR", source: .userEdit, secondsOffset: 0, fileNumber: 0, isDetached: false)])
         let model = RevisionHistoryModel(captureID: "cap", store: store)
         await model.open()
         store.revertError = TranscriptMergeError.notMachineLineage("H1")
@@ -364,7 +392,7 @@ final class RevisionHistoryModelTests: XCTestCase {
 private final class FakeRevisionHistoryStore: RevisionHistoryStore {
     var snapshot = EntryChainSnapshot(editability: .editable, currentRevisionID: nil, currentText: "",
                                       currentSource: nil, revisionCount: 0, isForked: false, openDraft: nil,
-                                      detachedMachineRevisions: [], currentSummary: nil, chainByteSize: 0)
+                                      detachedMachineRevisions: [], orderedChain: [], chainByteSize: 0)
     var revertError: (any Error)?
     private(set) var revertCalls: [(captureID: String, toRevisionID: String)] = []
 

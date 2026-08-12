@@ -42,6 +42,52 @@ final class MarkerCorrectionModelTests: XCTestCase {
                        "the .none-anchored word must not be offerable")
     }
 
+    /// Gate B Important 3: `BoundaryRow.voice` is load-bearing in the view — it prints the
+    /// row's label ("Voice: bn") and decides WHICH correction buttons are offered, since
+    /// only the other voice is shown (`MarkerCorrectionView.boundaryRow`) — and had zero
+    /// unit coverage. Hardcoding `voice: nil` for every row compiled and passed the whole
+    /// suite; on screen that is "Voice: —" with BOTH buttons offered on every row.
+    ///
+    /// A `.paragraph` row genuinely has no voice, so the fixture carries all three shapes:
+    /// what is asserted is that each row reports ITS OWN marker's voice, not a constant.
+    func testOpenCarriesEachBoundarysOwnVoice() async {
+        let store = FakeMarkerCorrectionStore()
+        store.markers = [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn"),
+            StructureMarker(seq: 1, frame: 48_000, kind: .voice, voice: "ln"),
+            StructureMarker(seq: 2, frame: 96_000, kind: .paragraph),
+        ]
+        store.spans = []
+
+        let model = model(store)
+        await model.open()
+
+        XCTAssertEqual(model.boundaries.map(\.id), [0, 1, 2], "precondition: all three rows are listed")
+        XCTAssertEqual(model.boundaries.map(\.voice), ["bn", "ln", nil],
+                       "each row carries its own marker's voice — a paragraph break has none")
+    }
+
+    /// The other half of the same field, and the model's own documented claim (`open()`'s
+    /// "folding here is what makes … a voice-corrected row show the CORRECTED voice, not
+    /// the original raw one"): `correctVoice` re-opens, and that re-read must fold the
+    /// appended `.correctionVoice` record in. Nothing in the suite asserted the row the
+    /// owner actually looks at afterwards.
+    func testACorrectedVoiceRowShowsTheCorrectedVoiceAfterTheReopen() async {
+        let store = FakeMarkerCorrectionStore()
+        store.markers = [StructureMarker(seq: 0, frame: 30_000, kind: .voice, voice: "bn")]
+        store.spans = []
+
+        let model = model(store)
+        await model.open()
+        XCTAssertEqual(model.boundaries.map(\.voice), ["bn"], "precondition: the raw tap said bn")
+
+        await model.correctVoice(model.boundaries[0], to: "ln")
+
+        XCTAssertEqual(model.boundaries.map(\.id), [0], "still one row — a correction is not a new boundary")
+        XCTAssertEqual(model.boundaries.map(\.voice), ["ln"],
+                       "the row the owner looks at after correcting must show the CORRECTED voice")
+    }
+
     /// Correction kinds are never listed as boundaries — this screen shows the
     /// EFFECTIVE state (folded), and a correction record showing up as something to
     /// retract would let the owner retract a retract. The retract here deliberately

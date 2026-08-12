@@ -46,28 +46,30 @@ enum VoiceMarkingPlan {
                                       hasAnyVoiceMarker: hasAnyVoiceMarker)
         commands.append(.addVoiceBoundary(spanIndex: anchor, voice: target))
 
-        guard paragraphs.indices.contains(index + 1) else { return commands }
-        let next = paragraphs[index + 1]
-
         // A paragraph whose voice differs from the one before it can only have gotten
         // that voice from a voice marker declaring it at its own start — that declaration
         // is already on disk and already outlives this flip, so a restore would be a
         // duplicate record saying what the log already says.
-        guard next.voice == currentVoice else { return commands }
+        if paragraphs.indices.contains(index + 1), paragraphs[index + 1].voice == currentVoice {
+            let next = paragraphs[index + 1]
 
-        // The restored voice is the FOLLOWING paragraph's pre-change voice; the index it
-        // lands on is the first placeable span from that paragraph forward, which can sit
-        // in a LATER paragraph when the following one has nothing placeable to anchor to.
-        // `paragraphs[j].spanRange` is read directly at every step rather than derived by
-        // arithmetic from a neighbour: a paragraph whose spans all carry empty text is
-        // filtered out of this list entirely, so surviving ranges need not be contiguous.
-        for j in (index + 1)..<paragraphs.count {
-            guard let laterRange = paragraphs[j].spanRange,
-                  let restore = firstPlaceable(in: laterRange, spans: spans) else { continue }
-            commands.append(.addVoiceBoundary(spanIndex: restore,
-                                              voice: next.voice ?? VoiceDisplay.mainVoice))
-            break
+            // The restored voice is the FOLLOWING paragraph's pre-change voice; the index
+            // it lands on is the first placeable span from that paragraph forward, which
+            // can sit in a LATER paragraph when the following one has nothing placeable to
+            // anchor to. `paragraphs[j].spanRange` is read directly at every step rather
+            // than derived by arithmetic from a neighbour: a paragraph whose spans all
+            // carry empty text is filtered out of this list entirely, so surviving ranges
+            // need not be contiguous.
+            for j in (index + 1)..<paragraphs.count {
+                guard let laterRange = paragraphs[j].spanRange,
+                      let restore = firstPlaceable(in: laterRange, spans: spans) else { continue }
+                commands.append(.addVoiceBoundary(spanIndex: restore,
+                                                  voice: next.voice ?? VoiceDisplay.mainVoice))
+                break
+            }
         }
+
+        try validate(commands, spans: spans)
         return commands
     }
 
@@ -97,10 +99,66 @@ enum VoiceMarkingPlan {
                                                                     paragraphs: paragraphs)
                                                   ?? VoiceDisplay.mainVoice))
         }
+
+        try validate(commands, spans: spans)
         return commands
     }
 
     // MARK: - Rules shared by both gestures
+
+    /// A plan is expressed in SPAN INDICES but lands on disk as FRAMES —
+    /// `MarkerCorrectionWriter.addVoiceBoundary` writes `spans[k].frameStart` — and
+    /// distinct placeable spans are NOT guaranteed distinct frames. `TranscriptSplice`
+    /// degrades a touched span into fragments that each carry the PARENT SPAN'S FULL
+    /// bounds (`TranscriptSplice.swift`, the `.inherited` fragment branch), so whenever an
+    /// intact join separator survives between two fragments of one parent span, two or
+    /// more CONSECUTIVE placeable spans share an identical `[frameStart, frameEnd)`. The
+    /// read side already documents and pins that shape —
+    /// `TranscriptAttribution.placeableCutPosition` and
+    /// `TranscriptAttributionTests.testTwoPlaceableSpansSharingBoundsCutAfterTheFirstFragmentAndFlagItApproximate`
+    /// — and it is an ORDINARY post-edit shape, not an exotic one.
+    ///
+    /// On it, a boundary aimed at the second fragment is written at a frame the FIRST
+    /// fragment also carries, and `placeableCutPosition` resolves that frame to the
+    /// earliest span carrying it. Two silent wrongs follow, both reachable (review
+    /// Important 1): a `markRange` starting at fragment two voices fragment one, which the
+    /// owner never selected; and a `flipParagraph` whose switch and restore both resolve
+    /// to that single cut self-cancels — the restore is appended later, so it wins, and
+    /// the gesture does nothing while every write reports success.
+    ///
+    /// Controller ruling (2026-08-12): REFUSE. Relocating a boundary to a different span
+    /// would mark text the owner didn't choose, which is worse than an honest refusal on a
+    /// rare shape. Validation runs over the WHOLE plan before any of it is returned, so a
+    /// refused gesture writes nothing at all — half of a plan in an append-only log could
+    /// never be taken back.
+    ///
+    /// Rule 2 (distinct frames within one plan) is, for every span array today, implied by
+    /// rule 1: boundaries are emitted in increasing index order, so an equal frame later in
+    /// the plan always has an earlier placeable span carrying it. It is kept as its own
+    /// guard because ascending frame order is an ASSUMPTION about span arrays, not an
+    /// invariant anything enforces — `TranscriptAttribution.fullSpanIndex`'s own doc
+    /// comment says so — and a self-cancelling plan is the one failure mode with no
+    /// visible symptom.
+    private static func validate(_ commands: [Command], spans: [TranscriptSpan]) throws {
+        var plannedFrames: Set<Int64> = []
+        for command in commands {
+            guard case .addVoiceBoundary(let index, _) = command else { continue }
+            guard spans.indices.contains(index),
+                  TranscriptAttribution.isPlaceableSpan(spans[index]),
+                  let frame = spans[index].frameStart else {
+                throw PlanError.notMarkable
+            }
+            // 1. The cut this frame produces lands on the EARLIEST placeable span carrying
+            //    it. If that isn't the span the gesture named, the boundary would mark
+            //    text nobody selected.
+            let earliest = spans.indices.first {
+                TranscriptAttribution.isPlaceableSpan(spans[$0]) && spans[$0].frameStart == frame
+            }
+            guard earliest == index else { throw PlanError.notMarkable }
+            // 2. Two boundaries of one plan at one frame collapse into a single breakpoint.
+            guard plannedFrames.insert(frame).inserted else { throw PlanError.notMarkable }
+        }
+    }
 
     /// The opener exists so that marking something in the MIDDLE of an entry that has no
     /// voice markers at all doesn't leave everything before it voiceless: a frame-0

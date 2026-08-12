@@ -109,8 +109,8 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testUpdateChangesOneFieldAndPreservesTheRest() async throws {
         let s = store()
         try EntryMetadataStore.write(EntryMetadata(journalID: "J1",
-                                        originalDate: PartialDate(year: 1970, month: 1, day: 1)),
-                          url: sidecarURL)
+                                                    originalDate: PartialDate(year: 1970, month: 1, day: 1)),
+                                     url: sidecarURL)
         let updated = try await s.update(captureID: captureID) {
             $0.trashedAt = Date(timeIntervalSince1970: 200)
         }

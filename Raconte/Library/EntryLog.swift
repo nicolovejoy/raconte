@@ -11,7 +11,9 @@ import Foundation
 /// Why an edit happened. `.unknown` is the decode fallback for a cause written by a
 /// future build this one doesn't recognize — never a throw, per the same reasoning as
 /// `RevisionSource.unknown(String)`, except a plain case suffices here: the raw spelling
-/// isn't load-bearing for anything this file's (still nonexistent) reader does yet.
+/// isn't load-bearing for anything `EntryLogReader` does — this log is written and
+/// exported, never shown (Q10), so there is no UI decision that turns on which cause a
+/// record carries.
 enum EntryLogCause: String, Codable, Sendable, Equatable {
     case userEdit
     case detection

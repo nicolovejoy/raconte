@@ -45,6 +45,19 @@ final class RevisionHistoryModel {
         /// is a no-op nobody asked for, and reverting to a human row is refused by
         /// `TranscriptMerge.revert`'s own `.notMachineLineage` guard regardless of what
         /// this flag says, so the flag is a UI nicety, never the enforcement).
+        ///
+        /// **Review fix (Critical 1):** gated on `!isCurrent`, NOT `isDetached` — an
+        /// ATTACHED machine revision (rev0, current's own ancestor) must still offer
+        /// revert. `isDetached` alone made the button inert for every chain the app can
+        /// produce today: rev0 `.machineLive` is always either `current` or in
+        /// `current`'s ancestry (never detached), `.userEdit`/`.merge`/`.import` are
+        /// excluded by the source check regardless, and `.machineRetranscribe` (the one
+        /// source that COULD be genuinely detached) has no production writer yet.
+        ///
+        /// **Review fix (Important 2):** also `false` on every row whenever
+        /// `EntryChainSnapshot.editability != .editable` (trashed, degraded chain,
+        /// unreadable sidecar, nothing transcribed yet) — content can still render, but
+        /// no row may offer a write the store will only refuse anyway.
         var canRevert: Bool
     }
 
@@ -62,7 +75,25 @@ final class RevisionHistoryModel {
     private(set) var chainByteSize: Int64 = 0
     /// §12.8's fork indicator — concurrent edits that never converged. Read-only in v1.
     private(set) var isForked = false
+    /// `EntryChainSnapshot.editability` (review Important 2) — the panel used to never
+    /// read this at all, so a degraded chain rendered as an empty history with a
+    /// self-contradicting footer ("0 revisions, 14 KB": `chainByteSize` still counts raw
+    /// bytes even when the chain can't be decoded), and a trashed entry showed rows
+    /// with the refusal discoverable only via a failed-revert alert. `readOnlyMessage`
+    /// below is the surfaceable form.
+    private(set) var editability: EntryChainSnapshot.Editability = .editable
     private(set) var errorMessage: String?
+
+    /// `nil` when `.editable`; otherwise the SAME sentence the editor uses
+    /// (`TranscriptEditorModel.readOnlySentence`) — that function's own doc comment
+    /// names this panel as its intended second consumer, precisely so the two surfaces
+    /// can never drift on what a state means.
+    var readOnlyMessage: String? {
+        guard case .editable = editability else {
+            return TranscriptEditorModel.readOnlySentence(editability)
+        }
+        return nil
+    }
 
     /// #39's growth alarm (Task 3/`RevisionGrowthAlarm`) — revisions per entry, not
     /// bytes. Computed, not stored: `revisionCount` is the one source of truth and this
@@ -90,6 +121,7 @@ final class RevisionHistoryModel {
         revisionCount = snapshot.revisionCount
         chainByteSize = snapshot.chainByteSize
         isForked = snapshot.isForked
+        editability = snapshot.editability
         state = .ready
     }
 
@@ -103,14 +135,28 @@ final class RevisionHistoryModel {
     /// thing computed here, by identity against `snapshot.currentRevisionID`, since
     /// `ChainRevisionRow` itself doesn't carry it (it's a property of the SNAPSHOT, not
     /// of the revision).
+    ///
+    /// Review Important 2: `canRevert` is ALSO gated on `snapshot.editability ==
+    /// .editable` — content still renders for a trashed or degraded entry (the same
+    /// "show rows, refuse writes" split `EntryChainSnapshot` itself already documents
+    /// for the trash window), but every revert affordance is suppressed rather than
+    /// left to fail loudly through the store guard on first tap.
     static func buildRows(from snapshot: EntryChainSnapshot) -> [Row] {
-        snapshot.orderedChain.map { entry in
-            Row(id: entry.summary.id, fileNumber: entry.summary.fileNumber,
-                source: entry.summary.source, createdAt: entry.summary.createdAt,
-                firstLine: entry.summary.firstLine,
-                isCurrent: entry.summary.id == snapshot.currentRevisionID,
-                isDetached: entry.isDetached,
-                canRevert: !entry.summary.source.isHumanLineage && entry.isDetached)
+        let isEditable: Bool = {
+            if case .editable = snapshot.editability { return true }
+            return false
+        }()
+        return snapshot.orderedChain.map { entry in
+            let isCurrent = entry.summary.id == snapshot.currentRevisionID
+            return Row(id: entry.summary.id, fileNumber: entry.summary.fileNumber,
+                      source: entry.summary.source, createdAt: entry.summary.createdAt,
+                      firstLine: entry.summary.firstLine,
+                      isCurrent: isCurrent,
+                      isDetached: entry.isDetached,
+                      // Critical 1 fix: `!isCurrent`, not `entry.isDetached` — see
+                      // `Row.canRevert`'s doc comment for why `isDetached` alone made
+                      // the button inert for every v1-producible chain.
+                      canRevert: isEditable && !entry.summary.source.isHumanLineage && !isCurrent)
         }
     }
 
@@ -162,6 +208,13 @@ final class RevisionHistoryModel {
             return "That revision could not be found. The history may have changed — try reopening it."
         case .allocationCollision:
             return "Another save is still finishing. Try again."
+        case .draftInProgress:
+            // Review Important 3: `revert`'s own guard against the silent-reversal bug
+            // (an open draft later closing and outranking the revert's merge). Route
+            // the owner to finish the edit — the editor's own Done is exactly what
+            // clears this.
+            return "There are unsaved edits open for this entry. Finish or discard them in the editor first, "
+                + "then try reverting again."
         }
     }
 }

@@ -36,6 +36,17 @@ enum TranscriptRevisionStoreError: Error, Equatable {
     /// panel offering a stale row (the chain moved since it last opened) or a caller
     /// passing a bad id directly.
     case revisionNotFound(String)
+    /// `revert`'s guard (T7 Task 8, review Important 3): a draft exists for this
+    /// capture. Reverting while a draft is open risks a silent reversal —
+    /// `closeDraft` (fired later by `closeStaleDrafts`, or the editor's own Done) mints
+    /// a `.userEdit` parented on PRE-revert `current` with a fresh `createdAt`, which
+    /// outranks the revert's merge in `(createdAt, id)` order and snaps `current` back
+    /// to the pre-revert text — no bytes lost, but the panel's one undo action would be
+    /// silently undone. Refuse rather than degrade, the same "refuse, don't guess"
+    /// discipline every other write guard here already holds to. The owner finishes or
+    /// discards the draft first (`EntryChainSnapshot.openDraft` is documented as
+    /// "Task 8's 'unsaved' marker" precisely for this collision).
+    case draftInProgress
 }
 
 /// The two numbers §2.5 invents for the draft lifecycle, injectable so tests don't wait
@@ -874,6 +885,16 @@ actor TranscriptRevisionStore {
     func revert(captureID: String, toRevisionID: String, now: Date) throws -> String {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
+
+        // Review Important 3: refuse rather than let an open draft silently reverse
+        // this revert later (see `.draftInProgress`'s own doc comment for the exact
+        // mechanism). Cheap check, placed right after `guardWritable` — same
+        // "cheapest/safest guard first" ordering the rest of this file already uses —
+        // and before the chain read, since there is nothing to gain from reading the
+        // chain only to refuse afterward.
+        if Self.readDraft(captureDirectory: captureDirectory) != nil {
+            throw TranscriptRevisionStoreError.draftInProgress
+        }
 
         // Critical 2 / §15b.15, same as writeDraft/closeDraft: refuse rather than
         // revert against — or even locate the target revision within — a chain missing

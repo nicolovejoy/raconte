@@ -89,22 +89,33 @@ final class RevisionHistoryModelTests: XCTestCase {
         XCTAssertEqual(root?.source, .machineLive)
         XCTAssertEqual(root?.isCurrent, false, "an ancestor of current is not current")
         XCTAssertEqual(root?.isDetached, false, "an ancestor of current is not detached")
+        // Critical 1 (review): the hole this slipped through — ROOT (an ATTACHED
+        // machine revision) was never asserted here, and `canRevert` was wrongly gated
+        // on `isDetached` instead of `!isCurrent`. That made revert impossible on
+        // every chain the app can actually produce today: rev0 is always either
+        // `current` or in its ancestry (never detached) in a v1 chain.
+        XCTAssertEqual(root?.canRevert, true, "an ATTACHED machine revision must still offer revert")
         XCTAssertEqual(detached?.source, .machineRetranscribe)
         XCTAssertEqual(detached?.isCurrent, false)
         XCTAssertEqual(detached?.isDetached, true)
+        XCTAssertEqual(detached?.canRevert, true)
         XCTAssertEqual(current?.source, .userEdit)
         XCTAssertEqual(current?.isCurrent, true)
         XCTAssertEqual(current?.isDetached, false)
+        XCTAssertEqual(current?.canRevert, false, "current is refused for two independent reasons here "
+                       + "(it's current, and it's human-lineage)")
     }
 
-    /// Revert eligibility: offered for a detached MACHINE row, refused for current
-    /// itself even when current is machine-sourced (the flag under test is
-    /// `isDetached`, not merely `!isHumanLineage` — a fixture where current is machine
-    /// makes that distinction representable).
-    func testBuildRowsOffersRevertOnlyForDetachedMachineRowsNeverForCurrentEvenWhenMachineSourced() {
+    /// Revert eligibility: offered for any non-current MACHINE row — attached (ROOT) or
+    /// detached (M1) alike — refused for current itself even when current is
+    /// machine-sourced. The flag under test is `!isCurrent`, not `isDetached` (Critical
+    /// 1): a fixture with an ATTACHED machine row alongside the detached one and a
+    /// machine `current` makes all three cases representable in one place.
+    func testBuildRowsOffersRevertForAnyNonCurrentMachineRowAttachedOrDetachedNeverForCurrent() {
         let rows = [
             chainRow("CUR", source: .machineLive, secondsOffset: 0, fileNumber: 0, isDetached: false),
-            chainRow("M1", source: .machineRetranscribe, secondsOffset: 10, fileNumber: 1, isDetached: true),
+            chainRow("ROOT", source: .machineLive, secondsOffset: -10, fileNumber: 1, isDetached: false),
+            chainRow("M1", source: .machineRetranscribe, secondsOffset: 10, fileNumber: 2, isDetached: true),
         ]
         let snap = snapshot(currentRevisionID: "CUR", orderedChain: rows)
 
@@ -112,6 +123,8 @@ final class RevisionHistoryModelTests: XCTestCase {
 
         XCTAssertEqual(built.first { $0.id == "CUR" }?.canRevert, false,
                        "current must never offer revert, even when it is itself machine-sourced")
+        XCTAssertEqual(built.first { $0.id == "ROOT" }?.canRevert, true,
+                       "an ATTACHED (not detached) machine row must still offer revert")
         XCTAssertEqual(built.first { $0.id == "M1" }?.canRevert, true)
     }
 
@@ -219,6 +232,27 @@ final class RevisionHistoryModelTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "That revision can’t be reverted to.")
     }
 
+    /// Important 3 (review): `.draftInProgress`'s message, routed through the SAME
+    /// failure-message mapping every other store guard already uses (no new alert
+    /// path). The real-store round trip (open draft → refuse → close → succeed) is
+    /// `testRevertRefusesWhileADraftIsOpenAndSucceedsOnceItsClosed` below.
+    func testRevertDraftInProgressErrorMessage() async {
+        let store = FakeRevisionHistoryStore()
+        store.snapshot = snapshot(
+            currentRevisionID: "CUR",
+            orderedChain: [chainRow("CUR", source: .userEdit, secondsOffset: 0, fileNumber: 0, isDetached: false)])
+        let model = RevisionHistoryModel(captureID: "cap", store: store)
+        await model.open()
+        store.revertError = TranscriptRevisionStoreError.draftInProgress
+
+        await model.revert(RevisionHistoryModel.Row(id: "M1", fileNumber: 1, source: .machineLive,
+                                                     createdAt: Date(), firstLine: "", isCurrent: false,
+                                                     isDetached: false, canRevert: true))
+
+        XCTAssertEqual(model.errorMessage, "There are unsaved edits open for this entry. Finish or discard "
+                       + "them in the editor first, then try reverting again.")
+    }
+
     // MARK: - 8.2/8.3/8.4 — real store, real guards (no parallel check in the model)
 
     private var containerRoot: URL!
@@ -299,6 +333,91 @@ final class RevisionHistoryModelTests: XCTestCase {
         XCTAssertEqual(rev1OnDisk.spans, rev1Spans, "the reverted-from revision is untouched, still on disk")
     }
 
+    /// Important 3 (review): `revert` neither read nor cleared `draft.json`, so a
+    /// revert issued while a draft is open was silently REVERSED once that draft later
+    /// closed — `closeDraft` mints a `.userEdit` parented on PRE-revert `current` with
+    /// a fresh `createdAt`, which outranks the revert's merge in `(createdAt, id)`
+    /// order and snaps `current` back. Reachable on device: Back leaves a draft open
+    /// (the Task 4 Back→Edit-again window), the owner reverts from the panel within the
+    /// 90 s window, `closeStaleDrafts` later closes the stale draft `.recovered`, and
+    /// the app's only undo action is silently undone. Fixed with a refusal: open draft
+    /// → revert refuses → close the draft → revert succeeds.
+    func testRevertRefusesWhileADraftIsOpenAndSucceedsOnceItsClosed() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0,
+                                          spans: [TranscriptSpan(text: "raw", anchor: .none)]),
+                                 captureID: captureID)
+        try await store().append(revision("REV1", source: .userEdit, secondsOffset: 10,
+                                          spans: [TranscriptSpan(text: "edited", anchor: .none)],
+                                          parentID: "REV0"), captureID: captureID)
+        try await store().writeDraft(captureID: captureID, text: "edited, still typing",
+                                     now: baseTime.addingTimeInterval(15))
+
+        do {
+            _ = try await model().revert(captureID: captureID, toRevisionID: "REV0",
+                                         now: baseTime.addingTimeInterval(20))
+            XCTFail("expected .draftInProgress")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .draftInProgress)
+        }
+        var ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        XCTAssertEqual(ordered.count, 2, "no revision must be minted while a draft is open")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: SegmentLayout
+            .transcriptDraftURL(captureDirectory: captureDirectory).path), "the draft itself is untouched")
+
+        // The owner finishes the edit (closeDraft deletes draft.json — text matches
+        // REV1 exactly here, so it closes to nothing per §2.5, the simplest case that
+        // still proves the guard clears).
+        _ = try await store().closeDraft(captureID: captureID, reason: .sessionEnd,
+                                         now: baseTime.addingTimeInterval(16))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: SegmentLayout
+            .transcriptDraftURL(captureDirectory: captureDirectory).path))
+
+        let mintedID = try await model().revert(captureID: captureID, toRevisionID: "REV0",
+                                                 now: baseTime.addingTimeInterval(20))
+
+        ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(ordered)))
+        XCTAssertEqual(current.id, mintedID, "revert succeeds once the draft is out of the way")
+        XCTAssertEqual(current.source, .merge)
+    }
+
+    /// Critical 1 (review), end-to-end: `canRevert` was gated on `isDetached`, which is
+    /// `false` for EVERY row of EVERY chain the app can produce today — rev0 is always
+    /// either `current` or in `current`'s own ancestry, never genuinely detached
+    /// (`.machineRetranscribe`, the one source that COULD be detached, has no
+    /// production writer yet). That made the Revert button inert everywhere while
+    /// `testRevertToRev0Mints…` above proved the STORE half worked fine — the UI
+    /// refused the exact case the store test drives. This is the real chain: rev0
+    /// `.machineLive` + a human edit above it, through the REAL
+    /// `EntryChainSnapshot.build` → `RevisionHistoryModel.open`/`buildRows` →
+    /// `RevisionHistoryModel.revert` path (not the lower-level store call the test
+    /// above uses), asserting the row is offered AND that reverting through it actually
+    /// moves `current`.
+    func testCanRevertOffersAnAttachedRev0AndRevertingThroughThePanelMovesCurrentToTheNewMerge() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0,
+                                          spans: [TranscriptSpan(text: "raw", anchor: .none)]),
+                                 captureID: captureID)
+        try await store().append(revision("REV1", source: .userEdit, secondsOffset: 10,
+                                          spans: [TranscriptSpan(text: "edited", anchor: .none)],
+                                          parentID: "REV0"), captureID: captureID)
+
+        let revertTime = baseTime.addingTimeInterval(20)
+        let panel = RevisionHistoryModel(captureID: captureID, store: model(),
+                                         clock: { revertTime })
+        await panel.open()
+        let rev0Row = try XCTUnwrap(panel.rows.first { $0.id == "REV0" })
+        XCTAssertFalse(rev0Row.isDetached, "REV0 is REV1's own ancestor — attached, not detached")
+        XCTAssertTrue(rev0Row.canRevert, "an attached machine revision must still offer revert")
+
+        await panel.revert(rev0Row)
+
+        XCTAssertNil(panel.errorMessage, "the revert must actually succeed, not just be offered")
+        let newCurrent = try XCTUnwrap(panel.rows.first { $0.isCurrent })
+        XCTAssertEqual(newCurrent.source, .merge, "current moved to the newly-minted merge")
+        let ordered = TranscriptChain.ordered(TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)!.revisions)
+        XCTAssertEqual(try XCTUnwrap(TranscriptChain.current(ordered)).basedOnMachineID, "REV0")
+    }
+
     /// 8.3a: refuses on a degraded chain — the SAME `§15b.15` guard `writeDraft`/
     /// `closeDraft` already refuse on, exercised through `revert` for the first time.
     /// Fixture: REV0 readable, file 1 corrupted — the negation (a silent revert that
@@ -340,6 +459,84 @@ final class RevisionHistoryModelTests: XCTestCase {
         }
         let ordered = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions ?? []
         XCTAssertEqual(ordered.count, 2, "no revision must be minted against a trashed capture")
+    }
+
+    /// Important 2 (review): a degraded chain must surface `readOnlyMessage` — the
+    /// panel used to never read `editability` at all, so this rendered as an EMPTY
+    /// history with a self-contradicting footer ("0 revisions" alongside a nonzero
+    /// `chainByteSize`, since that still counts raw bytes even when the chain can't be
+    /// decoded) and no visible reason why.
+    ///
+    /// No `canRevert` assertion here on purpose: `EntryChainSnapshot.build`'s
+    /// degraded-chain branches always collapse `orderedChain` to `[]` (there is
+    /// nothing safe to report), so `rows.allSatisfy { !$0.canRevert }` would pass
+    /// vacuously over an empty array regardless of whether the editability gate
+    /// exists — it would not be a real assertion. The genuinely mutation-sensitive
+    /// "content renders but revert is suppressed" case is the trashed fixture below,
+    /// which DOES have non-empty rows.
+    func testDegradedChainSurfacesReadOnlyMessageAndHasNoRowsToOfferRevertOn() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0,
+                                          spans: [TranscriptSpan(text: "raw", anchor: .none)]),
+                                 captureID: captureID)
+        try writeRawCanonical(1, "not valid json at all")
+
+        let panel = RevisionHistoryModel(captureID: captureID, store: model())
+        await panel.open()
+
+        let message = try XCTUnwrap(panel.readOnlyMessage)
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertTrue(panel.rows.isEmpty, "a degraded chain has nothing safe to report as a row")
+    }
+
+    /// Important 2 (review): a trashed entry must ALSO surface `readOnlyMessage` — but
+    /// unlike the degraded case, content still renders (rows are visible through the
+    /// 30-day trash window per `EntryChainSnapshot`'s own documented behavior); only
+    /// the revert affordance is suppressed, rather than discoverable solely through a
+    /// failed-revert alert after tapping a button that looked available.
+    ///
+    /// Non-degenerate fixture (standing rule): REV0 + a human edit above it, so REV0
+    /// is an ATTACHED, non-current MACHINE row — exactly the shape Critical 1's fix
+    /// makes `canRevert == true` for on a healthy chain. A single-revision fixture
+    /// (REV0 as its own current) would make this assertion pass vacuously too, since
+    /// `!isCurrent` alone already refuses current regardless of the editability gate;
+    /// this fixture isolates the trashed-specific suppression.
+    func testTrashedEntrySurfacesReadOnlyMessageAndSuppressesRevertOnAnOtherwiseEligibleRow() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0,
+                                          spans: [TranscriptSpan(text: "raw", anchor: .none)]),
+                                 captureID: captureID)
+        try await store().append(revision("REV1", source: .userEdit, secondsOffset: 10,
+                                          spans: [TranscriptSpan(text: "edited", anchor: .none)],
+                                          parentID: "REV0"), captureID: captureID)
+        var metadata = EntryMetadata.defaults
+        metadata.trashedAt = Date()
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
+
+        let panel = RevisionHistoryModel(captureID: captureID, store: model())
+        await panel.open()
+
+        XCTAssertNotNil(panel.readOnlyMessage)
+        XCTAssertEqual(panel.rows.map(\.id).sorted(), ["REV0", "REV1"], "content still renders for a trashed entry")
+        XCTAssertEqual(panel.rows.first { $0.id == "REV0" }?.canRevert, false,
+                       "REV0 is attached and non-current — canRevert on a HEALTHY chain, suppressed only "
+                       + "because this entry is trashed")
+    }
+
+    /// The healthy-chain converse: `readOnlyMessage` must be `nil` and rows editable —
+    /// pinned so a bug that ALWAYS surfaces a message (or always suppresses revert)
+    /// can't hide behind the two tests above alone.
+    func testEditableChainHasNoReadOnlyMessageAndOffersRevert() async throws {
+        try await store().append(revision("REV0", source: .machineLive, secondsOffset: 0,
+                                          spans: [TranscriptSpan(text: "raw", anchor: .none)]),
+                                 captureID: captureID)
+        try await store().append(revision("REV1", source: .userEdit, secondsOffset: 10,
+                                          spans: [TranscriptSpan(text: "edited", anchor: .none)],
+                                          parentID: "REV0"), captureID: captureID)
+
+        let panel = RevisionHistoryModel(captureID: captureID, store: model())
+        await panel.open()
+
+        XCTAssertNil(panel.readOnlyMessage)
+        XCTAssertEqual(panel.rows.first { $0.id == "REV0" }?.canRevert, true)
     }
 
     /// 8.4: attempting to revert to a HUMAN revision throws `.notMachineLineage`,

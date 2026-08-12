@@ -32,6 +32,10 @@ enum TranscriptRevisionStoreError: Error, Equatable {
     /// `mkdir` rather than let `createDirectory(withIntermediateDirectories:)` silently
     /// resurrect a tree the owner already deleted.
     case captureMissing
+    /// `revert`'s target id (T7 Task 8) named no revision in the readable chain — the
+    /// panel offering a stale row (the chain moved since it last opened) or a caller
+    /// passing a bad id directly.
+    case revisionNotFound(String)
 }
 
 /// The two numbers §2.5 invents for the draft lifecycle, injectable so tests don't wait
@@ -844,6 +848,54 @@ actor TranscriptRevisionStore {
             return nil
         }
         return try? closeDraft(captureID: captureID, reason: .recovered, now: now)
+    }
+
+    // MARK: - Revert (T7 Task 8, design §6.5)
+
+    /// Mints a `.merge` revision restoring an earlier MACHINE revision's spans verbatim
+    /// — `TranscriptMerge.revert`'s first production caller, reached from the
+    /// revision-history panel (`LibraryScreenModel.revert` is a thin passthrough to
+    /// this). Guarded exactly like `closeDraft`, in the same order: `guardWritable`
+    /// (missing/trashed capture) first, then `readableOrderedRevisions` — §15b.15's
+    /// degraded-chain refusal — BEFORE any mint, so a revert can never silently drop
+    /// content from a revision file this device failed to read, the same reason a draft
+    /// close refuses on the identical chain shape.
+    ///
+    /// `toRevisionID` must name a revision presently in the readable chain
+    /// (`.revisionNotFound` otherwise — the panel's row went stale, or a caller passed
+    /// a bad id). `TranscriptMerge.revert` itself throws `TranscriptMergeError
+    /// .notMachineLineage` if that revision is human-lineage (Task 1's caller-side
+    /// precondition on `basedOnMachineID`, exercised here for the first time in
+    /// production) — deliberately NOT re-checked here first: one guard, one place,
+    /// never a parallel copy that could drift from it.
+    ///
+    /// Returns the minted revision's id.
+    @discardableResult
+    func revert(captureID: String, toRevisionID: String, now: Date) throws -> String {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try guardWritable(captureDirectory: captureDirectory)
+
+        // Critical 2 / §15b.15, same as writeDraft/closeDraft: refuse rather than
+        // revert against — or even locate the target revision within — a chain missing
+        // its true tip.
+        let ordered = try Self.readableOrderedRevisions(captureDirectory: captureDirectory)
+        guard let machine = ordered.first(where: { $0.id == toRevisionID }) else {
+            throw TranscriptRevisionStoreError.revisionNotFound(toRevisionID)
+        }
+        // `TranscriptChain.current` returns `nil` only when `ordered` is empty
+        // (`ordered.last { … }` over nothing) — which the `machine` lookup just above
+        // already ruled out (a non-empty chain, since it contains `machine`). Guarded
+        // anyway rather than force-unwrapped: no unsafe assumption across the actor
+        // boundary for a branch that should be unreachable.
+        guard let current = TranscriptChain.current(ordered) else {
+            throw TranscriptRevisionStoreError.revisionNotFound(toRevisionID)
+        }
+
+        let revision = try TranscriptMerge.revert(current: current, toMachine: machine,
+                                                   id: ULID.make(now: now), createdAt: now,
+                                                   deviceID: DeviceIdentity.stable())
+        try append(revision, captureID: captureID)
+        return revision.id
     }
 
     // MARK: - Promotion (T6c, design §5.1/§5.2)

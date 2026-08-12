@@ -527,6 +527,12 @@ final class TranscriptEditorModel {
                 + "what it holds."
         case .allocationCollision:
             return "Another save is still finishing. Try again."
+        case .revisionNotFound:
+            // Never actually thrown by writeDraft/closeDraft (T7 Task 8's `revert` is
+            // the only caller that can produce this) — kept exhaustive rather than a
+            // silent `default:` so a future store method that COULD throw it here
+            // doesn't inherit a wrong message by accident.
+            return "That revision could not be found in this entry’s history."
         }
     }
 

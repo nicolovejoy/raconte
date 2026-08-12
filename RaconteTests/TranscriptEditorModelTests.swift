@@ -1390,7 +1390,7 @@ final class FakeEditorStore: TranscriptEditorStore {
         FakeEditorStore(snapshot: EntryChainSnapshot(
             editability: .editable, currentRevisionID: "R0", currentText: currentText,
             currentSource: .machineLive, revisionCount: 1, isForked: false, openDraft: draft,
-            detachedMachineRevisions: [], currentSummary: nil, chainByteSize: 0))
+            detachedMachineRevisions: [], orderedChain: [], chainByteSize: 0))
     }
 
     func chainSnapshot(for captureID: String) async -> EntryChainSnapshot {

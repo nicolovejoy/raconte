@@ -2,7 +2,7 @@ import Foundation
 
 /// The disk seam the revision-history panel reads/writes through (T7 Task 8). Mirrors
 /// `MarkerCorrectionStore`'s shape: the read is the SAME `chainSnapshot` every other T7
-/// screen already uses (no new read — see `EntryChainSnapshot.currentSummary`'s doc
+/// screen already uses (no new read — see `EntryChainSnapshot.orderedChain`'s doc
 /// comment), and `revert` is a plain `async throws` passthrough to
 /// `TranscriptRevisionStore.revert` via `LibraryScreenModel`.
 @MainActor
@@ -24,13 +24,11 @@ protocol RevisionHistoryStore: AnyObject {
 @MainActor
 @Observable
 final class RevisionHistoryModel {
-    /// One row: either `current` or a genuinely detached machine revision (T7 Task 2's
-    /// `EntryChainSnapshot.detachedMachineRevisions` — "not applied" per the owner's
-    /// §12.8 ruling, i.e. neither `current` nor one of its ancestors). Earlier revisions
-    /// that ARE part of `current`'s own lineage are not surfaced as separate rows: they
-    /// are exactly the history current already carries forward, and showing them would
-    /// need a disk read `EntryChainSnapshot` deliberately does not do (see its own doc
-    /// comment on why the row/scan path must never pay for a chain decode).
+    /// One row per revision in the WHOLE chain (T7 Task 8, fix round 1 — the brief's
+    /// "the chain in (createdAt, id) order" is literal: every revision, not just
+    /// `current` and the orphans, so the owner can see what sits between a machine
+    /// revision and `current` before reverting to it). One-to-one with
+    /// `EntryChainSnapshot.orderedChain`.
     struct Row: Identifiable, Equatable {
         var id: String
         var fileNumber: Int
@@ -56,9 +54,9 @@ final class RevisionHistoryModel {
     }
 
     private(set) var state: State = .loading
-    /// `(createdAt, id)` order — the same total order `EntryChainSnapshot
-    /// .detachedMachineRevisions` already uses (T7 Task 2 fix round 2's ordering pin),
-    /// extended here to include `current`.
+    /// `(createdAt, id)` order — straight from `EntryChainSnapshot.orderedChain`, never
+    /// re-sorted or re-filtered here (T7 Task 8, fix round 1: ordering AND detachment
+    /// are computed once, in `build`, and consumed as-is).
     private(set) var rows: [Row] = []
     private(set) var revisionCount = 0
     private(set) var chainByteSize: Int64 = 0
@@ -95,27 +93,22 @@ final class RevisionHistoryModel {
         state = .ready
     }
 
-    /// Pure row derivation (T7 Task 8, step 8.1) — a plain function so ordering and
-    /// labeling are pinned without going through `open()`'s async read.
+    /// Pure row derivation (T7 Task 8, step 8.1) — a plain function so the mapping is
+    /// pinned without going through `open()`'s async read.
+    ///
+    /// A thin MAP, deliberately: ordering and per-revision detachment are both already
+    /// computed, once, by `EntryChainSnapshot.build` (`orderedChain` is `(createdAt,
+    /// id)`-ordered and each row already carries its own `isDetached` answer) — this
+    /// function does not sort, filter, or re-derive ancestry. `isCurrent` is the one
+    /// thing computed here, by identity against `snapshot.currentRevisionID`, since
+    /// `ChainRevisionRow` itself doesn't carry it (it's a property of the SNAPSHOT, not
+    /// of the revision).
     static func buildRows(from snapshot: EntryChainSnapshot) -> [Row] {
-        var entries: [(summary: TranscriptHeadSummary, isDetached: Bool)] =
-            snapshot.detachedMachineRevisions.map { ($0, true) }
-        if let current = snapshot.currentSummary {
-            entries.append((current, false))
-        }
-        // The chain's own total order (design: `(createdAt, id)`), matching every other
-        // chain-derived list in this codebase (`TranscriptChain.ordered`,
-        // `detachedMachineRevisions` itself) — not insertion order, and not file order.
-        entries.sort { lhs, rhs in
-            if lhs.summary.createdAt != rhs.summary.createdAt {
-                return lhs.summary.createdAt < rhs.summary.createdAt
-            }
-            return lhs.summary.id < rhs.summary.id
-        }
-        return entries.map { entry in
+        snapshot.orderedChain.map { entry in
             Row(id: entry.summary.id, fileNumber: entry.summary.fileNumber,
                 source: entry.summary.source, createdAt: entry.summary.createdAt,
-                firstLine: entry.summary.firstLine, isCurrent: !entry.isDetached,
+                firstLine: entry.summary.firstLine,
+                isCurrent: entry.summary.id == snapshot.currentRevisionID,
                 isDetached: entry.isDetached,
                 canRevert: !entry.summary.source.isHumanLineage && entry.isDetached)
         }

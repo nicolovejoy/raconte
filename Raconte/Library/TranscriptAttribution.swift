@@ -21,6 +21,13 @@ enum TranscriptAttribution {
         /// Marked on both paragraphs adjacent to such a boundary: the imprecision is a
         /// property of the cut, not of a single side of it.
         var hasApproximateBoundary: Bool
+        /// Indices into the `spans` array passed to `attribute(spans:snapped:)` that
+        /// this paragraph was assembled from (T7 Task 3, #56) — lets a later marking UI
+        /// map a rendered paragraph back to span indices. Only the span path populates
+        /// this; the committed/pieces path (`attribute(committed:snapped:)`) has no span
+        /// array to index into and always leaves it `nil`. Defaulted so every existing
+        /// memberwise call site (fixtures, `paragraph(pieces:...)`) compiles unchanged.
+        var spanRange: Range<Int>? = nil
     }
 
     /// One contiguous span of transcript text on the capture-frame axis, tagged with
@@ -289,10 +296,10 @@ enum TranscriptAttribution {
     private static func spanParagraph(spans: [TranscriptSpan], range: Range<Int>,
                                       voice: String?, approximate: Bool) -> Paragraph {
         guard !range.isEmpty else {
-            return Paragraph(voice: voice, text: "", hasApproximateBoundary: approximate)
+            return Paragraph(voice: voice, text: "", hasApproximateBoundary: approximate, spanRange: range)
         }
         let text = TranscriptText.join(spans[range].map(\.text))
-        return Paragraph(voice: voice, text: text, hasApproximateBoundary: approximate)
+        return Paragraph(voice: voice, text: text, hasApproximateBoundary: approximate, spanRange: range)
     }
 
     // MARK: - Pieces

@@ -79,7 +79,26 @@ struct VoiceMarkingView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(model.rows) { row in
+                    // Review Important 1: `ForEach` diffs by `row.id` alone (the
+                    // paragraph's INDEX in this load — see the type doc above), and a
+                    // gesture can renumber/resplit paragraphs while leaving some index
+                    // occupied by genuinely different content (a merge shifts everything
+                    // after it up by one, a split inserts one). Without this, SwiftUI
+                    // reuses the SAME `VoiceMarkingParagraphBlock` instance — and its
+                    // `@State private var frames` — across that identity collision, so
+                    // stale token rects from the OLD content at this index survive into
+                    // the new one. A drag hit-testing against a stale rect can then
+                    // resolve to a span index that isn't even in the new paragraph,
+                    // clamp/widen against the wrong `placeableIDs`, and silently mark
+                    // words the drag never crossed — the exact silent-over-mark class
+                    // Task 4's `VoiceMarkingPlan` review killed at the plan layer,
+                    // reachable again here at the view layer. Keying identity to the
+                    // token id LIST (not just the row id) forces SwiftUI to tear down
+                    // and rebuild the block — resetting `frames` and every other gesture
+                    // `@State` — whenever the actual content at this index changes,
+                    // even when the index itself didn't.
                     VoiceMarkingParagraphBlock(row: row, voiceLabels: voiceLabels, model: model)
+                        .id(row.tokens.map(\.id))
                 }
             }
             .padding()

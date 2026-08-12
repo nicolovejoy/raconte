@@ -268,3 +268,269 @@ final class VoiceMarkingPlanTests: XCTestCase {
                        "a trailing non-placeable span can anchor nothing — no restore exists to emit")
     }
 }
+
+/// The D6 property (task-4-brief.md, the task's core): a plan, EXECUTED through the real
+/// `MarkerCorrectionWriter` against a real capture directory and re-derived through
+/// `EntryTranscript.voiceMarkingLayout`, must (a) leave the transcript's text byte-for-byte
+/// unchanged and (b) produce exactly the voices the gesture intended — no more, no fewer.
+///
+/// Every expectation below is written out literally, per fixture, rather than re-derived
+/// from the planner's own output: a computed expectation would agree with any planner,
+/// including a wrong one (memory: vacuous-fixtures-need-an-adversary).
+final class VoiceMarkingPlanApplyTests: XCTestCase {
+
+    private var containerRoot: URL!
+    private var capturesRoot: URL { AppContainer.capturesRoot(containerRoot: containerRoot) }
+
+    private let bn = VoiceDisplay.mainVoice
+    private var ln: String { VoiceDisplay.other(VoiceDisplay.mainVoice) }
+
+    override func setUpWithError() throws {
+        containerRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("VoiceMarkingPlanApply-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: capturesRoot, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let containerRoot { try? FileManager.default.removeItem(at: containerRoot) }
+    }
+
+    // MARK: - Disk fixture helpers (same shapes as TranscriptAttributionLoadTests)
+
+    private func captureDir(_ id: String) -> URL {
+        SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+    }
+
+    private func store() -> TranscriptRevisionStore { TranscriptRevisionStore(capturesRoot: capturesRoot) }
+
+    private func writeManifest(_ id: String) throws {
+        let format = AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
+                                           commonFormat: .pcmFormatFloat32,
+                                           interleaved: false, bytesPerFrame: 4)
+        let created = Date(timeIntervalSince1970: 1_000)
+        let manifest = Manifest(captureID: id, createdAt: created, state: .captured,
+                                stateSeq: 1, stateUpdatedAt: created, format: format)
+        try FileManager.default.createDirectory(at: captureDir(id), withIntermediateDirectories: true)
+        try CaptureCoding.encoder().encode(manifest)
+            .write(to: SegmentLayout.manifestURL(captureDirectory: captureDir(id)))
+    }
+
+    /// `promoteIfNeeded` requires durable audio before it will promote `live.jsonl` into
+    /// revision zero — content is irrelevant, only presence.
+    private func writeFinalAudio(_ id: String) throws {
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: captureDir(id))
+        try FileManager.default.createDirectory(at: finalDir, withIntermediateDirectories: true)
+        try Data("not really an m4a".utf8).write(to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(id)))
+    }
+
+    private func writeLiveTranscript(_ id: String,
+                                     _ records: [(text: String, start: Int64, end: Int64)]) throws {
+        let writer = LiveTranscriptWriter(captureDirectory: captureDir(id))
+        try writer.open()
+        for record in records {
+            try writer.append(TranscriptRecord(seq: 0, text: record.text,
+                                               captureFrameStart: record.start,
+                                               captureFrameEnd: record.end,
+                                               generator: "SpeechTranscriber", locale: "en_US"))
+        }
+        try writer.close()
+    }
+
+    private func writeMarkers(_ id: String, _ markers: [StructureMarker]) throws {
+        let writer = MarkerLogWriter(captureDirectory: captureDir(id))
+        try writer.open()
+        for marker in markers { try writer.append(marker) }
+        try writer.close()
+    }
+
+    /// A capture promoted from `live.jsonl` into revision zero — one span per record.
+    private func promoted(_ id: String, _ records: [(text: String, start: Int64, end: Int64)]) async throws {
+        try writeManifest(id)
+        try writeFinalAudio(id)
+        try writeLiveTranscript(id, records)
+        _ = await store().promoteIfNeeded(captureID: id)
+    }
+
+    private func currentSpans(_ id: String) throws -> [TranscriptSpan] {
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(id)))
+        return try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions))).spans
+    }
+
+    // MARK: - The property
+
+    private struct VoicedParagraph: Equatable, CustomStringConvertible {
+        var voice: String?
+        var text: String
+        var description: String { "(\(voice ?? "nil"), \"\(text)\")" }
+    }
+
+    private enum Gesture {
+        case flip(paragraph: Int)
+        case markRange(ClosedRange<Int>, to: String)
+    }
+
+    /// Runs one fixture end to end: read the layout, assert the pre-state literally, plan,
+    /// EXECUTE through `MarkerCorrectionWriter`, re-read, assert the post-state literally,
+    /// and assert the joined transcript text is untouched by the whole round trip.
+    private func assertPlanApplies(_ name: String, id: String,
+                                   gesture: Gesture,
+                                   before: [VoicedParagraph],
+                                   hasAnyVoiceMarkerBefore: Bool,
+                                   after: [VoicedParagraph],
+                                   file: StaticString = #filePath, line: UInt = #line) throws {
+        guard case .ready(let spans, let paragraphs, let hasAnyVoiceMarker) =
+                EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(id), sampleRate: 48_000) else {
+            return XCTFail("\(name): expected .ready before marking", file: file, line: line)
+        }
+        let observedBefore = paragraphs.map { VoicedParagraph(voice: $0.voice, text: $0.text) }
+        XCTAssertEqual(observedBefore, before, "\(name): pre-state", file: file, line: line)
+        XCTAssertEqual(hasAnyVoiceMarker, hasAnyVoiceMarkerBefore, "\(name): hasAnyVoiceMarker",
+                       file: file, line: line)
+
+        let commands: [VoiceMarkingPlan.Command]
+        switch gesture {
+        case .flip(let index):
+            commands = try VoiceMarkingPlan.flipParagraph(at: index, paragraphs: paragraphs,
+                                                          spans: spans, hasAnyVoiceMarker: hasAnyVoiceMarker)
+        case .markRange(let range, let voice):
+            commands = try VoiceMarkingPlan.markRange(range, to: voice, paragraphs: paragraphs,
+                                                      spans: spans, hasAnyVoiceMarker: hasAnyVoiceMarker)
+        }
+        XCTAssertFalse(commands.isEmpty, "\(name): a marking gesture that plans nothing marks nothing",
+                       file: file, line: line)
+
+        for command in commands {
+            switch command {
+            case .addOpeningVoice(let voice):
+                try MarkerCorrectionWriter.addOpeningVoice(voice: voice, captureDirectory: captureDir(id))
+            case .addVoiceBoundary(let spanIndex, let voice):
+                try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: spanIndex, spans: spans,
+                                                            voice: voice, captureDirectory: captureDir(id))
+            }
+        }
+
+        guard case .ready(_, let newParagraphs, _) =
+                EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(id), sampleRate: 48_000) else {
+            return XCTFail("\(name): expected .ready after marking", file: file, line: line)
+        }
+        let observedAfter = newParagraphs.map { VoicedParagraph(voice: $0.voice, text: $0.text) }
+        XCTAssertEqual(observedAfter, after, "\(name): post-state", file: file, line: line)
+        XCTAssertEqual(TranscriptText.join(newParagraphs.map(\.text)),
+                       TranscriptText.join(paragraphs.map(\.text)),
+                       "\(name): marking is a voice operation and must never touch the text",
+                       file: file, line: line)
+    }
+
+    func testAppliedPlansPreserveParagraphTextsAndProduceTheIntendedVoices() async throws {
+        // 1. Unmarked, single paragraph. The anchor IS the transcript's first placeable
+        //    span, so no opener is written — the flip alone voices the whole entry.
+        let single = "01AAAAAAAAAAAAAAAAAAAAAAAA"
+        try await promoted(single, [("one", 0, 10_000), ("two", 20_000, 30_000), ("three", 40_000, 50_000)])
+        try assertPlanApplies("unmarked single paragraph", id: single,
+                              gesture: .flip(paragraph: 0),
+                              before: [VoicedParagraph(voice: nil, text: "one two three")],
+                              hasAnyVoiceMarkerBefore: false,
+                              after: [VoicedParagraph(voice: ln, text: "one two three")])
+
+        // 2. Unmarked, THREE paragraphs made by voiceless ¶ boundary adds. Flipping the
+        //    middle one is the restore rule's whole reason to exist: without the trailing
+        //    restore, paragraph 3 would flip too, and without the opener paragraph 1 would
+        //    be left voiceless.
+        let multi = "01BBBBBBBBBBBBBBBBBBBBBBBB"
+        try await promoted(multi, [("one", 0, 10_000), ("two", 20_000, 30_000),
+                                   ("three", 40_000, 50_000), ("four", 60_000, 70_000),
+                                   ("five", 80_000, 90_000), ("six", 100_000, 110_000)])
+        let multiSpans = try currentSpans(multi)
+        for spanIndex in [2, 4] {
+            try MarkerCorrectionWriter.addBoundary(atSpanIndex: spanIndex, spans: multiSpans,
+                                                   captureDirectory: captureDir(multi))
+        }
+        try assertPlanApplies("unmarked multi-paragraph (¶ adds)", id: multi,
+                              gesture: .flip(paragraph: 1),
+                              before: [VoicedParagraph(voice: nil, text: "one two"),
+                                       VoicedParagraph(voice: nil, text: "three four"),
+                                       VoicedParagraph(voice: nil, text: "five six")],
+                              hasAnyVoiceMarkerBefore: false,
+                              after: [VoicedParagraph(voice: bn, text: "one two"),
+                                      VoicedParagraph(voice: ln, text: "three four"),
+                                      VoicedParagraph(voice: bn, text: "five six")])
+
+        // 3. A real captured two-voice entry: RAW taps (a frame-0 opener and a mid-entry
+        //    switch), which are snapped rather than exact. Flipping the last paragraph
+        //    overrides the switch tap's voice at the very cut it created — the tap itself
+        //    stays on disk untouched, and the paragraph break survives.
+        let twoVoice = "01CCCCCCCCCCCCCCCCCCCCCCCC"
+        try await promoted(twoVoice, [("intro words", 0, 20_000), ("reply words", 40_000, 60_000)])
+        try writeMarkers(twoVoice, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: bn),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: ln),
+        ])
+        try assertPlanApplies("captured two-voice, raw taps", id: twoVoice,
+                              gesture: .flip(paragraph: 1),
+                              before: [VoicedParagraph(voice: bn, text: "intro words"),
+                                       VoicedParagraph(voice: ln, text: "reply words")],
+                              hasAnyVoiceMarkerBefore: true,
+                              after: [VoicedParagraph(voice: bn, text: "intro words"),
+                                      VoicedParagraph(voice: bn, text: "reply words")])
+
+        // 4. A leading span with no usable bounds — here an anchor spelling this build
+        //    doesn't recognise (`SpanAnchor.unknown`, the documented foreign/imported
+        //    shape that round-trips verbatim). It can anchor nothing, so the flip lands on
+        //    the first placeable span and that leading text HONESTLY keeps no voice rather
+        //    than being swept into a claim the markers can't support.
+        let leading = "01DDDDDDDDDDDDDDDDDDDDDDDD"
+        try writeManifest(leading)
+        try await store().append(
+            TranscriptRevision(id: "01DDDDDDDDDDDDDDDDDDDDDDDE", source: .import,
+                               createdAt: Date(timeIntervalSince1970: 3_000),
+                               spans: [TranscriptSpan(text: "prelude", anchor: .unknown("approximate"),
+                                                      frameStart: 0, frameEnd: 5_000),
+                                       TranscriptSpan(text: "one", anchor: .exact,
+                                                      frameStart: 10_000, frameEnd: 20_000),
+                                       TranscriptSpan(text: "two", anchor: .exact,
+                                                      frameStart: 20_000, frameEnd: 30_000),
+                                       TranscriptSpan(text: "three", anchor: .exact,
+                                                      frameStart: 30_000, frameEnd: 40_000)],
+                               parentID: nil),
+            captureID: leading)
+        try assertPlanApplies("leading non-placeable span", id: leading,
+                              gesture: .flip(paragraph: 0),
+                              before: [VoicedParagraph(voice: nil, text: "prelude one two three")],
+                              hasAnyVoiceMarkerBefore: false,
+                              after: [VoicedParagraph(voice: nil, text: "prelude"),
+                                      VoicedParagraph(voice: ln, text: "one two three")])
+
+        // 5. Abutting exact-frame runs (the device-observed norm: no silence between
+        //    in-record words, so `MarkerSnapping` has no gap to search). Marking a range in
+        //    the MIDDLE of the only paragraph must split it three ways — [prev, target,
+        //    prev] — with every boundary landing on the exact word it was anchored to.
+        let abutting = "01EEEEEEEEEEEEEEEEEEEEEEEE"
+        try await promoted(abutting, [("one", 0, 10_000), ("two", 10_000, 20_000),
+                                      ("three", 20_000, 30_000), ("four", 30_000, 50_000)])
+        try assertPlanApplies("abutting exact-frame runs, mid-paragraph range", id: abutting,
+                              gesture: .markRange(1...2, to: ln),
+                              before: [VoicedParagraph(voice: nil, text: "one two three four")],
+                              hasAnyVoiceMarkerBefore: false,
+                              after: [VoicedParagraph(voice: bn, text: "one"),
+                                      VoicedParagraph(voice: ln, text: "two three"),
+                                      VoicedParagraph(voice: bn, text: "four")])
+
+        // 6. An entry someone has already marked (opening voice + a voice-carrying
+        //    boundary add). Re-marking the same cut is a plain append: later seq wins, and
+        //    the earlier add stays on disk. This is what makes the whole design retract-free.
+        let corrected = "01FFFFFFFFFFFFFFFFFFFFFFFF"
+        try await promoted(corrected, [("one", 0, 10_000), ("two", 20_000, 30_000),
+                                       ("three", 40_000, 50_000), ("four", 60_000, 70_000)])
+        let correctedSpans = try currentSpans(corrected)
+        try MarkerCorrectionWriter.addOpeningVoice(voice: bn, captureDirectory: captureDir(corrected))
+        try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: 2, spans: correctedSpans, voice: ln,
+                                                    captureDirectory: captureDir(corrected))
+        try assertPlanApplies("already-corrected entry, re-flipped at the same cut", id: corrected,
+                              gesture: .flip(paragraph: 1),
+                              before: [VoicedParagraph(voice: bn, text: "one two"),
+                                       VoicedParagraph(voice: ln, text: "three four")],
+                              hasAnyVoiceMarkerBefore: true,
+                              after: [VoicedParagraph(voice: bn, text: "one two"),
+                                      VoicedParagraph(voice: bn, text: "three four")])
+    }
+}

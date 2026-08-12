@@ -36,11 +36,11 @@ struct EntryDetailView: View {
     @State private var editSaveFailed = false
     @State private var editSaveFailureReason = ""
     @State private var editorModel: TranscriptEditorModel
-    /// Marker correction is its OWN mode (T7 Task 6, ruling Q11) — a separate pushed
-    /// screen, never inline in the editor. Same "built once in init" reasoning as
-    /// `editorModel` above.
-    @State private var showingMarkerCorrection = false
-    @State private var markerCorrectionModel: MarkerCorrectionModel
+    /// Mark voices is its OWN mode (T7 Mark Voices, issue #56, Task 6 — replaces the
+    /// old "Correct markers" screen) — a separate pushed screen, never inline in the
+    /// editor. Same "built once in init" reasoning as `editorModel` above.
+    @State private var showingVoiceMarking = false
+    @State private var voiceMarkingModel: VoiceMarkingModel
     /// The whole undo story (T7 Task 8, ruling Q1) — a separate pushed screen, same
     /// "built once in init" reasoning as `editorModel`/`markerCorrectionModel` above.
     @State private var showingRevisionHistory = false
@@ -62,8 +62,8 @@ struct EntryDetailView: View {
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
-        _markerCorrectionModel = State(initialValue: MarkerCorrectionModel(captureID: item.captureID,
-                                                                           store: model))
+        _voiceMarkingModel = State(initialValue: VoiceMarkingModel(captureID: item.captureID,
+                                                                    store: model))
         _revisionHistoryModel = State(initialValue: RevisionHistoryModel(captureID: item.captureID,
                                                                           store: model))
     }
@@ -107,14 +107,14 @@ struct EntryDetailView: View {
                 await refresh()
             }
         }
-        .navigationDestination(isPresented: $showingMarkerCorrection) {
-            MarkerCorrectionView(model: markerCorrectionModel)
+        .navigationDestination(isPresented: $showingVoiceMarking) {
+            VoiceMarkingView(model: voiceMarkingModel, voiceLabels: item.journal?.voiceLabels ?? [:])
         }
-        // Every correction action writes and commits immediately (no draft, no debounce —
-        // see `MarkerCorrectionModel`'s doc comment), so unlike the editor there is nothing
+        // Every marking action writes and commits immediately (no draft, no debounce —
+        // see `VoiceMarkingModel`'s doc comment), so unlike the editor there is nothing
         // to finish on the way out; a refresh once the screen closes is enough for the
-        // transcript section to pick up the corrected attribution.
-        .onChange(of: showingMarkerCorrection) { _, shown in
+        // transcript section to pick up the new voices.
+        .onChange(of: showingVoiceMarking) { _, shown in
             guard !shown else { return }
             Task {
                 await model.rescan()
@@ -484,11 +484,12 @@ struct EntryDetailView: View {
                 .font(.caption)
                 .accessibilityIdentifier("detail.editButton")
 
-            // Its own mode, not inline here (T7 Task 6, ruling Q11) — retract a mis-tap,
-            // correct a voice at an existing boundary, or add one the owner never tapped.
-            Button("Correct markers…") { showingMarkerCorrection = true }
+            // Its own mode, not inline here (T7 Mark Voices, issue #56, Task 6 — replaces
+            // the old "Correct markers" screen): tap a paragraph to flip its voice, or
+            // drag a range of words to mark it.
+            Button("Mark voices…") { showingVoiceMarking = true }
                 .font(.caption)
-                .accessibilityIdentifier("detail.correctMarkersButton")
+                .accessibilityIdentifier("detail.markVoicesButton")
 
             // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
             // and no revert button, so this is the only way back.

@@ -126,10 +126,10 @@ final class LibraryScreenModel {
             // T7 Task 4.6: an entry with a real chain to edit, since nothing is ever
             // transcribed under the synthetic harness. No-op unless asked for.
             UITestEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
-            // T7 Task 6.5: a second entry with real frame-bounded spans + existing
-            // taps, since the editor's fixture above is deliberately frameless. No-op
-            // unless asked for.
-            UITestMarkerCorrectionSeed.seedIfRequested(capturesRoot: capturesRoot)
+            // T7 Mark Voices, issue #56, Task 6: two more entries with real
+            // frame-bounded spans (one already voice-marked, one not), since the
+            // editor's fixture above is deliberately frameless. No-op unless asked for.
+            UITestVoiceMarkingSeed.seedIfRequested(capturesRoot: capturesRoot)
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif
@@ -639,9 +639,8 @@ extension LibraryScreenModel: TranscriptEditorStore {}
 
 /// The mark-voices screen writes through this model, never straight to
 /// `MarkerCorrectionWriter`/`EntryTranscript.voiceMarkingLayout` — one store instance
-/// per file, app-wide, same reasoning as `MarkerCorrectionStore`'s conformance
-/// (`MarkerCorrectionModel.swift`). Lives here rather than in `VoiceMarkingModel.swift`
-/// because it needs `manifestFacts`, `private` to this file.
+/// per file, app-wide. Lives here rather than in `VoiceMarkingModel.swift` because it
+/// needs `manifestFacts`, `private` to this file.
 extension LibraryScreenModel: VoiceMarkingStore {
     nonisolated func voiceMarkingLayout(for captureID: String) async -> EntryTranscript.VoiceMarkingLayout {
         let capturesRoot = self.capturesRoot
@@ -652,12 +651,25 @@ extension LibraryScreenModel: VoiceMarkingStore {
         }.value
     }
 
-    /// Re-reads `current`'s spans (via the same `currentSpans` `MarkerCorrectionStore`
-    /// already implements) rather than trusting a caller-supplied array — the screen's
-    /// own `spans` could be one action stale (another marking session, or the editor,
-    /// changed the chain since this screen last opened), and writing against a stale
-    /// span array could anchor to the wrong frame silently. Same rule as
-    /// `MarkerCorrectionStore.addBoundary(atSpanIndex:captureID:)`.
+    /// `current`'s own spans — the exact frame source `addVoiceBoundary` anchors to.
+    /// `nil` when there is no readable current revision. Was `MarkerCorrectionStore
+    /// .currentSpans` before that protocol was retired (T7 Mark Voices, issue #56,
+    /// Task 6); kept as a private helper here since only this extension calls it now.
+    private nonisolated func currentSpans(for captureID: String) async -> [TranscriptSpan]? {
+        let capturesRoot = self.capturesRoot
+        return await Task.detached(priority: .userInitiated) {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            guard let chain = TranscriptRevisionStore.loadChain(captureDirectory: directory),
+                  let current = TranscriptChain.current(TranscriptChain.ordered(chain.revisions))
+            else { return nil }
+            return current.spans
+        }.value
+    }
+
+    /// Re-reads `current`'s spans rather than trusting a caller-supplied array — the
+    /// screen's own `spans` could be one action stale (another marking session, or the
+    /// editor, changed the chain since this screen last opened), and writing against a
+    /// stale span array could anchor to the wrong frame silently.
     @discardableResult
     func addVoiceBoundary(atSpanIndex spanIndex: Int, voice: String, captureID: String) async throws -> Int64 {
         guard let spans = await currentSpans(for: captureID) else {

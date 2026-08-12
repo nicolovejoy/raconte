@@ -380,6 +380,45 @@ final class EntryChainSnapshotTests: XCTestCase {
                        "the history panel and the diagnostics screen must never disagree about one entry's chain size")
     }
 
+    // MARK: - currentSummary (T7 Task 8)
+
+    /// `currentSummary` must carry the same identity/derived fields
+    /// `detachedMachineRevisions`' elements do for THEIR revisions — both are minted by
+    /// the same `TranscriptRevisionStore.headSummary`, never a second implementation.
+    func testCurrentSummaryMatchesCurrentRevision() async throws {
+        try await store().append(revision("R0", text: "hello world"), captureID: captureID)
+
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertEqual(snapshot.currentSummary?.id, "R0")
+        XCTAssertEqual(snapshot.currentSummary?.source, .machineLive)
+        XCTAssertEqual(snapshot.currentSummary?.firstLine, "hello world")
+    }
+
+    /// The file-number pin specifically: `current` is NOT file 0 here (an earlier
+    /// revision occupies it) — a hardcoded `fileNumber: 0`, or one copied from the
+    /// wrong revision, is representable and would fail this test.
+    func testCurrentSummaryFileNumberIsCurrentsOwnNotTheChainsFirstFile() async throws {
+        try await store().append(revision("R_ROOT", text: "first"), captureID: captureID) // file 0
+        try await store().append(revision("R0", source: .userEdit, secondsOffset: 10,
+                                          parentID: "R_ROOT", text: "second"), captureID: captureID) // file 1
+
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertEqual(snapshot.currentRevisionID, "R0")
+        XCTAssertEqual(snapshot.currentSummary?.fileNumber, 1,
+                       "current's own file number (1), not the chain's first file (0)")
+    }
+
+    /// Every branch that collapses `currentRevisionID` to `nil` must leave
+    /// `currentSummary` `nil` too — it is derived FROM `current`, never independently.
+    func testCurrentSummaryIsNilWhenThereIsNoCurrentRevision() throws {
+        let snapshot = EntryChainSnapshot.build(captureDirectory: captureDirectory)
+
+        XCTAssertNil(snapshot.currentRevisionID)
+        XCTAssertNil(snapshot.currentSummary)
+    }
+
     // MARK: - Sidecar-unreadable edge case (beyond the 5 required fixtures)
 
     /// Not one of the brief's 5 required Editability fixtures, but a real read-path edge

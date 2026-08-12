@@ -35,6 +35,15 @@ struct EntryChainSnapshot: Sendable, Equatable {
     /// order every other chain-derived list in this codebase uses — since Task 8 renders
     /// this list and needs it deterministic.
     var detachedMachineRevisions: [TranscriptHeadSummary]
+    /// The same summary shape as `detachedMachineRevisions`' elements, but for `current`
+    /// itself (T7 Task 8) — free to compute here (the `.present` branch already holds
+    /// `current`, `fileNumbers`, and `forked` by the time this is populated; no new
+    /// read). Exists so the revision-history panel can render ONE chronologically
+    /// ordered list (current plus every detached machine revision, `(createdAt, id)`
+    /// order — the same total order `detachedMachineRevisions` already uses) instead of
+    /// two disconnected pieces, without `EntryChainSnapshot` growing a second disk read
+    /// to get there. `nil` in every branch that also leaves `currentRevisionID` nil.
+    var currentSummary: TranscriptHeadSummary?
     /// Sum of on-disk byte sizes of every LISTED `canonical-<n>.json` file — readable or
     /// not (a corrupt revision still occupies real bytes, and the storage stat, #39, is
     /// meant to show the chain's real disk cost, not just the successfully-parsed
@@ -108,13 +117,13 @@ struct EntryChainSnapshot: Sendable, Equatable {
             return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
                                       currentRevisionID: nil, currentText: "", currentSource: nil,
                                       revisionCount: 0, isForked: false, openDraft: openDraft,
-                                      detachedMachineRevisions: [], chainByteSize: 0)
+                                      detachedMachineRevisions: [], currentSummary: nil, chainByteSize: 0)
 
         case .unreadable(let reason):
             return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyListingUnreadable(reason),
                                       currentRevisionID: nil, currentText: "", currentSource: nil,
                                       revisionCount: 0, isForked: false, openDraft: openDraft,
-                                      detachedMachineRevisions: [], chainByteSize: 0)
+                                      detachedMachineRevisions: [], currentSummary: nil, chainByteSize: 0)
 
         case .present(let files):
             // #39/#40 Task 3: shared with `DirectorySnapshot.revisionsByteSize` — see
@@ -131,7 +140,7 @@ struct EntryChainSnapshot: Sendable, Equatable {
                 return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
                                           currentRevisionID: nil, currentText: "", currentSource: nil,
                                           revisionCount: 0, isForked: false, openDraft: openDraft,
-                                          detachedMachineRevisions: [], chainByteSize: byteSize)
+                                          detachedMachineRevisions: [], currentSummary: nil, chainByteSize: byteSize)
             }
 
             if let firstUnreadable = raw.unreadableFiles.first {
@@ -139,7 +148,7 @@ struct EntryChainSnapshot: Sendable, Equatable {
                     editability: precedenceOverride ?? .readOnlyUnreadableRevision(file: firstUnreadable),
                     currentRevisionID: nil, currentText: "", currentSource: nil,
                     revisionCount: 0, isForked: false, openDraft: openDraft,
-                    detachedMachineRevisions: [], chainByteSize: byteSize)
+                    detachedMachineRevisions: [], currentSummary: nil, chainByteSize: byteSize)
             }
 
             let ordered = TranscriptChain.ordered(raw.numbered.map(\.revision))
@@ -150,7 +159,7 @@ struct EntryChainSnapshot: Sendable, Equatable {
                 return EntryChainSnapshot(editability: precedenceOverride ?? .readOnlyNoTranscript,
                                           currentRevisionID: nil, currentText: "", currentSource: nil,
                                           revisionCount: ordered.count, isForked: forked, openDraft: openDraft,
-                                          detachedMachineRevisions: [], chainByteSize: byteSize)
+                                          detachedMachineRevisions: [], currentSummary: nil, chainByteSize: byteSize)
             }
 
             // Fix round 1, owner ruling: "not applied" (§12.8) is reserved for machine
@@ -181,6 +190,13 @@ struct EntryChainSnapshot: Sendable, Equatable {
                 guard let fileNumber = fileNumbers[revision.id] else { return nil }
                 return TranscriptRevisionStore.headSummary(for: revision, fileNumber: fileNumber, isForked: forked)
             }
+            // T7 Task 8: same summary shape as `detachedSummaries`' elements, for
+            // `current` itself — free here, no new read (see `currentSummary`'s doc
+            // comment). `fileNumbers[current.id]` cannot miss: `current` came out of
+            // `ordered`, which is built from the very numbering `fileNumbers` indexes.
+            let currentSummary = fileNumbers[current.id].map { fileNumber in
+                TranscriptRevisionStore.headSummary(for: current, fileNumber: fileNumber, isForked: forked)
+            }
 
             return EntryChainSnapshot(editability: precedenceOverride ?? .editable,
                                       currentRevisionID: current.id,
@@ -190,6 +206,7 @@ struct EntryChainSnapshot: Sendable, Equatable {
                                       isForked: forked,
                                       openDraft: openDraft,
                                       detachedMachineRevisions: detachedSummaries,
+                                      currentSummary: currentSummary,
                                       chainByteSize: byteSize)
         }
     }

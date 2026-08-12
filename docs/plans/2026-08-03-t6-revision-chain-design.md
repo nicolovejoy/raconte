@@ -1512,3 +1512,85 @@ pass (Task 9) on `t7/editor-ui`.
    `testSameSizeCorruptionIsAnAcceptedGapNotCaughtByTheIntegrityCheck`
    (`RaconteTests/TranscriptRevisionStoreTests.swift:495`) — so a future reader finds a named,
    intentional gap rather than rediscovering it as a bug.
+
+## 17. Mark voices (as-built) (2026-08-12 — issue #56, replaces "Correct markers")
+
+Same convention as §15/§15b/§16: this subsection supersedes what it names. Built on
+`feat/mark-voices` per `docs/plans/2026-08-12-mark-voices-plan.md`'s D1-D9. No encoded
+shape changed except `Journal` gaining `voiceLabels` (additive, below) — `StructureMarker
+.voice` already existed and needed no wire change.
+
+1. **Voice-carrying adds (D1).** `MarkerCorrectionWriter.addVoiceBoundary` writes a
+   `.correctionBoundaryAdd` record that also carries `voice`
+   (`MarkerCorrectionWriter.swift:96-103`), sharing `addBoundary`'s placeable-anchor rule
+   (`placeableFrame`, `MarkerCorrectionWriter.swift:80-87`) rather than re-deriving it. On
+   the read side a voice-carrying add folds to a synthesized `.voice` marker and a
+   voiceless one still folds to `.paragraph`, exactly as before —
+   `TranscriptAttribution.breakpoints(for:pieces:)` switches on `marker.marker.kind`
+   (`TranscriptAttribution.swift:384-393`) and never on the record's own correction kind,
+   so old and new adds are indistinguishable once folded.
+2. **Opening-voice rule (D2).** `MarkerCorrectionWriter.addOpeningVoice` writes a
+   voice-carrying `.correctionBoundaryAdd` at frame 0 unconditionally — no picked-word
+   validation, since frame 0 is always a legal anchor
+   (`MarkerCorrectionWriter.swift:113-116`). `VoiceMarkingPlan` only emits it when the
+   entry has no voice marker at all (`hasAnyVoiceMarker == false`) and the gesture's
+   anchor isn't itself the transcript's first placeable span — in that one case the
+   opener would collide at the same attribution cut as the anchor and lose to it anyway,
+   so it's a permanent no-op line skipped on purpose
+   (`VoiceMarkingPlan.swift:163-178`, `openerIfNeeded`). This mirrors capture's own
+   frame-0 `bn` opener (`CaptureCoordinator.markOpeningVoice`) for the correction path.
+3. **Append-only planning, later-seq-wins (D3).** `VoiceMarkingPlan` has no retract and
+   no correct — every gesture is a `Command` list of `addOpeningVoice`/`addVoiceBoundary`
+   only (`VoiceMarkingPlan.swift:16-19`). Re-flipping a paragraph or re-marking a range
+   is just a later append: `TranscriptAttribution.breakpoints` walks markers in sorted
+   `(frame, seq)` order and overwrites `result[index]` on every marker landing at that
+   cut, so the last one in order always wins (`TranscriptAttribution.swift:374-402`).
+   `MarkerCorrectionWriter.retract`/`.correctVoice` are unchanged and gain no new
+   callers — format capabilities, not marking-mode capabilities (D8, next).
+4. **Frame-ambiguity refusal (Task 4 fix round).** Splice fragments of one parent span
+   can share an identical `[frameStart, frameEnd)`
+   (`TranscriptSplice.swift`'s `.inherited` fragment branch) — a boundary aimed at a
+   later fragment resolves, on read, to the EARLIEST placeable span carrying that frame
+   (`TranscriptAttribution.placeableCutPosition`), which can silently mark text nobody
+   selected or make a flip's switch-and-restore self-cancel. Controller ruling
+   2026-08-12: refuse rather than relocate. `VoiceMarkingPlan.validate` checks the WHOLE
+   plan before returning any of it — every `addVoiceBoundary` command's frame must
+   resolve back to the exact span index that emitted it, and no two commands in one plan
+   may target the same frame (`VoiceMarkingPlan.swift:142-161`). A refusal throws
+   `PlanError.notMarkable` and writes nothing (half a plan can never be taken back out of
+   an append-only log). This is a reachable UI state, not a programmer error:
+   `VoiceMarkingModel.flipParagraph`/`.markRange` catch it explicitly and surface
+   `MarkerCorrectionWriter.boundaryAddRejectionMessage()` — the same copy `addBoundary`
+   already uses for "no timed position" — then reload from disk
+   (`VoiceMarkingModel.swift:146-160,168-187`).
+5. **Display-config default flip (D7), supersedes.** `Journal.voiceLabels: [String:
+   String]` (voice id -> label), additive and lenient, empty by default, encoded only
+   when non-empty so an unlabelled journal's bytes are unchanged
+   (`Journal.swift:15-20,42-46,49-62`). `VoiceDisplay` is now the one display-mapping
+   type: `label(forVoice:voiceLabels:)` returns `nil` unless the voice is set AND that
+   journal configured a non-empty label for it; `isItalic(voice:)` keeps the main-voice
+   rule (`VoiceDisplay.swift:12,25-36`). **This supersedes the 2026-08-08 always-on-label
+   decision** (§4 of `docs/overview.md`'s prior text, "BN: prose in italic, LN: regular"
+   inline labels) — the default render as of this section has NO label at all; labels
+   are opt-in per journal via `JournalVoiceLabelsSheet`. `TranscriptAttribution
+   .displayName`/`.isItalic` are deleted; `EntryDetailView.attributedParagraph` reads
+   `VoiceDisplay` directly (`EntryDetailView.swift:565-568`) and the accessibility label
+   still names the voice even with labels off (`VoiceDisplay
+   .accessibilityName`, `VoiceDisplay.swift:42-44`).
+6. **D8's deliberately dropped capabilities.** `EntryDetailView`'s old "Correct
+   markers…" button, `MarkerCorrectionView`, and `MarkerCorrectionModel` are deleted,
+   replaced by "Mark voices…" pushing `VoiceMarkingView`
+   (`EntryDetailView.swift:518-522`, `.navigationDestination` at `EntryDetailView.swift
+   :110-111`). `MarkerCorrectionWriter.retract` and `.correctVoice` stay (format
+   capabilities, still tested) but have no caller from marking mode: **retracting a
+   mis-tap and adding a bare paragraph break (no voice) have no UI as of this section.**
+   Both can return inside marking mode later if the owner asks; nothing about the format
+   forecloses it.
+7. **WYSIWYG / append-only planning (D6's invariant).** Marking mode always reads the
+   layout fresh from disk on open and after every gesture, success or failure
+   (`VoiceMarkingModel.open`, `VoiceMarkingModel.swift:111-135`, called at the end of
+   both `flipParagraph` and `markRange`) — the screen is a projection of what actually
+   landed, never of what the model assumed a plan would do. This is also what makes
+   non-atomic multi-command plans (switch lands, restore write throws) surface honestly
+   rather than silently: the reload after a partial failure shows the entry genuinely
+   flipped-to-end-of-entry, not a guessed pre- or post-gesture state.

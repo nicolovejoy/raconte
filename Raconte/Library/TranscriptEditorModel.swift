@@ -533,6 +533,10 @@ final class TranscriptEditorModel {
             // silent `default:` so a future store method that COULD throw it here
             // doesn't inherit a wrong message by accident.
             return "That revision could not be found in this entry’s history."
+        case .draftInProgress:
+            // Never actually thrown by writeDraft/closeDraft either (same reasoning as
+            // .revisionNotFound above — `revert` is the only caller).
+            return "There are unsaved edits open for this entry. Finish or discard them first."
         }
     }
 

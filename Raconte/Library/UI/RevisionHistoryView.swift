@@ -13,6 +13,18 @@ struct RevisionHistoryView: View {
                 ProgressView()
             case .ready:
                 List {
+                    // Review Important 2: rendered ABOVE whatever content is honestly
+                    // renderable — a trashed or degraded entry can still show its
+                    // rows (or an honestly empty list), but the reason revert isn't
+                    // offered must never be discoverable only via a failed-revert
+                    // alert.
+                    if let readOnlyMessage = model.readOnlyMessage {
+                        Section {
+                            Label(readOnlyMessage, systemImage: "lock.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityIdentifier("revisionHistory.readOnlyMessage")
+                    }
                     if model.isForked {
                         Section {
                             Label("This entry has edits that never converged.", systemImage: "arrow.triangle.branch")

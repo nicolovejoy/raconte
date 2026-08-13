@@ -32,6 +32,12 @@ struct DebugMenuView: View {
                 Button("Disarm all", role: .cancel) { controller.disarmAll() }
                     .disabled(controller.armedStates.isEmpty)
             }
+
+            Section("Build") {
+                Text(BuildStamp.currentBuildDisplayString() ?? "Build date unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("Transition Breakpoints")
     }

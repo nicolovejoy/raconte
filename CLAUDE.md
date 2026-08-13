@@ -1,5 +1,59 @@
 # CLAUDE.md
 
+## Session 2026-08-12 evening (laptop — #56 FINISHED AND MERGED; PR #57; 1124 → 1179 unit + 14 UI tests)
+
+Resumed the SDD loop at Task 5 and ran it to the end: Tasks 5-8, adversarial gate, two
+fix waves, **PR #57 merged by Nico** (`6a3c6dfa`), #56 closed. Worktree + branch deleted.
+Owner smoke-tested mid-session on a macOS build; feedback filed as #58-#60.
+
+- **Task 5** (VoiceMarkingModel + store seam): review found 3 Importants, one fix round —
+  `hasApproximateBoundary` was wholly unpinned (the branch's repeat vacuous-fixture
+  shape), `alternativeVoice` byte-copied `VoiceMarkingPlan.governingVoice` (drift =
+  silent misattribution; now shared), and no in-flight guard (interleaved taps left a
+  paragraph unflipped with no error; now `isWriting` + CheckedContinuation-parked test).
+- **Task 6** (Mark voices UI, old Correct-markers surface deleted): one fix round —
+  stale per-block gesture rects could silently over-mark after a paragraph merge (fixed
+  by keying block identity to token ids), and the brief's detail-screen a11y assertion
+  had been dropped over a real VoiceOver merge gap (single-paragraph entries lost their
+  voice label entirely; fixed with `.accessibilityElement(children:)`).
+- **Task 7** (per-journal Voice Labels sheet): approved clean, no fix round — first on
+  the branch. **Task 8 docs**: §17 as-built + overview editing story; CLAUDE.md refresh
+  deliberately deferred to this handoff (branch base predated main's handoff commit).
+- **GATE (Opus, adversarial):** suite independently re-run (1176 green), iOS builds,
+  commit bodies clean. All four probes SAFE: non-placeable restore-span bleed
+  structurally unreachable; marking during an open transcript draft touches neither
+  draft nor chain (byte-identical, markers survive the next revision); OLD build decodes
+  voice-carrying adds as voiceless paragraph markers (structure degrades, text never
+  misattributes); unlabelled journals.json byte-identical. One Important: the Task 6
+  `.id()` identity fix survives deletion against every test — fix wave added a real
+  drag-path UI test, but it provably can't discriminate that one line in the simulator
+  (two constructions tried, documented); **parked — the flip-merge-then-drag owner smoke
+  step is the pin**. Late owner ruling folded in: capture voice switch now speaks the
+  journal's labels via VoiceDisplay (`0ddf6b74`).
+- **Owner smoke (macOS build, partway):** tap-to-flip PASS (wants undo → **#59**);
+  drag-to-mark PASS mostly (implied ¶ breaks invisible/uneditable; owner wants a
+  text/markdown-style structure editor → **#60**, explicitly NOT ruled out, deferred by
+  D8); merge-then-drag INCOMPLETE (owner "not finding a way to drag" on macOS — real UX
+  signal for #60); steps 6-8 (marking-mode scroll, Voice Labels sheet, labels round-trip)
+  NOT yet run. **#58** filed: macOS capture screen dark-on-dark controls near-invisible
+  in light mode (pre-existing class).
+- **Trap that cost a smoke round:** this laptop has NINE Raconte DerivedData dirs;
+  newest-by-mtime handed the owner a STALE app (he saw the old Correct-markers UI).
+  Always build with an explicit `-derivedDataPath` and verify the binary (`grep -ac
+  "Mark voices" …/Raconte.debug.dylib` — Debug builds put code in the debug dylib, the
+  main executable is a stub). Verified build at `~/Desktop/Raconte-markvoices.app`.
+
+**Next steps:**
+1. **Finish owner smoke 5-8 on the macOS build** (`~/Desktop/Raconte-markvoices.app`,
+   now = merged main): flip-to-merge then drag inside the merged block (the unpinned
+   `.id()` case), marking-mode scroll, Voice Labels sheet, labels on a fresh entry open.
+2. **Visible build date/time (PST) in the app** (owner ask, approach agreed): read the
+   binary's link timestamp at runtime, show on the Debug screen; no build-system change.
+3. **TestFlight upload** — one Info.plist fix (orientations key; docs/testflight-deploy.md).
+4. **Repo-privacy audit** (owner ask, subagent) — unchanged from prior handoffs.
+5. Design passes queued: #60 text-based structure editing (+ #59 undo, macOS drag UX),
+   #54 prev/next, #55 bubble hierarchy, #58 capture dark-on-dark, capture-landing plan.
+
 ## Session 2026-08-12 afternoon (laptop — owner smoke + #56 designed AND half-built; 1124 → 1171 tests on branch)
 
 Owner ran the smoke test live and the session pivoted into the thing it surfaced.

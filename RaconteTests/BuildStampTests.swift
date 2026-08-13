@@ -67,7 +67,13 @@ final class BuildStampTests: XCTestCase {
     // MARK: candidates(inDirectory:executableURL:) — real fixture tree
 
     func testCandidatesFindsExecutableAndDebugDylibButExcludesPreviewDylib() throws {
+        // `FileManager.default.temporaryDirectory` can be a symlink
+        // (`/var/folders/...` -> `/private/var/folders/...` on macOS), while
+        // `FileManager.enumerator` resolves paths to their real location —
+        // so URL equality below would fail on the unresolved vs. resolved
+        // form of the identical file without this.
         let root = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
             .appendingPathComponent("BuildStampTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -113,7 +119,9 @@ final class BuildStampTests: XCTestCase {
     /// source must NOT follow it there, or every build's displayed
     /// identity collapses to the stub's constant UUID.
     func testCandidatesWithExecutableNewerThanDylibStillPicksTheDylibForRepresentativeDateSource() throws {
+        // Same symlink-vs-resolved-path hazard as the sibling fixture above.
         let root = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
             .appendingPathComponent("BuildStampTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -167,6 +175,24 @@ final class BuildStampTests: XCTestCase {
             modificationDate: Date(timeIntervalSince1970: 1)
         )
         XCTAssertEqual(BuildStamp.identityCandidate(among: [onlyExecutable]), onlyExecutable)
+    }
+
+    /// N4: the single-element fallback test above can't distinguish "returns
+    /// the only element" from "returns `candidates.first`" — this pins the
+    /// latter at cardinality 2, with neither candidate a dylib and a newer
+    /// mtime on the SECOND element, so a min/max-based fallback (rather than
+    /// `.first`) would also fail this.
+    func testIdentityCandidateFallsBackToTheFirstNonDylibCandidateAmongMultiple() {
+        let firstExecutable = BuildFileStamp(
+            url: URL(fileURLWithPath: "/app/Raconte"),
+            modificationDate: Date(timeIntervalSince1970: 1)
+        )
+        let secondNonDylibFile = BuildFileStamp(
+            url: URL(fileURLWithPath: "/app/Frameworks/Something.other"),
+            modificationDate: Date(timeIntervalSince1970: 9_999)
+        )
+        let identity = BuildStamp.identityCandidate(among: [firstExecutable, secondNonDylibFile])
+        XCTAssertEqual(identity, firstExecutable)
     }
 
     func testIdentityCandidateNilForEmptyCandidates() {

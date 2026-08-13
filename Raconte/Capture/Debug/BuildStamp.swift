@@ -32,6 +32,29 @@ enum BuildStamp {
         candidates.max(by: { $0.modificationDate < $1.modificationDate })
     }
 
+    // MARK: identity candidate
+
+    /// Which candidate's Mach-O UUID stands for "this build"'s identity.
+    ///
+    /// Deliberately NOT `representativeFile` (the mtime max): across 10
+    /// real builds over 4 days, the main executable stub's own UUID was
+    /// identical every time (`FB163BF4`) because the app's code lives in
+    /// the debug dylib, not the stub — and the stub wins the mtime max both
+    /// normally (it links ~58ms after the dylib) and on ties (first-maximal
+    /// + appended-first order on a `cp -R` copy, where every mtime
+    /// collapses to the copy instant). A constant identity is worse than
+    /// none: it looks discriminating while vouching for nothing. So the
+    /// identity always prefers a code-bearing (`isBuildEvidence`) file,
+    /// independent of mtime, and only falls back to the executable when no
+    /// dylib candidate was found at all.
+    static func identityCandidate(among candidates: [BuildFileStamp]) -> BuildFileStamp? {
+        let dylibCandidates = candidates.filter { isBuildEvidence(fileName: $0.url.lastPathComponent) }
+        if let representativeDylib = representativeFile(among: dylibCandidates) {
+            return representativeDylib
+        }
+        return candidates.first
+    }
+
     // MARK: candidate selection
 
     /// Which bundle files count as build evidence for the mtime comparison.
@@ -121,6 +144,9 @@ enum BuildStamp {
             var cursor = UnsafeRawPointer(header64).advanced(by: MemoryLayout<mach_header_64>.size)
             for _ in 0..<header64.pointee.ncmds {
                 let command = cursor.load(as: load_command.self)
+                // A zero-size command would spin this loop forever against
+                // a malformed Mach-O; bail instead of hanging.
+                guard command.cmdsize > 0 else { return nil }
                 if command.cmd == LC_UUID {
                     let uuidCommand = cursor.load(as: uuid_command.self)
                     return UUID(uuid: uuidCommand.uuid)
@@ -133,21 +159,35 @@ enum BuildStamp {
 
     // MARK: full pipeline
 
+    /// Combines a formatted date with an optional identity. Pure — the only
+    /// place the "· identity unavailable" wording lives, so N1 (date-only
+    /// and date+identity must be visually distinct, never a silent drop of
+    /// the identity suffix) is pinned directly without mocking bundle I/O.
+    static func combinedDisplayString(dateString: String, identity: UUID?) -> String {
+        guard let identity else {
+            return "\(dateString) · identity unavailable"
+        }
+        return "\(dateString) · \(shortIdentity(from: identity))"
+    }
+
     /// Full pipeline for the Debug screen row: date + identity, computed
     /// once by the caller (this does bundle I/O and a dyld image walk) and
     /// nil only if no candidate file could be found or stat'd, which should
     /// not happen in a real bundle.
+    ///
+    /// Date and identity deliberately come from two different candidates
+    /// (see `identityCandidate`'s doc comment): the date is still the mtime
+    /// max across everything, but the identity is always the code-bearing
+    /// dylib when one exists.
     static func currentBuildDisplayString(bundle: Bundle = .main, fileManager: FileManager = .default) -> String? {
-        guard let representative = representativeFile(
-            among: currentBuildCandidates(bundle: bundle, fileManager: fileManager)
-        ) else {
+        let allCandidates = currentBuildCandidates(bundle: bundle, fileManager: fileManager)
+        guard let representative = representativeFile(among: allCandidates) else {
             return nil
         }
         let dateString = displayString(for: representative.modificationDate)
-        guard let uuid = loadedImageUUID(forExecutablePath: representative.url.path) else {
-            return dateString
-        }
-        return "\(dateString) · \(shortIdentity(from: uuid))"
+        let identity = identityCandidate(among: allCandidates)
+            .flatMap { loadedImageUUID(forExecutablePath: $0.url.path) }
+        return combinedDisplayString(dateString: dateString, identity: identity)
     }
 }
 #endif

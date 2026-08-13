@@ -2,9 +2,37 @@
 xcuserdata/
 DerivedData/
 build/
+.build/
+TestResults/
+*.xcresult
 *.xcodeproj
 !project.yml
 .swiftpm/
 
 # Claude Code agent worktrees (isolated subagent workspaces)
 .claude/worktrees/
+
+# Real capture/journal data must never enter this public repo.
+# Device container pulls (devicectl copy from) go to ~/Desktop or the
+# session scratchpad — never into this directory tree.
+*.m4a
+*.m4a.part
+*.wav
+*.caf
+*.aiff
+live.jsonl
+markers.jsonl
+entry.json
+journals.json
+head.json
+manifest.json
+containers/
+device-pull*/
+
+# Signing material — credentials never belong in the tree.
+*.p8
+*.p12
+*.pem
+*.cer
+*.mobileprovision
+.appstoreconnect/

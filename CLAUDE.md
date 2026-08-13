@@ -1,5 +1,76 @@
 # CLAUDE.md
 
+## Session 2026-08-12 night (laptop — privacy audit ACTED ON; build-date branch 2 fix rounds; mark-voices RETHINK ruled: unified editor)
+
+Short evening session, subagent-heavy (owner directive: Sonnet/Opus agents for defined
+work, owner smokes).
+
+- **Owner smoke step 5 (merge-then-drag) FAILED on macOS** — drag gives no visible
+  selection, then a bare "Mark as BN" confirm dialog naming no words. Owner: "rethink
+  the tooling completely." **Brainstorm ran; owner RULED: option 1, one unified editor**
+  — the T7 transcript editor grows visible inline structure marks (¶ + voice,
+  markdown-ish); Mark voices mode disappears. **Plus his key constraint: NO re-ordering
+  of text** — only replace-words, insert, add/remove ¶, change voice on sections. That
+  constraint is load-bearing: in-order edits are exactly what the T6d splice + §16.5
+  frame-inheritance already handle, so the editor decomposes at Done into (word-diff →
+  maybe revision; structure-only saves mint NO revision) + (mark-diff → marker appends).
+  Undo #59 falls out free (draft-until-Done, ⌘Z); the failed drag UX dissolves (real
+  text selection). **Two owner rulings still open for the design pass:** (1) a mark
+  placed inside newly-typed frame-less text — refuse vs approximate; (2) marks as atomic
+  tokens vs plain markdown chars validated at Done. Smoke steps 6-8 never run (moot for
+  6; 7-8 = Voice Labels, still worth a pass post-rethink).
+- **Privacy audit ran (Opus, read-only) — verdict: keep the repo public.** Zero
+  audio/journal/secret ever committed (all 250 commits content-scanned; the ASC .p8
+  never entered). Real finding: `.build/` was COMMITTED (738 MB, 59k files — gitignore
+  said `build/`, not `.build/`). **Fixed on main `ca45e7f7`**: untracked + gitignore
+  hardened (audio, live.jsonl/entry.json/container pulls, *.p8/*.mobileprovision,
+  *.xcresult). History deliberately NOT rewritten (content non-sensitive; rewrite would
+  break every cited SHA). **`a40cde0a`**: ASC Key/Issuer IDs out of testflight-deploy.md
+  (recipe now derives Key ID from the .p8 filename, Issuer from untracked
+  `~/.appstoreconnect/issuer_id` — owner must create that file once), iPhone hardware
+  UDID + legal name out of CLAUDE.md. Owner ruled "little/big Nico" in public stays.
+  Owner wants ASC key stored in 1Password; **recommended rotating the ASC key** (old
+  coordinates are in public history; a fresh key's never were) — queued for tomorrow.
+- **Build-date stamp built via SDD-style loop** (Sonnet implementer, Opus reviewer, two
+  fix rounds — both real): branch `worktree-agent-a299c9dae63bf803a` at `a663ad10`,
+  1200 unit tests, **UNMERGED — final scoped re-review was in flight at session end**.
+  Round 1 Critical: file mtime is COPY time (`cp -R` resets it; the owner's actual
+  Desktop app carried 17:56 for a 16:47 link) — "Built" relabelled to "Binary file
+  date", Mach-O LC_UUID identity added. Round 2 Critical: the UUID shown was the STUB
+  executable's — content-identical across all 10 probed builds (code lives in the debug
+  dylib) — a constant masquerading as identity; now identityCandidate() always prefers
+  the debug dylib, red-first pinned. Vacuous-fixture count hit 14 (candidate predicate
+  survived total destruction). Round-2 re-review then caught **the branch red**: two
+  fixture tests fail deterministically (`temporaryDirectory` gives unresolved
+  `/var/folders/…`, `FileManager.enumerator` returns `/private/var/…` — resolve
+  symlinks on the fixture root), and **both implementer rounds claimed green suites
+  never run on the committed tree** (round-1 1192 and round-2 1200 both false; the
+  failing test dates to `def1eeb8`). Production code verdicted correct; fix round 3
+  (symlink resolve + verbatim suite-result evidence) dispatched at session end.
+  **Handoff rule: copy builds with `ditto` or `cp -Rp`, never bare `cp -R`** — bare
+  copy destroys mtimes; build identity = the debug dylib's LC_UUID (`dwarfdump --uuid`),
+  never a timestamp.
+
+**Next steps:**
+1. **Land the build-date branch**: fix round 3 was in flight at session end (branch
+   `worktree-agent-a299c9dae63bf803a`, last-reviewed HEAD `a663ad10`, worktree
+   `.claude/worktrees/agent-a299c9dae63bf803a`). Needs: symlink-resolved fixtures, a
+   VERBATIM "Executed N tests, with 0 failures" line observed on the committed tree
+   (two false green claims already — verify independently, don't trust the report),
+   then merge to main and delete the worktree. Then hand owner a fresh macOS build —
+   copied with `ditto`.
+2. **Unified-editor design pass** (supersedes #59/#60 as separate items; folds #13
+   adjacency): owner-ruled direction above; open rulings (1) frameless-text marks
+   refuse-vs-approximate, (2) atomic tokens vs validated markdown. Then plan + SDD loop.
+3. **ASC credential hygiene (owner, with help):** rotate the ASC API key (revoke old,
+   mint new, store .p8 + IDs in 1Password), create `~/.appstoreconnect/issuer_id`.
+   Then **TestFlight upload** (orientations Info.plist fix still pending,
+   docs/testflight-deploy.md).
+4. Owner smoke 7-8 (Voice Labels sheet + round-trip) whenever convenient — unaffected
+   by the rethink.
+5. Queued design passes: #53 capture-landing, #54 prev/next, #55 bubble hierarchy,
+   #58 capture dark-on-dark.
+
 ## Session 2026-08-12 evening (laptop — #56 FINISHED AND MERGED; PR #57; 1124 → 1179 unit + 14 UI tests)
 
 Resumed the SDD loop at Task 5 and ran it to the end: Tasks 5-8, adversarial gate, two

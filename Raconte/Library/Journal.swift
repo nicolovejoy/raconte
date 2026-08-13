@@ -12,11 +12,18 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     var id: String
     var name: String
     var createdAt: Date
+    /// Voice id -> display label ("bn" -> "Grandpa"). Additive (T7 Mark Voices, issue
+    /// #56, owner ruling): the default render has NO label at all — voices are told
+    /// apart by `VoiceDisplay.isItalic` (main voice) vs regular. A label is opt-in per
+    /// journal, empty by default. See the house decoder rule below: this field decodes
+    /// leniently, unlike `id`/`name`/`createdAt`.
+    var voiceLabels: [String: String]
 
-    init(id: String, name: String, createdAt: Date) {
+    init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:]) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
+        self.voiceLabels = voiceLabels
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -32,6 +39,31 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
+        // Additive and lenient, unlike the three identity fields above: every registry
+        // on disk predates this field, and a damaged/garbage voiceLabels value must not
+        // take the journal's id/name/createdAt down with it. Absent or garbage -> no
+        // labels, which is also what every pre-feature journal actually has.
+        voiceLabels = ((try? container.decodeIfPresent([String: String].self, forKey: .voiceLabels)) ?? nil) ?? [:]
+    }
+
+    /// Hand-written per the same rule: the synthesized encoder does not know
+    /// `voiceLabels`'s default is `[:]`, and would write `"voiceLabels":{}` into every
+    /// journal — a byte-shape change for the common case that has no labels at all.
+    /// `id`/`name`/`createdAt` are always written (identity fields, never optional
+    /// omission); `voiceLabels` only when non-empty, so a journal nobody has labelled
+    /// yet keeps producing exactly today's bytes.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(createdAt, forKey: .createdAt)
+        if !voiceLabels.isEmpty {
+            try container.encode(voiceLabels, forKey: .voiceLabels)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, voiceLabels
     }
 }
 
@@ -100,5 +132,25 @@ struct JournalRegistry: Codable, Sendable, Equatable {
 
     static func normalized(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Replaces a journal's voice labels wholesale (T7 Mark Voices, issue #56). Mirrors
+    /// `rename`'s shape exactly: find-by-id-or-throw, mutate in place, hand back the
+    /// stored result. Values are trimmed, and a value that is empty after trimming is
+    /// dropped rather than stored as a blank label — the same "no label configured"
+    /// state as never having set one.
+    @discardableResult
+    mutating func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        var trimmed: [String: String] = [:]
+        for (voice, label) in labels {
+            let value = Self.normalized(label)
+            guard !value.isEmpty else { continue }
+            trimmed[voice] = value
+        }
+        journals[index].voiceLabels = trimmed
+        return journals[index]
     }
 }

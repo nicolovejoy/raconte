@@ -36,13 +36,13 @@ struct EntryDetailView: View {
     @State private var editSaveFailed = false
     @State private var editSaveFailureReason = ""
     @State private var editorModel: TranscriptEditorModel
-    /// Marker correction is its OWN mode (T7 Task 6, ruling Q11) — a separate pushed
-    /// screen, never inline in the editor. Same "built once in init" reasoning as
-    /// `editorModel` above.
-    @State private var showingMarkerCorrection = false
-    @State private var markerCorrectionModel: MarkerCorrectionModel
+    /// Mark voices is its OWN mode (T7 Mark Voices, issue #56, Task 6 — replaces the
+    /// old "Correct markers" screen) — a separate pushed screen, never inline in the
+    /// editor. Same "built once in init" reasoning as `editorModel` above.
+    @State private var showingVoiceMarking = false
+    @State private var voiceMarkingModel: VoiceMarkingModel
     /// The whole undo story (T7 Task 8, ruling Q1) — a separate pushed screen, same
-    /// "built once in init" reasoning as `editorModel`/`markerCorrectionModel` above.
+    /// "built once in init" reasoning as `editorModel`/`voiceMarkingModel` above.
     @State private var showingRevisionHistory = false
     @State private var revisionHistoryModel: RevisionHistoryModel
 
@@ -62,8 +62,8 @@ struct EntryDetailView: View {
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
-        _markerCorrectionModel = State(initialValue: MarkerCorrectionModel(captureID: item.captureID,
-                                                                           store: model))
+        _voiceMarkingModel = State(initialValue: VoiceMarkingModel(captureID: item.captureID,
+                                                                    store: model))
         _revisionHistoryModel = State(initialValue: RevisionHistoryModel(captureID: item.captureID,
                                                                           store: model))
     }
@@ -107,14 +107,14 @@ struct EntryDetailView: View {
                 await refresh()
             }
         }
-        .navigationDestination(isPresented: $showingMarkerCorrection) {
-            MarkerCorrectionView(model: markerCorrectionModel)
+        .navigationDestination(isPresented: $showingVoiceMarking) {
+            VoiceMarkingView(model: voiceMarkingModel, voiceLabels: item.journal?.voiceLabels ?? [:])
         }
-        // Every correction action writes and commits immediately (no draft, no debounce —
-        // see `MarkerCorrectionModel`'s doc comment), so unlike the editor there is nothing
+        // Every marking action writes and commits immediately (no draft, no debounce —
+        // see `VoiceMarkingModel`'s doc comment), so unlike the editor there is nothing
         // to finish on the way out; a refresh once the screen closes is enough for the
-        // transcript section to pick up the corrected attribution.
-        .onChange(of: showingMarkerCorrection) { _, shown in
+        // transcript section to pick up the new voices.
+        .onChange(of: showingVoiceMarking) { _, shown in
             guard !shown else { return }
             Task {
                 await model.rescan()
@@ -376,11 +376,13 @@ struct EntryDetailView: View {
     /// tail is a fourth: the text is real and there may simply be less of it than was
     /// spoken, which the library row already marks and this screen used not to.
     ///
-    /// Voice-attributed paragraphs (T7 plan step 3, restyled per owner ask 2026-08-08):
-    /// the voice label is inline (`"BN: "` prefixed to the prose, one line) rather than
-    /// a separate caption line, and BN paragraphs render in italic
-    /// (`TranscriptAttribution.isItalic(voice:)`) as a stand-in for the
-    /// print-vs-cursive distinction his physical journals use — no per-voice typeface
+    /// Voice-attributed paragraphs (T7 plan step 3, restyled per owner ask 2026-08-08;
+    /// labels made per-journal and opt-in by T7 Mark Voices, issue #56 — see
+    /// `VoiceDisplay`): a voice label is prefixed inline to the prose, one line, only
+    /// when the entry's journal has configured a non-empty label for that voice
+    /// (`VoiceDisplay.label`) — the DEFAULT render has no prefix at all. The main voice's
+    /// paragraphs render in italic regardless (`VoiceDisplay.isItalic`) as a stand-in for
+    /// the print-vs-cursive distinction his physical journals use — no per-voice typeface
     /// yet. **`hasApproximateBoundary` affordance (T7 Task 9.3):** a paragraph adjacent
     /// to an approximate cut gets a small, subtle trailing mark — a hint, not an error
     /// state; the split itself is never wrong, only its exact position within a word-gap
@@ -424,6 +426,11 @@ struct EntryDetailView: View {
                     .textSelection(.enabled)
                     .accessibilityIdentifier("detail.transcript.text")
             case .attributed(let paragraphs):
+                // Read once per render, not per paragraph: labels are a property of the
+                // entry's journal, not of any one paragraph. Unfiled/dangling ->
+                // defaults (no labels), same as everywhere else `item.journal` is
+                // optional.
+                let voiceLabels = item.journal?.voiceLabels ?? [:]
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(paragraphs.enumerated()), id: \.offset) { index, paragraph in
                         // The base identifier is unchanged for the common (non-approximate)
@@ -438,9 +445,43 @@ struct EntryDetailView: View {
                         // bare "star" after the prose with nothing to say what it meant. As a
                         // sibling the text copies clean and the mark carries its own label.
                         HStack(alignment: .firstTextBaseline, spacing: 2) {
-                            attributedParagraph(paragraph)
+                            // T7 Mark Voices (#56): VoiceOver must not lose the voice
+                            // distinction just because visual labels are off — the
+                            // common case now that labels are opt-in. Applied only when
+                            // a voice is actually in force; an unattributed paragraph
+                            // keeps its default accessibility text (its own prose).
+                            //
+                            // Task 6 review Important 2: this used to be `.accessibility
+                            // Label` on the inner `Text` conditionally, inside a `Group`
+                            // with no element boundary of its own. With exactly one
+                            // paragraph — the common case pre-Mark-Voices, and post-flip
+                            // whenever a paragraph merges into its neighbour's voice —
+                            // iOS's accessibility tree flattened the whole `Group` (and
+                            // its explicit label) into the OUTER `detail.transcript.text`
+                            // `VStack`, exposing an auto-derived label from the raw
+                            // prose instead: VoiceOver lost the voice distinction on
+                            // exactly the entries this comment promises it must not.
+                            // Fixed two ways together: `.accessibilityElement(children:
+                            // .combine)` forces this `Group` to be its own
+                            // independently-exposed element regardless of sibling count
+                            // (paired with `.contain` on the outer `VStack`, below, so it
+                            // stops treating a single child as mergeable into itself);
+                            // and the label is now set directly on the `Group` itself,
+                            // unconditionally, rather than conditionally on the inner
+                            // `Text` — `.combine`'s own label-concatenation heuristic
+                            // was observed (via a UI test) to derive its label from the
+                            // `Text`'s literal content rather than an explicit override
+                            // set on a descendant, so the override has to sit on the
+                            // element boundary itself to reliably survive.
+                            Group {
+                                attributedParagraph(paragraph, voiceLabels: voiceLabels)
+                            }
                                 .font(.system(.body, design: .serif))
                                 .textSelection(.enabled)
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel(paragraph.voice.map {
+                                    "\(VoiceDisplay.accessibilityName(forVoice: $0, voiceLabels: voiceLabels)): \(paragraph.text)"
+                                } ?? paragraph.text)
                                 .accessibilityIdentifier(paragraph.hasApproximateBoundary
                                     ? "detail.transcript.paragraph.\(index).approximate"
                                     : "detail.transcript.paragraph.\(index)")
@@ -455,6 +496,16 @@ struct EntryDetailView: View {
                         }
                     }
                 }
+                // Task 6 review Important 2, continued: `.accessibilityElement(children:
+                // .combine)` on each paragraph's `Group` (above) makes THAT view its own
+                // element, but with only one paragraph this outer `VStack` still had
+                // exactly one accessibility-bearing child and no boundary of its own —
+                // iOS kept flattening past the `Group`'s boundary and exposing this
+                // `VStack`'s identifier/auto-label instead. `.contain` tells the system
+                // this view is a CONTAINER of its children's own elements, never a
+                // candidate to be merged down into one itself, regardless of how many
+                // paragraphs there are.
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("detail.transcript.text")
             }
 
@@ -464,11 +515,12 @@ struct EntryDetailView: View {
                 .font(.caption)
                 .accessibilityIdentifier("detail.editButton")
 
-            // Its own mode, not inline here (T7 Task 6, ruling Q11) — retract a mis-tap,
-            // correct a voice at an existing boundary, or add one the owner never tapped.
-            Button("Correct markers…") { showingMarkerCorrection = true }
+            // Its own mode, not inline here (T7 Mark Voices, issue #56, Task 6 — replaces
+            // the old "Correct markers" screen): tap a paragraph to flip its voice, or
+            // drag a range of words to mark it.
+            Button("Mark voices…") { showingVoiceMarking = true }
                 .font(.caption)
-                .accessibilityIdentifier("detail.correctMarkersButton")
+                .accessibilityIdentifier("detail.markVoicesButton")
 
             // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
             // and no revert button, so this is the only way back.
@@ -486,11 +538,15 @@ struct EntryDetailView: View {
         }
     }
 
-    /// Builds one paragraph's `Text`: an inline, bold-secondary voice prefix
-    /// (`"BN: "`) concatenated onto the prose — SwiftUI `Text` concatenation is the
-    /// only way to mix styling within one line — then italicized as a whole when
-    /// `TranscriptAttribution.isItalic(voice:)` says so. Unattributed paragraphs
-    /// (`voice == nil`) get no prefix and are never italic.
+    /// Builds one paragraph's `Text`: an inline, bold-secondary voice-label prefix
+    /// concatenated onto the prose — SwiftUI `Text` concatenation is the only way to mix
+    /// styling within one line — then italicized as a whole when
+    /// `VoiceDisplay.isItalic(voice:)` says so. The prefix appears ONLY when
+    /// `VoiceDisplay.label` finds a non-nil, non-empty configured label for the
+    /// paragraph's voice in `voiceLabels` (T7 Mark Voices, issue #56, owner ruling: the
+    /// default render has no label at all — voices are told apart by italic vs regular
+    /// until the owner opts a journal into labels). Unattributed paragraphs
+    /// (`voice == nil`) never get a prefix.
     ///
     /// **`hasApproximateBoundary` is NOT rendered here (Gate B Minor 2).** The small
     /// asterisk used to be concatenated onto the end of this `Text`, which put a character
@@ -505,18 +561,19 @@ struct EntryDetailView: View {
     /// `Text` concatenation keeps each segment's own explicit modifiers
     /// (font/color/italic) regardless of the outer `.font(.system(.body, design:
     /// .serif))` the call site applies, which is the mechanism the voice label relies on.
-    private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph) -> Text {
+    private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph,
+                                     voiceLabels: [String: String]) -> Text {
         let body = Text(paragraph.text)
         let combined: Text
-        if let voice = paragraph.voice {
-            let label = Text("\(TranscriptAttribution.displayName(forVoice: voice)): ")
+        if let label = VoiceDisplay.label(forVoice: paragraph.voice, voiceLabels: voiceLabels) {
+            let prefix = Text("\(label): ")
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
-            combined = label + body
+            combined = prefix + body
         } else {
             combined = body
         }
-        return TranscriptAttribution.isItalic(voice: paragraph.voice) ? combined.italic() : combined
+        return VoiceDisplay.isItalic(voice: paragraph.voice) ? combined.italic() : combined
     }
 
     // MARK: - Trash

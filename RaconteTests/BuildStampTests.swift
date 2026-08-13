@@ -105,6 +105,74 @@ final class BuildStampTests: XCTestCase {
         XCTAssertEqual(representative?.url, dylibURL)
     }
 
+    /// The realistic ordering (C1 fix round): on a real build the main
+    /// executable stub links ~58ms AFTER the debug dylib, so it is the
+    /// mtime max — the inverse of the sibling fixture above. This is
+    /// exactly the case that broke identity: `representativeFile` (the
+    /// date source) correctly picks the newer executable, but the identity
+    /// source must NOT follow it there, or every build's displayed
+    /// identity collapses to the stub's constant UUID.
+    func testCandidatesWithExecutableNewerThanDylibStillPicksTheDylibForRepresentativeDateSource() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BuildStampTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let executableURL = root.appendingPathComponent("Raconte")
+        let macOSDir = root.appendingPathComponent("Contents/MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOSDir, withIntermediateDirectories: true)
+        let dylibURL = macOSDir.appendingPathComponent("Raconte.debug.dylib")
+
+        try Data("exe".utf8).write(to: executableURL)
+        try Data("dylib".utf8).write(to: dylibURL)
+
+        let dylibDate = Date(timeIntervalSince1970: 1_000)
+        let executableDate = Date(timeIntervalSince1970: 1_058) // links ~58ms later
+        try FileManager.default.setAttributes([.modificationDate: dylibDate], ofItemAtPath: dylibURL.path)
+        try FileManager.default.setAttributes([.modificationDate: executableDate], ofItemAtPath: executableURL.path)
+
+        let candidates = BuildStamp.candidates(inDirectory: root, executableURL: executableURL)
+
+        // Date source: mtime max, unchanged contract — the executable wins.
+        let representative = BuildStamp.representativeFile(among: candidates)
+        XCTAssertEqual(representative?.url, executableURL)
+
+        // Identity source: must diverge from the date source here — the
+        // dylib, never the stub, because the stub's UUID never changes.
+        let identity = BuildStamp.identityCandidate(among: candidates)
+        XCTAssertEqual(identity?.url, dylibURL)
+    }
+
+    // MARK: identityCandidate (C1 fix — pinned against preferring the stub)
+
+    func testIdentityCandidatePrefersTheDylibEvenWhenTheExecutableIsNewer() {
+        let newerExecutable = BuildFileStamp(
+            url: URL(fileURLWithPath: "/app/Raconte"),
+            modificationDate: Date(timeIntervalSince1970: 9_999)
+        )
+        let olderDylib = BuildFileStamp(
+            url: URL(fileURLWithPath: "/app/Frameworks/Raconte.debug.dylib"),
+            modificationDate: Date(timeIntervalSince1970: 1)
+        )
+        // This is the exact defect: preferring `representativeFile` (mtime
+        // max) for identity returns the executable here. A correct fix
+        // must return the dylib regardless.
+        let identity = BuildStamp.identityCandidate(among: [olderDylib, newerExecutable])
+        XCTAssertEqual(identity, olderDylib)
+    }
+
+    func testIdentityCandidateFallsBackToTheExecutableWhenNoDylibExists() {
+        let onlyExecutable = BuildFileStamp(
+            url: URL(fileURLWithPath: "/app/Raconte"),
+            modificationDate: Date(timeIntervalSince1970: 1)
+        )
+        XCTAssertEqual(BuildStamp.identityCandidate(among: [onlyExecutable]), onlyExecutable)
+    }
+
+    func testIdentityCandidateNilForEmptyCandidates() {
+        XCTAssertNil(BuildStamp.identityCandidate(among: []))
+    }
+
     // MARK: displayString — date + honest label + timezone
 
     func testDisplayStringUsesPacificTimeZoneNotUTC() {
@@ -163,6 +231,50 @@ final class BuildStampTests: XCTestCase {
 
     func testLoadedImageUUIDReturnsNilForAPathThatIsNotALoadedImage() {
         XCTAssertNil(BuildStamp.loadedImageUUID(forExecutablePath: "/definitely/not/a/loaded/image"))
+    }
+
+    /// This is the actual production path, not a proxy: `Bundle.main` in
+    /// this macOS unit-test host is `Raconte.app`, and `@testable import
+    /// Raconte` means its code-bearing `Raconte.debug.dylib` is loaded into
+    /// this very process — under exactly the bundle path
+    /// `currentBuildCandidates`/`identityCandidate` would produce. If this
+    /// ever returns nil, the production row would silently degrade to
+    /// "identity unavailable" on every real launch.
+    func testLoadedImageUUIDFindsTheRaconteDebugDylibAtItsBundlePath() {
+        let allCandidates = BuildStamp.currentBuildCandidates(bundle: .main)
+        guard let dylibCandidate = BuildStamp.identityCandidate(among: allCandidates),
+              BuildStamp.isBuildEvidence(fileName: dylibCandidate.url.lastPathComponent)
+        else {
+            XCTFail("expected a *.debug.dylib candidate in the test host's own bundle")
+            return
+        }
+        let uuid = BuildStamp.loadedImageUUID(forExecutablePath: dylibCandidate.url.path)
+        XCTAssertNotNil(uuid, "Raconte.debug.dylib must be a loaded image with a readable LC_UUID")
+    }
+
+    // MARK: combinedDisplayString — N1: silence vs "identity unavailable" must differ
+
+    func testCombinedDisplayStringNamesIdentityAsUnavailableWhenNil() {
+        let result = BuildStamp.combinedDisplayString(dateString: "Binary file date 2026-08-12 18:41 PT", identity: nil)
+        XCTAssertEqual(result, "Binary file date 2026-08-12 18:41 PT · identity unavailable")
+    }
+
+    func testCombinedDisplayStringAppendsTheShortIdentityWhenPresent() {
+        let uuid = UUID(uuidString: "544D7A8A-0000-0000-0000-000000000000")!
+        let result = BuildStamp.combinedDisplayString(dateString: "Binary file date 2026-08-12 18:41 PT", identity: uuid)
+        XCTAssertEqual(result, "Binary file date 2026-08-12 18:41 PT · 544D7A8A")
+    }
+
+    func testCombinedDisplayStringDateOnlyCaseIsVisiblyDistinctFromAnIdentityCase() {
+        // N1 itself: the two branches must not collapse to the same text.
+        let dateString = "Binary file date 2026-08-12 18:41 PT"
+        let withoutIdentity = BuildStamp.combinedDisplayString(dateString: dateString, identity: nil)
+        let withIdentity = BuildStamp.combinedDisplayString(
+            dateString: dateString,
+            identity: UUID(uuidString: "544D7A8A-0000-0000-0000-000000000000")!
+        )
+        XCTAssertNotEqual(withoutIdentity, dateString)
+        XCTAssertNotEqual(withoutIdentity, withIdentity)
     }
 }
 #endif

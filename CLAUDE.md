@@ -52,13 +52,12 @@ work, owner smokes).
   never a timestamp.
 
 **Next steps:**
-1. **Land the build-date branch**: fix round 3 was in flight at session end (branch
-   `worktree-agent-a299c9dae63bf803a`, last-reviewed HEAD `a663ad10`, worktree
-   `.claude/worktrees/agent-a299c9dae63bf803a`). Needs: symlink-resolved fixtures, a
-   VERBATIM "Executed N tests, with 0 failures" line observed on the committed tree
-   (two false green claims already — verify independently, don't trust the report),
-   then merge to main and delete the worktree. Then hand owner a fresh macOS build —
-   copied with `ditto`.
+1. ~~Land the build-date branch~~ **DONE post-handoff**: fix round 3 (`0035bc1d`,
+   symlink-resolved fixtures) verified INDEPENDENTLY — parent re-ran the full suite on
+   the committed tree, 1201 green — then merged `de9c5503`, worktree + branch deleted.
+   Fresh macOS build for the owner at `~/Desktop/Raconte-latest.app` (ditto-copied,
+   dylib UUID verified against the build products; the stale Raconte-markvoices.app
+   was removed). Debug screen now shows "Binary file date … PT · <UUID prefix>".
 2. **Unified-editor design pass** (supersedes #59/#60 as separate items; folds #13
    adjacency): owner-ruled direction above; open rulings (1) frameless-text marks
    refuse-vs-approximate, (2) atomic tokens vs validated markdown. Then plan + SDD loop.

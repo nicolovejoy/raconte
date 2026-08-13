@@ -15,11 +15,16 @@ xcodebuild archive -project Raconte.xcodeproj -scheme Raconte \
   -destination 'generic/platform=iOS' \
   -archivePath /tmp/Raconte-$(date +%Y%m%d%H%M).xcarchive \
   -allowProvisioningUpdates
+# Key ID comes from the key file's own name; issuer ID from the untracked
+# sibling file (see One-time assets). Neither belongs in this public repo.
+ASC_KEY_PATH="$(ls ~/.appstoreconnect/private_keys/AuthKey_*.p8 | head -1)"
+ASC_KEY_ID="$(basename "$ASC_KEY_PATH" .p8)"; ASC_KEY_ID="${ASC_KEY_ID#AuthKey_}"
+ASC_ISSUER_ID="$(cat ~/.appstoreconnect/issuer_id)"
 xcodebuild -exportArchive -archivePath <that .xcarchive> \
   -exportOptionsPlist scripts/ExportOptions.plist \
-  -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_5CFXBJT3G9.p8 \
-  -authenticationKeyID 5CFXBJT3G9 \
-  -authenticationKeyIssuerID 75fc3ac1-a302-4c0d-8683-c20fc8d6d495
+  -authenticationKeyPath "$ASC_KEY_PATH" \
+  -authenticationKeyID "$ASC_KEY_ID" \
+  -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 ```
 
 Success prints `Uploaded Raconte`. Internal testers get the build after Apple-side
@@ -33,9 +38,13 @@ processing (minutes); no Beta Review for internal.
   `POST /v1/profiles` against distribution cert `89FGBW89NS`, installed at
   `~/Library/Developer/Xcode/UserData/Provisioning Profiles/` and
   `~/Library/MobileDevice/Provisioning Profiles/`.
-- ASC API key: `~/.appstoreconnect/private_keys/AuthKey_5CFXBJT3G9.p8` (Key ID
-  `5CFXBJT3G9`, Issuer `75fc3ac1-a302-4c0d-8683-c20fc8d6d495`, App Manager). Pass the
-  PATH to tools; never print its contents.
+- ASC API key: one `AuthKey_<KEYID>.p8` under `~/.appstoreconnect/private_keys/`
+  (App Manager role). The Key ID is the filename; the Issuer ID lives in the untracked
+  sibling `~/.appstoreconnect/issuer_id` (one line, create it once from the ASC → Users
+  and Access → Integrations page, or from 1Password). Key ID and Issuer ID are the
+  PUBLIC half of the credential — still keep them out of this repo so a leaked `.p8`
+  elsewhere can't be paired with pre-published coordinates. Pass the key PATH to tools;
+  never print its contents.
 - App Store Connect app record: **created manually in the web UI** (the one step the
   public API cannot do).
 

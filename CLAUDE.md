@@ -1014,10 +1014,11 @@ Three defects the device pass found, all fixed, none reachable from CI:
    TCC behaviour, the ~2-instance limit (macOS has none), background suspension (§7),
    asset download on a device without models, battery/thermal.
    **The device is an iPhone 17 Pro** (`iPhone18,1`, iOS 26.5.2, CoreDevice
-   `0CE992E2-8065-5FAB-A2E2-064D9712A522`, hardware UDID `00008150-000D244C3663401C`) —
+   `0CE992E2-8065-5FAB-A2E2-064D9712A522`; hardware UDID deliberately not recorded here —
+   public repo; get it from `devicectl list devices` when needed) —
    *not* an iPhone 15. Its name was inherited from a restore, and a stale `iPhone16,1`
    record with a near-identical name still shows as `unavailable`. Identify by
-   productType or UDID, never by name. Note it needs Developer Mode confirmed **after**
+   productType or CoreDevice UUID, never by name. Note it needs Developer Mode confirmed **after**
    the reboot, not just toggled before it.
 2. Carry-ins still open from design §11.7: the secondary-sink abandon hook (four
    coordinator paths drop the sink with no notification, leaking a live analyzer), and
@@ -1190,7 +1191,7 @@ delta passes, 32 tests total).
   lives in the M1 design doc). Test-first for the pure core (state machine, recovery
   planner, segment math) — hardware behind protocols.
 - Docs: plain and terse. No grandiose prose.
-- Signing: team `8UK463WB83` ("Nicholas Lovejoy", in project.yml) is a **paid** Apple
+- Signing: team `8UK463WB83` (in project.yml) is a **paid** Apple
   Developer Program membership — the same team MusicForge ships under. Nothing is gated on
   enrollment: TestFlight, CloudKit containers, push and Live Activities are all available
   now. (Verified 2026-07-31 from the on-disk profiles: App Store distribution profiles and

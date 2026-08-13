@@ -517,4 +517,209 @@ final class TranscriptAttributionLoadTests: XCTestCase {
         XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
                        "an exact, word-anchored frame is never approximate — nothing here was snapped")
     }
+
+    // MARK: - Task 1 (#56): voice-carrying boundary adds, end to end
+
+    /// `MarkerCorrectionWriter.addOpeningVoice` + `.addVoiceBoundary` running against a
+    /// real promoted chain, loaded through `EntryTranscriptLoader.load(...,
+    /// attribution: .compute(...))` — the same abutting-words fixture as
+    /// `testAddBoundaryOnAbuttingWordsIsNotSnapped` above (device-observed norm for
+    /// in-record runs), so this also re-proves the voice-carrying add is never snapped:
+    /// with no gap anywhere in the four-word run, a snapped frame would land on frame 0
+    /// or a wrong word, not the picked one.
+    func testVoiceCarryingAddEndToEndChangesTheRenderedVoice() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+            ("three", 20_000, 30_000),
+            ("four", 30_000, 50_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two", "three", "four"])
+
+        try MarkerCorrectionWriter.addOpeningVoice(voice: StructureMarker.Voice.bigNico,
+                                                   captureDirectory: captureDir(idA))
+        let written = try MarkerCorrectionWriter.addVoiceBoundary(
+            atSpanIndex: 2, spans: current.spans, voice: StructureMarker.Voice.littleNico,
+            captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 20_000, "span 2's (\"three\") own start frame")
+
+        let transcript = EntryTranscriptLoader.load(captureDirectory: captureDir(idA), expectedRecords: nil,
+                                                    attribution: .compute(sampleRate: 48_000))
+
+        let paragraphs = try XCTUnwrap(transcript.paragraphs)
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs.map(\.voice), [StructureMarker.Voice.bigNico, StructureMarker.Voice.littleNico])
+        XCTAssertEqual(paragraphs.map(\.text), ["one two", "three four"])
+        XCTAssertEqual(paragraphs.map(\.text).joined(separator: " "), "one two three four",
+                       "the two paragraphs rejoin to exactly the original text")
+        XCTAssertFalse(paragraphs.contains { $0.hasApproximateBoundary },
+                       "a voice-carrying add is exact, word-anchored, and must never be snapped — "
+                       + "same guarantee as a plain boundary-add")
+    }
+
+    // MARK: - Task 3 (#56): EntryTranscript.voiceMarkingLayout
+
+    /// The key departure from the reading path (task-3-brief.md): an entry with NO
+    /// markers.jsonl at all is still `.ready` — marking mode exists precisely for
+    /// entries with no markers yet. One nil-voice paragraph spanning every span,
+    /// `hasAnyVoiceMarker == false`.
+    func testVoiceMarkingLayoutReadyOnAnEntryWithNoMarkerFile() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        // No markers.jsonl written at all.
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(let spans, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertFalse(spans.isEmpty, "a promoted entry has real spans to mark onto")
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertNil(paragraphs[0].voice)
+        XCTAssertEqual(paragraphs[0].text, "hello there")
+        XCTAssertFalse(hasAnyVoiceMarker)
+    }
+
+    /// An unreadable `markers.jsonl` is its own answer — distinct from "no log at all" —
+    /// so marking mode refuses rather than silently offering to mark on top of taps that
+    /// are still really there on disk.
+    func testVoiceMarkingLayoutUnreadableMarkerLogIsItsOwnAnswer() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 0, kind: .voice, voice: "bn")])
+
+        let logURL = markerLogURL(idA)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: logURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: logURL.path) }
+        try XCTSkipIf(FileManager.default.isReadableFile(atPath: logURL.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .markersUnreadable = layout else {
+            return XCTFail("expected .markersUnreadable, got \(layout)")
+        }
+    }
+
+    /// No promotion at all (no `transcript/` canonical chain) — marking needs a
+    /// revision's own spans, and unlike the reading path there is no live.jsonl
+    /// fallback: `.unavailable`, not a degraded read of the machine transcript.
+    func testVoiceMarkingLayoutUnavailableWithoutACanonicalRevision() async throws {
+        try writeManifest(idA)
+        try writeLiveTranscript(idA, [("hello there", 0, 20_000)])
+        // Deliberately no store().promoteIfNeeded(captureID:) call.
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        XCTAssertEqual(layout, .unavailable)
+    }
+
+    /// WYSIWYG guarantee: the SAME fixture through the reading path
+    /// (`EntryTranscriptLoader.load(..., attribution: .compute)`) and through
+    /// `voiceMarkingLayout` must produce identical paragraph texts and voices — marking
+    /// mode must show exactly what the detail screen already renders, not a
+    /// differently-computed approximation of it.
+    func testVoiceMarkingLayoutParagraphsMatchTheReadingPath() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("intro words", 0, 20_000),
+            ("reply words", 40_000, 60_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [
+            StructureMarker(seq: 0, frame: 0, kind: .voice, voice: StructureMarker.Voice.bigNico),
+            StructureMarker(seq: 1, frame: 30_000, kind: .voice, voice: StructureMarker.Voice.littleNico),
+        ])
+
+        let reading = EntryTranscriptLoader.load(captureDirectory: captureDir(idA), expectedRecords: nil,
+                                                 attribution: .compute(sampleRate: 48_000))
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let markingParagraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        let readingParagraphs = try XCTUnwrap(reading.paragraphs)
+        XCTAssertEqual(markingParagraphs.map(\.text), readingParagraphs.map(\.text))
+        XCTAssertEqual(markingParagraphs.map(\.voice), readingParagraphs.map(\.voice))
+        XCTAssertTrue(hasAnyVoiceMarker)
+    }
+
+    /// Review Important 1 (task-3-report re-review): `hasAnyVoiceMarker` was pinned in
+    /// only one direction — `testVoiceMarkingLayoutReadyOnAnEntryWithNoMarkerFile`
+    /// exercises the `.absent` branch, which passes a LITERAL `false`
+    /// (`EntryTranscript.swift:109`), never the COMPUTED value at `:394`
+    /// (`effective.contains { $0.marker.kind == .voice }`). This fixture forces the
+    /// `.present` branch with a non-empty effective list that contains NO `.voice`
+    /// kind at all — a `.paragraph`-only marker log — so `hasAnyVoiceMarker` can only
+    /// read `false` here if the computed fold actually ran and found nothing voiced.
+    /// Hardcoding `hasAnyVoiceMarker = true` at `:394` fails this test (see task-3
+    /// report's mutation-check evidence).
+    func testVoiceMarkingLayoutParagraphOnlyMarkersComputeHasAnyVoiceMarkerFalse() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("first part", 0, 96_000),
+            ("second part", 96_000, 192_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+        try writeMarkers(idA, [StructureMarker(seq: 0, frame: 96_000, kind: .paragraph)])
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertEqual(paragraphs.count, 2, "the paragraph marker itself still splits — the log is genuinely used")
+        XCTAssertFalse(hasAnyVoiceMarker,
+                       "a present, non-empty marker log with only .paragraph markers carries no voice "
+                       + "signal — this must come from the computed fold, not the .absent branch's literal false")
+    }
+
+    /// Review Important 1's second half: the spec clause "voice-carrying boundary adds
+    /// count" toward `hasAnyVoiceMarker`. `MarkerCorrections.effectiveMarkers` folds a
+    /// voice-carrying `.correctionBoundaryAdd` into a SYNTHESIZED `.voice` record
+    /// (`MarkerCorrections.swift`'s Task 1 rule) — there is no raw `.voice` tap and no
+    /// `.correctionVoice` anywhere on disk, only the one boundary-add. If
+    /// `hasAnyVoiceMarker` were computed off raw records instead of the fold's output,
+    /// this would wrongly read `false`.
+    func testVoiceMarkingLayoutVoiceCarryingBoundaryAddAloneComputesHasAnyVoiceMarkerTrue() async throws {
+        try writeManifest(idA)
+        try writeFinalAudio(idA)
+        try writeLiveTranscript(idA, [
+            ("one", 0, 10_000),
+            ("two", 10_000, 20_000),
+        ])
+        _ = await store().promoteIfNeeded(captureID: idA)
+
+        let chain = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA)))
+        let current = try XCTUnwrap(TranscriptChain.current(TranscriptChain.ordered(chain.revisions)))
+        XCTAssertEqual(current.spans.map(\.text), ["one", "two"], "sanity: one span per record")
+
+        // The ONLY marker record ever written: no raw .voice tap, no addOpeningVoice,
+        // no .correctionVoice — just the single voice-carrying boundary-add.
+        let written = try MarkerCorrectionWriter.addVoiceBoundary(
+            atSpanIndex: 1, spans: current.spans, voice: StructureMarker.Voice.littleNico,
+            captureDirectory: captureDir(idA))
+        XCTAssertEqual(written, 10_000, "span 1's (\"two\") own start frame")
+
+        let layout = EntryTranscript.voiceMarkingLayout(captureDirectory: captureDir(idA), sampleRate: 48_000)
+
+        guard case .ready(_, let paragraphs, let hasAnyVoiceMarker) = layout else {
+            return XCTFail("expected .ready, got \(layout)")
+        }
+        XCTAssertEqual(paragraphs.map(\.text), ["one", "two"], "sanity: the add actually split the paragraph")
+        XCTAssertTrue(hasAnyVoiceMarker,
+                     "a voice-carrying boundary-add is the ONLY voice signal in this log, and must still count")
+    }
 }

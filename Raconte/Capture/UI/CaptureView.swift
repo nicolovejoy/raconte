@@ -72,6 +72,15 @@ final class CaptureScreenModel {
         return registryUnreadable ? "Journals unavailable" : "Journal"
     }
 
+    /// The selected journal's voice labels, or `[:]` when nothing is selected or the
+    /// journal has none configured (owner ruling 2026-08-12: the capture-time voice
+    /// switch must speak the journal's labels, not hardcoded "LN"/"BN"). Reads straight
+    /// off `journals`, so a journal switch or a `setCurrentJournalVoiceLabels` save is
+    /// visible here with no separate cache to go stale.
+    var selectedJournalVoiceLabels: [String: String] {
+        journals.first(where: { $0.id == selectedJournalID })?.voiceLabels ?? [:]
+    }
+
     /// Optional backdate (§ "entry date — set only if backdating"). `false`/`Date()`
     /// until the user opts in; `originalDate` in the sidecar stays nil while disabled —
     /// the default is never materialized (`EntryMetadata`'s doc comment).
@@ -351,6 +360,23 @@ final class CaptureScreenModel {
         guard let id = selectedJournalID,
               let renamed = try? await journalStore.rename(id: id, to: name) else { return }
         if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
+    }
+
+    /// Sets (or clears, via an empty dict) the current journal's voice labels
+    /// (T7 Mark Voices, issue #56). Same load/patch shape as `renameCurrentJournal`:
+    /// `journalStore` is the source of truth, and `journals[index]` is patched in place
+    /// so the change is visible through `journals` with no rescan. `labels` is passed
+    /// through to `JournalStore.setVoiceLabels`, which trims VALUES but not keys — the
+    /// sheet only ever constructs the "bn"/"ln" keys as literals, so no untrimmed key can
+    /// reach here today, but a future caller building keys dynamically would need to
+    /// trim/normalize them itself before calling this.
+    @discardableResult
+    func setCurrentJournalVoiceLabels(_ labels: [String: String]) async -> Bool {
+        guard let id = selectedJournalID,
+              let updated = try? await journalStore.setVoiceLabels(id: id, labels: labels)
+        else { return false }
+        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = updated }
+        return true
     }
 
     /// Cover image for the currently selected journal, sourced from `library` —
@@ -849,6 +875,7 @@ struct JournalHeaderView: View {
     @State private var showingNewJournalPrompt = false
     @State private var showingRenamePrompt = false
     @State private var showingCoverPicker = false
+    @State private var showingVoiceLabels = false
     @State private var draftName = ""
 
     var body: some View {
@@ -881,6 +908,8 @@ struct JournalHeaderView: View {
                 if model.selectedJournalID != nil {
                     Button("Cover Photo…") { showingCoverPicker = true }
                         .accessibilityIdentifier("capture.coverPhotoMenuItem")
+                    Button("Voice Labels…") { showingVoiceLabels = true }
+                        .accessibilityIdentifier("capture.voiceLabelsMenuItem")
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -931,6 +960,15 @@ struct JournalHeaderView: View {
                     catch { return false }
                 },
                 onRemove: { await model.removeCurrentJournalCover() })
+            .foregroundStyle(Color.primary)
+        }
+        .sheet(isPresented: $showingVoiceLabels) {
+            // Same foreground reset as the cover sheet above — system sheet background.
+            JournalVoiceLabelsSheet(
+                journalName: model.selectedJournalName,
+                currentLabels: model.journals.first(where: { $0.id == model.selectedJournalID })?
+                    .voiceLabels ?? [:],
+                onSave: { labels in await model.setCurrentJournalVoiceLabels(labels) })
             .foregroundStyle(Color.primary)
         }
     }
@@ -1041,19 +1079,25 @@ struct MarkerControlsRow: View {
     /// spinning up per tap.
     @State private var haptics = MarkerHapticsPlayer()
 
-    /// The voice the capture is currently in. A multi-voice capture opens with a frame-0
-    /// `bn` marker, so nil — the window before that opener lands — shows "BN", which is
-    /// the truth rather than a placeholder (plan §0.3.12).
+    /// `coordinator.currentVoice` before a capture opens (or before its frame-0 `bn`
+    /// marker lands) is `nil`; the main voice (`bn`) is the truth for that window, not
+    /// a placeholder (plan §0.3.12) — same rule the pre-`VoiceDisplay` ternary encoded.
+    private var effectiveVoice: String {
+        model.coordinator.currentVoice ?? VoiceDisplay.mainVoice
+    }
+
+    /// The voice the capture is currently in, spoken in the selected journal's own
+    /// labels when it has configured them (owner ruling 2026-08-12) — else exactly
+    /// today's fallback, the uppercased id ("BN"/"LN"), via `VoiceDisplay`'s one
+    /// label-resolution rule rather than a local copy of it.
     private var activeVoice: String {
-        model.coordinator.currentVoice == StructureMarker.Voice.littleNico ? "LN" : "BN"
+        VoiceDisplay.accessibilityName(forVoice: effectiveVoice, voiceLabels: model.selectedJournalVoiceLabels)
     }
 
     /// A tap switches to the *other* voice — the label states where you are, the tap
-    /// says where you're going.
+    /// says where you're going. The flip rule lives once, in `VoiceDisplay.other`.
     private var otherVoice: String {
-        model.coordinator.currentVoice == StructureMarker.Voice.littleNico
-            ? StructureMarker.Voice.bigNico
-            : StructureMarker.Voice.littleNico
+        VoiceDisplay.other(effectiveVoice)
     }
 
     /// A broken marker log means every tap can only no-op; a live-looking control over a

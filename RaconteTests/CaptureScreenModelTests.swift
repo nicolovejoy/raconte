@@ -244,4 +244,79 @@ final class CaptureScreenModelTests: XCTestCase {
                         "coverageFrames must be copied from the manifest.transcript ref "
                         + "recordTranscriptRef just wrote — proves promotion ran AFTER it")
     }
+
+    // MARK: selectedJournalVoiceLabels (owner ruling 2026-08-12, issue #56 follow-up:
+    // the capture-time voice switch must speak the SELECTED journal's own voice
+    // labels, not hardcoded "LN"/"BN")
+
+    /// Cardinality-2 case 1: a journal with no configured labels reads as `[:]`, which
+    /// is exactly the input `VoiceDisplay.accessibilityName` needs to fall back to the
+    /// old uppercased-id behaviour — unlabelled journals must render unchanged.
+    func testSelectedJournalVoiceLabelsIsEmptyForAnUnlabelledJournal() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
+            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
+            // `root` (a direct child of the shared system temp dir) lands on that
+            // SHARED temp dir. Without this override every test in this file writes
+            // `journals.json` to the same place and pollutes every other test's
+            // journal list.
+            journalsContainerRoot: root)
+        await model.bootstrap()
+
+        XCTAssertEqual(model.selectedJournalVoiceLabels, [:])
+    }
+
+    /// Cardinality-2 case 2: once the current journal has labels configured, they are
+    /// visible through this property with no separate cache to go stale — proving the
+    /// capture screen's voice switch will pick up a save from the Voice Labels sheet.
+    func testSelectedJournalVoiceLabelsReflectsTheConfiguredLabels() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
+            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
+            // `root` (a direct child of the shared system temp dir) lands on that
+            // SHARED temp dir. Without this override every test in this file writes
+            // `journals.json` to the same place and pollutes every other test's
+            // journal list.
+            journalsContainerRoot: root)
+        await model.bootstrap()
+
+        let saved = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa", "ln": "Me"])
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.selectedJournalVoiceLabels, ["bn": "Grandpa", "ln": "Me"])
+    }
+
+    /// A journal switch must not carry the old journal's labels forward — each
+    /// journal's labels are its own, and a stale read here would leak one journal's
+    /// voice names onto another journal's recording screen.
+    func testSelectedJournalVoiceLabelsSwitchesWithTheJournal() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
+            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
+            // `root` (a direct child of the shared system temp dir) lands on that
+            // SHARED temp dir. Without this override every test in this file writes
+            // `journals.json` to the same place and pollutes every other test's
+            // journal list.
+            journalsContainerRoot: root)
+        await model.bootstrap()
+        _ = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa"])
+
+        let created = await model.createJournal(name: "Second Journal")
+        let second = try XCTUnwrap(created)
+        model.selectJournal(second.id)
+
+        XCTAssertEqual(model.selectedJournalVoiceLabels, [:],
+                       "the freshly created journal has no labels of its own")
+    }
 }

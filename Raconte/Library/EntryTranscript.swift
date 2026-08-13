@@ -49,6 +49,74 @@ struct EntryTranscript: Sendable, Equatable {
     var isTruncated: Bool { degradations.contains(.transcriptTruncated) }
 }
 
+extension EntryTranscript {
+    /// Marking mode's one read primitive (T7 Task 3, #56): what a "mark voices" screen
+    /// needs to render and let the owner tap voice/paragraph structure onto an entry.
+    /// Composes the same internals the reading path (`EntryTranscriptLoader.load`)
+    /// uses — `TranscriptRevisionStore.loadChain` for the current revision's spans,
+    /// `LiveTranscriptReader` for the marker-snap intervals, `EntryTranscriptLoader
+    /// .snappedMarkers` for the fold + snap-vs-exact split, and
+    /// `TranscriptAttribution.attribute(spans:snapped:)` for the actual grouping —
+    /// never duplicating any of those rules.
+    ///
+    /// The one deliberate departure from the reading path (brief's "key difference"):
+    /// an ABSENT or EMPTY marker log is `.ready`, not "nothing to show" — marking
+    /// exists precisely for entries that have no markers yet, so a single nil-voice
+    /// paragraph spanning every span is the correct starting point to mark ONTO, not a
+    /// dead end.
+    enum VoiceMarkingLayout: Equatable {
+        /// No readable canonical revision to mark onto — the entry was never
+        /// promoted, or every canonical file is unreadable / the chain listing itself
+        /// failed (`TranscriptRevisionStore.loadChain` returning `nil`, or a non-nil
+        /// chain with no attached current revision). Marking needs a revision's
+        /// SPANS, not the raw machine transcript, so — unlike the reading path —
+        /// there is no live.jsonl fallback here.
+        case unavailable
+        /// `markers.jsonl` exists but couldn't be read. A silent "no markers yet"
+        /// answer here would risk marking directly on top of taps that are still
+        /// really there on disk — refuse instead, distinctly from `.unavailable`.
+        case markersUnreadable(String)
+        case ready(spans: [TranscriptSpan],
+                   paragraphs: [TranscriptAttribution.Paragraph],
+                   hasAnyVoiceMarker: Bool)
+    }
+
+    static func voiceMarkingLayout(captureDirectory: URL, sampleRate: Double) -> VoiceMarkingLayout {
+        guard let chainLoad = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory),
+              let current = TranscriptChain.current(TranscriptChain.ordered(chainLoad.revisions))
+        else {
+            return .unavailable
+        }
+
+        // Same `live.jsonl` read `EntryTranscriptLoader.load`'s `.compute` branch uses —
+        // `snappedMarkers` still needs `committed` to derive the real audio gaps a raw
+        // tap snaps against, unaffected by any later edit to `current`.
+        let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+        var committed: [TranscriptResult] = []
+        if case .present = loaded.source {
+            committed = LiveTranscriptReader.consolidate(loaded.records).committed
+        }
+
+        switch EntryTranscriptLoader.snappedMarkers(captureDirectory: captureDirectory,
+                                                     committed: committed, sampleRate: sampleRate) {
+        case .unreadable(let reason):
+            return .markersUnreadable(reason)
+        case .absent:
+            // The departure from the reading path: absent is READY, not nil — one
+            // nil-voice paragraph spanning every span, the correct starting point to
+            // mark onto.
+            let paragraphs = TranscriptAttribution.attribute(spans: current.spans, snapped: [])
+            return .ready(spans: current.spans, paragraphs: paragraphs, hasAnyVoiceMarker: false)
+        case .present(let snapped, let hasAnyVoiceMarker):
+            // Covers both "markers exist but folded to nothing usable" (snapped == [])
+            // and the ordinary populated case — both are `.ready`, matching the same
+            // departure as the `.absent` case above.
+            let paragraphs = TranscriptAttribution.attribute(spans: current.spans, snapped: snapped)
+            return .ready(spans: current.spans, paragraphs: paragraphs, hasAnyVoiceMarker: hasAnyVoiceMarker)
+        }
+    }
+}
+
 /// Whether `EntryTranscriptLoader.load` also computes voice attribution.
 ///
 /// The scanner (`LibraryScanner.transcriptSummary`) must keep the `.skip` default —
@@ -294,15 +362,39 @@ enum EntryTranscriptLoader {
     /// `MarkerSnapping.snap`; an exact marker is wrapped directly as its own
     /// `SnappedMarker` at its own frame, `approximate: false` — the honest answer,
     /// since nothing was approximated.
-    private static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
-                                       sampleRate: Double) -> [MarkerSnapping.SnappedMarker]? {
+    ///
+    /// Three-way answer (T7 Task 3, #56), not the collapsed nil/non-nil `attributedParagraphs`
+    /// below actually needs: `EntryTranscript.voiceMarkingLayout` has to tell "no log at
+    /// all" (`.absent`) apart from "log exists but is unreadable" (its own
+    /// `.markersUnreadable` answer, refuse-to-mark) — a distinction `attributedParagraphs`
+    /// has never needed, since both collapse to `nil` on the reading path. It also needs
+    /// `hasAnyVoiceMarker` without re-deriving `MarkerCorrections.effectiveMarkers` itself
+    /// — computed here, once, alongside the fold that already produces it.
+    ///
+    /// Not `private` (T7 Task 3): `EntryTranscript.voiceMarkingLayout` is a DIFFERENT type
+    /// declared later in this same file and must call this directly rather than
+    /// reimplement the fold + snap-vs-exact split — copying it would be a second
+    /// implementation of the same rule, free to silently disagree with this one.
+    enum MarkerAttributionInputs {
+        case absent
+        case unreadable(String)
+        case present(snapped: [MarkerSnapping.SnappedMarker], hasAnyVoiceMarker: Bool)
+    }
+
+    static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
+                               sampleRate: Double) -> MarkerAttributionInputs {
         let markerLoad = MarkerLogReader.load(captureDirectory: captureDirectory)
         switch markerLoad.source {
-        case .absent, .unreadable:
-            return nil
+        case .absent:
+            return .absent
+        case .unreadable(let reason):
+            return .unreadable(reason)
         case .present:
             let effective = MarkerCorrections.effectiveMarkers(markerLoad.markers)
-            guard !effective.isEmpty else { return nil }
+            let hasAnyVoiceMarker = effective.contains { $0.marker.kind == .voice }
+            guard !effective.isEmpty else {
+                return .present(snapped: [], hasAnyVoiceMarker: hasAnyVoiceMarker)
+            }
             let intervals = MarkerSnapping.intervals(fromCommitted: committed)
             let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
 
@@ -311,7 +403,7 @@ enum EntryTranscriptLoader {
             let exact = effective.filter(\.isExact).map { em in
                 MarkerSnapping.SnappedMarker(marker: em.marker, snappedFrame: em.marker.frame, approximate: false)
             }
-            return snapped + exact
+            return .present(snapped: snapped + exact, hasAnyVoiceMarker: hasAnyVoiceMarker)
         }
     }
 
@@ -321,8 +413,9 @@ enum EntryTranscriptLoader {
     private static func attributedParagraphs(captureDirectory: URL,
                                               committed: [TranscriptResult],
                                               sampleRate: Double) -> [TranscriptAttribution.Paragraph]? {
-        guard let snapped = snappedMarkers(captureDirectory: captureDirectory,
-                                           committed: committed, sampleRate: sampleRate) else { return nil }
+        guard case .present(let snapped, _) = snappedMarkers(captureDirectory: captureDirectory,
+                                                              committed: committed, sampleRate: sampleRate),
+              !snapped.isEmpty else { return nil }
         let paragraphs = TranscriptAttribution.attribute(committed: committed, snapped: snapped)
         // Markers with no transcript (hazard 4): `attribute` returns `[]`, which must
         // render as "not transcribed", not as an empty paragraph list.
@@ -339,8 +432,9 @@ enum EntryTranscriptLoader {
                                               spans: [TranscriptSpan],
                                               committed: [TranscriptResult],
                                               sampleRate: Double) -> [TranscriptAttribution.Paragraph]? {
-        guard let snapped = snappedMarkers(captureDirectory: captureDirectory,
-                                           committed: committed, sampleRate: sampleRate) else { return nil }
+        guard case .present(let snapped, _) = snappedMarkers(captureDirectory: captureDirectory,
+                                                              committed: committed, sampleRate: sampleRate),
+              !snapped.isEmpty else { return nil }
         let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: snapped)
         return paragraphs.isEmpty ? nil : paragraphs
     }

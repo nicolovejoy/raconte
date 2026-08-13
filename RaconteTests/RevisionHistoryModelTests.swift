@@ -588,7 +588,7 @@ final class RevisionHistoryModelTests: XCTestCase {
 
 /// Fake `RevisionHistoryStore` for the pure model-behaviour tests (`open()`'s
 /// pass-through fields, `revert()`'s success/failure branches) — mirrors
-/// `FakeMarkerCorrectionStore`/`FakeEditorStore`'s own shape.
+/// `FakeVoiceMarkingStore`/`FakeEditorStore`'s own shape.
 @MainActor
 private final class FakeRevisionHistoryStore: RevisionHistoryStore {
     var snapshot = EntryChainSnapshot(editability: .editable, currentRevisionID: nil, currentText: "",

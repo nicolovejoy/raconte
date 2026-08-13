@@ -547,19 +547,6 @@ final class TranscriptAttributionTests: XCTestCase {
         XCTAssertEqual(paragraphs[0].text, "hello there general kenobi")
     }
 
-    func testDisplayNameUppercasesTheOpaqueVoiceID() {
-        XCTAssertEqual(TranscriptAttribution.displayName(forVoice: "bn"), "BN")
-        XCTAssertEqual(TranscriptAttribution.displayName(forVoice: "ln"), "LN")
-        XCTAssertEqual(TranscriptAttribution.displayName(forVoice: "x-third"), "X-THIRD")
-    }
-
-    func testIsItalicIsTrueOnlyForBigNico() {
-        XCTAssertTrue(TranscriptAttribution.isItalic(voice: "bn"))
-        XCTAssertFalse(TranscriptAttribution.isItalic(voice: "ln"))
-        XCTAssertFalse(TranscriptAttribution.isItalic(voice: "x-third"))
-        XCTAssertFalse(TranscriptAttribution.isItalic(voice: nil))
-    }
-
     /// For fixtures whose breaks land exactly on record boundaries (never mid-record),
     /// every paragraph is composed of whole records — so rejoining paragraph texts with
     /// a single space reproduces `committedText` exactly, regardless of how many voice
@@ -597,5 +584,100 @@ final class TranscriptAttributionTests: XCTestCase {
             let rejoined = paragraphs.map(\.text).joined(separator: " ")
             XCTAssertEqual(rejoined, committedText(fixture.committed))
         }
+    }
+
+    // MARK: - T7 Task 3 (#56): Paragraph.spanRange
+
+    /// The already-computed `groupStart..<index` range (task-3-brief.md), threaded
+    /// through into `Paragraph.spanRange` on the span path. Two paragraph markers over
+    /// four spans, landing exactly on span boundaries — no filtering involved, so the
+    /// partition property is checked both by exact expected ranges AND generically (no
+    /// gaps, no overlaps, full coverage), so a change that shuffled indices for an
+    /// unrelated reason would still be caught.
+    func testSpanPathPopulatesSpanRangesThatPartitionTheSpans() {
+        let spans = [
+            TranscriptSpan(text: "one", anchor: .exact, frameStart: 0, frameEnd: 10_000),
+            TranscriptSpan(text: "two", anchor: .exact, frameStart: 10_000, frameEnd: 20_000),
+            TranscriptSpan(text: "three", anchor: .exact, frameStart: 20_000, frameEnd: 30_000),
+            TranscriptSpan(text: "four", anchor: .exact, frameStart: 30_000, frameEnd: 40_000),
+        ]
+        let markers = [
+            snapped(mark(10_000, seq: 0, kind: .paragraph), at: 10_000),
+            snapped(mark(30_000, seq: 1, kind: .paragraph), at: 30_000),
+        ]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.map(\.text), ["one", "two three", "four"])
+        let ranges = paragraphs.compactMap(\.spanRange)
+        XCTAssertEqual(ranges.count, paragraphs.count, "every surviving span-path paragraph must carry a spanRange")
+        XCTAssertEqual(ranges, [0..<1, 1..<3, 3..<4])
+
+        XCTAssertEqual(ranges.first?.lowerBound, 0, "the partition must start at 0")
+        XCTAssertEqual(ranges.last?.upperBound, spans.count, "the partition must cover every span")
+        for (a, b) in zip(ranges, ranges.dropFirst()) {
+            XCTAssertEqual(a.upperBound, b.lowerBound, "ranges must be contiguous, no gap or overlap")
+        }
+    }
+
+    /// The other half of the "partition over SURVIVING paragraphs" rule: a frame-0
+    /// opening voice marker produces a would-be paragraph over the empty index range
+    /// `0..<0`, which is filtered for empty text (`:152`) before the caller ever sees
+    /// it. The ranges that DO survive must still partition `0..<spans.count` — the
+    /// filtered phantom range must not leave a gap. Cardinality 3 (not 1), so
+    /// "contiguous" is a real, non-vacuous check between multiple surviving paragraphs.
+    func testFilteredEmptyOpeningParagraphDoesNotBreakSpanRangeContiguity() {
+        let spans = [
+            TranscriptSpan(text: "bn opener", anchor: .exact, frameStart: 0, frameEnd: 96_000),
+            TranscriptSpan(text: "ln reply", anchor: .exact, frameStart: 96_000, frameEnd: 192_000),
+            TranscriptSpan(text: "bn again", anchor: .exact, frameStart: 192_000, frameEnd: 288_000),
+        ]
+        let markers = [
+            snapped(mark(0, seq: 0, kind: .voice, voice: StructureMarker.Voice.bigNico), at: 0),
+            snapped(mark(96_000, seq: 1, kind: .voice, voice: StructureMarker.Voice.littleNico), at: 96_000),
+            snapped(mark(192_000, seq: 2, kind: .voice, voice: StructureMarker.Voice.bigNico), at: 192_000),
+        ]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: markers)
+
+        XCTAssertEqual(paragraphs.map(\.text), ["bn opener", "ln reply", "bn again"],
+                       "the frame-0 opener's own empty paragraph must be filtered, not the real ones")
+        let ranges = paragraphs.compactMap(\.spanRange)
+        XCTAssertEqual(ranges.count, 3)
+        XCTAssertEqual(ranges.first?.lowerBound, 0)
+        XCTAssertEqual(ranges.last?.upperBound, spans.count)
+        for (a, b) in zip(ranges, ranges.dropFirst()) {
+            XCTAssertEqual(a.upperBound, b.lowerBound,
+                          "the filtered empty 0..<0 range must not leave a gap before the first real paragraph")
+        }
+    }
+
+    /// Brief step: the no-marker, whole-span case also gets a spanRange — `0..<n`.
+    func testNoMarkersYieldsOneParagraphSpanningAllSpans() {
+        let spans = [
+            TranscriptSpan(text: "hello there", anchor: .exact, frameStart: 0, frameEnd: 50_000),
+            TranscriptSpan(text: "general kenobi", anchor: .inherited, frameStart: 50_000, frameEnd: 100_000),
+        ]
+
+        let paragraphs = TranscriptAttribution.attribute(spans: spans, snapped: [])
+
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs[0].spanRange, 0..<spans.count)
+    }
+
+    /// The pieces (committed) path has no span array to index into — `spanRange` must
+    /// stay `nil` there, always, regardless of marker structure.
+    func testPiecesPathLeavesSpanRangeNil() {
+        let committed = [
+            result("first part", range: (0, 96_000)),
+            result("second part", range: (96_000, 192_000)),
+        ]
+        let markers = [snapped(mark(96_000, seq: 0, kind: .paragraph), at: 96_000)]
+
+        let paragraphs = TranscriptAttribution.attribute(committed: committed, snapped: markers)
+
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertTrue(paragraphs.allSatisfy { $0.spanRange == nil },
+                      "the committed/pieces path never populates spanRange")
     }
 }

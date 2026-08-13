@@ -11,6 +11,11 @@ import SwiftUI
 struct DebugMenuView: View {
     private let controller = TransitionBreakpointController.shared
 
+    // Bundle enumeration + a dyld image walk are I/O that can't change
+    // within a process lifetime — compute once in `.task`, never inline in
+    // `body` (which re-evaluates on every re-render).
+    @State private var buildInfo: String?
+
     var body: some View {
         List {
             Section("Kill switch") {
@@ -32,8 +37,19 @@ struct DebugMenuView: View {
                 Button("Disarm all", role: .cancel) { controller.disarmAll() }
                     .disabled(controller.armedStates.isEmpty)
             }
+
+            Section("Build") {
+                Text(buildInfo ?? "Build info unavailable")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .navigationTitle("Transition Breakpoints")
+        .task {
+            if buildInfo == nil {
+                buildInfo = BuildStamp.currentBuildDisplayString()
+            }
+        }
     }
 
     @ViewBuilder

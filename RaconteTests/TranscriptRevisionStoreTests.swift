@@ -136,7 +136,7 @@ final class TranscriptRevisionStoreTests: XCTestCase {
         let plantedDirectory = transcriptDirectory
         let plantedTargetURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
                                                                     revision: 0)
-        let n = try await store().append(revision("NEW"), captureID: captureID, beforeWrite: {
+        let n = try await store().append(revision("NEW"), captureID: captureID, beforeWrite: { _ in
             try? FileManager.default.createDirectory(at: plantedDirectory, withIntermediateDirectories: true)
             try? Data(plantedJSON.utf8).write(to: plantedTargetURL)
         })
@@ -151,6 +151,36 @@ final class TranscriptRevisionStoreTests: XCTestCase {
         let wonURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 1)
         let won = try CaptureCoding.decoder().decode(TranscriptRevision.self, from: try Data(contentsOf: wonURL))
         XCTAssertEqual(won.id, "NEW")
+    }
+
+    /// #42 pin 1: a SECOND EEXIST in a row — `.allocationCollision` — reachable under
+    /// T9 sync, when a concurrent writer (a different device/process, not this actor)
+    /// plants a file at the slot `append`'s own retry just recomputed. `nextFileNumber`
+    /// always recomputes one past the current max, which by construction is never
+    /// already occupied — so a single, one-shot plant can never force this; `beforeWrite`
+    /// must fire again with the retry's recomputed number for a test to reach it (see
+    /// the doc comment on `append`'s `beforeWrite` parameter).
+    func testDoubleCollisionDuringAppendThrowsAllocationCollision() async throws {
+        let dir = captureDirectory
+        do {
+            _ = try await store().append(revision("NEW"), captureID: captureID, beforeWrite: { n in
+                try? FileManager.default.createDirectory(
+                    at: SegmentLayout.transcriptDirectory(captureDirectory: dir),
+                    withIntermediateDirectories: true)
+                try? Data("blocker-\(n)".utf8).write(
+                    to: SegmentLayout.canonicalTranscriptURL(captureDirectory: dir, revision: n))
+            })
+            XCTFail("expected .allocationCollision")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .allocationCollision)
+        }
+        // Neither blocker was overwritten, and no third slot was ever tried.
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: dir, revision: 0).path))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: dir, revision: 1).path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: dir, revision: 2).path))
     }
 
     func testAppendOnTrashedCaptureThrowsAndCreatesNoTranscriptDir() async throws {

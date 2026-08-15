@@ -1,5 +1,60 @@
 # CLAUDE.md
 
+## Session 2026-08-14 evening (laptop — 5-item Sonnet batch SHIPPED, PR #61 merged; 1201 → 1212 tests; secrets hard-block)
+
+Owner low on tokens: everything ran on Sonnet subagents (implementers AND reviewers,
+owner directive) in one SDD loop, 3 dispatches for 5 items, worktree `raconte-b5`
+(deleted after merge). Both fix rounds were real catches.
+
+- **PR #61 merged by owner** (`43076bae`, closes #42/#48/#49): the five #42 test pins
+  (allocationCollision via widened `beforeWrite` seam; DeviceIdentity off real
+  UserDefaults; F18 seeded/reproducible; closeDraft-on-trashed pinned via the
+  equal-text no-op branch — the only path where its own guard is load-bearing;
+  F11 half-open boundary), #58 capture legibility, TestFlight orientations keys
+  (iPhone portrait, iPad all four — **upload now unblocked** pending ASC key rotation),
+  #49 backdate affordance (button gone once set; the date itself opens the sheet),
+  #48 weekday (day-precision BACKDATES only, rows "Tue"/detail "Tuesday", via
+  `Calendar.weekdaySymbols` — `Date.FormatStyle.weekday` has an in-process width-leak
+  bug, reproduced and documented in PartialDate).
+- **Fix round catches:** (1) first #58 fix used `.preferredColorScheme(.dark)` inside
+  CaptureView — the permanent NavigationStack root — which would have forced the WHOLE
+  window dark in light mode; reverted to subtree `.environment` pin + `.toggleStyle(
+  .switch)` + white tint at the capture call site only. (2) the tappable backdate row
+  repeated this file's own Task-6 VoiceOver flattening bug; fixed with
+  `.accessibilityElement(children: .combine)` + explicit label.
+- **NEW TRAP VARIANT: GitHub close-keywords fire from PR BODIES too.** PR #61's body
+  said "Close #58 manually if it passes" — GitHub closed #58 on merge. Reopened.
+  The commit-message rule now extends to PR bodies: reference issues without a
+  close-verb immediately before the number.
+- Final whole-branch review independently re-ran the suite on the committed tree
+  (1212/0), rebuilt iOS, verified orientation keys via plutil on the built product.
+- **Phone updated twice** (pre-batch main `993E`, then batch build `26E8` — dylib UUID
+  prefixes on the Debug screen). Owner smoke feedback filed mid-session: #53 upgraded
+  (voice switch DISAPPEARS on long entries, not just drifts — Dec 9 2025 entry is the
+  repro), #60 (unified editor must show voice-change marks, not just ¶), #48 comment
+  (weekday shipped for backdates; extend to capture dates if owner asks post-smoke).
+- **Global secrets hard-block installed** (`~/.claude/settings.json` + global
+  CLAUDE.md): Read deny rules for .env variants/keys/credentials, auto-mode hard_deny
+  for shell-side reads, op (1Password) + `.env.tpl` (`op inject`/`op run`) documented
+  as the only secrets path. `.env.tpl`/`.env.example` deliberately exempt.
+- Housekeeping: stale remote branches deleted (feat/mark-voices, fix/aug14-batch);
+  resync marker refreshed (light resync: no drift found).
+
+**Next steps:**
+1. **Owner smoke on the new builds:** #58 macOS light mode (exact steps in PR #61
+   body — close #58 manually if it passes) and phone: backdated Dec 9 2025 entry
+   should show "Tuesday"; backdate button should be gone on backdated entries (tap
+   the date to edit).
+2. **Unified-editor design pass** — unchanged from prior handoff, now also carries
+   #60's voice-indication ask; two owner rulings still open (frameless-text marks
+   refuse-vs-approximate; atomic tokens vs validated markdown).
+3. **ASC credential hygiene → TestFlight upload** — orientations blocker is MERGED;
+   remaining: owner rotates ASC key, creates `~/.appstoreconnect/issuer_id`, then
+   archive+upload per docs/testflight-deploy.md.
+4. **#53 capture-landing build** raised in urgency: controls now known to DISAPPEAR on
+   long entries (owner: "need the controls to stay put").
+5. Queued design passes: #54 prev/next, #55 bubble hierarchy.
+
 ## Session 2026-08-12 night (laptop — privacy audit ACTED ON; build-date branch 2 fix rounds; mark-voices RETHINK ruled: unified editor)
 
 Short evening session, subagent-heavy (owner directive: Sonnet/Opus agents for defined

@@ -7,6 +7,13 @@ import Foundation
 /// westward timezone change. This type is the fix (M3 issue #14 part 2) — `EntryMetadata`
 /// carries it instead of `Date? + DatePrecision?`.
 ///
+/// The two weekday widths `PartialDate.weekdayText` supports — library rows want
+/// abbreviated ("Wed"), the detail screen wants the full name ("Wednesday").
+enum WeekdayStyle: Sendable, Equatable {
+    case abbreviated
+    case wide
+}
+
 /// `day` requires `month`; there is no such thing as "day 4 of an unknown month".
 struct PartialDate: Sendable, Equatable, Hashable {
     let year: Int
@@ -128,6 +135,28 @@ struct PartialDate: Sendable, Equatable, Hashable {
         comps.day = day ?? 1
         comps.hour = 12
         return calendar.date(from: comps) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    /// The weekday name for this value — present only at `.day` precision (issue #48).
+    /// `anchorDate`'s day-1 fill at `.yearMonth`/`.year` would name a weekday for a day
+    /// nobody wrote down; that is exactly the fabricated-precision lie this type exists
+    /// to prevent, so those precisions answer `nil` rather than a confident wrong guess.
+    ///
+    /// Reads `calendar.weekdaySymbols`/`shortWeekdaySymbols` — locale-aware (CLDR data
+    /// keyed off the calendar's locale, `Locale.autoupdatingCurrent` when unset, same as
+    /// every other unpinned date display in this app), never a hardcoded English name.
+    /// Deliberately NOT `Date.FormatStyle`'s `.dateTime.weekday(_:)`: on this SDK
+    /// (macOS 26.5) it memoizes the resolved ICU pattern across calls in a way that
+    /// leaks width between styles — calling `.wide` and then `.abbreviated` in the same
+    /// process can return "Wednesday" for the abbreviated call, order-dependently
+    /// reproduced in `PartialDateTests`. `Calendar`'s own symbol arrays have no such
+    /// cache and are the more direct API for "just the weekday name" regardless.
+    func weekdayText(style: WeekdayStyle = .abbreviated,
+                      calendar: Calendar = .gregorianCurrent) -> String? {
+        guard precision == .day else { return nil }
+        let weekdayIndex = calendar.component(.weekday, from: anchorDate(calendar: calendar))
+        let symbols = style == .wide ? calendar.weekdaySymbols : calendar.shortWeekdaySymbols
+        return symbols[weekdayIndex - 1]
     }
 
     /// Precision-aware future check (disallow-future-backdates): compares against `now`

@@ -211,10 +211,43 @@ struct EntryDetailView: View {
 
     // MARK: - Dates
 
+    /// Whether the standalone "Backdate this entry…" button renders (issue #49, owner-
+    /// ruled option 1). Once a backdate is set the button disappears entirely — the
+    /// displayed date itself becomes the edit affordance (see `datesSection`'s tappable
+    /// `Entry date` row) — so this is simply "not yet backdated". Pulled out as its own
+    /// pure function, same reasoning as `transcriptDisplay` above: a name a test can
+    /// call directly, so both directions pin without a view-inspection harness.
+    static func backdateButtonVisible(for item: EntryListItem) -> Bool {
+        !item.isBackdated
+    }
+
     private var datesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
-                .accessibilityIdentifier("detail.originalDate")
+            if item.isBackdated {
+                // The rendered date IS the edit affordance now (issue #49) — no separate
+                // button once a backdate is set. `.isButton` + the hint keep the route
+                // discoverable for VoiceOver, which has no other way to know a plain-
+                // looking date row is tappable.
+                labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
+                    .contentShape(Rectangle())
+                    .onTapGesture { openBackdateSheet() }
+                    .accessibilityIdentifier("detail.originalDate")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Edit backdate")
+            } else {
+                labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
+                    .accessibilityIdentifier("detail.originalDate")
+            }
+
+            // Weekday only at day precision (issue #48): coarser backdates and
+            // capture-date-only entries have no user-authored day to name one for —
+            // see `PartialDate.weekdayText`.
+            if let weekday = item.weekdayText(style: .wide) {
+                Text(weekday)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("detail.weekday")
+            }
 
             // M3 issue #15. Shown only while the detected date is still the one in force
             // — the moment the owner edits it this is his date, not the recording's, and
@@ -231,18 +264,24 @@ struct EntryDetailView: View {
             // No standalone Clear (owner, 2026-08-02): a set backdate is typed intent,
             // and one stray tap must not erase it. Clearing lives inside the sheet as
             // an explicit destructive action.
-            Button(item.isBackdated ? "Change backdate…" : "Backdate this entry…") {
-                // `anchorDate`, not `effectiveDate`: both currently agree (there is no
-                // "unnormalized" `Date` left to prefer — `PartialDate` never carried
-                // more precision than it declares), but anchoring explicitly here keeps
-                // this call site correct if `effectiveDate` ever grows a different rule.
-                backdateDraft = item.originalDate?.anchorDate(calendar: .gregorianCurrent) ?? item.capturedAt
-                backdatePrecisionDraft = item.originalDatePrecision
-                showingBackdatePicker = true
+            if Self.backdateButtonVisible(for: item) {
+                Button("Backdate this entry…") { openBackdateSheet() }
+                    .accessibilityIdentifier("detail.backdateButton")
+                    .font(.caption)
             }
-            .accessibilityIdentifier("detail.backdateButton")
-            .font(.caption)
         }
+    }
+
+    /// Shared by the standalone button (no backdate yet) and the tappable date row
+    /// (backdate set) — both open the same sheet pre-filled from the current value.
+    private func openBackdateSheet() {
+        // `anchorDate`, not `effectiveDate`: both currently agree (there is no
+        // "unnormalized" `Date` left to prefer — `PartialDate` never carried more
+        // precision than it declares), but anchoring explicitly here keeps this call
+        // site correct if `effectiveDate` ever grows a different rule.
+        backdateDraft = item.originalDate?.anchorDate(calendar: .gregorianCurrent) ?? item.capturedAt
+        backdatePrecisionDraft = item.originalDatePrecision
+        showingBackdatePicker = true
     }
 
     private var backdateSheet: some View {

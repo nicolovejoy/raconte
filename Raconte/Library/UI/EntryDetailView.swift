@@ -222,20 +222,28 @@ struct EntryDetailView: View {
     }
 
     private var datesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let entryDateText = item.formattedEffectiveDate(dayStyle: .long)
+        return VStack(alignment: .leading, spacing: 10) {
             if item.isBackdated {
                 // The rendered date IS the edit affordance now (issue #49) — no separate
-                // button once a backdate is set. `.isButton` + the hint keep the route
-                // discoverable for VoiceOver, which has no other way to know a plain-
-                // looking date row is tappable.
-                labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
+                // button once a backdate is set. `labeledRow` is an `HStack` of two
+                // `Text` children (label + value); without `.accessibilityElement
+                // (children: .combine)` iOS flattens it into two separate elements and
+                // drops the container-level `.isButton`/hint/identifier below — the
+                // exact failure mode already fixed once in this file for the transcript
+                // paragraph `Group` (see the Task 6 review Important 2 comment further
+                // down). Combine + an explicit label keeps this one element that
+                // VoiceOver can actually activate.
+                labeledRow("Entry date", entryDateText)
                     .contentShape(Rectangle())
                     .onTapGesture { openBackdateSheet() }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Entry date, \(entryDateText)")
                     .accessibilityIdentifier("detail.originalDate")
                     .accessibilityAddTraits(.isButton)
                     .accessibilityHint("Edit backdate")
             } else {
-                labeledRow("Entry date", item.formattedEffectiveDate(dayStyle: .long))
+                labeledRow("Entry date", entryDateText)
                     .accessibilityIdentifier("detail.originalDate")
             }
 

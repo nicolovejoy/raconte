@@ -81,7 +81,12 @@ struct EntryDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle(item.formattedEffectiveDate())
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .principal) { navigationTitleView }
+        }
         .task { await refresh() }
         .navigationDestination(isPresented: $showingEditor) {
             TranscriptEditorView(model: editorModel)
@@ -213,50 +218,55 @@ struct EntryDetailView: View {
 
     /// Whether the standalone "Backdate this entry…" button renders (issue #49, owner-
     /// ruled option 1). Once a backdate is set the button disappears entirely — the
-    /// displayed date itself becomes the edit affordance (see `datesSection`'s tappable
-    /// `Entry date` row) — so this is simply "not yet backdated". Pulled out as its own
+    /// displayed date itself becomes the edit affordance (see `navigationTitleView`,
+    /// which now carries that row) — so this is simply "not yet backdated". Pulled out as its own
     /// pure function, same reasoning as `transcriptDisplay` above: a name a test can
     /// call directly, so both directions pin without a view-inspection harness.
     static func backdateButtonVisible(for item: EntryListItem) -> Bool {
         !item.isBackdated
     }
 
+    /// The nav title text (owner ask 2026-08-14, issue #48 follow-up): weekday +
+    /// abbreviated date when the backdate is day-precision, otherwise just the date —
+    /// `EntryListItem.weekdayText` already enforces that precision rule (nil for
+    /// coarser backdates and for un-backdated entries), so this is pure composition,
+    /// no new logic. Moved up here from a standalone caption row so the weekday reads
+    /// "up there" next to the date instead of buried below the (now-removed) redundant
+    /// "Entry date" row that repeated what the title already said.
+    static func navigationTitleText(for item: EntryListItem) -> String {
+        let dateText = item.formattedEffectiveDate()
+        guard let weekday = item.weekdayText() else { return dateText }
+        return "\(weekday), \(dateText)"
+    }
+
+    /// The nav title doubles as the backdate-edit affordance once a backdate is set —
+    /// the same tap-to-edit rule issue #49 gave the old "Entry date" row, moved here.
+    /// `.accessibilityElement(children: .combine)` + an explicit label on the element
+    /// boundary is required to keep this one activatable element instead of iOS
+    /// flattening/auto-deriving a label (the Task 6 VoiceOver comment further down in
+    /// this file documents the same failure mode).
+    @ViewBuilder
+    private var navigationTitleView: some View {
+        let text = Self.navigationTitleText(for: item)
+        if item.isBackdated {
+            Text(text)
+                .font(.headline)
+                .contentShape(Rectangle())
+                .onTapGesture { openBackdateSheet() }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Entry date, \(text)")
+                .accessibilityIdentifier("detail.originalDate")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Edit backdate")
+        } else {
+            Text(text)
+                .font(.headline)
+                .accessibilityIdentifier("detail.originalDate")
+        }
+    }
+
     private var datesSection: some View {
-        let entryDateText = item.formattedEffectiveDate(dayStyle: .long)
-        return VStack(alignment: .leading, spacing: 10) {
-            if item.isBackdated {
-                // The rendered date IS the edit affordance now (issue #49) — no separate
-                // button once a backdate is set. `labeledRow` is an `HStack` of two
-                // `Text` children (label + value); without `.accessibilityElement
-                // (children: .combine)` iOS flattens it into two separate elements and
-                // drops the container-level `.isButton`/hint/identifier below — the
-                // exact failure mode already fixed once in this file for the transcript
-                // paragraph `Group` (see the Task 6 review Important 2 comment further
-                // down). Combine + an explicit label keeps this one element that
-                // VoiceOver can actually activate.
-                labeledRow("Entry date", entryDateText)
-                    .contentShape(Rectangle())
-                    .onTapGesture { openBackdateSheet() }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Entry date, \(entryDateText)")
-                    .accessibilityIdentifier("detail.originalDate")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityHint("Edit backdate")
-            } else {
-                labeledRow("Entry date", entryDateText)
-                    .accessibilityIdentifier("detail.originalDate")
-            }
-
-            // Weekday only at day precision (issue #48): coarser backdates and
-            // capture-date-only entries have no user-authored day to name one for —
-            // see `PartialDate.weekdayText`.
-            if let weekday = item.weekdayText(style: .wide) {
-                Text(weekday)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("detail.weekday")
-            }
-
+        VStack(alignment: .leading, spacing: 10) {
             // M3 issue #15. Shown only while the detected date is still the one in force
             // — the moment the owner edits it this is his date, not the recording's, and
             // saying otherwise would be wrong rather than merely stale.

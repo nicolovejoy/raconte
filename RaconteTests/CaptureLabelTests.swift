@@ -54,20 +54,43 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
-    func testEveryControlLabelClearsTheSizeFloor() {
-        for label in CaptureLabel.allCases {
-            XCTAssertGreaterThanOrEqual(
-                label.size, CaptureSurface.minimumControlSize,
-                "\(label.rawValue): \(label.size) is below the \(CaptureSurface.minimumControlSize) floor")
+    func testEveryControlLabelClearsTheSizeFloorOnBothPlatforms() {
+        for platform in CapturePlatform.allCases {
+            for label in CaptureLabel.allCases {
+                let points = label.textSize(on: platform).pointSize(on: platform)
+                XCTAssertGreaterThanOrEqual(
+                    points, CaptureSurface.minimumControlPointSize,
+                    "\(label.rawValue) on \(platform.rawValue): renders at \(points) pt, "
+                    + "below the \(CaptureSurface.minimumControlPointSize) pt floor")
+            }
         }
     }
 
-    /// The floor has to be a real increase on BOTH platforms. macOS renders `.caption` and
-    /// `.footnote` at the same 10 pt, so a floor set at `.footnote` would leave the reported
-    /// bug fully intact on the exact platform it was reported from.
-    func testSizeFloorIsAboveTheSizesThatMacOSRendersIdentically() {
-        XCTAssertGreaterThan(CaptureSurface.minimumControlSize, .footnote,
-                             "a .caption/.footnote floor is a no-op on macOS, where both are 10 pt")
+    /// The bug this round exists to fix. The first attempt raised every label to `.callout`,
+    /// which is 16 pt on iPhone but only 12 pt on Mac — so the owner reported it still too
+    /// small on exactly the platform he had reported it from. A style-name floor is not a
+    /// size floor; only points compare across platforms.
+    func testTheSameRoleIsNotRenderedSmallerOnMacOSThanOniOS() {
+        for label in CaptureLabel.allCases {
+            let mac = label.textSize(on: .macOS).pointSize(on: .macOS)
+            let ios = label.textSize(on: .iOS).pointSize(on: .iOS)
+            XCTAssertGreaterThanOrEqual(
+                mac, ios - 1,
+                "\(label.rawValue): \(mac) pt on macOS against \(ios) pt on iOS — the Mac "
+                + "must not render this role meaningfully smaller")
+        }
+    }
+
+    /// Pins the table the whole comparison rests on, at the two entries that caused the
+    /// miss. If these drift to "whatever makes the floor pass", every assertion above stops
+    /// meaning anything.
+    func testPointSizeTableMatchesApplesPublishedTypographyAtTheStylesThatMisled() {
+        XCTAssertEqual(CaptureTextSize.callout.pointSize(on: .iOS), 16)
+        XCTAssertEqual(CaptureTextSize.callout.pointSize(on: .macOS), 12)
+        // macOS collapses these three onto one size — the reason a style-based floor failed.
+        XCTAssertEqual(CaptureTextSize.caption.pointSize(on: .macOS), 10)
+        XCTAssertEqual(CaptureTextSize.footnote.pointSize(on: .macOS), 10)
+        XCTAssertEqual(CaptureTextSize.caption2.pointSize(on: .macOS), 10)
     }
 
     /// Guards the one assumption every ratio above rests on: that this really is the colour

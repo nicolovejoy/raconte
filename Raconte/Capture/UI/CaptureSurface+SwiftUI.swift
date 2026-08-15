@@ -3,6 +3,7 @@ import SwiftUI
 /// The SwiftUI half of `CaptureSurface` — kept apart from the model so the model itself
 /// stays pure Foundation and unit-testable, matching `MarkerControlsModel`'s split.
 extension CaptureTextSize {
+    /// Semantic styles, not `.system(size:)`, so Dynamic Type still scales these.
     var font: Font {
         switch self {
         case .caption2: .caption2
@@ -13,13 +14,28 @@ extension CaptureTextSize {
         case .body: .body
         case .headline: .headline
         case .title3: .title3
+        case .title2: .title2
+        case .title: .title
         }
+    }
+}
+
+extension CapturePlatform {
+    /// The platform this binary is running on — the single place the compile-time
+    /// condition lives, so `CaptureLabel`'s tables stay pure and testable for BOTH
+    /// platforms from a test run on either one.
+    static var current: CapturePlatform {
+        #if os(macOS)
+        .macOS
+        #else
+        .iOS
+        #endif
     }
 }
 
 extension CaptureLabel {
     var color: Color { Color(white: whiteLevel) }
-    var font: Font { size.font }
+    var font: Font { textSize(on: .current).font }
 }
 
 extension View {

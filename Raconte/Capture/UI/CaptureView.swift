@@ -703,93 +703,41 @@ struct CaptureView: View {
                                  multiVoice: model.multiVoiceEnabled)
     }
 
+    private var layout: CaptureLayoutModel {
+        CaptureLayoutModel.make(phase: model.coordinator.phase)
+    }
+
+    /// Issue #53. Three bands, top to bottom: a scrolling setup region, the live
+    /// transcript, and a control bar pinned to the bottom.
+    ///
+    /// The single page-level `ScrollView` this replaces is what caused #53: the record
+    /// button, voice switch and paragraph button sat inside it, *below* the transcript,
+    /// so every word transcribed pushed them further down — and on a long reading the
+    /// voice switch left the viewport altogether. Nothing hid it; it had scrolled away.
+    ///
+    /// The controls are now outside every scroll view, so no amount of transcript can
+    /// move them. That property is what `CaptureControlsUITests` measures; the visibility
+    /// rules per phase are `CaptureLayoutModel`'s.
     var body: some View {
         ZStack {
             Color(white: 0.05).ignoresSafeArea()
 
-            ScrollView {
-                VStack(spacing: 28) {
-                    // DEBUG-HARNESS-MOUNT — transition-pause menu (T11) for the kill-at-every-transition sweep.
-                    #if DEBUG
-                    HStack {
-                        Spacer()
-                        Button("Debug") { showDebugMenu = true }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .sheet(isPresented: $showDebugMenu) {
-                        // Reset the capture screen's inherited .white foreground —
-                        // it renders invisible on the system sheet background.
-                        NavigationStack { DebugMenuView() }
-                            .foregroundStyle(Color.primary)
-                    }
-                    #endif
-
-                    JournalHeaderView(model: model)
-                    BackdateField(model: model)
-                    MultiVoiceField(model: model)
-
-                    ForEach(model.visibleRecovered) { rec in
-                        RecoveryBanner(recording: rec,
-                                       capturesRoot: model.capturesRoot,
-                                       onKeep: { model.keep(rec.captureID) },
-                                       onDelete: { model.delete(rec.captureID) })
-                    }
-
-                    Spacer(minLength: 12)
-
-                    if let transcription = model.transcription, !transcription.displayText.isEmpty {
-                        ScrollView {
-                            Text(transcription.displayText)
-                                .font(.callout)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
-                        .frame(maxHeight: 160)
-                        .accessibilityIdentifier("capture.transcript")
-                    }
-
-                    RecStatusLine(phase: model.coordinator.phase,
-                                  canResume: model.coordinator.canResume,
-                                  elapsed: model.coordinator.elapsed)
-
-                    MicMeter(level: model.coordinator.micLevel,
-                             isLive: model.coordinator.phase == .recording)
-
-                    RecordButton(model: control, action: primaryAction)
-                        .accessibilityIdentifier("capture.record")
-
-                    MarkerControlsRow(model: model, markers: markers)
-
-                    if control.showsDoneButton {
-                        Button("Done") { Task { await model.done() } }
-                            .buttonStyle(.bordered)
-                            .tint(.red)
-                            .accessibilityIdentifier("capture.done")
-                    }
-
-                    if let error = model.coordinator.lastError {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    recentSection
-
-                    Spacer(minLength: 24)
-
-                    // Not DEBUG-gated: a wireless install is exactly when you can't tell
-                    // which build you're holding, and TestFlight has the same problem.
-                    Text(BuildInfo.stamp)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.35))
-                        .accessibilityIdentifier("capture.buildStamp")
-                }
-                .padding(24)
-                .frame(maxWidth: 560)
-                .frame(maxWidth: .infinity)
+            VStack(spacing: 0) {
+                setupRegion
+                transcriptRegion
+                // Absorbs whatever the bands above do not want, so the bar stays welded to
+                // the bottom edge. Without it the stack sizes to its content and the ZStack
+                // centres the lot — which moved the record button 59 pt the moment
+                // recording started and the setup band shrank to its capture-time height.
+                // Only ever non-zero when neither the setup band nor the transcript is
+                // stretching, i.e. mid-capture with nothing transcribed yet.
+                Spacer(minLength: 0)
+                errorBanner
+                controlBar
             }
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
+            .frame(maxHeight: .infinity)
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
@@ -821,6 +769,154 @@ struct CaptureView: View {
             UIApplication.shared.isIdleTimerDisabled = false
         }
         #endif
+    }
+
+    /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything
+    /// that is setup or browsing rather than operating the recorder.
+    ///
+    /// Given a fixed slice of the screen during a capture (`setupHeightWhileCapturing`)
+    /// rather than being removed: the backdate field is NOT phase-gated the way the
+    /// two-voices toggle is — it writes through to the live capture's `entry.json`
+    /// mid-recording — so it has to stay reachable, which here means "scroll this band".
+    /// A fixed slice, rather than letting this band and the transcript both stretch,
+    /// keeps the split deterministic instead of at the mercy of two greedy views.
+    private var setupRegion: some View {
+        ScrollView {
+            VStack(spacing: 28) {
+                // DEBUG-HARNESS-MOUNT — transition-pause menu (T11) for the kill-at-every-transition sweep.
+                #if DEBUG
+                HStack {
+                    Spacer()
+                    Button("Debug") { showDebugMenu = true }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .sheet(isPresented: $showDebugMenu) {
+                    // Reset the capture screen's inherited .white foreground —
+                    // it renders invisible on the system sheet background.
+                    NavigationStack { DebugMenuView() }
+                        .foregroundStyle(Color.primary)
+                }
+                #endif
+
+                JournalHeaderView(model: model)
+                BackdateField(model: model)
+
+                if layout.showsMultiVoiceField {
+                    MultiVoiceField(model: model)
+                }
+
+                ForEach(model.visibleRecovered) { rec in
+                    RecoveryBanner(recording: rec,
+                                   capturesRoot: model.capturesRoot,
+                                   onKeep: { model.keep(rec.captureID) },
+                                   onDelete: { model.delete(rec.captureID) })
+                }
+
+                if layout.showsRecentList {
+                    recentSection
+                }
+
+                // Not DEBUG-gated: a wireless install is exactly when you can't tell
+                // which build you're holding, and TestFlight has the same problem.
+                Text(BuildInfo.stamp)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.35))
+                    .accessibilityIdentifier("capture.buildStamp")
+            }
+            .padding(24)
+        }
+        .frame(maxHeight: layout.transcriptFillsAvailableHeight
+               ? CaptureLayoutModel.setupHeightWhileCapturing
+               : nil)
+    }
+
+    /// The live transcript: capped when idle, and free to take everything the setup band
+    /// and the control bar leave behind during a capture.
+    ///
+    /// Its scroll view is now the ONLY one in this band — previously it was a same-axis
+    /// scroll nested inside the page scroll, which is its own source of confused gestures.
+    @ViewBuilder
+    private var transcriptRegion: some View {
+        if let transcription = model.transcription, !transcription.displayText.isEmpty {
+            ScrollView {
+                Text(transcription.displayText)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            .frame(maxHeight: layout.transcriptFillsAvailableHeight ? .infinity : 160)
+            .padding(.horizontal, 24)
+            .accessibilityIdentifier("capture.transcript")
+        }
+    }
+
+    /// Capture errors, deliberately ABOVE the control bar rather than inside it.
+    ///
+    /// Its height depends on the message, and anything of variable height inside a
+    /// bottom-anchored bar moves the controls. Here it displaces the transcript — the one
+    /// band on this screen that is meant to flex — and the bar does not budge.
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let error = model.coordinator.lastError {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+        }
+    }
+
+    /// Everything that operates the recorder, pinned outside every scroll view — the #53
+    /// fix itself. Present in every phase so it never appears, disappears, or resizes
+    /// under the owner's thumb mid-reading.
+    ///
+    /// The background is opaque on purpose: the setup band scrolls behind this, and a
+    /// transparent bar would let text slide under the record button.
+    private var controlBar: some View {
+        VStack(spacing: 16) {
+            RecStatusLine(phase: model.coordinator.phase,
+                          canResume: model.coordinator.canResume,
+                          elapsed: model.coordinator.elapsed)
+
+            MicMeter(level: model.coordinator.micLevel,
+                     isLive: model.coordinator.phase == .recording)
+
+            RecordButton(model: control, action: primaryAction)
+                .accessibilityIdentifier("capture.record")
+
+            // Both of these are RESERVED in every phase rather than inserted when needed.
+            // The bar is bottom-anchored, so anything appearing inside it pushes the
+            // record button upward — 151 pt between idle and recording, measured, before
+            // this. Hidden-but-present keeps the bar one fixed height. `.opacity(0)` plus
+            // `.accessibilityHidden` rather than removal: the space must stay, the control
+            // must not be reachable by touch or VoiceOver while it is not really there.
+            MarkerControlsRow(model: model,
+                              markers: markers.isVisible ? markers : .reservedForLayout)
+                .opacity(markers.isVisible ? 1 : 0)
+                .disabled(!markers.isVisible)
+                .accessibilityHidden(!markers.isVisible)
+
+            Button("Done") { Task { await model.done() } }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .accessibilityIdentifier("capture.done")
+                .opacity(control.showsDoneButton ? 1 : 0)
+                .disabled(!control.showsDoneButton)
+                .accessibilityHidden(!control.showsDoneButton)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity)
+        .background(Color(white: 0.05))
+        // Deliberately NO accessibilityIdentifier on this container. Putting one here
+        // turns the bar into a single accessibility element that absorbs its children,
+        // and `capture.record` / `capture.voiceSwitch` / `capture.paragraph` stop being
+        // queryable at all — which broke every capture UI test the first time round. Same
+        // flattening this file already hit on the NavigationLink rows and the Task-6
+        // backdate row.
     }
 
     /// The 3 most recently captured entries (M3 T4.5), sourced from `model.library` —

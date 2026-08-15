@@ -190,7 +190,7 @@ final class TranscriptMergeTests: XCTestCase {
         let retained = [
             exact("a", 0, 50),      // overlaps adopted[0]
             exact("b", 500, 600),   // clear
-            exact("c", 95, 150),    // overlaps adopted[0] at the boundary
+            exact("c", 95, 150),    // 5-frame real overlap with adopted[0] (95..<100), not a boundary touch
         ]
         let adopted = [exact("x", 40, 100)]
 
@@ -218,6 +218,19 @@ final class TranscriptMergeTests: XCTestCase {
         let result = TranscriptMerge.degradingOverlaps(retained: retained, adopted: adopted)
 
         XCTAssertEqual(result, retained)
+    }
+
+    /// #42 pin 5: `[100,150]` starts exactly where adopted `[40,100]` ends — the
+    /// half-open boundary case (`FrameRange.overlaps`'s own doc comment: "touching
+    /// ranges do not overlap"). Must NOT degrade; a mutation to closed-interval
+    /// comparison (`<=`) makes this fail — see the mutation note below.
+    func testDegradingOverlapsHalfOpenBoundaryTouchDoesNotDegrade() {
+        let retained = [exact("touches the boundary", 100, 150)]
+        let adopted = [exact("x", 40, 100)]
+
+        let result = TranscriptMerge.degradingOverlaps(retained: retained, adopted: adopted)
+
+        XCTAssertEqual(result, retained, "a span starting exactly where another ends must stay .exact")
     }
 
     // MARK: - Adopt-verbatim pin (#41, §15b.13): accept/revert must carry a machine

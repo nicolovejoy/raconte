@@ -80,10 +80,20 @@ struct DraftPolicy: Sendable {
 actor TranscriptRevisionStore {
     nonisolated let capturesRoot: URL
     private let policy: DraftPolicy
+    /// #42 pin 2: every internal `DeviceIdentity.stable()` call routes through this
+    /// rather than calling it directly, so a test can supply a throwaway
+    /// `UserDefaults(suiteName:)`-backed provider instead of writing into the real
+    /// `UserDefaults.standard` domain (test pollution across runs — every test that
+    /// exercises `closeDraft`/`revert`/`promoteIfNeeded` used to mint or read a real,
+    /// persisted `raconte.deviceID` key on the machine running the suite). Production
+    /// callers get the exact previous behavior via the default.
+    private let deviceIDProvider: @Sendable () -> String
 
-    init(capturesRoot: URL, policy: DraftPolicy = DraftPolicy()) {
+    init(capturesRoot: URL, policy: DraftPolicy = DraftPolicy(),
+        deviceIDProvider: @escaping @Sendable () -> String = { DeviceIdentity.stable() }) {
         self.capturesRoot = capturesRoot
         self.policy = policy
+        self.deviceIDProvider = deviceIDProvider
     }
 
     // MARK: - Listing
@@ -509,11 +519,18 @@ actor TranscriptRevisionStore {
     /// (design §4.3); `validatedHead` rebuilds it in memory on the next read regardless.
     ///
     /// `beforeWrite` is a test seam: it runs after `n` is computed and `transcript/` is
-    /// guaranteed to exist, but before the exclusive create — letting a test plant a
-    /// colliding `canonical-<n>.json` to force the EEXIST retry path deterministically.
+    /// guaranteed to exist, but before EACH exclusive-create attempt (first AND retry —
+    /// #42 pin 1) — letting a test plant a colliding `canonical-<n>.json` at whichever
+    /// slot `n` it's handed, to force the EEXIST retry path, or a SECOND EEXIST
+    /// (`.allocationCollision`), deterministically. `nextFileNumber()`'s own
+    /// `(files.max() ?? -1) + 1` definition means a single, one-shot plant can never
+    /// force a second collision on its own — the retry always recomputes to a slot
+    /// one past whatever's already present, which by construction is never occupied —
+    /// so a real double-collision test needs the callback to fire again with the
+    /// retry's recomputed number.
     @discardableResult
     func append(_ revision: TranscriptRevision, captureID: String,
-                beforeWrite: (@Sendable () -> Void)? = nil) throws -> Int {
+                beforeWrite: (@Sendable (Int) -> Void)? = nil) throws -> Int {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
 
         // C2 (verified by the reviewer): EntryMetadataStore.read answers `.defaults` —
@@ -556,7 +573,7 @@ actor TranscriptRevisionStore {
             at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
             withIntermediateDirectories: true)
 
-        beforeWrite?()
+        beforeWrite?(fileNumber)
 
         do {
             try AtomicFile.createExclusively(
@@ -565,6 +582,7 @@ actor TranscriptRevisionStore {
                 writing: data)
         } catch let error as AtomicFileError where isEEXIST(error) {
             fileNumber = try nextFileNumber()
+            beforeWrite?(fileNumber)
             do {
                 try AtomicFile.createExclusively(
                     at: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
@@ -803,7 +821,7 @@ actor TranscriptRevisionStore {
 
         let revision = TranscriptRevision(id: newID, source: .userEdit, createdAt: now, spans: spans,
                                           parentID: draft.parentID, basedOnMachineID: draft.basedOnMachineID,
-                                          deviceID: DeviceIdentity.stable(), closedBy: effectiveReason)
+                                          deviceID: deviceIDProvider(), closedBy: effectiveReason)
 
         try append(revision, captureID: captureID)
         try FileManager.default.removeItem(at: draftURL)
@@ -914,7 +932,7 @@ actor TranscriptRevisionStore {
 
         let revision = try TranscriptMerge.revert(current: current, toMachine: machine,
                                                    id: ULID.make(now: now), createdAt: now,
-                                                   deviceID: DeviceIdentity.stable())
+                                                   deviceID: deviceIDProvider())
         try append(revision, captureID: captureID)
         return revision.id
     }
@@ -1012,7 +1030,7 @@ actor TranscriptRevisionStore {
             // fabricated coverage number here would claim more than is actually known.
             coverageFrames: ref?.coverageFrames,
             skippedRanges: ref?.skippedRanges,
-            deviceID: DeviceIdentity.stable(),
+            deviceID: deviceIDProvider(),
             closedBy: nil)
 
         do {
@@ -1098,8 +1116,11 @@ actor TranscriptRevisionStore {
 
 /// A per-install stable id, minted once and cached in `UserDefaults` (design §5.2's
 /// `TranscriptRevision.deviceID`). Not a preference — nothing else in the app reads or
-/// writes this key — so a bare `UserDefaults.standard` read/write needs no seam of its
-/// own the way `CurrentJournal` needed `JournalPreferenceStore` for testability; no
+/// writes this key — so `stable(defaults:)` takes a plain `UserDefaults` parameter
+/// rather than a dedicated store type the way `CurrentJournal` needed
+/// `JournalPreferenceStore` for testability. `TranscriptRevisionStore`'s own
+/// `deviceIDProvider` seam (#42 pin 2) is what lets a test route this through a
+/// throwaway `UserDefaults(suiteName:)` instead of the real `.standard` domain; no
 /// test asserts on the exact id, only that it is stable and non-empty.
 enum DeviceIdentity {
     private static let defaultsKey = "raconte.deviceID"

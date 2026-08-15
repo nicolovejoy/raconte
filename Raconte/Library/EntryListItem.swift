@@ -168,6 +168,14 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     }
 
     var isBackdated: Bool { originalDate != nil }
+
+    /// The weekday for this entry's backdate — `nil` unless `originalDate` is set AND
+    /// at `.day` precision (issue #48). A capture-date-only entry has no user-authored
+    /// day to name a weekday for, so it is `nil` here regardless of `capturedAt`'s own
+    /// (exact) weekday — see `PartialDate.weekdayText`.
+    func weekdayText(style: WeekdayStyle = .abbreviated) -> String? {
+        originalDate?.weekdayText(style: style)
+    }
     /// The backdate came from the recording's own opening words and has not been edited
     /// (M3 issue #15) — the detail screen says so under the date.
     var backdateWasDetected: Bool { metadata.backdateWasDetected }

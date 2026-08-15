@@ -834,13 +834,11 @@ struct CaptureView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Recent")
-                        .font(.headline)
-                        .foregroundStyle(Color(white: 0.7))
+                        .captureLabel(.recentHeader)
                     Spacer()
                     NavigationLink(value: RootDestination.library) {
                         Text("See all")
-                            .font(.caption)
-                            .foregroundStyle(Color(white: 0.7))
+                            .captureLabel(.seeAllLink)
                     }
                     .accessibilityIdentifier("capture.seeAllLink")
                 }
@@ -881,8 +879,7 @@ struct JournalHeaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Recording into")
-                .font(.caption)
-                .foregroundStyle(Color(white: 0.55))
+                .captureLabel(.journalHeaderCaption)
 
             Menu {
                 ForEach(model.journals) { journal in
@@ -918,8 +915,7 @@ struct JournalHeaderView: View {
                     Text(model.selectedJournalName)
                         .font(.title3.weight(.semibold))
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption)
-                        .foregroundStyle(Color(white: 0.6))
+                        .captureLabel(.journalPickerChevron)
                 }
                 .foregroundStyle(.white)
             }
@@ -946,8 +942,7 @@ struct JournalHeaderView: View {
             if model.registryUnreadable {
                 Text("Your journals couldn’t be read. This entry will record normally "
                      + "and stay where it is until they’re back.")
-                    .font(.caption)
-                    .foregroundStyle(Color(white: 0.55))
+                    .captureLabel(.journalsUnreadable)
                     .accessibilityIdentifier("capture.journalsUnreadable")
             }
         }
@@ -1015,8 +1010,7 @@ struct BackdateField: View {
                 set: { model.setBackdateEnabled($0) }
             )) {
                 Text("Backdate this entry")
-                    .font(.caption)
-                    .foregroundStyle(Color(white: 0.55))
+                    .captureLabel(.backdateToggle)
             }
             .accessibilityIdentifier("capture.backdateToggle")
             // `.switch`, not the platform-default checkbox: a checkbox's outline-only
@@ -1030,8 +1024,7 @@ struct BackdateField: View {
             // feedback, 2026-08-02). The row itself is the affordance.
             VStack(alignment: .leading, spacing: 4) {
                 Text("Entry date")
-                    .font(.caption)
-                    .foregroundStyle(Color(white: 0.55))
+                    .captureLabel(.backdateFieldCaption)
                 PrecisionDatePicker(
                     date: Binding(get: { model.backdateDate }, set: { model.setBackdateDate($0) }),
                     precision: Binding(get: { model.backdatePrecision }, set: { model.setBackdatePrecision($0) }),
@@ -1083,8 +1076,7 @@ struct MultiVoiceField: View {
                 set: { model.setMultiVoiceEnabled($0) }
             )) {
                 Text("Two voices")
-                    .font(.caption)
-                    .foregroundStyle(Color(white: 0.55))
+                    .captureLabel(.multiVoiceToggle)
             }
             .accessibilityIdentifier("capture.multiVoiceToggle")
             .disabled(model.coordinator.phase != .idle)

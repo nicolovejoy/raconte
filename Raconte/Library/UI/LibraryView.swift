@@ -294,6 +294,16 @@ struct LibraryEntryRow: View {
                     .font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("library.row.date")
 
+                // Weekday only at day precision (issue #48) — see
+                // `PartialDate.weekdayText`. Abbreviated for the row; full name lives on
+                // the detail screen.
+                if let weekday = item.weekdayText() {
+                    Text(weekday)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("library.row.weekday")
+                }
+
                 if item.isBackdated {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.caption2)

@@ -519,11 +519,18 @@ actor TranscriptRevisionStore {
     /// (design §4.3); `validatedHead` rebuilds it in memory on the next read regardless.
     ///
     /// `beforeWrite` is a test seam: it runs after `n` is computed and `transcript/` is
-    /// guaranteed to exist, but before the exclusive create — letting a test plant a
-    /// colliding `canonical-<n>.json` to force the EEXIST retry path deterministically.
+    /// guaranteed to exist, but before EACH exclusive-create attempt (first AND retry —
+    /// #42 pin 1) — letting a test plant a colliding `canonical-<n>.json` at whichever
+    /// slot `n` it's handed, to force the EEXIST retry path, or a SECOND EEXIST
+    /// (`.allocationCollision`), deterministically. `nextFileNumber()`'s own
+    /// `(files.max() ?? -1) + 1` definition means a single, one-shot plant can never
+    /// force a second collision on its own — the retry always recomputes to a slot
+    /// one past whatever's already present, which by construction is never occupied —
+    /// so a real double-collision test needs the callback to fire again with the
+    /// retry's recomputed number.
     @discardableResult
     func append(_ revision: TranscriptRevision, captureID: String,
-                beforeWrite: (@Sendable () -> Void)? = nil) throws -> Int {
+                beforeWrite: (@Sendable (Int) -> Void)? = nil) throws -> Int {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
 
         // C2 (verified by the reviewer): EntryMetadataStore.read answers `.defaults` —
@@ -566,7 +573,7 @@ actor TranscriptRevisionStore {
             at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
             withIntermediateDirectories: true)
 
-        beforeWrite?()
+        beforeWrite?(fileNumber)
 
         do {
             try AtomicFile.createExclusively(
@@ -575,6 +582,7 @@ actor TranscriptRevisionStore {
                 writing: data)
         } catch let error as AtomicFileError where isEEXIST(error) {
             fileNumber = try nextFileNumber()
+            beforeWrite?(fileNumber)
             do {
                 try AtomicFile.createExclusively(
                     at: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,

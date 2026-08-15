@@ -48,6 +48,16 @@ targets:
         # Kept so a future cloud/dictation path can't turn into a launch crash.
         NSSpeechRecognitionUsageDescription: Raconte transcribes your entries on this device.
         UIBackgroundModes: [audio]
+        # TestFlight/App Store validation requires this key — its absence ("the app
+        # declares no orientations") failed the upload. iPhone: portrait-only (the
+        # capture screen has no rotated layout). iPad: all four, to keep multitasking
+        # (Split View/Slide Over rotate the window regardless of the app's own intent).
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     entitlements:
       path: Raconte/Raconte.entitlements
       properties:

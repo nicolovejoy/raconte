@@ -924,6 +924,22 @@ struct JournalHeaderView: View {
                 .foregroundStyle(.white)
             }
             .accessibilityIdentifier("capture.journalPicker")
+            // This control had NO color-scheme pin at all before (issue #58) — its
+            // label was already explicit `.white`/gray, but nothing pinned the menu's
+            // own rendering. `.environment(\.colorScheme, .dark)`, never
+            // `.preferredColorScheme`: `CaptureView` is the app's one permanently-
+            // mounted NavigationStack root (`ContentView.swift`), with no sheet/popover
+            // boundary around it, so `preferredColorScheme` here would resolve to the
+            // whole window — forcing Library/Detail/Trash dark for every macOS
+            // light-mode user, not just this menu (fix-round-1 finding). Scoped to the
+            // `Menu` only, not the enclosing `VStack` below, which also anchors this
+            // view's `.sheet`/`.alert` presentations (cover picker, voice labels,
+            // rename/new journal prompts) — those must keep following the system's
+            // normal appearance. The menu's own dropdown *content* (journal list,
+            // Rename/New Journal/Cover Photo/Voice Labels items) is a transient popup
+            // and out of scope for #58 — it renders on its own material background,
+            // not the near-black screen.
+            .environment(\.colorScheme, .dark)
 
             // The one honest case where nothing is selected. Says what it costs — the
             // recording is unaffected, only its filing — rather than raising an alarm.
@@ -1003,10 +1019,11 @@ struct BackdateField: View {
                     .foregroundStyle(Color(white: 0.55))
             }
             .accessibilityIdentifier("capture.backdateToggle")
-            // The capture screen's background is near-black regardless of the app's
-            // color scheme; an ambient-scheme system control renders dark-on-dark in
-            // light mode (smoke feedback 2026-08-02) — same rule as the date picker below.
-            .environment(\.colorScheme, .dark)
+            // `.switch`, not the platform-default checkbox: a checkbox's outline-only
+            // chrome is low-contrast against near-black in light mode; the switch style
+            // always paints a distinctly-colored track + thumb, so legibility doesn't
+            // depend on the color-scheme pin below actually reaching the control.
+            .toggleStyle(.switch)
 
             // Always rendered, disabled until the toggle is on — a conditional picker
             // with a hidden label left no visible "place to set the date" (smoke
@@ -1019,15 +1036,32 @@ struct BackdateField: View {
                     date: Binding(get: { model.backdateDate }, set: { model.setBackdateDate($0) }),
                     precision: Binding(get: { model.backdatePrecision }, set: { model.setBackdatePrecision($0) }),
                     idPrefix: "capture")
-                // The capture screen's background is near-black regardless of the app's
-                // color scheme, but system controls style themselves for the ambient
-                // scheme — in light mode that's dark-on-dark (smoke feedback 2026-08-02).
-                .environment(\.colorScheme, .dark)
+                // Belt-and-suspenders alongside the pin below (issue #58): an explicit
+                // foreground/tint on the call site (not inside `PrecisionDatePicker`
+                // itself, which is shared with `EntryDetailView`'s light-background
+                // sheet and must not be forced) so the segmented control's and date
+                // field's own text/highlight read correctly even if the environment
+                // pin doesn't reach every native subview.
+                .tint(.white)
+                .foregroundStyle(.white)
             }
             .disabled(!model.backdateEnabled)
             .opacity(model.backdateEnabled ? 1 : 0.45)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The capture screen's background is near-black regardless of the app's color
+        // scheme; an ambient-scheme system control renders dark-on-dark in light mode
+        // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
+        // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
+        // presentation, such as a popover or window" (Apple's own wording): this view
+        // lives inside `CaptureView`, the app's one permanently-mounted NavigationStack
+        // root (`ContentView.swift`), with no sheet/popover boundary around it, so a
+        // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
+        // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
+        // scoped `.environment` pin has no such reach; a control's own transient popup
+        // (the calendar/segment dropdown) is explicitly out of scope for #58 — it
+        // renders on its own material background, not the near-black screen.
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -1053,14 +1087,19 @@ struct MultiVoiceField: View {
                     .foregroundStyle(Color(white: 0.55))
             }
             .accessibilityIdentifier("capture.multiVoiceToggle")
-            // The capture screen's background is near-black regardless of the app's
-            // color scheme; an ambient-scheme system control renders dark-on-dark in
-            // light mode (smoke feedback 2026-08-02) — same rule as the date picker above.
-            .environment(\.colorScheme, .dark)
             .disabled(model.coordinator.phase != .idle)
             .opacity(model.coordinator.phase == .idle ? 1 : 0.45)
+            // Same `.switch` reasoning as `BackdateField`'s toggle — not itself named
+            // in issue #58, but the same control class on the same background.
+            .toggleStyle(.switch)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
+        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding):
+        // `CaptureView` is the app's permanently-mounted NavigationStack root with no
+        // sheet/popover boundary, so `preferredColorScheme` here would resolve to the
+        // whole window, not this subtree.
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -1123,9 +1162,10 @@ struct MarkerControlsRow: View {
             .controlSize(.large)
             .disabled(!isEnabled)
             .opacity(isEnabled ? 1 : 0.45)
-            // The capture screen's background is near-black regardless of the app's
-            // color scheme; an ambient-scheme system control renders dark-on-dark in
-            // light mode (smoke feedback 2026-08-02) — same rule as the setup fields.
+            // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
+            // see the matching comment on `BackdateField` (issue #58 fix-round-1
+            // finding: `CaptureView` is the permanently-mounted NavigationStack root,
+            // so `preferredColorScheme` here would resolve to the whole window).
             .environment(\.colorScheme, .dark)
             // The owner is reading a page, not watching the screen: confirmation has to
             // be felt (design §5). Watching `markerCount`, which counts what reached

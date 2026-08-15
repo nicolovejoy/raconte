@@ -171,6 +171,42 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
 
     // MARK: - closeDraft
 
+    /// #42 pin 4: `guardWritable` exists for `closeDraft` too, but only `writeDraft`
+    /// (`testWriteDraftOnTrashedCaptureThrows` above) had a test naming it. §10's
+    /// trash-composition row names draft *close* explicitly, so this closes that gap.
+    ///
+    /// Shaped so `closeDraft`'s OWN guard is load-bearing, not merely backstopped by
+    /// `append`'s redundant trash check: the draft's text is made to equal CURRENT's
+    /// text before trashing (same construction as
+    /// `testCloseDraftWithTextEqualToCurrentDeletesDraftAndMintsNothing` above), which
+    /// routes through the early "delete draft, mint nothing" branch that never calls
+    /// `append` at all. Without `closeDraft`'s own guard, this branch would silently
+    /// delete the draft and return `nil` — no thrown error, no evidence the operation
+    /// was ever refused.
+    func testCloseDraftOnTrashedCaptureThrowsAndLeavesDraftUntouched() async throws {
+        let s = store()
+        try await s.append(revision("R0", text: "hello"), captureID: captureID)
+        try await s.writeDraft(captureID: captureID, text: "goodbye", now: baseTime)
+        // Edit the draft back to match current — same shape as the equal-text no-op
+        // test above, so closeDraft's guard is exercised on the branch that never
+        // reaches append's own trash check.
+        try await s.writeDraft(captureID: captureID, text: "hello", now: baseTime.addingTimeInterval(5))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path))
+
+        var metadata = EntryMetadata.defaults
+        metadata.trashedAt = Date()
+        try EntryMetadataStore.write(metadata, url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+
+        do {
+            _ = try await s.closeDraft(captureID: captureID, reason: .sessionEnd, now: baseTime.addingTimeInterval(10))
+            XCTFail("expected .trashedCapture")
+        } catch let error as TranscriptRevisionStoreError {
+            XCTAssertEqual(error, .trashedCapture)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: draftURL.path),
+                     "a refused closeDraft must not silently discard the draft")
+    }
+
     func testCloseDraftWithTextEqualToCurrentDeletesDraftAndMintsNothing() async throws {
         let s = store()
         try await s.append(revision("R0", text: "hello"), captureID: captureID)

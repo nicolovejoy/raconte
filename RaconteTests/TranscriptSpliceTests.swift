@@ -518,10 +518,22 @@ final class TranscriptSpliceTests: XCTestCase {
     /// in the fix report): a deleted join-separator between two untouched `.exact`
     /// spans left them as two array entries, which `TranscriptText.join` silently
     /// reunites with a phantom space on the next read.
+    ///
+    /// #42 pin 3: `SystemRandomNumberGenerator` made failures here unreproducible —
+    /// a run that failed once could never be replayed to debug it. `SeededGenerator`
+    /// (below) is deterministic by default (fixed seed), and the seed is both printed
+    /// unconditionally (so a CI failure's exact seed is in the log) and overridable
+    /// via `RACONTE_F18_SEED` for ad hoc exploration beyond the default 200 cases —
+    /// without editing this file. Via `xcodebuild test`, environment variables only
+    /// reach the test process when prefixed `TEST_RUNNER_` (verified): e.g.
+    /// `TEST_RUNNER_RACONTE_F18_SEED=12345 xcodebuild … test`.
     func testMonotoneLatticeNoExactSpanHasTextDifferingFromItsParentSpan() {
-        var rng = SystemRandomNumberGenerator()
+        let seed = ProcessInfo.processInfo.environment["RACONTE_F18_SEED"].flatMap { UInt64($0) }
+            ?? 0xF18_5EED_5EED_F18
+        var rng = SeededGenerator(seed: seed)
+        print("F18 property test seed: \(seed) (override via RACONTE_F18_SEED, TEST_RUNNER_-prefixed under xcodebuild)")
         let alphabet = Array("abcde ")
-        for _ in 0..<200 {
+        for caseIndex in 0..<200 {
             let parentSpans = Self.randomSpans(alphabet: alphabet, rng: &rng)
             let p = parent(parentSpans)
             let parentText = TranscriptChain.plainText(p)
@@ -531,21 +543,42 @@ final class TranscriptSpliceTests: XCTestCase {
 
             let joined = TranscriptText.join(result.map(\.text))
             XCTAssertEqual(joined, editedText,
-                           "spliced output must round-trip through TranscriptText.join back to exactly what was typed")
+                           "spliced output must round-trip through TranscriptText.join back to exactly what was typed"
+                           + " (case \(caseIndex), seed \(seed))")
 
             for span in result where span.anchor == .exact {
                 // Every .exact output span must be a byte-identical, UNSPLIT copy of
                 // some parent span's full text — never a sub-range or a modification.
                 XCTAssertTrue(parentSpans.contains { $0.anchor == .exact && $0.text == span.text },
-                              "an .exact span in the output must match a parent .exact span verbatim")
+                              "an .exact span in the output must match a parent .exact span verbatim"
+                              + " (case \(caseIndex), seed \(seed))")
             }
         }
     }
 
     // MARK: - Generative helpers
 
+    /// Deterministic, seedable `RandomNumberGenerator` for the F18 property test —
+    /// see that test's own doc comment for why. Splitmix64: small, fast, well
+    /// distributed for a fuzz test's purposes (not cryptographic).
+    struct SeededGenerator: RandomNumberGenerator {
+        private var state: UInt64
+
+        init(seed: UInt64) {
+            self.state = seed
+        }
+
+        mutating func next() -> UInt64 {
+            state = state &+ 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
     private static func randomSpans(alphabet: [Character],
-                                    rng: inout SystemRandomNumberGenerator) -> [TranscriptSpan] {
+                                    rng: inout SeededGenerator) -> [TranscriptSpan] {
         let count = Int.random(in: 0...3, using: &rng)
         var spans: [TranscriptSpan] = []
         var frame: Int64 = 0
@@ -570,7 +603,7 @@ final class TranscriptSpliceTests: XCTestCase {
     }
 
     private static func randomEdit(of text: String, alphabet: [Character],
-                                   rng: inout SystemRandomNumberGenerator) -> String {
+                                   rng: inout SeededGenerator) -> String {
         var chars = Array(text)
         let editCount = Int.random(in: 0...3, using: &rng)
         for _ in 0..<editCount {

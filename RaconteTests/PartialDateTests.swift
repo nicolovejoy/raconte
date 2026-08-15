@@ -198,4 +198,32 @@ final class PartialDateTests: XCTestCase {
         XCTAssertTrue(dayText.contains("1998"))
         XCTAssertTrue(dayText.contains("4") || dayText.contains("04"))
     }
+
+    // MARK: weekdayText (issue #48)
+    //
+    // March 4, 1998 is deliberately clear of any year boundary (house rule — backdate
+    // fixtures near Jan 1 have broken CI under UTC before). It was a Wednesday.
+
+    func testWeekdayTextIsPresentOnlyAtDayPrecision() {
+        let day = PartialDate(year: 1998, month: 3, day: 4)
+        let yearMonth = PartialDate(year: 1998, month: 3)
+        let year = PartialDate(year: 1998)
+        XCTAssertNotNil(day.weekdayText(calendar: cal))
+        XCTAssertNil(yearMonth.weekdayText(calendar: cal),
+                     "anchorDate's day-1 fill would fabricate a weekday nobody wrote down")
+        XCTAssertNil(year.weekdayText(calendar: cal))
+    }
+
+    /// Names the actual weekday, computed via an independent Calendar path (component +
+    /// `weekdaySymbols`, not `Date.FormatStyle`) so a hardcoded or off-by-one production
+    /// answer is caught rather than just "some non-nil string".
+    func testWeekdayTextNamesTheActualDay() {
+        let day = PartialDate(year: 1998, month: 3, day: 4)
+        let weekdayIndex = cal.component(.weekday, from: day.anchorDate(calendar: cal))
+        let expectedWide = cal.weekdaySymbols[weekdayIndex - 1]
+        let expectedAbbreviated = cal.shortWeekdaySymbols[weekdayIndex - 1]
+        XCTAssertEqual(day.weekdayText(style: .wide, calendar: cal), expectedWide)
+        XCTAssertEqual(day.weekdayText(calendar: cal), expectedAbbreviated,
+                       "default style must be abbreviated for the library row")
+    }
 }

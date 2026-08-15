@@ -227,4 +227,26 @@ final class EntryListItemTests: XCTestCase {
         XCTAssertNotEqual(entry.transcript, .absent)
         XCTAssertFalse(entry.hasTranscriptText)
     }
+
+    // MARK: weekdayText (issue #48) — forwarding to PartialDate, plus the no-backdate case
+    // PartialDate itself owns.
+
+    func testWeekdayTextIsNilWithNoBackdate() {
+        let entry = item("A", capturedAt: 100)
+        XCTAssertNil(entry.weekdayText())
+        XCTAssertFalse(entry.isBackdated)
+    }
+
+    func testWeekdayTextIsPresentForADayPrecisionBackdate() {
+        let entry = item("A", capturedAt: 100,
+                         originalDate: PartialDate(year: 1998, month: 3, day: 4))
+        XCTAssertNotNil(entry.weekdayText())
+    }
+
+    func testWeekdayTextIsNilForCoarserPrecisionBackdates() {
+        XCTAssertNil(item("A", capturedAt: 100,
+                          originalDate: PartialDate(year: 1998, month: 3)).weekdayText())
+        XCTAssertNil(item("A", capturedAt: 100,
+                          originalDate: PartialDate(year: 1998)).weekdayText())
+    }
 }

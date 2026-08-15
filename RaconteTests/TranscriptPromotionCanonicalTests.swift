@@ -374,14 +374,34 @@ final class TranscriptPromotionCanonicalTests: XCTestCase {
         XCTAssertNotNil(revision.deviceID)
     }
 
-    func testDeviceIdentityIsStableAcrossTwoPromotions() async throws {
+    /// #42 pin 2: the original form of this test called the real `DeviceIdentity
+    /// .stable()` — reading and, on the first-ever run, WRITING the real
+    /// `UserDefaults.standard` domain of whatever process runs the suite (test
+    /// pollution: `promoteIfNeeded` itself also reads/writes `.standard` internally on
+    /// every test in this file, since `deviceIDProvider` did not exist yet). Routes
+    /// instead through a throwaway `UserDefaults(suiteName:)`, injected via
+    /// `TranscriptRevisionStore`'s `deviceIDProvider` seam, and cleans the suite up in
+    /// `defer` — nothing here ever touches `.standard`.
+    func testDeviceIdentityIsStableAcrossTwoPromotionsUsingAnInjectedThrowawayDefaultsSuite() async throws {
+        let suiteName = "raconte.tests.deviceIdentity.\(UUID().uuidString)"
+        let throwawayDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { throwawayDefaults.removePersistentDomain(forName: suiteName) }
+
+        // Captures the (Sendable) suite name rather than the `UserDefaults` instance
+        // itself — `UserDefaults` is thread-safe but not `Sendable` in this SDK, and
+        // `UserDefaults(suiteName:)` always resolves to the same underlying domain.
+        let injectedStore = TranscriptRevisionStore(
+            capturesRoot: capturesRoot,
+            deviceIDProvider: { DeviceIdentity.stable(defaults: UserDefaults(suiteName: suiteName)!) })
+
         try writeFinalAudio()
         try writeLiveTranscript([record("hello", 0, 4_800)])
-        let outcome = await store().promoteIfNeeded(captureID: captureID)
+        let outcome = await injectedStore.promoteIfNeeded(captureID: captureID)
         guard case .promoted = outcome else { return XCTFail("expected .promoted, got \(outcome)") }
         let first = try XCTUnwrap(TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)?.revisions.first)
 
-        XCTAssertEqual(first.deviceID, DeviceIdentity.stable())
+        XCTAssertEqual(first.deviceID, DeviceIdentity.stable(defaults: throwawayDefaults),
+                       "the minted revision must carry the SAME id the injected provider yields on a later call")
     }
 
     // MARK: - promoteCorpus

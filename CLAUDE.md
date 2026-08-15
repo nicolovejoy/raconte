@@ -1,5 +1,79 @@
 # CLAUDE.md
 
+## Session 2026-08-15 evening (laptop — #53 ROOT-CAUSED + DESIGNED, owner-approved, NOT built)
+
+Very short session (owner had to reboot). Zero code written, tree clean. Everything below
+is a fresh agent's starting point: the diagnosis is confirmed by reading, both owner
+rulings are in hand, and the next step is implementation.
+
+- **#53 root cause, confirmed by reading — the two symptoms are ONE defect.**
+  `CaptureView.body` (`Raconte/Capture/UI/CaptureView.swift:706-792`) is a **single outer
+  `ScrollView`** holding everything in one `VStack(spacing: 28)`: journal header →
+  backdate → multi-voice → recovery banners → **transcript** (`:741-750`, capped
+  `maxHeight: 160`) → status line → mic meter → record button → `MarkerControlsRow` →
+  Done → recents → build stamp. The controls live *inside* the page scroll, *below*
+  content that grows. So the transcript block appearing shoves record + voice switch down
+  ~188 pt (160 + spacing) — the original drift report — and since the ¶ button was
+  already noted below the fold on iPhone (CLAUDE.md 2026-08-07), a long entry pushes the
+  voice switch off-screen entirely. **"Disappeared" = scrolled out of view, not removed.**
+  Ruled out as the cause: `MarkerControlsModel.make` (`Raconte/Capture/UI/MarkerControls.swift:22`)
+  never hides the voice switch in `.recording`/`.interrupted`/`.resuming` — visibility is
+  purely `multiVoice`, so nothing conditionally removes the control.
+
+- **Owner ruling 1 — fix #53 STANDALONE now, do NOT fold into the capture-landing
+  redesign.** Reason: `docs/plans/2026-08-08-capture-landing-decisions.md` item 1 says the
+  owner wants to iterate again on the capture interface *specifically*, "later, not now",
+  and wants that look discussion on a larger screen (iPad/Mac). So that build isn't ready,
+  and this bug blocks recordings today. **Layout only — no palette, typography, or IA
+  change** (icon-blue / serif / lowercase `ln`-`bn` all stay queued for the redesign,
+  which later inherits the fixed-controls constraint).
+
+- **Owner ruling 2 — "pin controls, simplify the recording view."** Approved layout:
+  - **Fixed bottom control bar in EVERY phase** — status line, mic meter, record button,
+    `MarkerControlsRow`, Done, and the error text move OUT of the page scroll into a bar
+    pinned to the bottom. They never move, idle or recording. This is the actual #53 fix.
+  - **While recording**: hide the Recent list (a browse affordance nobody uses mid-read)
+    and the Two-voices toggle (already `.disabled` outside `.idle` at `CaptureView.swift:1090`
+    — pre-record only by design, so hiding it loses nothing). The **transcript expands to
+    fill the space above the bar** with its own independent scroll, replacing the 160 pt cap.
+  - **Backdate stays reachable** by scrolling the region above the transcript — unlike the
+    two-voices toggle it is NOT phase-gated (`BackdateField`, `:1005`) and writes through
+    to the live capture's `entry.json` mid-recording, so it must not be removed.
+  - **Idle layout unchanged.**
+
+- **Implementation notes for the next agent** (not yet started, nothing on disk):
+  1. Put the visibility rules in a pure, testable `make(phase:)`-style model next to
+     `MarkerControlsModel` (same file/pattern, exhaustive `switch` with no `default`) —
+     which sections show per phase. That is the unit-testable core; TDD it red-first.
+  2. **The honest pin for #53 is a UI test**, not a unit test: the simulator harness
+     already exists (`RACONTE_UITEST_ID` synthetic sine recorder,
+     `Capture/Debug/UITestSupport.swift`, scheme `RaconteUI`). Assert the
+     `capture.voiceSwitch` / `capture.record` frames are UNCHANGED before vs. after the
+     transcript grows, and that the voice switch stays hittable. A layout fix with no
+     frame assertion is exactly the vacuous-fixture shape this repo keeps hitting.
+  3. Watch the `.environment(\.colorScheme, .dark)` pins when moving controls (#58): the
+     subtree pin must travel with each moved control — and NEVER `.preferredColorScheme`,
+     since `CaptureView` is the permanently-mounted NavigationStack root.
+  4. Nested same-axis `ScrollView`s: the transcript's inner scroll currently sits inside
+     the outer page scroll. The new structure should make the transcript's scroll the only
+     one in that band, not a nested one.
+
+- Session hygiene: CI green (5/5 recent runs on main), CLAUDE.md conventions in sync,
+  0 unsummarized days, no other worktrees or agents. Stale local `design/capture-landing-mocks`
+  is 5 behind origin (ignorable — that branch also carries committed `.build/` junk;
+  cherry-pick from it, never merge).
+
+**Next steps:**
+1. **Build #53** to the approved layout above — it is fully ruled, nothing blocking.
+2. Owner smoke: #58 macOS light mode (PR #61 body has exact steps); phone check that the
+   new nav-title weekday layout reads right on the Dec 8, 2025 entry.
+3. Unified-editor design pass (#60, #59) — unchanged from prior handoffs.
+4. ASC credential hygiene → TestFlight upload — orientations blocker merged; owner still
+   needs to rotate the ASC key.
+5. Queued design passes: capture-landing redesign (now owes the fixed-controls constraint
+   as a named requirement), #54 prev/next, #55 bubble hierarchy, #38 voice-label
+   mistranscription, #26 capture pause.
+
 ## Session 2026-08-15 (laptop — detail nav-title weekday fix; #53 identified as next, NOT started)
 
 Short session. Owner smoke-tested PR #61's #48 weekday work live and found the layout

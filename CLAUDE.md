@@ -1,5 +1,56 @@
 # CLAUDE.md
 
+## Session 2026-08-15 (laptop — detail nav-title weekday fix; #53 identified as next, NOT started)
+
+Short session. Owner smoke-tested PR #61's #48 weekday work live and found the layout
+wrong; fixed same-session. Then owner asked what's queued for capture, which surfaced
+#53's severity has changed — that's next session's target, described below for a fresh
+agent to pick up directly.
+
+- **Detail-screen weekday placement fixed** (`c82bb1ef`, TDD red→green,
+  `EntryDetailViewNavigationTitleTests.swift` new). Owner's complaint: the weekday
+  landed in its own caption line below an "Entry date" row that just repeated the nav
+  title's date — redundant, and not "up there" where he was looking. Fix: nav title
+  itself now reads "Mon, Dec 8, 2025" (weekday only at day-precision backdates, same
+  #48 rule as before) and doubles as the tap-to-edit affordance issue #49 gave the old
+  row (`EntryDetailView.navigationTitleView`, `.toolbar { ToolbarItem(placement:
+  .principal) }`). The standalone "Entry date" row and "Mon" caption are gone. 1215
+  unit tests green (was 1212). Built for and installed on the phone
+  (`0CE992E2-8065-5FAB-A2E2-064D9712A522`), pushed to origin/main.
+
+- **NEXT: #53 — capture screen controls, now a functional bug, not polish.**
+  Original report (2026-08-12): live transcript text pushes the record button and
+  multi-voice switch around on screen, so a muscle-memory tap misses. **Owner smoke
+  2026-08-14 escalated it**: on a long entry (the Dec 9, 2025 recording) the voice-
+  switch button *disappeared entirely* partway through — not drift, gone. That makes
+  voice marking impossible mid-entry on any long capture. Requirement (owner's own
+  words): "need the controls to stay put." Fix shape: during an active recording, the
+  record/stop button, voice switch, and paragraph button must have FIXED positions
+  regardless of transcript length — the transcript area scrolls/clips within its own
+  region instead of reflowing the controls. Source: `Raconte/Capture/UI/CaptureView.swift`.
+  Design already scoped as a named requirement of the capture-landing redesign
+  (`docs/plans/2026-08-08-capture-landing-decisions.md`, IA + type + palette all
+  locked) — **fold #53's fixed-controls constraint into that build rather than
+  patching CaptureView twice.** A next agent should read that design doc first, then
+  either (a) brainstorm/plan the capture-landing implementation with #53 as a named
+  layout constraint, or (b) if the owner wants #53 fixed standalone first, scope a
+  smaller layout-only fix to CaptureView (pin controls, isolate the transcript in its
+  own scrolling container) as a stopgap.
+- Reviewed full open-issue list against CLAUDE.md's own capture-related next steps
+  (#53, #58, #38, #26, #2, #1) — no drift found; #58 stays open pending the owner's
+  macOS light-mode smoke test from PR #61 (steps in the PR body).
+
+**Next steps:**
+1. **#53** — capture screen fixed-controls fix, see problem description above. Start
+   by reading `docs/plans/2026-08-08-capture-landing-decisions.md`.
+2. Owner smoke: #58 macOS light mode (PR #61 body has exact steps); phone check that
+   the new nav-title weekday layout reads right on the Dec 8, 2025 entry.
+3. Unified-editor design pass (#60, #59) — unchanged from prior handoffs.
+4. ASC credential hygiene → TestFlight upload — orientations blocker merged; owner
+   still needs to rotate the ASC key.
+5. Queued design passes: #54 prev/next, #55 bubble hierarchy, #38 voice-label
+   mistranscription, #26 capture pause.
+
 ## Session 2026-08-14 evening (laptop — 5-item Sonnet batch SHIPPED, PR #61 merged; 1201 → 1212 tests; secrets hard-block)
 
 Owner low on tokens: everything ran on Sonnet subagents (implementers AND reviewers,

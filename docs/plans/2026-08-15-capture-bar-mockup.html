@@ -1,0 +1,381 @@
+<title>Capture Bar Proportions</title>
+<style>
+  :root {
+    --ground: #f4f5f7;
+    --panel: #ffffff;
+    --ink: #14171c;
+    --ink-soft: #565d69;
+    --rule: #d9dde3;
+    --accent: #1f5fb0;
+    --bad: #b4232a;
+    --good: #1c7551;
+    --shadow: 0 1px 2px rgba(20,23,28,.06), 0 8px 24px rgba(20,23,28,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #101317;
+      --panel: #171b21;
+      --ink: #e8ebef;
+      --ink-soft: #99a2ad;
+      --rule: #2a3038;
+      --accent: #6ea8f0;
+      --bad: #f0787e;
+      --good: #5cc79b;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #101317;
+    --panel: #171b21;
+    --ink: #e8ebef;
+    --ink-soft: #99a2ad;
+    --rule: #2a3038;
+    --accent: #6ea8f0;
+    --bad: #f0787e;
+    --good: #5cc79b;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+    padding: 40px 24px 72px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  header { margin-bottom: 36px; max-width: 62ch; }
+  h1 {
+    font: 600 30px/1.15 ui-sans-serif, -apple-system, system-ui, sans-serif;
+    letter-spacing: -.02em; margin: 0 0 10px; text-wrap: balance;
+  }
+  header p { margin: 0 0 8px; color: var(--ink-soft); }
+  .flag {
+    display: inline-block; margin-top: 10px; padding: 3px 9px; border-radius: 4px;
+    background: color-mix(in srgb, var(--bad) 12%, transparent);
+    color: var(--bad); font-size: 12.5px; font-weight: 600;
+  }
+
+  .frames {
+    display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start;
+    margin-bottom: 40px;
+  }
+  figure { margin: 0; width: 280px; }
+  figcaption { margin-top: 12px; }
+  .name { font-weight: 650; font-size: 15px; }
+  .pct { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--ink-soft); }
+  .pct b { color: var(--ink); font-weight: 600; }
+  .verdict { font-size: 13px; margin-top: 5px; }
+  .verdict.no { color: var(--bad); }
+  .verdict.yes { color: var(--good); }
+
+  /* ---- the phone: true 402 x 874 proportions, scaled to 280 wide ---- */
+  .phone {
+    width: 280px; height: 609px; border-radius: 30px; padding: 8px;
+    background: #262a30; box-shadow: var(--shadow); position: relative;
+  }
+  .screen {
+    width: 100%; height: 100%; border-radius: 23px; overflow: hidden;
+    background: #0d0d0d;                 /* the app's Color(white: 0.05) */
+    color: #ffffff;
+    display: flex; flex-direction: column;
+    font: 11px/1.35 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  }
+  .notch {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    width: 78px; height: 18px; background: #0d0d0d; border-radius: 0 0 11px 11px; z-index: 3;
+  }
+
+  .setup { padding: 26px 15px 8px; display: flex; flex-direction: column; gap: 13px; flex: 1; min-height: 0; }
+  .setup.clipped { overflow: hidden; position: relative; }
+  .setup.clipped::after {
+    content: ""; position: absolute; inset: auto 0 0 0; height: 34px;
+    background: linear-gradient(to top, #0d0d0d, transparent);
+  }
+  .cap { color: #c7c7c7; font-size: 11.5px; }      /* white 0.78, the shipped fix */
+  .jrnl { display: flex; align-items: center; gap: 6px; }
+  .cover { width: 24px; height: 24px; border-radius: 4px; background: #24405f; flex: none; }
+  .jname { font-size: 15px; font-weight: 600; }
+  .chev { color: #c7c7c7; font-size: 9px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .sw { width: 30px; height: 18px; border-radius: 9px; background: #3a3f46; flex: none; position: relative; }
+  .sw.on { background: #2f7d4f; }
+  .sw::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: #fff;
+  }
+  .sw.on::after { left: auto; right: 2px; }
+  .datefield {
+    border: 1px solid #34383e; border-radius: 6px; padding: 5px 8px;
+    color: #c7c7c7; font-size: 11.5px; display: flex; justify-content: space-between;
+  }
+  .recent { display: flex; flex-direction: column; gap: 6px; }
+  .rrow { display: flex; justify-content: space-between; color: #c7c7c7; font-size: 11px;
+          border-top: 1px solid #232323; padding-top: 5px; }
+
+  .transcript {
+    flex: 1; min-height: 0; margin: 0 15px; padding: 8px 0;
+    color: #ddd; font-size: 11px; overflow: hidden; position: relative;
+    border-top: 1px solid #1e1e1e;
+  }
+
+  /* ---- the control bar ---- */
+  .bar { background: #0d0d0d; flex: none; }
+  .bar.cur { padding: 11px 15px 17px; display: flex; flex-direction: column; gap: 11px; align-items: center; }
+  .bar.a   { padding: 8px 15px 14px;  display: flex; flex-direction: column; gap: 7px;  align-items: center; }
+  .bar.b   { padding: 8px 15px 14px;  display: flex; flex-direction: column; gap: 7px;  align-items: center; }
+
+  .clockbig { font: 300 31px/1 ui-monospace, "SF Mono", monospace; color: #e6484f; font-variant-numeric: tabular-nums; }
+  .clocksm  { font: 400 19px/1 ui-monospace, "SF Mono", monospace; color: #e6484f; font-variant-numeric: tabular-nums; }
+  .status { display: flex; align-items: center; gap: 5px; color: #c7c7c7; font-size: 11px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #e6484f; flex: none; }
+  .meter { width: 170px; height: 5px; border-radius: 3px; background: #26292e; position: relative; }
+  .meter::after { content: ""; position: absolute; inset: 0 45% 0 0; border-radius: 3px; background: #6ea8f0; }
+  .rec {
+    width: 52px; height: 52px; border-radius: 50%; background: #e6484f;
+    display: grid; place-items: center; color: #fff; font-size: 10px; font-weight: 600; flex: none;
+  }
+  .rec.sq { border-radius: 13px; }
+  .mk {
+    height: 30px; min-width: 42px; padding: 0 11px; border-radius: 8px;
+    background: #23272d; color: #fff; display: grid; place-items: center;
+    font-size: 12px; font-weight: 600; flex: none;
+  }
+  .mk.ghost { opacity: .25; }
+  .done { padding: 4px 12px; border-radius: 7px; border: 1px solid #7a2a2e; color: #f0787e; font-size: 11px; }
+  .triple { display: flex; align-items: center; gap: 16px; }
+
+  .measure {
+    position: absolute; right: -1px; width: 3px; border-radius: 2px; z-index: 4;
+  }
+
+  /* ---- copy blocks ---- */
+  .note {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 20px; box-shadow: var(--shadow);
+  }
+  .note h2 { font-size: 16px; margin: 0 0 8px; letter-spacing: -.01em; }
+  .note p, .note li { color: var(--ink-soft); margin: 0 0 7px; }
+  .note li { margin-left: 2px; }
+  ul { padding-left: 18px; margin: 8px 0 0; }
+  strong { color: var(--ink); font-weight: 600; }
+  ol.q { padding-left: 20px; }
+  ol.q li { margin-bottom: 9px; color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); }
+  th { color: var(--ink-soft); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  td.n { font-variant-numeric: tabular-nums; }
+  .scroller { overflow-x: auto; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Capture bar proportions</h1>
+    <p>The controls now stay put, but the bar eats too much of the screen — the setup fields
+       are pushed below the fold, so Two voices needs a scroll to reach.</p>
+    <p>All three phones below are drawn at true iPhone 17 Pro proportions (402 × 874), in the
+       recording state, so the height percentages are honest rather than impressionistic.</p>
+    <span class="flag">Shipped version measures 38% — your ceiling was a third</span>
+  </header>
+
+  <div class="frames">
+
+    <!-- ============ CURRENT ============ -->
+    <figure>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="screen">
+          <div class="setup clipped">
+            <div>
+              <div class="cap">Recording into</div>
+              <div class="jrnl">
+                <div class="cover"></div>
+                <div class="jname">1987 Journal</div>
+                <div class="chev">▲▼</div>
+              </div>
+            </div>
+            <div class="row"><span class="cap">Backdate this entry</span><span class="sw on"></span></div>
+            <div>
+              <div class="cap" style="margin-bottom:4px">Entry date</div>
+              <div class="datefield"><span>Mar 4, 1987</span><span>day</span></div>
+            </div>
+          </div>
+          <div class="bar cur">
+            <div class="clockbig">0:42</div>
+            <div class="status"><span class="dot"></span>Recording</div>
+            <div class="meter"></div>
+            <div class="rec sq">Stop</div>
+            <div class="triple">
+              <div class="mk">BN</div>
+              <div class="mk">¶</div>
+            </div>
+            <div class="done">Done</div>
+          </div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="name">Now (shipped)</div>
+        <div class="pct">bar ≈ <b>331 pt</b> · <b>38%</b> of screen</div>
+        <div class="verdict no">Two voices and Recent are below the fold</div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ OPTION A ============ -->
+    <figure>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="screen">
+          <div class="setup">
+            <div>
+              <div class="cap">Recording into</div>
+              <div class="jrnl">
+                <div class="cover"></div>
+                <div class="jname">1987 Journal</div>
+                <div class="chev">▲▼</div>
+              </div>
+            </div>
+            <div class="row"><span class="cap">Backdate this entry</span><span class="sw on"></span></div>
+            <div>
+              <div class="cap" style="margin-bottom:4px">Entry date</div>
+              <div class="datefield"><span>Mar 4, 1987</span><span>day</span></div>
+            </div>
+            <div class="row"><span class="cap">Two voices</span><span class="sw on"></span></div>
+          </div>
+          <div class="transcript">
+            …and then we walked down to the river, which was higher than
+            I had ever seen it, and Ellen said we should turn back before
+            the light went…
+          </div>
+          <div class="bar a">
+            <div class="status">
+              <span class="clocksm">0:42</span><span class="dot"></span>Recording
+            </div>
+            <div class="meter"></div>
+            <div class="rec sq">Stop</div>
+            <div class="triple">
+              <div class="mk">BN</div>
+              <div class="mk">¶</div>
+              <div class="done">Done</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="name">A — compact stack</div>
+        <div class="pct">bar ≈ <b>202 pt</b> · <b>23%</b> of screen</div>
+        <div class="verdict yes">Timer inline with status; marks + Done share one row</div>
+      </figcaption>
+    </figure>
+
+    <!-- ============ OPTION B ============ -->
+    <figure>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="screen">
+          <div class="setup">
+            <div>
+              <div class="cap">Recording into</div>
+              <div class="jrnl">
+                <div class="cover"></div>
+                <div class="jname">1987 Journal</div>
+                <div class="chev">▲▼</div>
+              </div>
+            </div>
+            <div class="row"><span class="cap">Backdate this entry</span><span class="sw on"></span></div>
+            <div>
+              <div class="cap" style="margin-bottom:4px">Entry date</div>
+              <div class="datefield"><span>Mar 4, 1987</span><span>day</span></div>
+            </div>
+            <div class="row"><span class="cap">Two voices</span><span class="sw on"></span></div>
+            <div class="recent">
+              <div class="cap" style="font-weight:600">Recent</div>
+              <div class="rrow"><span>Mar 3, 1987</span><span>4:12</span></div>
+              <div class="rrow"><span>Mar 1, 1987</span><span>2:38</span></div>
+            </div>
+          </div>
+          <div class="transcript">
+            …and then we walked down to the river, which was higher than
+            I had ever seen it, and Ellen said we should turn back…
+          </div>
+          <div class="bar b">
+            <div class="row" style="width:100%">
+              <div class="status"><span class="clocksm">0:42</span><span class="dot"></span>Recording</div>
+              <div class="done">Done</div>
+            </div>
+            <div class="meter"></div>
+            <div class="triple">
+              <div class="mk">BN</div>
+              <div class="rec sq">Stop</div>
+              <div class="mk">¶</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>
+        <div class="name">B — marks flank the button</div>
+        <div class="pct">bar ≈ <b>164 pt</b> · <b>19%</b> of screen</div>
+        <div class="verdict yes">Everything reachable with one thumb, no row wasted</div>
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="note">
+    <h2>Where the 331 pt went</h2>
+    <p>The single biggest item is not the record button — it is the timer, set at 44 pt.
+       It is taller than the button it sits above.</p>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>Element</th><th>Now</th><th>A</th><th>B</th><th>What changed</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Timer + status</td><td class="n">78</td><td class="n">34</td><td class="n">34</td><td>44 pt clock drops to 19 pt, on one line with the status</td></tr>
+          <tr><td>Mic meter</td><td class="n">8</td><td class="n">5</td><td class="n">5</td><td>—</td></tr>
+          <tr><td>Record button</td><td class="n">65</td><td class="n">56</td><td class="n">56</td><td>—</td></tr>
+          <tr><td>Voice + ¶ row</td><td class="n">44</td><td class="n">44</td><td class="n">0</td><td>B moves them beside the button</td></tr>
+          <tr><td>Done row</td><td class="n">32</td><td class="n">0</td><td class="n">0</td><td>joins another row</td></tr>
+          <tr><td>Padding + gaps</td><td class="n">104</td><td class="n">63</td><td class="n">69</td><td>28 pt gaps down to 7</td></tr>
+          <tr><td><strong>Total</strong></td><td class="n"><strong>331</strong></td><td class="n"><strong>202</strong></td><td class="n"><strong>164</strong></td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="note">
+    <h2>What stays true in both options</h2>
+    <ul>
+      <li>The bar is one fixed height in every phase, so nothing moves when recording starts —
+          that is the #53 fix and it is already pinned by tests that measure real frames.</li>
+      <li>Marks and Done are <strong>reserved, not inserted</strong>. In A they occupy the same row;
+          in B, Done sits in the timer row and the marks flank the button. Either way the bar
+          cannot change size.</li>
+      <li>Two voices is now visible without scrolling. Recent fits in B, and in A it is one
+          short scroll away while idle.</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <h2>Worth knowing before you pick</h2>
+    <p><strong>B is tighter but changes muscle memory.</strong> Putting the voice switch and ¶
+       beside the record button is the most thumb-reachable arrangement — it also means the two
+       controls you tap mid-reading sit either side of the one control you must never hit by
+       accident. A keeps them on their own row, further from the Stop button.</p>
+    <p>I lean <strong>A</strong> for that reason: 23% is comfortably inside your ceiling, and the
+       Stop button keeps a clear exclusion zone. B is the answer if screen space matters more
+       than that separation.</p>
+  </div>
+
+  <div class="note">
+    <h2>Questions</h2>
+    <ol class="q">
+      <li>A or B?</li>
+      <li>Is the small timer (19 pt, inline with "Recording") acceptable, or do you want the
+          big glanceable clock kept at some middle size like 28 pt?</li>
+      <li>Should Recent stay visible while idle, or is it fine below the fold there?</li>
+      <li>The label sizes shown here are the ones I shipped this morning (17 pt on Mac,
+          16 pt on iPhone). Still too small, about right, or too big?</li>
+    </ol>
+  </div>
+</div>

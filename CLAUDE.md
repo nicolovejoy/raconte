@@ -1,5 +1,84 @@
 # CLAUDE.md
 
+## Session 2026-08-15 midday (laptop — #53 BUILT+SHIPPED but bar too tall; OPTION B ruled, rebuild next)
+
+Owner smoke-driven session, three round-trips. #53 is fixed and pushed, but the owner
+rejected the control bar's SIZE on smoke — so the next session's job is a compact rebuild
+against a mockup he has already approved. Tree clean, everything pushed, phone + Mac carry
+`42293da4`.
+
+- **Capture-label legibility, two commits, both from owner smoke.** `d51a1863`: setup
+  labels were `.caption` at `Color(white: 0.55)` on the `0.05` background — 5.81:1, a
+  PASSING WCAG AA score, which is exactly why no test caught it. New pure `CaptureSurface`
+  + `CaptureLabel` carry each label's size/grey with WCAG luminance math, a 7.0:1 (AAA)
+  floor, and a source-scanning test asserting the dim literals are GONE from CaptureView —
+  without which the model could satisfy every rule while the screen stayed unchanged.
+  Then `dd3ff008`, owner's second report ("still pretty small on the mac"): **the first
+  fix was near-worthless on macOS because a semantic style is not a size.** `.callout` is
+  16 pt on iPhone but 12 pt on Mac; macOS also renders `.caption`/`.footnote`/`.caption2`
+  all at 10 pt. Floor restated in POINTS (16), and each role now maps to a *different*
+  style per platform (control labels `.callout` on iOS, `.title2` on macOS) so both render
+  the same size. Test asserts no role renders smaller on macOS than iOS.
+- **#53 built and pushed (`42293da4`)**: three bands — scrolling setup region, transcript,
+  and a control bar OUTSIDE every scroll view. While capturing, Recent + Two-voices hide
+  and the transcript loses its 160 pt cap; the setup band keeps a fixed 200 pt scrollable
+  slice because **BackdateField is not phase-gated** and writes through mid-recording.
+  `CaptureControlsUITests` measures rendered frames (the only honest pin) and is
+  mutation-verified: restoring the pre-#53 structure fails all three, the record button
+  moving 101 pt on scroll and the voice switch reporting "not hittable when it appears" —
+  the owner's exact symptom. 1231 unit + 17 UI tests.
+- **Two defects the UI tests caught mid-build, both mine, both instructive:**
+  (1) an `accessibilityIdentifier` on the control-bar *container* flattened it into one
+  element and made `capture.record` unqueryable — every capture UI test broke. Third time
+  this file has hit container-flattening. (2) The bar is bottom-anchored, so anything
+  appearing INSIDE it grows it upward: the marker row + Done moved the record button
+  151 pt at record-start, then 59 pt more because the stack sized to content and got
+  centred once the setup band shrank. Fixed by reserving marker row + Done in every phase
+  (hidden, not absent), moving the variable-height error text above the bar, and a
+  `Spacer(minLength: 0)` welding the bar to the bottom edge.
+- **OWNER SMOKE VERDICT: the fix works, the proportions do not.** "The bottom half stays
+  put but it's so big I can't even see the full backdate interface let alone Two voices
+  and Recents." Ruling: **the record section should take a quarter to a third of the screen
+  at most, and all the important controls must be visible up top.** Measured: the shipped
+  bar is **331 pt = 38%** of an iPhone 17 Pro screen. The single biggest item is not the
+  record button — it is **`RecStatusLine`'s 44 pt clock** (`RecStatusLine.swift`), taller
+  than the button beneath it; then a 32 pt Done row and 28 pt gaps throughout.
+- **Mockup made and OWNER RULED — build Option B** (artifact:
+  https://claude.ai/code/artifact/f62d9280-a6a4-4c1d-bac6-b6be1fa42f0f , source
+  in this session's scratchpad). **Option B = 164 pt ≈ 19%**: timer drops 44 → ~19 pt and
+  goes inline with the status text, Done moves into that same top row, and the voice
+  switch + ¶ **flank the record button horizontally**. Owner's refinement, verbatim:
+  *"just make sure we separate the clickable buttons as much as we can within that
+  paradigm… BN and paragraph marker could move towards the side just a bit"* — i.e. push
+  the marker buttons toward the screen edges so the Stop button keeps the widest possible
+  exclusion zone. Three questions on the mockup went unanswered (timer size, Recent
+  visibility while idle, whether the new label sizes are right) — ask on next smoke.
+- **Owner smoke PASSES this session:** the #48/#49 detail nav title on iPhone (title reads
+  "Mon, Dec 8, 2025", tap opens the backdate sheet) — that work is confirmed done.
+- **Pre-existing red, NOT from this session:** `BuildStampTests` has 4 failures on this
+  laptop (`/private/var` vs `/var` symlink shape, supposedly fixed in `0035bc1d`),
+  verified failing on a stashed clean tree. CI is green, so it is laptop-local — but main
+  is NOT green here despite the last handoff claiming 1215 passing.
+- Screen-recording permission was granted to iTerm mid-session but needs a full ⌘Q to take
+  effect, so no screenshots were possible; the owner deferred the restart.
+
+**Next steps:**
+1. **Rebuild the control bar as Option B** — owner-approved, mockup above is the spec.
+   ~164 pt: timer inline with status at ~19 pt, Done in that top row, voice switch and ¶
+   flanking the record button and pushed toward the edges. **Owner asked for Sonnet
+   subagents on this one.** Keep the #53 invariant: one fixed bar height in every phase,
+   and `CaptureControlsUITests` must stay green (add a height-fraction assertion — the bar
+   must measure ≤ 1/3 of screen height, which is the requirement no current test encodes).
+2. Owner smoke on the rebuilt bar + the 3 unanswered mockup questions.
+3. **#58 still OPEN** — macOS light-mode capture look; distinct from the size/contrast work
+   shipped today (that hit both appearances). Steps in PR #61's body.
+4. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
+   marks refuse-vs-approximate; atomic tokens vs validated markdown).
+5. ASC credential hygiene → TestFlight (owner rotates the key when not mid-band-practice).
+6. Queued design passes: capture-landing redesign (now owes fixed-controls AND the
+   ≤1/3 bar proportion as named requirements), #54 prev/next, #55 bubble hierarchy,
+   #38 voice-label mistranscription, #26 capture pause.
+
 ## Session 2026-08-15 evening (laptop — #53 ROOT-CAUSED + DESIGNED, owner-approved, NOT built)
 
 Very short session (owner had to reboot). Zero code written, tree clean. Everything below

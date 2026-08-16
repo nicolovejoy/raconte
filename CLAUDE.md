@@ -159,10 +159,14 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
 5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
    marks refuse-vs-approximate; atomic tokens vs validated markdown). Real-time voice marks
    and edit-then-continue-recording stay deferred.
-6. **Stale design branches, awaiting one yes/no** — `origin/design/capture-landing-mocks`
-   and `origin/design/lnbn-font-mock` each carry **59,288 files / 2.5 GB of Swift compiler
-   cache** (`.build/`, the bug main fixed in `ca45e7f7`). Six mock HTMLs
-   (`a-global-focus`…`f-croix`) exist ONLY there. Cherry-pick those six, then delete both.
+6. ~~Stale design branches~~ **DONE (`520db8b7`)**: the six mock HTMLs that existed only on
+   those branches were taken onto main **as files, not by cherry-picking the commits** —
+   the commits carry the 59,288-file `.build` cache with them. Both remotes deleted, both
+   local branches deleted, `git gc --prune=now` run. **`.git` is still 750 MB**, and that is
+   NOT leftover from these branches: main's own history carries the earlier 738 MB of
+   `.build` blobs from before `ca45e7f7` untracked them. The privacy audit deliberately
+   ruled against rewriting history (it would break every SHA cited across CLAUDE.md, docs
+   and issues), so that stays unless the owner reverses it.
 7. ASC credential hygiene → TestFlight; queued: #54 prev/next, #55 bubble hierarchy,
    #38 voice-label mistranscription, #26 capture pause, #29 (a live effect-list lie).
 

@@ -13,9 +13,9 @@ struct MarkerControlsModel: Equatable, Sendable {
     /// The paragraph button. Independent of the multi-voice toggle (owner decision 7)
     /// — paragraphs are structure in a single-voice reading too.
     var showsParagraphControl: Bool
-    /// Taps land only in `.recording` (design §5); the controls stay *shown* through
-    /// `.interrupted`/`.resuming` so the layout doesn't jump across an interruption
-    /// (plan §0.3.9).
+    /// Taps land only in `.recording` (design §5). The controls are shown in every phase —
+    /// greyed everywhere else — so the layout never jumps, and so the Two-voices toggle has
+    /// a visible effect at the moment it is being decided.
     var isEnabled: Bool
 
     // There was a `reservedForLayout` constant here, and an `isVisible` flag, from the
@@ -26,16 +26,29 @@ struct MarkerControlsModel: Equatable, Sendable {
     // their space individually, so no phase-dependent substitute model is needed to keep
     // the geometry constant. See `RecordControlsRow.markerButton`.
 
+    /// Owner ruling, 2026-08-16 smoke: "when I select Two voices, show the switcher button
+    /// right away, don't wait for me to hit record. Just greyed out. Same with paragraph
+    /// button, leave it up, but grey, when not recording."
+    ///
+    /// The controls used to appear only from `.recording`, which made the Two-voices toggle
+    /// look inert: you turn on the thing whose whole purpose is the voice switch, and nothing
+    /// appears. They are the answer to "can this reading be marked at all", and that is asked
+    /// BEFORE the record button is pressed. So visibility is now phase-independent — voice
+    /// still gated on the toggle, paragraph never (owner decision 7) — and only `isEnabled`
+    /// tracks the phase.
+    ///
+    /// The cases stay listed individually rather than collapsing to `default`: a new
+    /// `CaptureState` must still break the build here and be considered, which is the
+    /// property this type was written for.
     static func make(phase: CaptureState, multiVoice: Bool) -> MarkerControlsModel {
         switch phase {
-        case .recording, .interrupted, .resuming:
+        case .idle, .preparing, .recording, .interrupted, .resuming,
+             .stopping, .captured, .finalizing, .complete:
             return .init(showsVoiceControl: multiVoice,
                          showsParagraphControl: true,
+                         // Only `.recording` has a frame to anchor a marker to; a tap in any
+                         // other phase would have nowhere to land.
                          isEnabled: phase == .recording)
-        case .idle, .preparing, .stopping, .captured, .finalizing, .complete:
-            return .init(showsVoiceControl: false,
-                         showsParagraphControl: false,
-                         isEnabled: false)
         }
     }
 }

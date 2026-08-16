@@ -138,6 +138,90 @@ final class CaptureControlsUITests: XCTestCase {
         waitUntil(20, "never left recording") { record.label != "Stop" }
     }
 
+    // MARK: - The post-stop receipt (owner smoke, 2026-08-15)
+
+    /// The stranded-transcript bug, pinned end to end.
+    ///
+    /// Owner's report, with a screenshot: after Done, the finished transcript stayed on
+    /// screen as loose text below a sliced Recent list, unheaded and untappable — "a
+    /// really messed up user experience that has not been engineering correctly". The text
+    /// was held deliberately (`LiveTranscriptionCoordinator.lastCompletedText` survives so
+    /// the panel doesn't blank the instant you stop) and nothing ever cleared it.
+    ///
+    /// So the discriminating assertion is not "a receipt appeared" — it is that the LIVE
+    /// transcript band is gone at the same time. A receipt drawn over a band that is still
+    /// there would satisfy a weaker test and leave the defect in place.
+    func testStoppingRaisesAReceiptAndClearsTheLiveTranscript() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 2)   // let the synthetic engine produce transcript
+        press(record)
+
+        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 30),
+                      "no receipt after a capture finished")
+        XCTAssertTrue(app.staticTexts["capture.receipt.date"].firstMatch.exists,
+                      "the receipt does not say which entry it is about")
+        XCTAssertFalse(app.descendants(matching: .any)
+                        .matching(identifier: "capture.transcript").firstMatch.exists,
+                       "the live transcript band is STILL on screen behind the receipt — "
+                       + "this is the stranded-text bug the receipt exists to fix")
+
+        // And dismissing returns to a landing screen with neither the receipt nor the
+        // stranded text — the state the owner should have been getting all along.
+        press(dismiss)
+        waitUntil(10, "receipt never dismissed") { !dismiss.exists }
+        XCTAssertFalse(app.descendants(matching: .any)
+                        .matching(identifier: "capture.transcript").firstMatch.exists,
+                       "the finished transcript came back after dismissing the receipt")
+        XCTAssertTrue(app.buttons["capture.libraryDoor"].firstMatch.exists,
+                      "the landing screen did not come back")
+    }
+
+    /// One entry on the landing screen, and a full-width route to the rest.
+    ///
+    /// Owner: "I'd rather not have too many things scrolling around. Would be better just
+    /// to see the most recent one and then have an obvious link to the Library. That's not
+    /// just up in the top right."
+    func testLandingScreenShowsOneEntryAndAProminentLibraryRoute() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        let door = app.buttons["capture.libraryDoor"].firstMatch
+        XCTAssertTrue(door.waitForExistence(timeout: 10), "no library route on the landing screen")
+        XCTAssertTrue(door.isHittable, "the library route is not reachable without scrolling")
+
+        // The old top-right "See all" link is gone, not merely moved: leaving both would
+        // be two routes to the same place, one of them the one he objected to.
+        XCTAssertFalse(app.descendants(matching: .any)
+                        .matching(identifier: "capture.seeAllLink").firstMatch.exists,
+                       "the top-right See all link is still there")
+
+        // Record twice; the landing screen must still show exactly one entry.
+        for _ in 1...2 {
+            waitUntil(15, "record button not ready") { record.label == "Record" && record.isEnabled }
+            press(record)
+            waitUntil(10, "never entered recording") { record.label == "Stop" }
+            Thread.sleep(forTimeInterval: 1)
+            press(record)
+            let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+            XCTAssertTrue(dismiss.waitForExistence(timeout: 30), "no receipt")
+            press(dismiss)
+        }
+
+        waitUntil(15, "landing screen never showed the last entry") {
+            app.descendants(matching: .any).matching(identifier: "capture.recentRow").count >= 1
+        }
+        XCTAssertEqual(app.descendants(matching: .any)
+                        .matching(identifier: "capture.recentRow").count, 1,
+                       "the landing screen is listing more than the single most recent entry")
+    }
+
     // MARK: - The ≤ ⅓ ruling (owner smoke, 2026-08-15)
 
     /// #53's fix kept the controls still and every one of the tests above passed on a bar

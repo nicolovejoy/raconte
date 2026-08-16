@@ -22,6 +22,25 @@ final class CaptureScreenModel {
     /// Tail of the sidecar-write chain — see `enqueueEntryMetadataWrite`.
     private var pendingMetadataWrite: Task<Void, Never>?
 
+    /// The just-finished capture's receipt, or nil when there is nothing to acknowledge.
+    ///
+    /// Screen state, not machine state, and it has to be: `finishCurrentCapture` replaces
+    /// the coordinator with a fresh idle one, so by the time a capture is safely on disk
+    /// the phase says `.idle` and is indistinguishable from having just opened the app.
+    /// That gap is why the finished transcript used to end up loose on the landing screen
+    /// with nothing owning it.
+    ///
+    /// Set once a capture is fully committed (after the finalizer, the transcript ref, and
+    /// the rescan), and cleared only by an explicit dismissal — never on a timer. The owner
+    /// is usually looking down at a paper journal when a recording ends, so anything that
+    /// vanishes on its own vanishes unseen.
+    private(set) var receipt: CaptureReceipt?
+
+    /// Dismiss the receipt and return to the landing screen. The "Record another" action,
+    /// and also what "Open" does on its way to the entry — coming back from the detail
+    /// screen to a receipt for an entry you have just been reading would be a loop.
+    func dismissReceipt() { receipt = nil }
+
     let capturesRoot: URL
     /// The recent-recordings section (M3 T4.5) and the Library screen read through the
     /// SAME instance — one scanner, one `JournalStore`/`EntryMetadataStore` pair, per
@@ -270,7 +289,16 @@ final class CaptureScreenModel {
         await library.sweepTrash()
     }
 
-    func record() async { await coordinator.record() }
+    /// Starting a new reading retires the previous one's receipt.
+    ///
+    /// `CaptureLayoutModel` already refuses to draw a receipt in a capturing phase, so
+    /// this is not what keeps the screen correct — it is what keeps the STATE honest, so
+    /// a receipt for the previous entry can never reappear when this capture ends and the
+    /// build of the new one fails.
+    func record() async {
+        receipt = nil
+        await coordinator.record()
+    }
     func done() async { await coordinator.done() }
     func resume() async { await coordinator.resume() }
 
@@ -523,8 +551,32 @@ final class CaptureScreenModel {
         for id in transcribed { await revisionStore.promoteIfNeeded(captureID: id) }
         for id in transcribed { await detectSpokenDate(for: id) }
         await library.rescan()
+        // Strictly after the rescan: the receipt is built from the library's own view of
+        // the entry, so it cannot be assembled until the scan has seen it. Also after
+        // `detectSpokenDate`, or a receipt could name a date the sidecar is about to
+        // change under it.
+        await buildReceipt(for: transcribed)
         coordinator = spawn()
         finishing = false
+    }
+
+    /// Assemble the post-stop receipt for the capture that just committed.
+    ///
+    /// Best-effort in every direction, and deliberately so: this runs on the path that has
+    /// just made a recording safe on disk, and nothing about acknowledging it may stand
+    /// between the owner and that fact. An entry the scan cannot see, or a transcript that
+    /// will not read, leaves the screen on its ordinary landing state — the recording is
+    /// still saved and still in the library. It never throws and never blocks.
+    ///
+    /// The LAST id, not the first: `finalizeQueue` can hold more than one capture (launch
+    /// recovery drains a backlog through here), and the receipt is about the reading the
+    /// owner just finished, which is the most recent one.
+    private func buildReceipt(for captureIDs: [String]) async {
+        guard let captureID = captureIDs.last,
+              let entry = library.allEntries.first(where: { $0.captureID == captureID })
+        else { return }
+        let transcript = await library.transcript(for: captureID)
+        receipt = CaptureReceipt.make(entry: entry, transcript: transcript)
     }
 
     /// M3 issue #15. Run when a capture's transcript first exists — after finalize, and
@@ -704,7 +756,8 @@ struct CaptureView: View {
     }
 
     private var layout: CaptureLayoutModel {
-        CaptureLayoutModel.make(phase: model.coordinator.phase)
+        CaptureLayoutModel.make(phase: model.coordinator.phase,
+                                hasReceipt: model.receipt != nil)
     }
 
     /// Issue #53. Three bands, top to bottom: a scrolling setup region, the live
@@ -723,15 +776,22 @@ struct CaptureView: View {
             Color(white: 0.05).ignoresSafeArea()
 
             VStack(spacing: 0) {
-                setupRegion
-                transcriptRegion
-                // Absorbs whatever the bands above do not want, so the bar stays welded to
-                // the bottom edge. Without it the stack sizes to its content and the ZStack
-                // centres the lot — which moved the record button 59 pt the moment
-                // recording started and the setup band shrank to its capture-time height.
-                // Only ever non-zero when neither the setup band nor the transcript is
-                // stretching, i.e. mid-capture with nothing transcribed yet.
-                Spacer(minLength: 0)
+                if let receipt = model.receipt, layout.showsReceipt {
+                    // Just stopped. The receipt owns everything above the bar; the arming
+                    // controls step aside until it is dismissed.
+                    receiptRegion(receipt)
+                } else {
+                    setupRegion
+                    transcriptRegion
+                    // Absorbs whatever the bands above do not want, so the bar stays welded
+                    // to the bottom edge. Without it the stack sizes to its content and the
+                    // ZStack centres the lot — which moved the record button 59 pt the
+                    // moment recording started and the setup band shrank to its
+                    // capture-time height. Only ever non-zero when neither the setup band
+                    // nor the transcript is stretching, i.e. mid-capture with nothing
+                    // transcribed yet.
+                    Spacer(minLength: 0)
+                }
                 errorBanner
                 controlBar
             }
@@ -813,8 +873,12 @@ struct CaptureView: View {
                                    onDelete: { model.delete(rec.captureID) })
                 }
 
-                if layout.showsRecentList {
-                    recentSection
+                if layout.showsLastEntry {
+                    lastEntrySection
+                }
+
+                if layout.showsLibraryDoor {
+                    libraryDoor
                 }
 
                 // Not DEBUG-gated: a wireless install is exactly when you can't tell
@@ -958,33 +1022,158 @@ struct CaptureView: View {
         .padding(.horizontal, CaptureControlBarMetrics.controlRowHorizontalPadding)
     }
 
-    /// The 3 most recently captured entries (M3 T4.5), sourced from `model.library` —
-    /// the SAME scan/store the Library screen reads — and rendered with the same
-    /// `LibraryEntryRow` the library list uses. No play/delete affordances here: those
-    /// moved to `EntryDetailView`, which every row pushes into via the existing
-    /// `LibraryDestination.entry` route.
+    /// The single most recent entry (M3 T4.5, cut down 2026-08-15), sourced from
+    /// `model.library` — the SAME scan/store the Library screen reads — and rendered with
+    /// the same `LibraryEntryRow` the library list uses.
+    ///
+    /// One, not three, and not a list. Owner smoke: "I'd rather not have too many things
+    /// scrolling around. Would be better just to see the most recent one and then have an
+    /// obvious link to the Library." Three rows were also what turned the setup band into a
+    /// scroll view tall enough to compete with the control bar for height, which is why
+    /// its last row rendered sliced through the middle of a sentence.
     @ViewBuilder
-    private var recentSection: some View {
-        if !model.library.recent.isEmpty {
+    private var lastEntrySection: some View {
+        if let item = model.library.recent.first {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Recent")
-                        .captureLabel(.recentHeader)
-                    Spacer()
-                    NavigationLink(value: RootDestination.library) {
-                        Text("See all")
-                            .captureLabel(.seeAllLink)
-                    }
-                    .accessibilityIdentifier("capture.seeAllLink")
+                Text("Last entry")
+                    .captureLabel(.recentHeader)
+                NavigationLink(value: LibraryDestination.entry(item.captureID)) {
+                    LibraryEntryRow(item: item)
                 }
-                ForEach(model.library.recent) { item in
-                    NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                        LibraryEntryRow(item: item)
-                    }
-                    .accessibilityIdentifier("capture.recentRow")
-                }
+                .accessibilityIdentifier("capture.recentRow")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The way into everything else, at full width and at the foot of the landing area.
+    ///
+    /// Replaces the "See all" link that sat in the Recent header's top-right corner. The
+    /// owner's words: he wants "an obvious link to the Library… not just up in the top
+    /// right like open more recent". A route this central should not be the smallest thing
+    /// on the screen.
+    private var libraryDoor: some View {
+        NavigationLink(value: RootDestination.library) {
+            HStack {
+                Text("All entries & journals")
+                    .captureLabel(.libraryDoor)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .captureLabel(.libraryDoorChevron)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+        }
+        // Combined, with an explicit label: a NavigationLink wrapping an HStack of Text
+        // plus an Image is read out as two elements otherwise. This file has hit that
+        // flattening/splitting pair repeatedly (Task-6 backdate row, the control bar).
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("All entries and journals")
+        .accessibilityIdentifier("capture.libraryDoor")
+    }
+
+    /// The post-stop receipt (owner ruling 2026-08-15, capture-landing option B).
+    ///
+    /// Everything above the control bar for as long as it is up. What the owner lost
+    /// before was any sense that a reading had FINISHED: the transcript simply stayed on
+    /// screen as loose text under a sliced Recent list, belonging to nothing and leading
+    /// nowhere. Here the same words are headed, dated, set in the reading serif with their
+    /// voice marks, and have two doors out of them.
+    private func receiptRegion(_ receipt: CaptureReceipt) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(receipt.dateText)
+                        .captureLabel(.receiptDate)
+                        .accessibilityIdentifier("capture.receipt.date")
+                    Spacer()
+                    Text("Saved")
+                        .captureLabel(.receiptSavedChip)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.green.opacity(0.22)))
+                }
+                Text(receipt.summaryLine)
+                    .captureLabel(.receiptSummary)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("capture.receipt.summary")
+            }
+
+            receiptProse(receipt)
+
+            HStack(spacing: 12) {
+                NavigationLink(value: LibraryDestination.entry(receipt.captureID)) {
+                    Text("Open")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                // Dismissed on the way out, not on the way back: returning from the entry
+                // you were just reading to a receipt about it is a loop with no exit that
+                // feels like progress.
+                .simultaneousGesture(TapGesture().onEnded { model.dismissReceipt() })
+                .accessibilityIdentifier("capture.receipt.open")
+
+                Button("Record another") { model.dismissReceipt() }
+                    .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("capture.receipt.dismiss")
+            }
+            .controlSize(.large)
+            // Never `.preferredColorScheme` on this screen — see `BackdateField`.
+            .environment(\.colorScheme, .dark)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The receipt's prose, or one calm line saying why there is none.
+    ///
+    /// Absent, unreadable and present-but-empty stay three distinct answers (issue #11's
+    /// rule) rather than collapsing into a blank box — and none of them is an error, which
+    /// is why they read as statements and not warnings. The recording is safe in all three.
+    @ViewBuilder
+    private func receiptProse(_ receipt: CaptureReceipt) -> some View {
+        if let unavailable = receipt.proseUnavailableText {
+            Text(unavailable)
+                .captureLabel(.receiptSummary)
+                .accessibilityIdentifier("capture.receipt.prose")
+            Spacer(minLength: 0)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    switch receipt.body {
+                    case .attributed(let paragraphs):
+                        // `VoiceAttributedText` is the SAME renderer the detail screen
+                        // uses, so the marks the owner asked to see "manifest" here are
+                        // exactly the ones he'll see when he opens the entry.
+                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                            VoiceAttributedText.paragraph(
+                                paragraph, voiceLabels: model.selectedJournalVoiceLabels)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    case .plain(let text):
+                        Text(text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .absent, .unreadable, .empty:
+                        // Unreachable: `proseUnavailableText` is non-nil for all three, so
+                        // the branch above handled them. Stated rather than defaulted, so
+                        // a new display case has to be decided here instead of silently
+                        // rendering nothing.
+                        EmptyView()
+                    }
+                }
+                // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
+                // and this is a reading surface.
+                .font(.system(.callout, design: .serif))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityIdentifier("capture.receipt.prose")
         }
     }
 

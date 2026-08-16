@@ -125,14 +125,85 @@ final class CaptureControlsUITests: XCTestCase {
         let before = voiceSwitch.frame
         XCTAssertTrue(voiceSwitch.isHittable, "voice switch is not hittable when it appears")
 
-        // Whatever the page does, the switch is not part of it.
-        app.scrollViews.firstMatch.swipeUp()
+        // Whatever the page does, the switch is not part of it. Since approach 2
+        // (2026-08-16), no scroll view exists at all while recording until the
+        // transcript has content — correctly, per the owner's "I would rather have
+        // none [scrollable sections]" — so give the synthetic engine a moment to
+        // produce some before swiping; its absence this early is not a failure.
+        let scroll = app.scrollViews.firstMatch
+        if scroll.waitForExistence(timeout: 5) { scroll.swipeUp() }
         Thread.sleep(forTimeInterval: 1.5)   // let synthetic audio and any layout settle
 
         assertFrame(voiceSwitch, equals: before, "voice switch during recording")
         XCTAssertTrue(voiceSwitch.isHittable,
                       "voice switch stopped being hittable during recording — this is the "
                       + "#53 report: it had scrolled out of the viewport")
+
+        press(record)
+        waitUntil(20, "never left recording") { record.label != "Stop" }
+    }
+
+    // MARK: - Approach 2, 2026-08-16 IA discussion
+    //
+    // Owner: "there are three sections on the iPhone screen... the fact that there's two
+    // scrollable sections above [the bar] doesn't make any sense at all to me... I would
+    // rather have none, especially during the recording." Before this, the setup band
+    // (journal + backdate) was squeezed into a fixed-height box and forced to scroll
+    // internally — a second scroll view stacked above the transcript's own. These pin the
+    // rendered consequence: only the transcript should scroll while recording, and
+    // backdating must stay reachable through the compact summary that replaces it.
+
+    /// The discriminating count. `CaptureLayoutModelTests` pins the visibility rule; only
+    /// this can catch a `ScrollView` still wrapping the setup band even if its content
+    /// happens to fit without scrolling — the old bug was the scroll view existing, not
+    /// merely content overflowing it.
+    func testOnlyOneScrollableRegionExistsWhileRecording() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+
+        let summary = app.buttons["capture.backdateSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 10),
+                      "compact backdate summary missing while recording")
+        XCTAssertFalse(app.switches["capture.backdateToggle"].firstMatch.exists,
+                       "the full inline backdate field is still on screen while recording — "
+                       + "it is exactly the content that forced a second scroll view")
+
+        Thread.sleep(forTimeInterval: 2)   // let the synthetic engine grow the transcript
+        XCTAssertLessThanOrEqual(app.scrollViews.count, 1,
+                                 "more than one scrollable region above the control bar "
+                                 + "while recording")
+
+        press(record)
+        waitUntil(20, "never left recording") { record.label != "Stop" }
+    }
+
+    /// Backdating is bounded content, not removed capability — the compact summary must
+    /// still open the real, write-through editor, and opening it must not disturb the
+    /// recording underneath.
+    func testTappingTheCompactBackdateSummaryOpensTheEditorWithoutInterruptingTheRecording() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+
+        let summary = app.buttons["capture.backdateSummary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 10), "compact backdate summary missing")
+        press(summary)
+
+        let toggle = app.switches["capture.backdateToggle"].firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10),
+                      "tapping the compact summary did not open the backdate editor")
+
+        let done = app.buttons["capture.backdateSheetDone"].firstMatch
+        if done.waitForExistence(timeout: 5) { press(done) }
+        XCTAssertEqual(record.label, "Stop",
+                       "opening the backdate sheet interrupted the recording")
 
         press(record)
         waitUntil(20, "never left recording") { record.label != "Stop" }

@@ -52,6 +52,32 @@ final class CaptureLayoutModelTests: XCTestCase {
         }
     }
 
+    // MARK: - Approach 2, 2026-08-16 IA discussion
+    //
+    // Owner: "there are three sections on the iPhone screen... the fact that there's two
+    // scrollable sections above [the bottom control bar] doesn't make any sense at all to
+    // me... I would rather have none, especially during the recording." The two scroll
+    // views were the setup band (squeezed into `setupHeightWhileCapturing` and forced to
+    // scroll internally) and the transcript. Bounded content — the journal name, the
+    // backdate — should never need a scroll region of its own; only the transcript is
+    // genuinely unbounded. These two flags are how the setup band stops needing one.
+
+    func testBackdateFieldIsCompactWhileCapturing() {
+        for phase in capturingPhases {
+            XCTAssertTrue(layout(phase).usesCompactBackdateField,
+                          "\(phase): the full inline backdate field is still on screen — "
+                          + "it is exactly the content that forced a second scroll view")
+        }
+    }
+
+    func testRecoveryBannersAreHiddenWhileCapturing() {
+        for phase in capturingPhases {
+            XCTAssertFalse(layout(phase).showsRecoveryBanners,
+                           "\(phase): a launch-recovery banner still occupies height during "
+                           + "a capture")
+        }
+    }
+
     /// The owner's explicit constraint: idle must look exactly as it did. This fix is not
     /// licence to redesign the capture landing — that redesign is separately scoped and
     /// deliberately deferred until it can be discussed on a large screen.
@@ -63,6 +89,10 @@ final class CaptureLayoutModelTests: XCTestCase {
         XCTAssertTrue(idle.showsMultiVoiceField, "idle lost the Two-voices toggle")
         XCTAssertFalse(idle.transcriptFillsAvailableHeight,
                        "idle must not give the transcript the whole screen")
+        XCTAssertFalse(idle.usesCompactBackdateField,
+                       "idle must keep the full inline backdate field — it is a browsing "
+                       + "screen, where one honest scroll region is fine")
+        XCTAssertTrue(idle.showsRecoveryBanners, "idle lost the launch-recovery banners")
     }
 
     // MARK: - The post-stop receipt (owner ruling 2026-08-15, option B)

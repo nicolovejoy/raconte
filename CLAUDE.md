@@ -1,15 +1,15 @@
 # CLAUDE.md
 
-## Session 2026-08-15 night → 08-16 (laptop — Mac date picker rebuilt TWICE, smoked; CI flake fixed; deep resync + docs; 1252 → 1267 tests)
+## Session 2026-08-15 night → 08-16 (laptop — Mac date picker rebuilt TWICE, THREE smoke rounds; CI flake; #53/#58 CLOSED; deep resync + docs; 1252 → 1269 tests)
 
 Owner went to bed after approving all five queued next-steps and asking for a date-picker
-recommendation; the unattended stretch is items 1 and 3 below. He then smoked in the
-morning ("mostly pass") and a second round shipped off that. Tree clean, main at
-`b262a270`, pushed, CI green.
+recommendation; the unattended stretch is the first two bullets. He then smoked three times
+across the morning. Tree clean, main at `3fc6fa9b`, pushed.
 
 **The session's shape is worth copying: build blind overnight → owner smoke → fix what he
-actually hit.** The overnight guess (a sheet) was structurally sound and still wrong in
-two ways only a human at the keyboard could find.
+actually hit.** The overnight guess (a sheet) was structurally sound and still wrong in two
+ways only a human at the keyboard could find. Every visual fix this session was either
+confirmed or corrected by smoke within hours — nothing shipped on my judgement alone.
 
 - **Mac backdate control rebuilt: the app now draws its own button and calendar sheet
   (`2e7c7d34`).** The reco, and the reasoning worth keeping: **two system styles had been
@@ -123,25 +123,46 @@ two ways only a human at the keyboard could find.
   with a clamp + 5 tests. **Mutation-verified**: without the clamp Jan 31 → Feb becomes
   March 3 and Feb 29 2024 → 2025 becomes March 1. Test calendars pinned to UTC.
 
+- **Smoke round 3 (Mac + iPhone): everything passed. #58 and #53 both CLOSED.** The Mac
+  date picker is done — Escape and click-away dismiss, the year dropdown moves the calendar
+  without shifting the day. Phone marker smoke passed all six steps.
+- **Marker buttons now stand from the start, greyed until recording (`3fc6fa9b`).** Owner:
+  "when I select Two voices, show the switcher button right away, don't wait for me to hit
+  record. Just greyed out." He was right and the reason is worth keeping: **the toggle
+  looked inert** — you turn on the one thing whose entire purpose is the voice switch, and
+  nothing appears. The controls answer "can this reading be marked at all", which is asked
+  BEFORE record is pressed. Visibility is now phase-independent (voice still gated on the
+  toggle, paragraph never); only `isEnabled` tracks phase, pinned as
+  `isEnabled == (phase == .recording)` across EVERY `CaptureState` rather than a hand-picked
+  few. Model-only — the view already drew disabled buttons at 0.45 opacity.
+- **Two issues filed from that smoke.** **#62** — trashing an entry leaves its receipt on
+  the capture screen naming the deleted entry. Mechanism read, not guessed: `receipt` is
+  cleared only at record start and by the dismiss button, so nothing invalidates it when the
+  entry goes to the trash; the `recent` row is NOT at fault (`trashEntry` already rescans).
+  It is a consequence of the receipt's own "stays until dismissed, never on a timer" ruling,
+  which stands — it just never considered the entry vanishing underneath it.
+  **#63** — no marker feedback at all on macOS: the dash-dot haptic is iOS-only and Macs have
+  no haptic engine, so step 5 of the smoke was unjudgeable there. Owner: "which is a miss."
+
 **Next steps:**
-1. **Re-smoke the two morning fixes on the Mac** (`~/Desktop/Raconte-latest.app`, dylib
-   `0556FFB9`): Escape and click-away both close the calendar; picking a year from the
-   dropdown moves the calendar **without shifting the day**. Then #58 can close.
-2. **Owner smoke, phone** — build on the device (`61BB40A0`), never run. Two unanswered
-   cosmetics ride along: timer at **24 pt** (his mockup drew ~27, its table said 19) and the
-   library route reading **"All entries & journals"**.
-3. **Close #53** — resync verified it DONE (`CaptureView.swift:778-797` +
-   `CaptureControlBarMetrics.swift:17-121`, two UI tests measuring rendered frames). Left
-   open only because closing is the owner's call.
-4. **Error-banner legibility ruling** — 10 pt red on the Mac. It is an operating message
-   below the floor, but `CaptureLabel` models grey levels only, so folding it in means
-   extending the colour model.
+1. **#62** — trashed entry still shown on the capture screen. Cheapest fix: clear the
+   receipt when its `captureID` leaves `library.allEntries` after a rescan. Two adjacent
+   decisions in the issue (what Open should do for a trashed entry; whether restore brings
+   the receipt back — almost certainly not).
+2. **#63** — macOS marker feedback. Needs its own answer, not a port: the requirement is
+   confirmation perceivable **without looking at the screen**, since his eyes are on the
+   paper. A sound cue lands in the microphone, which may disqualify it on its own.
+3. **Error-banner legibility ruling** — 10 pt red on the Mac. An operating message below the
+   floor, but `CaptureLabel` models grey levels only, so folding it in extends the colour model.
+4. **Two unanswered cosmetics**, still unasked after three smokes: timer at **24 pt** (his
+   mockup drew ~27, its table said 19) and the library route reading **"All entries & journals"**.
 5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
    marks refuse-vs-approximate; atomic tokens vs validated markdown). Real-time voice marks
    and edit-then-continue-recording stay deferred.
-6. **Stale design branches** — `origin/design/capture-landing-mocks` and
-   `origin/design/lnbn-font-mock` each carry **59,288 committed `.build` files**; six mock
-   HTMLs exist ONLY there. Cherry-pick those six, then delete both.
+6. **Stale design branches, awaiting one yes/no** — `origin/design/capture-landing-mocks`
+   and `origin/design/lnbn-font-mock` each carry **59,288 files / 2.5 GB of Swift compiler
+   cache** (`.build/`, the bug main fixed in `ca45e7f7`). Six mock HTMLs
+   (`a-global-focus`…`f-croix`) exist ONLY there. Cherry-pick those six, then delete both.
 7. ASC credential hygiene → TestFlight; queued: #54 prev/next, #55 bubble hierarchy,
    #38 voice-label mistranscription, #26 capture pause, #29 (a live effect-list lie).
 

@@ -1236,8 +1236,16 @@ struct JournalHeaderView: View {
                 HStack(spacing: 6) {
                     JournalCoverThumbnail(data: model.selectedJournalCover, size: 34)
                         .accessibilityIdentifier("capture.journalCoverThumbnail")
+                    // `captureLabel`, not a raw `.font(.title3…)`. The raw style rendered
+                    // this at 15 pt on the Mac — below the 16 pt floor — on the very
+                    // platform the "font too small" report came from, while
+                    // `CaptureLabel.journalName` sat in the model declaring 22 pt and
+                    // passing every check in `CaptureLabelTests`. The model said one thing
+                    // and the screen did another; `testEveryLabelCaseIsActuallyAppliedToAView`
+                    // is what now makes that disagreement impossible.
                     Text(model.selectedJournalName)
-                        .font(.title3.weight(.semibold))
+                        .captureLabel(.journalName)
+                        .fontWeight(.semibold)
                     Image(systemName: "chevron.up.chevron.down")
                         .captureLabel(.journalPickerChevron)
                 }

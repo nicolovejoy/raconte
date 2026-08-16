@@ -118,6 +118,52 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
+    /// The adversary the floor tests were missing.
+    ///
+    /// Every assertion above quantifies over `CaptureLabel.allCases` — so a case that no
+    /// view ever applies is a guarantee about nothing, and worse, it reads in the suite as
+    /// coverage. That is not hypothetical: `journalName` declared `.title` on macOS (22 pt)
+    /// and passed every floor above, while `JournalHeaderView` drew the journal name with a
+    /// raw `.font(.title3.weight(.semibold))` — 15 pt on the Mac, BELOW the 16 pt floor, on
+    /// the exact platform the "font too small" report came from. The model said one thing
+    /// and the screen did another, and nothing in the suite could tell.
+    ///
+    /// This is the same shape as `testCaptureViewDoesNotReintroduceTheDimGreyLiterals…`,
+    /// pointed the other way: that one checks no label escapes the model downward, this one
+    /// checks no case sits in the model unattached to a label at all.
+    func testEveryLabelCaseIsActuallyAppliedToAView() throws {
+        let sources = try captureUISources()
+        for label in CaptureLabel.allCases {
+            XCTAssertTrue(
+                sources.contains(".captureLabel(.\(label.rawValue))"),
+                "CaptureLabel.\(label.rawValue) is declared and checked by every floor in "
+                + "this file, but no view applies it — so those checks prove nothing about "
+                + "the screen. Either apply it, or delete the case")
+        }
+    }
+
+    /// Concatenated source of every capture-screen view, comments stripped so a case merely
+    /// *named* in prose cannot satisfy the check above.
+    private func captureUISources() throws -> String {
+        let uiDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()          // RaconteTests
+            .deletingLastPathComponent()          // repo root
+            .appendingPathComponent("Raconte/Capture/UI")
+        let files = try FileManager.default
+            .contentsOfDirectory(at: uiDir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertFalse(files.isEmpty, "found no capture UI sources to scan")
+        return try files
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                guard let slashes = line.range(of: "//") else { return line }
+                return line[line.startIndex..<slashes.lowerBound]
+            }
+            .joined(separator: "\n")
+    }
+
     private func captureViewSource() throws -> String {
         try String(
             contentsOf: URL(fileURLWithPath: #filePath)

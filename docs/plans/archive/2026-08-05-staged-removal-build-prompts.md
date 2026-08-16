@@ -1,3 +1,5 @@
+> **Archived — shipped 2026-08-07 (PR #34).** #25 closed.
+
 # Staged removal — build prompts (#25)
 
 **Status: EXECUTED — shipped 2026-08-07 (PR #34, issue #25 closed).** Kept as the build

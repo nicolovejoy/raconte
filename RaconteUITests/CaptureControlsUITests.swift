@@ -137,4 +137,115 @@ final class CaptureControlsUITests: XCTestCase {
         press(record)
         waitUntil(20, "never left recording") { record.label != "Stop" }
     }
+
+    // MARK: - The ≤ ⅓ ruling (owner smoke, 2026-08-15)
+
+    /// #53's fix kept the controls still and every one of the tests above passed on a bar
+    /// that took 331 pt — 38% of the owner's screen. He rejected it: "the bottom half
+    /// stays put but it's so big I can't even see the full backdate interface let alone
+    /// Two voices and Recents." The ruling is a proportion, at most a third, and no test
+    /// in this file encoded a proportion — which is exactly why it shipped.
+    ///
+    /// Measured from the elapsed timer — the topmost element of the topmost row — down to
+    /// the bottom of the window. Two known inaccuracies, in opposite directions: it
+    /// excludes the bar's own top padding (~12 pt), and it includes the bottom safe-area
+    /// inset the bar sits above (~34 pt on this device). Net, it over-reports slightly,
+    /// which is the safe direction for a ceiling. Measured 190 pt of 874 (22%) against the
+    /// 291 pt ceiling; the rejected bar would measure ~353 pt and fail.
+    ///
+    /// Anchoring on the clock rather than the record button is deliberate: anything that
+    /// makes a row above the button taller pushes the clock UP, so this catches a bar that
+    /// grew for a reason nobody predicted, not just one whose constants were edited.
+    private func assertBarFitsWithinAThird(_ app: XCUIApplication,
+                                           _ phase: String,
+                                           file: StaticString = #filePath, line: UInt = #line) {
+        let clock = app.staticTexts["capture.clock"].firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout: 10),
+                      "elapsed timer not found — cannot locate the top of the control bar",
+                      file: file, line: line)
+
+        let screen = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(screen.height, 0, "window has no measurable frame",
+                             file: file, line: line)
+
+        let barHeight = screen.maxY - clock.frame.minY
+        let ceiling = screen.height / 3
+
+        XCTAssertLessThanOrEqual(
+            barHeight, ceiling,
+            "\(phase): the control bar measures \(Int(barHeight)) pt of a "
+            + "\(Int(screen.height)) pt screen "
+            + "(\(Int((barHeight / screen.height * 100).rounded()))%) — the ruling is a "
+            + "third at most, i.e. \(Int(ceiling)) pt",
+            file: file, line: line)
+    }
+
+    /// Idle is what the owner sees before he starts reading, and the state in which the
+    /// backdate field, Two voices and Recent all have to be reachable without scrolling.
+    func testControlBarTakesAtMostAThirdOfTheScreenWhenIdle() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        assertBarFitsWithinAThird(app, "idle")
+    }
+
+    /// And while recording — the state the mockup was drawn in, and the state where the
+    /// bar is at its fullest (live timer, marks shown, Done reserved).
+    func testControlBarTakesAtMostAThirdOfTheScreenWhileRecording() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
+        if multiVoice.waitForExistence(timeout: 10), (multiVoice.value as? String) != "1" {
+            press(multiVoice)
+        }
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+
+        assertBarFitsWithinAThird(app, "recording")
+
+        press(record)
+        waitUntil(20, "never left recording") { record.label != "Stop" }
+    }
+
+    /// The horizontal half of "the controls stay put".
+    ///
+    /// The marks flank the record button with equal spacers, so the record button's
+    /// centring depends on the two side slots staying the same width. The voice button's
+    /// label changes on every tap — "BN" → "LN", or a journal's own labels, which can be
+    /// any length — so intrinsic widths would walk the Stop button sideways mid-reading.
+    /// This is #53's failure mode rotated 90°, and nothing else in the suite would see it.
+    func testMarkingAVoiceDoesNotMoveTheRecordButtonSideways() throws {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
+        guard multiVoice.waitForExistence(timeout: 10) else {
+            throw XCTSkip("two-voices toggle not present in this configuration")
+        }
+        if (multiVoice.value as? String) != "1" { press(multiVoice) }
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+
+        let voiceSwitch = app.buttons["capture.voiceSwitch"].firstMatch
+        XCTAssertTrue(voiceSwitch.waitForExistence(timeout: 10), "voice switch missing")
+
+        let recordBefore = record.frame
+        let switchBefore = voiceSwitch.frame
+        let startingLabel = voiceSwitch.label
+
+        press(voiceSwitch)
+        waitUntil(10, "voice never flipped") { voiceSwitch.label != startingLabel }
+
+        assertFrame(record, equals: recordBefore, "record button after a voice mark")
+        assertFrame(voiceSwitch, equals: switchBefore, "voice switch after a voice mark")
+
+        press(record)
+        waitUntil(20, "never left recording") { record.label != "Stop" }
+    }
 }

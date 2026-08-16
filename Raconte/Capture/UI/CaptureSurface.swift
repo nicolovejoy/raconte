@@ -143,7 +143,6 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case backdateDateButton
     case multiVoiceToggle
     case recentHeader
-    case seeAllLink
     /// The full-width library route at the foot of the landing area (2026-08-15) —
     /// replaces the top-right "See all" link, which the owner called out as too small a
     /// target for the only way into everything else.
@@ -167,7 +166,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
              .backdateDateButton: 1.0
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .seeAllLink, .libraryDoorChevron, .receiptSummary: 0.78
+             .recentHeader, .libraryDoorChevron, .receiptSummary: 0.78
         }
     }
 
@@ -184,7 +183,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .recentHeader, .libraryDoor: .headline // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-                 .seeAllLink, .libraryDoorChevron, .receiptSummary,
+                 .libraryDoorChevron, .receiptSummary,
                  .receiptSavedChip, .backdateDateButton: .callout    // 16
             }
         case .macOS:
@@ -193,7 +192,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .recentHeader, .libraryDoor: .title2  // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-                 .seeAllLink, .libraryDoorChevron, .receiptSummary,
+                 .libraryDoorChevron, .receiptSummary,
                  .receiptSavedChip, .backdateDateButton: .title2     // 17
             }
         }

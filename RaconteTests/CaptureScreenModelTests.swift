@@ -87,8 +87,27 @@ final class CaptureScreenModelTests: XCTestCase {
 
         await waitUntil({ model.library.items.isEmpty == false }, "library never refreshed")
         XCTAssertEqual(encoder.calls.count, 1, "encoder must run in-session, not at next launch")
-        XCTAssertTrue(model.coordinator !== liveCoordinator,
-                      "model should reset to a fresh idle coordinator after the commit")
+
+        // Waited for, not asserted outright — and the difference is a CI failure.
+        //
+        // A refreshed library is NOT the signal that the coordinator has been replaced.
+        // `finishCurrentCapture` does `await library.rescan()`, then `await
+        // buildReceipt(...)` — which itself awaits a transcript read off disk — and only
+        // then `coordinator = spawn()`. So the gate above goes true strictly before this
+        // line's subject is set, with real I/O in between. It passed for as long as that
+        // gap was one continuation; the post-stop receipt (a509a1b6) put a disk read in it,
+        // and the first loaded CI runner to see the widened window lost the race
+        // (run 31928162420, on a docs-only commit, which is the tell that nothing in the
+        // product changed).
+        //
+        // This is the #4/#22 family again: gate on the effect you are asserting, never on
+        // an earlier one that merely tends to precede it. `waitUntil` still XCTFails on
+        // timeout, so a coordinator that genuinely never resets still fails here.
+        //
+        // Verified by inserting a 300 ms sleep in exactly that window, which reproduces the
+        // CI message verbatim against the old assertion and passes against this one.
+        await waitUntil({ model.coordinator !== liveCoordinator },
+                        "model should reset to a fresh idle coordinator after the commit")
 
         let captureID = liveCoordinator.finalizeQueue[0]
         let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: captureID)

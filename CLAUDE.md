@@ -77,6 +77,27 @@ note below.
   symlink shape. **Trap re-confirmed: a new test file needs `xcodegen generate`** or
   `-only-testing` reports "Executed 0 tests" and **exits 0** — a silent pass.
 
+- **Post-handoff, 2026-08-16 — deep `/resync` + docs reorg.** All 22 open issues verified
+  against code (three Explore agents, evidence = file:line + SHA, never a commit subject).
+  **Result: almost no drift — exactly ONE shipped-but-open issue, #53**, verified done at
+  `CaptureView.swift:778-797` + `CaptureControlBarMetrics.swift:17-121` with two UI tests
+  measuring rendered frames (`42293da4`). Everything else genuinely TODO. **#58 has code
+  for all four controls it names but its acceptance is VISUAL — left open for smoke.**
+  Also confirmed live: **#29 is a real inconsistency**, not a nit — `CaptureMachine` rows
+  11/14 omit `.releaseSession` while `CaptureCoordinator.swift:654-659` deactivates on
+  every path anyway, so the effect list actively lies.
+  Docs: `docs/plans/README.md` now sorts plans into **living specs / approved-unbuilt /
+  archive**, and nine executed recipes moved to `docs/plans/archive/` with one-line banners.
+  **`2026-08-08-revision-chain-code-maps.md` was FACTUALLY WRONG** (it asserts T6a-e is
+  unbuilt; every type it calls missing now exists) — archived with a loud banner rather
+  than deleted, since the implementation plan cites it. `docs/overview.md`'s status section
+  was two milestones stale (T7 shown as "Gate B + PR next"); rewritten. All relative doc
+  links re-pointed and machine-verified.
+  **Not done, awaiting your call:** closing #53, and the stale design branches — both
+  `origin/design/capture-landing-mocks` and `origin/design/lnbn-font-mock` carry **59,288
+  committed `.build` files** each, and six mock HTMLs (`a-global-focus`…`f-croix`) exist
+  ONLY there. Cherry-pick those six, then delete both.
+
 **Next steps:**
 1. **Owner smoke, macOS light mode** — the five numbered steps on #58. This is the whole
    verification story for two of tonight's three commits.

@@ -1,3 +1,5 @@
+> **Archived — shipped 2026-08-08 (`8f5c4cb0`).** `TranscriptAttribution` / `VoiceDisplay` are live.
+
 # Voice-attributed transcript rendering (T6 §14 step 7, v1) — implementation plan
 
 Written 2026-08-08 by an Opus planning agent from the code and design docs; executed

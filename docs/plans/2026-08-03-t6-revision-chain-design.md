@@ -579,7 +579,7 @@ regardless of what else the directory holds, so a half-destroyed trashed capture
 reads as live. `EntryMetadataStore.update` also now refuses to write when
 `captures/<id>/` is absent (`EntryMetadataError.captureMissing`), closing the ordinary
 restore-after-stage ordering flagged by the write-side rule in §0.3.11 of
-`docs/plans/2026-08-05-staged-removal-build-prompts.md`.
+`docs/plans/archive/2026-08-05-staged-removal-build-prompts.md`.
 **T6 still owes the writer-side skip described above** — the head rebuild, promotion, and
 stale-draft close paths must each skip a capture whose sidecar reports `trashedAt != nil`
 before writing into `transcript/`. Neither of the #25 fixes reaches A2.3: that failure
@@ -1516,7 +1516,7 @@ pass (Task 9) on `t7/editor-ui`.
 ## 17. Mark voices (as-built) (2026-08-12 — issue #56, replaces "Correct markers")
 
 Same convention as §15/§15b/§16: this subsection supersedes what it names. Built on
-`feat/mark-voices` per `docs/plans/2026-08-12-mark-voices-plan.md`'s D1-D9. No encoded
+`feat/mark-voices` per `docs/plans/archive/2026-08-12-mark-voices-plan.md`'s D1-D9. No encoded
 shape changed except `Journal` gaining `voiceLabels` (additive, below) — `StructureMarker
 .voice` already existed and needed no wire change.
 

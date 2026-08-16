@@ -1,3 +1,5 @@
+> **Archived — shipped.** Scratch task list from the M1/M2 era (#6 scrubbing, M2 T1); superseded by the M2 and M3 builds.
+
 # Next two tasks — scrubbing (#6) and M2 T1
 
 Planned 2026-07-30 by subagents reading the real sources. Both are ready to execute cold:

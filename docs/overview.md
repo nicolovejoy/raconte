@@ -1,7 +1,7 @@
 # Raconte — how it works (current plan, plain words)
 
 A map of the system as it stands and where it's going. Mental models only — the
-reasoning and history live in the linked design docs. Updated 2026-08-09.
+reasoning and history live in the linked design docs. Updated 2026-08-16.
 
 ## The one idea
 
@@ -79,7 +79,7 @@ so a half-finished delete can't resurrect an entry. Nothing in the app ever
 writes into a trashed or deleted capture.
 
 Details: [M3 dogfood plan](plans/2026-08-02-m3-dogfood-mvp-plan.md),
-[staged removal](plans/2026-08-05-staged-removal-build-prompts.md)
+[staged removal](plans/archive/2026-08-05-staged-removal-build-prompts.md)
 
 ## 3. Dates: when it was spoken vs. when it was written
 
@@ -126,7 +126,7 @@ styles paper convention). Labels (e.g. "BN", "LN") are opt-in, set per
 journal. Entries with no markers render exactly as before.
 
 Details: [markers design](plans/2026-08-05-capture-structure-markers-design.md),
-[voice rendering](plans/2026-08-08-voice-attributed-rendering-plan.md)
+[voice rendering](plans/archive/2026-08-08-voice-attributed-rendering-plan.md)
 
 ## 5. The transcript: a chain of snapshots, and editing it (T6 + T7)
 
@@ -225,46 +225,39 @@ revisions; nothing is ever destroyed.
 
 Details: [T6 design](plans/2026-08-03-t6-revision-chain-design.md) (§15/§15b =
 T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
-[T6 build plan](plans/2026-08-08-revision-chain-implementation-plan.md),
-[T7 build plan](plans/2026-08-09-t7-editor-ui-plan.md)
+[T6 build plan](plans/archive/2026-08-08-revision-chain-implementation-plan.md),
+[T7 build plan](plans/archive/2026-08-09-t7-editor-ui-plan.md)
 
 ## Where the project is
 
 ```mermaid
 flowchart LR
-    M1["M1 capture ✅"] --> M2["M2 live transcript ✅"] --> M3["M3 journals + library ✅\n(search pending)"] --> T6["T6 revision chain ✅"] --> T7["T7 editor UI\n◀ Gate B + PR next"] --> T8["T8 retranscribe"] --> M4["M4 iCloud sync"] --> M5["M5 reading polish\n+ export + migration"]
+    M1["M1 capture ✅"] --> M2["M2 live transcript ✅"] --> M3["M3 journals + library ✅\n(search pending)"] --> T6["T6 revision chain ✅"] --> T7["T7 editor UI ✅"] --> T8["T8 retranscribe"] --> M4["M4 iCloud sync"] --> M5["M5 reading polish\n+ export + migration"]
 ```
 
-Shipped and dogfooding on the phone: indestructible capture, live on-device
-transcription, journals, backdates with spoken-date detection, library, trash,
-markers with voice rendering, and the revision-chain storage layer (T6, PR #45
-merged). Built on branch `t7/editor-ui`, not yet merged: the editor itself,
-voice attribution surviving edits, marker correction, revision history +
-revert, and the metadata audit log — everything in §5 above except Task 9b
-(splice-inherit) and the whole-branch Gate B review + PR.
+Shipped and dogfooding on the phone and Mac: indestructible capture, live
+on-device transcription, journals, backdates with spoken-date detection,
+library, trash, markers with voice rendering, the revision chain (T6), and the
+editor on top of it (T7 — editing, voice attribution surviving edits, marker
+correction, revision history and revert, metadata audit log). Since then: Mark
+voices mode for fixing attribution by hand, a fixed capture control bar that a
+growing transcript cannot move, and a post-stop receipt that tells you what you
+just recorded.
 
 Next, in order:
 
-1. **T7 — Task 9b, then Gate B, then PR.** Task 9b lands the splice-inherit
-   ruling (§16.5 of the T6 design); Gate B is the adversarial whole-branch
-   review; Nico merges the PR (auto-mode can't `gh pr merge`). Deferred out of
-   T7 on purpose (owner-ruled, non-goals in the T7 plan): per-hunk merge/diff
-   UI, accept/decline (no machine revision arrives until T8), collecting typed
-   corrections into a vocabulary list for #38's biasing (#37 stays edit-time
-   only), tap-a-word-to-play (#13), cross-paragraph text selection.
-2. **T8 — retranscription** from the m4a, plus contextual biasing so "LN" stops
-   transcribing as "ellen" (#38), and the accept/decline UI T7 deliberately
-   left uncalled.
-3. **Capture-landing redesign** — approved direction: global journal focus,
-   journal rows with per-journal settings, post-stop receipt, marker thumb bar,
-   icon-blue accent ([decisions](plans/2026-08-08-capture-landing-decisions.md)).
-   Owed first: the BN/LN serif-vs-sans font mock. Then Mail-style swipe (#27)
-   gated by per-journal delete friction (#35).
-4. **M4 — CloudKit sync** (private iCloud DB). Done = delete the app, reinstall,
+1. **T8 — retranscription** from the m4a, plus contextual biasing so "LN" stops
+   transcribing as "ellen" (#38), and the accept/decline UI T7 left uncalled.
+2. **The unified editor** (#60, #59) — one editor showing visible paragraph and
+   voice structure, replacing Mark voices mode; undo falls out of it. Two design
+   rulings still open.
+3. **M4 — CloudKit sync** (private iCloud DB). Done = delete the app, reinstall,
    everything comes back. Only after this: migrate the 36 frozen recountly.org
    entries in and tear the web app down
    ([data model + migration](plans/2026-07-29-data-model-and-migration.md)).
-5. **M5 — reading polish**, search, verified open-format export.
+4. **M5 — reading polish**, search, verified open-format export.
+
+Smaller queued work lives in the GitHub issues, not here.
 
 ## Reading the docs
 
@@ -273,10 +266,11 @@ sections and all, which is why they're hard to skim. Rules of thumb:
 
 - **This file** is the current model. When it disagrees with an old doc
   section, a newer amendment (like T6's §15/§15b) usually explains why.
+- [plans/README.md](plans/README.md) sorts the rest into living specs, approved-
+  but-unbuilt designs, and an archive of executed build recipes.
 - The plan of record for milestones is
   [native-rebuild-plan.md](native-rebuild-plan.md); the M3 plan supersedes its
   M3/M4 ordering.
 - [user-journeys.md](user-journeys.md) is the intent document — nine
   walk-throughs of how you actually use it.
-- Anything named `…-build-prompts.md` or `…-implementation-plan.md` is an
-  executed build recipe kept for the record.
+- Nothing in [plans/archive/](plans/archive/) describes work still to do.

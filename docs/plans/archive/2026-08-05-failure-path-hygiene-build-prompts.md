@@ -1,3 +1,5 @@
+> **Archived — shipped 2026-08-05.** #23 and #24 closed.
+
 # Failure-path hygiene — build prompts (#23, #24)
 
 **Status: EXECUTED — shipped 2026-08-05 (issues #23 and #24 closed).** Kept as the build

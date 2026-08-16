@@ -1,3 +1,5 @@
+> **Archived — shipped (PR #45).** #39/#40/#41 closed. The living spec is `../2026-08-03-t6-revision-chain-design.md` with its §15/§15b amendments.
+
 # Revision Chain (T6a–T6e) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development

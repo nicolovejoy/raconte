@@ -1,3 +1,5 @@
+> **Archived — SUPERSEDED, AND NOW FACTUALLY WRONG.** This was a one-time ground-truth snapshot taken when T6a-e was unbuilt. T6a-e shipped in PR #45; every type it calls missing now exists. Kept only to explain the implementation plan's citations — do not read it as a description of the code.
+
 # Revision-chain build — code maps (2026-08-08)
 
 Ground truth from three Explore passes over current `main` (`d0c18d2c`), gathered before

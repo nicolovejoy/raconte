@@ -1,3 +1,5 @@
+> **Archived — shipped (PR #57).** #56 closed. Follow-ups are open as #59 (undo) and #60 (visible structure).
+
 # Mark Voices Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development

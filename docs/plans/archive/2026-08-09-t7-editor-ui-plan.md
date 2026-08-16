@@ -1,3 +1,5 @@
+> **Archived — shipped (PR #52).** Editor, revision history and revert are live; #37 closed. Its deferred non-goals live on as #13, #38 and the #60 editor pass.
+
 # T7 — transcript editor UI (implementation plan)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development

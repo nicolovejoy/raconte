@@ -1,3 +1,5 @@
+> **Archived — shipped.** Steps 1-6 landed 2026-08-05, step 7 on 2026-08-08.
+
 # Capture-time structure markers — implementation plan (T6 §14)
 
 **Status: EXECUTED — steps 1–6 shipped 2026-08-05 (PR #31, merged `6562c6f0`); step 7

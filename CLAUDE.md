@@ -1,12 +1,15 @@
 # CLAUDE.md
 
-## Session 2026-08-15 night (laptop, unattended — Mac date picker rebuilt, a live CI flake fixed, both builds handed over; 1252 → 1260 tests)
+## Session 2026-08-15 night → 08-16 (laptop — Mac date picker rebuilt TWICE, smoked; CI flake fixed; deep resync + docs; 1252 → 1267 tests)
 
-Owner went to bed after saying all five queued next-steps were approved and asking for a
-date-picker recommendation. Everything below is unattended work on items 1 and 3; items 2,
-4 and 5 need him (smoke, or an open ruling). Tree clean, main at `13db861f`, pushed.
-**Every visual claim here is unverified until owner smoke** — see the "could not see it"
-note below.
+Owner went to bed after approving all five queued next-steps and asking for a date-picker
+recommendation; the unattended stretch is items 1 and 3 below. He then smoked in the
+morning ("mostly pass") and a second round shipped off that. Tree clean, main at
+`b262a270`, pushed, CI green.
+
+**The session's shape is worth copying: build blind overnight → owner smoke → fix what he
+actually hit.** The overnight guess (a sheet) was structurally sound and still wrong in
+two ways only a human at the keyboard could find.
 
 - **Mac backdate control rebuilt: the app now draws its own button and calendar sheet
   (`2e7c7d34`).** The reco, and the reasoning worth keeping: **two system styles had been
@@ -98,20 +101,49 @@ note below.
   committed `.build` files** each, and six mock HTMLs (`a-global-focus`…`f-croix`) exist
   ONLY there. Cherry-pick those six, then delete both.
 
+- **Owner smoke 2026-08-16 (macOS, light): "mostly pass" — two complaints, both right,
+  both fixed in `b262a270`.**
+  1. *"No year picker in the day picker — you have to scroll back month by month."* macOS
+     `.graphical` offers only prev/next arrows, so an 1998 page is **~340 clicks**. His own
+     workaround (Year precision → pick year → back to Day) proved the controls existed and
+     were simply not offered where the work happens. Month + year dropdowns now sit above
+     the Mac calendar, bound through `componentBinding` to the same `date` it reads. **Added
+     to the entry-detail editor too** — identical defect, likelier place to meet it.
+  2. *"Escape doesn't close it, clicking outside doesn't either, you have to click Done —
+     excessive."* All inherent to a **sheet**: on macOS a sheet is modal to its window and
+     closes only through its own controls. Now a **popover** — Escape and click-away come
+     free, and it is the idiom the system's own date chip uses; Done deleted. **This does
+     not reopen the styling bug**: what could not be styled was the popover the SYSTEM
+     builds inside `.compact`; this one's content is a view hierarchy we own.
+- **The dropdown exposed a latent data bug — the best find of the session.**
+  `Calendar.date(from:)` is **LENIENT**: day 31 with month set to February does not clamp,
+  it **rolls forward to March 3**. The reduced precisions were always safe (they overwrite
+  day with 1); `.day` — the one precision that KEEPS its day — was unguarded, harmless only
+  while no UI could reach it. The setter is now pure `PrecisionDatePicker.adjusted(...)`
+  with a clamp + 5 tests. **Mutation-verified**: without the clamp Jan 31 → Feb becomes
+  March 3 and Feb 29 2024 → 2025 becomes March 1. Test calendars pinned to UTC.
+
 **Next steps:**
-1. **Owner smoke, macOS light mode** — the five numbered steps on #58. This is the whole
-   verification story for two of tonight's three commits.
-2. **Owner smoke, phone** — build is on the device (`61BB40A0`). Still-unanswered cosmetics
-   from two sessions ago ride along: timer at **24 pt** (his mockup drew ~27, its table said
-   19) and the library route reading **"All entries & journals"**.
-3. **Error-banner legibility ruling** — 10 pt red on the Mac; extending `CaptureLabel` past
-   grey levels is the question.
-4. Real-time voice marks, and edit-then-continue-recording — owner deferred both; the
-   receipt is the natural home for the first.
+1. **Re-smoke the two morning fixes on the Mac** (`~/Desktop/Raconte-latest.app`, dylib
+   `0556FFB9`): Escape and click-away both close the calendar; picking a year from the
+   dropdown moves the calendar **without shifting the day**. Then #58 can close.
+2. **Owner smoke, phone** — build on the device (`61BB40A0`), never run. Two unanswered
+   cosmetics ride along: timer at **24 pt** (his mockup drew ~27, its table said 19) and the
+   library route reading **"All entries & journals"**.
+3. **Close #53** — resync verified it DONE (`CaptureView.swift:778-797` +
+   `CaptureControlBarMetrics.swift:17-121`, two UI tests measuring rendered frames). Left
+   open only because closing is the owner's call.
+4. **Error-banner legibility ruling** — 10 pt red on the Mac. It is an operating message
+   below the floor, but `CaptureLabel` models grey levels only, so folding it in means
+   extending the colour model.
 5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
-   marks refuse-vs-approximate; atomic tokens vs validated markdown).
-6. ASC credential hygiene → TestFlight; queued design passes: #54 prev/next, #55 bubble
-   hierarchy, #38 voice-label mistranscription, #26 capture pause.
+   marks refuse-vs-approximate; atomic tokens vs validated markdown). Real-time voice marks
+   and edit-then-continue-recording stay deferred.
+6. **Stale design branches** — `origin/design/capture-landing-mocks` and
+   `origin/design/lnbn-font-mock` each carry **59,288 committed `.build` files**; six mock
+   HTMLs exist ONLY there. Cherry-pick those six, then delete both.
+7. ASC credential hygiene → TestFlight; queued: #54 prev/next, #55 bubble hierarchy,
+   #38 voice-label mistranscription, #26 capture pause, #29 (a live effect-list lie).
 
 ## Session 2026-08-15 evening (laptop — Option B bar SHIPPED, capture-landing redesigned + BUILT; 1231 → 1252 tests)
 

@@ -1,5 +1,115 @@
 # CLAUDE.md
 
+## Session 2026-08-15 evening (laptop — Option B bar SHIPPED, capture-landing redesigned + BUILT; 1231 → 1252 tests)
+
+Live owner-in-the-loop session, three smoke round-trips, everything pushed. Tree clean,
+main carries `a509a1b6`. The whole session was capture-screen UX driven by owner smoke.
+
+- **Control bar rebuilt to Option B (`2ff8fe79`)** — the owner-approved mockup from the
+  last session. Five rows become three: the 44 pt clock drops to 24 and goes INLINE with
+  the status text, **Done joins that row**, and the voice switch + ¶ move out of their own
+  row to **flank the record button** (132 → 76). 28 pt gaps → 10. **Measured 190 pt of
+  874 = 22%**, against the rejected 331 pt / 38%.
+  - **The ≤⅓ ruling is now encoded twice**: `CaptureControlBarMetrics` holds the geometry
+    as one pure value and `CaptureControlBarMetricsTests` does the arithmetic;
+    `CaptureControlsUITests` measures the RENDERED bar against the window (anchored on the
+    clock, so a row growing for an unforeseen reason still trips it). Mutation-verified —
+    restoring the shipped geometry fails the ceiling assertions at 46%.
+  - **A first draft of the timer assertion was VACUOUS and the mutation caught it**: it
+    compared the 44 pt clock to the 132 pt record button and passed on the exact
+    configuration it existed to reject (CLAUDE.md's "taller than the button" line was
+    about the mockup's *scaled* numbers, not the real 132). Restated against the marker
+    button. Same shape as the standing vacuous-fixture problem — the mutation is what
+    found it, not review.
+  - **Two build defects, both mine.** (1) Equal spacers either side of the record button
+    mean Stop's centring depends on equal side slots — but the voice label CHANGES
+    mid-capture ("BN"→"LN", or journal labels of any length), so intrinsic widths would
+    walk Stop sideways on every voice mark: **#53 rotated 90°**. Fixed widths + a UI test
+    that flips the voice and asserts nothing moved. (2) Reserving an absent marker slot
+    with `.opacity(0)` + `.accessibilityHidden(true)` does **NOT** remove a Button from
+    XCUITest queries or VoiceOver — it stays reachable while doing nothing. The slot is
+    now held by a same-size `Color.clear`. `MarkerControlsModel.reservedForLayout`/
+    `.isVisible` deleted (they reserved a ROW's height for marks with no row).
+
+- **Owner smoke found two colour/control bugs, both fixed (`d3af816c`).** The capture
+  screen sets `.foregroundStyle(.white)` for its near-black surface and that **leaks into
+  system-drawn controls on their own light material**. New Journal alert = white-on-white
+  ("can't read what I type. but it does work" — the binding was never the problem); the
+  `.sheet` ten lines below already had an explicit reset and a comment saying exactly this.
+  macOS date picker: different mechanism, `.compact` is a chip opening a calendar POPOVER
+  that the colour-scheme pin explicitly does not reach — switched macOS to `.field` (typed,
+  no popup), which also suits his stated keyboard preference on Mac.
+
+- **Capture-landing redesigned from a 3-option mockup, owner ruled B, BUILT (`a509a1b6`).**
+  Owner smoke on the new bar surfaced the real problem: after Done the finished transcript
+  sat on the landing screen as loose text under a Recent list **sliced mid-sentence** —
+  "a really messed up user experience that has not been engineering correctly".
+  Mockup artifact: https://claude.ai/code/artifact/12c85935-a1a3-45ec-80c1-8b1808f6e365
+  (source in this session's scratchpad, `capture-landing.html`).
+  - **Root cause was deliberate code**: `LiveTranscriptionCoordinator.lastCompletedText` is
+    held so the panel doesn't blank the instant a capture ends — right when the transcript
+    was inline in one page scroll, wrong once #53 gave it a band of its own, where it just
+    squatted until the next recording.
+  - **`CaptureReceipt`** (pure, Sendable): names the entry, `0:16 · 2 voices · 3
+    paragraphs`, opening prose in the reading serif with ln/bn marks. **Stays until
+    dismissed, never on a timer** — the owner is looking down at a paper journal when a
+    recording ends, so anything that self-dismisses is unseen. Open → the entry;
+    Record another → the landing screen. All four degraded transcript reads still produce
+    a receipt: the RECORDING is safe in every one, and refusing to acknowledge it would
+    read as a lost capture.
+  - **The receipt CANNOT be a phase** — `finishCurrentCapture` spawns a fresh idle
+    coordinator, so a finished capture reads `.idle`, indistinguishable from a cold launch.
+    That gap is exactly why the transcript had nowhere to belong. `CaptureLayoutModel.make`
+    now takes `hasReceipt`, and **a live capture outranks a leftover receipt in every
+    capturing phase** — otherwise a stale receipt covers a live transcript with the
+    PREVIOUS entry's words, which reads as the transcriber having died.
+  - **Landing screen** per "I'd rather not have too many things scrolling around… just see
+    the most recent one and then have an obvious link to the Library. That's not just up in
+    the top right": Recent 3 → 1, and the top-right "See all" → a full-width bordered route
+    at the foot. Live transcript band now exists ONLY during a capture.
+  - **De-duplicated rather than copied**: `VoiceAttributedText` is now the one renderer of
+    a voice-marked paragraph, called by both the receipt and `EntryDetailView`, so the
+    receipt and the entry it opens into cannot disagree about who said what; the receipt
+    reuses `EntryDetailView.transcriptDisplay` rather than re-deciding the five states.
+
+- **NEW TRAP — library rows were never queryable from a UI test at all.** Rerouting two
+  tests through the library surfaced it: the list's `NavigationLink` merges its label's
+  children, so `LibraryEntryRow`'s own `library.row` identifier is invisible to XCUITest.
+  Pre-existing, not introduced here. The link now carries `library.entryLink` — the same
+  workaround `capture.recentRow` already needed. **Rule: put the identifier on the LINK,
+  never on the row inside it.**
+- Test fallout handled, not papered over: nine UI tests read "a recording finished" off a
+  Recent row appearing and now dismiss the receipt first (which is what a person does, and
+  a *stronger* signal — the receipt is built after the finalizer, the ref write and the
+  rescan). Two counted rows the capture screen no longer shows and were rerouted to the
+  library. **1252 unit + 22 UI tests green.**
+- **Pre-existing red, NOT from this session**: `BuildStampTests` 4 failures, laptop-local
+  `/private/var` symlink shape — re-verified this session on a **stashed clean tree** with
+  none of these changes present. CI green.
+- Owner smoke verdict at session end: **pass**, with one open note (below). Phone install
+  failed twice — the device reports `unavailable` over the wireless tunnel even after
+  `devicectl device info details` opens it; stopped rather than retry-looping. macOS build
+  handed over at `~/Desktop/Raconte-latest.app` (ditto-copied, dylib UUID verified against
+  build products, `capture.receipt.dismiss` grepped present).
+
+**Next steps:**
+1. **Mac date picker still worse than iPhone's** (owner, final smoke: "pass, but the
+   date-picker ux is better on the iphone"). `.field` fixed *unusable*; it did not make it
+   *good*. Options: a `.graphical` popover done properly, or a custom compact control. File
+   or fold into the capture-landing look pass.
+2. **Owner smoke on the phone** — never installed this session. Two unanswered cosmetics
+   ride along: the timer is at **24 pt** (his mockup drew ~27, its table said 19) and the
+   library route reads **"All entries & journals"**.
+3. **#58 still OPEN** — macOS light-mode capture look. Distinct from the white-leak fix
+   shipped today, though that fix is adjacent; re-check light mode before closing.
+4. Real-time voice marks during recording, and edit-then-continue-recording — owner
+   explicitly deferred both this session ("that's for a later date"), but the receipt is
+   now the natural home for the first one to grow out of.
+5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
+   marks refuse-vs-approximate; atomic tokens vs validated markdown).
+6. ASC credential hygiene → TestFlight; queued design passes: #54 prev/next, #55 bubble
+   hierarchy, #38 voice-label mistranscription, #26 capture pause.
+
 ## Session 2026-08-15 midday (laptop — #53 BUILT+SHIPPED but bar too tall; OPTION B ruled, rebuild next)
 
 Owner smoke-driven session, three round-trips. #53 is fixed and pushed, but the owner

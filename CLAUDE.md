@@ -1,5 +1,97 @@
 # CLAUDE.md
 
+## Session 2026-08-15 night (laptop, unattended — Mac date picker rebuilt, a live CI flake fixed, both builds handed over; 1252 → 1260 tests)
+
+Owner went to bed after saying all five queued next-steps were approved and asking for a
+date-picker recommendation. Everything below is unattended work on items 1 and 3; items 2,
+4 and 5 need him (smoke, or an open ruling). Tree clean, main at `13db861f`, pushed.
+**Every visual claim here is unverified until owner smoke** — see the "could not see it"
+note below.
+
+- **Mac backdate control rebuilt: the app now draws its own button and calendar sheet
+  (`2e7c7d34`).** The reco, and the reasoning worth keeping: **two system styles had been
+  tried and both failed for ONE underlying reason — the calendar was drawn in a
+  presentation this app cannot reach.** `.compact` opens an AppKit popover the
+  colour-scheme pin does not enter (while the screen's white foreground plausibly does);
+  `.field` removed the popup but is a typed field at the Mac's small default size, i.e. not
+  a date picker. So the third attempt stops asking the system for a presentation it will
+  not let us style: our own button (drawn through `CaptureLabel`, so **its size and
+  contrast are checked**, which the system-drawn `.field` never was) opening a sheet we
+  paint in the capture surface's own near-black with scheme pinned and foreground + tint
+  reset inside it. **iOS deliberately untouched** — its `.compact` chip presents a sheet
+  the system styles correctly and the owner says it works.
+- **#58, third bullet, found by READING not smoke:** `BackdateField` wraps the picker in
+  BOTH `.tint(.white)` and `.foregroundStyle(.white)`. On a segmented control the tint
+  fills the SELECTED segment while the foreground draws its label — so the active precision
+  was **a white label on a white fill, invisible in every appearance on both platforms**.
+  Tint reset inside `PrecisionDatePicker`, not at the call site, because that white tint is
+  also what makes the iOS date chip read on near-black.
+- **The journal name was 15 pt on the Mac while the model claimed 22 (`aa31efbc`) — and how
+  it was found is the durable part.** Every floor in `CaptureLabelTests` quantifies over
+  `allCases`, so **a case no view applies is a guarantee about nothing that reads in the
+  suite as coverage**. `journalName` declared `.title` (22 pt macOS) and passed everything
+  while `JournalHeaderView` drew the name with a raw `.font(.title3…)` = 15 pt, below the
+  16 pt floor, **on the exact platform the "too small on the mac" report came from**.
+  `seeAllLink` was likewise dead (the library door replaced it in `a509a1b6`).
+  **New test `testEveryLabelCaseIsActuallyAppliedToAView` is the missing adversary** — the
+  mirror of the dim-grey-literals scan: that one checks no label escapes the model downward,
+  this one checks no case sits in the model unattached to any view.
+- **A vacuous source-scan caught in the act, and the general fix.** The first draft of the
+  sheet assertion looked for `\.colorScheme, .dark` and **passed before the fix existed** —
+  a comment explaining that the pin does not reach a popover contained the phrase. Both
+  scanning helpers now **strip `//` comments**, and each has a test that the stripping
+  happens. **Rule: a source-scanning test must scan CODE, or this file's own prose will
+  satisfy it** — this repo documents itself heavily, which makes it uniquely prone to this.
+- **CI was red on main and it was NOT a docs artifact (`13db861f`).** Run 31928162420 failed
+  on `5dbb8114`, a **docs-only** commit — the tell that nothing in the product changed.
+  Single failure, `testDoneFinalizesInSessionWithoutRelaunch`: it waited for the library to
+  refresh, then asserted the coordinator had been replaced — but `finishCurrentCapture` does
+  `rescan()` → `buildReceipt(...)` (which awaits a transcript read off disk) → `spawn()`, so
+  **the gate went true strictly before its subject, with real I/O in between.** Held while
+  that gap was one continuation; **last session's receipt work put a disk read in it**.
+  The #4/#22 family again. **8 spinners × 15 iterations would NOT reproduce it here** — too
+  narrow on this laptop — so it was pinned with the probe-sleep method (`a140b7f8`'s
+  technique): a 300 ms sleep in exactly that window reproduces the CI message verbatim, the
+  fix passes against that widened window, and deleting `coordinator = spawn()` outright
+  still fails the waited version (so the wait is not vacuous). Probe and mutation reverted;
+  the commit is test-only.
+- **Could not see any of it.** `screencapture` now works (the iTerm permission took effect),
+  but the app reports **zero windows to the accessibility API** — two launch attempts, and
+  the owner's own Raconte instance was left running rather than killed. So the macOS visual
+  claims are dispositive only on re-smoke, same caveat `d3af816c` carried. The difference
+  this time: **the fix does not rest on unobservable system behaviour** — every colour in
+  the sheet is one this app sets.
+- **Both builds handed over, identity verified.** Mac: `~/Desktop/Raconte-latest.app`,
+  ditto-copied, debug dylib UUID **`B022685D`** matching the build product byte for byte.
+  Phone: installed wirelessly (the device reported `available (paired)` straight away this
+  time — last session's failure did not recur), dylib UUID **`61BB40A0`**.
+- **#58 updated with a five-step macOS light-mode smoke checklist** (comment, no close verb).
+  All four controls it names now have a claimed fix; it stays open pending that smoke.
+- Deliberately NOT changed, and listed rather than silently fixed: the live transcript body
+  and receipt prose are `.callout` = **12 pt on the Mac**, and the error banner is
+  `.footnote` = **10 pt**. The first two are body text, which `CaptureLabel`'s doc comment
+  excludes on purpose. The error banner is neither body text nor a whisper — an operating
+  message below the floor — but it is **red**, and `CaptureLabel` models grey levels only,
+  so folding it in means extending the colour model. Owner's call.
+- Pre-existing red unchanged: `BuildStampTests` 4 failures, laptop-local `/private/var`
+  symlink shape. **Trap re-confirmed: a new test file needs `xcodegen generate`** or
+  `-only-testing` reports "Executed 0 tests" and **exits 0** — a silent pass.
+
+**Next steps:**
+1. **Owner smoke, macOS light mode** — the five numbered steps on #58. This is the whole
+   verification story for two of tonight's three commits.
+2. **Owner smoke, phone** — build is on the device (`61BB40A0`). Still-unanswered cosmetics
+   from two sessions ago ride along: timer at **24 pt** (his mockup drew ~27, its table said
+   19) and the library route reading **"All entries & journals"**.
+3. **Error-banner legibility ruling** — 10 pt red on the Mac; extending `CaptureLabel` past
+   grey levels is the question.
+4. Real-time voice marks, and edit-then-continue-recording — owner deferred both; the
+   receipt is the natural home for the first.
+5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
+   marks refuse-vs-approximate; atomic tokens vs validated markdown).
+6. ASC credential hygiene → TestFlight; queued design passes: #54 prev/next, #55 bubble
+   hierarchy, #38 voice-label mistranscription, #26 capture pause.
+
 ## Session 2026-08-15 evening (laptop — Option B bar SHIPPED, capture-landing redesigned + BUILT; 1231 → 1252 tests)
 
 Live owner-in-the-loop session, three smoke round-trips, everything pushed. Tree clean,

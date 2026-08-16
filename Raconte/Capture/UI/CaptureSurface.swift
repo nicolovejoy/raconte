@@ -137,6 +137,10 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case journalsUnreadable
     case backdateToggle
     case backdateFieldCaption
+    /// The macOS backdate day button (2026-08-15) — the Mac draws its own date button and
+    /// calendar sheet instead of a system date picker, so unlike the iOS `.compact` chip
+    /// this text is ours to size and colour, and therefore ours to check.
+    case backdateDateButton
     case multiVoiceToggle
     case recentHeader
     case seeAllLink
@@ -157,7 +161,10 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         switch self {
         // The receipt's date is the answer to "what did I just record", so it carries the
         // same full-white weight the journal name does.
-        case .journalName, .receiptDate, .libraryDoor, .receiptSavedChip: 1.0
+        // The backdated date is a value the owner has to read back and confirm, not a
+        // caption naming a control — full white, like the journal name and the receipt date.
+        case .journalName, .receiptDate, .libraryDoor, .receiptSavedChip,
+             .backdateDateButton: 1.0
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
              .recentHeader, .seeAllLink, .libraryDoorChevron, .receiptSummary: 0.78
@@ -178,7 +185,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .seeAllLink, .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip: .callout    // 16
+                 .receiptSavedChip, .backdateDateButton: .callout    // 16
             }
         case .macOS:
             switch self {
@@ -187,7 +194,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .seeAllLink, .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip: .title2     // 17
+                 .receiptSavedChip, .backdateDateButton: .title2     // 17
             }
         }
     }

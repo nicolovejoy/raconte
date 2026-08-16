@@ -145,6 +145,29 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
   no haptic engine, so step 5 of the smoke was unjudgeable there. Owner: "which is a miss."
 
 **Next steps:**
+0. **START HERE — high-level design conversation the owner explicitly deferred to next
+   session: what the capture interface PROVIDES.** Not a layout tweak; he wants to talk
+   about the interface at the level of purpose first. Trigger (smoke, 2026-08-16): "there
+   are three sections on the iPhone screen. The bottom record control section that stays
+   static — I like that section just fine — but the fact that there's two scrollable
+   sections above it doesn't make any sense at all to me. Let's discuss how we get rid of
+   that. I would rather have none, especially during the recording." Then: **"I think it's
+   more likely an artifact of how we got here."**
+   **He is right, and the code says so in its own comments.** Neither scroll region was
+   designed; both are residue from fixing #53 locally. `CaptureLayoutModel.swift:80-86`
+   describes `setupHeightWhileCapturing = 200` as "a fixed slice rather than letting the
+   setup band and the transcript both stretch — two greedy views split the space between
+   them by rules nobody chose"; `:38-44` records the Recent list being cut 3 → 1 because it
+   "made the setup band a scroll view that competed with the control bar for height".
+   The setup band scrolls at all only because **`BackdateField` is not phase-gated** and
+   writes through to the live capture's `entry.json` mid-recording, so it could not simply
+   be removed during a capture.
+   **The real question is IA, not geometry:** if nothing above the bar scrolls, what happens
+   to the idle content that no longer fits (journal header, backdate, Two voices, last
+   entry, library door)? Does it move behind a disclosure, a sheet, or off this screen
+   entirely? Do NOT start with `CaptureLayoutModel` — start with what the screen is for.
+   Prior art to read first: `docs/plans/2026-08-08-capture-landing-decisions.md`, and the
+   six rescued mock variants in `docs/mocks/2026-08-07-capture-landing/`.
 1. **#62** — trashed entry still shown on the capture screen. Cheapest fix: clear the
    receipt when its `captureID` leaves `library.allEntries` after a rescan. Two adjacent
    decisions in the issue (what Open should do for a trashed entry; whether restore brings

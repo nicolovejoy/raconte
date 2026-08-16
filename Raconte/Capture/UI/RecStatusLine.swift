@@ -31,7 +31,17 @@ enum RecFormat {
     }
 }
 
-/// The elapsed-time readout + status line shown above the record button.
+/// The elapsed-time readout and status text, on ONE line.
+///
+/// It used to be a two-line stack with a 44 pt clock above a 15 pt status — roughly 78 pt
+/// of a 331 pt bar, and the largest single item in the bar the owner rejected as too tall
+/// (smoke, 2026-08-15). The clock was literally taller than the record button beneath it.
+/// Laid out inline it costs about 34 pt, and the row has room left over for Done, which
+/// removes another row entirely (approved mockup, Option B).
+///
+/// Sizes come from `CaptureControlBarMetrics` rather than being written here, because the
+/// ruling this shape exists to satisfy — the bar takes at most a third of the screen — is
+/// a property of the sum, and a sum needs its terms in one place to be checkable.
 struct RecStatusLine: View {
     let phase: CaptureState
     let canResume: Bool
@@ -40,21 +50,33 @@ struct RecStatusLine: View {
     private var isLive: Bool { phase == .recording }
 
     var body: some View {
-        VStack(spacing: 6) {
+        HStack(spacing: 8) {
             Text(RecFormat.clock(elapsed))
-                .font(.system(size: 44, weight: .light).monospacedDigit())
+                .font(.system(size: CaptureControlBarMetrics.clockPointSize,
+                              weight: .regular).monospacedDigit())
                 .foregroundStyle(isLive ? Color.red : Color(white: 0.9))
-            HStack(spacing: 8) {
-                if phase == .recording || phase == .interrupted {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 9, height: 9)
-                        .opacity(phase == .interrupted ? 0.5 : 1)
-                }
-                Text(RecFormat.statusText(phase: phase, canResume: canResume))
-                    .font(.subheadline)
-                    .foregroundStyle(Color(white: 0.6))
+                // The UI test's anchor for "where does the bar start" — the topmost thing
+                // in the topmost row. An identifier on a `Text` is safe; one on a
+                // CONTAINER flattens its children out of the accessibility tree, which is
+                // the trap this file has now hit three times.
+                .accessibilityIdentifier("capture.clock")
+
+            if phase == .recording || phase == .interrupted {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 9, height: 9)
+                    .opacity(phase == .interrupted ? 0.5 : 1)
             }
+
+            Text(RecFormat.statusText(phase: phase, canResume: canResume))
+                .font(.subheadline)
+                .foregroundStyle(Color(white: 0.78))
+                // The status string varies a lot in length ("Recording" against
+                // "Interrupted — reconnecting…"). The bar is anchored to the bottom edge,
+                // so a string that wraps to a second line grows the bar UPWARD and moves
+                // the record button under the owner's thumb. Shrink, never wrap.
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
     }
 }

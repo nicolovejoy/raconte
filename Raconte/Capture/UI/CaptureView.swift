@@ -872,43 +872,31 @@ struct CaptureView: View {
     /// fix itself. Present in every phase so it never appears, disappears, or resizes
     /// under the owner's thumb mid-reading.
     ///
+    /// Rebuilt 2026-08-15 to the owner-approved "Option B" mockup. The #53 version kept
+    /// the controls still but took 331 pt — 38% of an iPhone 17 Pro — stacking timer,
+    /// meter, record button, marker row and Done as five separate rows with 28 pt gaps.
+    /// The owner's verdict: *"the bottom half stays put but it's so big I can't even see
+    /// the full backdate interface let alone Two voices and Recents"*, and his ruling was
+    /// a proportion — **at most a third of the screen**.
+    ///
+    /// Three rows now instead of five: the timer goes inline with the status text and
+    /// Done, and the marker buttons move from their own row to FLANKING the record
+    /// button. Every size comes from `CaptureControlBarMetrics`, which is where the
+    /// ≤ ⅓ arithmetic can be tested.
+    ///
     /// The background is opaque on purpose: the setup band scrolls behind this, and a
     /// transparent bar would let text slide under the record button.
     private var controlBar: some View {
-        VStack(spacing: 16) {
-            RecStatusLine(phase: model.coordinator.phase,
-                          canResume: model.coordinator.canResume,
-                          elapsed: model.coordinator.elapsed)
+        VStack(spacing: CaptureControlBarMetrics.rowSpacing) {
+            statusRow
 
             MicMeter(level: model.coordinator.micLevel,
                      isLive: model.coordinator.phase == .recording)
 
-            RecordButton(model: control, action: primaryAction)
-                .accessibilityIdentifier("capture.record")
-
-            // Both of these are RESERVED in every phase rather than inserted when needed.
-            // The bar is bottom-anchored, so anything appearing inside it pushes the
-            // record button upward — 151 pt between idle and recording, measured, before
-            // this. Hidden-but-present keeps the bar one fixed height. `.opacity(0)` plus
-            // `.accessibilityHidden` rather than removal: the space must stay, the control
-            // must not be reachable by touch or VoiceOver while it is not really there.
-            MarkerControlsRow(model: model,
-                              markers: markers.isVisible ? markers : .reservedForLayout)
-                .opacity(markers.isVisible ? 1 : 0)
-                .disabled(!markers.isVisible)
-                .accessibilityHidden(!markers.isVisible)
-
-            Button("Done") { Task { await model.done() } }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .accessibilityIdentifier("capture.done")
-                .opacity(control.showsDoneButton ? 1 : 0)
-                .disabled(!control.showsDoneButton)
-                .accessibilityHidden(!control.showsDoneButton)
+            recordRow
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 16)
-        .padding(.bottom, 24)
+        .padding(.top, CaptureControlBarMetrics.topPadding)
+        .padding(.bottom, CaptureControlBarMetrics.bottomPadding)
         .frame(maxWidth: .infinity)
         .background(Color(white: 0.05))
         // Deliberately NO accessibilityIdentifier on this container. Putting one here
@@ -917,6 +905,57 @@ struct CaptureView: View {
         // queryable at all — which broke every capture UI test the first time round. Same
         // flattening this file already hit on the NavigationLink rows and the Task-6
         // backdate row.
+    }
+
+    /// Timer, live dot, status text and Done, all on one line — two rows of the old bar
+    /// collapsed into one.
+    ///
+    /// Height is FIXED rather than sized to content. The bar is anchored to the bottom
+    /// edge, so anything inside it that grows pushes the record button upward: the #53
+    /// build measured 151 pt of exactly that before reserving space in every phase. The
+    /// status string is the variable-length part and `RecStatusLine` shrinks it instead of
+    /// wrapping; Done is reserved here for the same reason it was reserved before.
+    private var statusRow: some View {
+        HStack(spacing: 12) {
+            RecStatusLine(phase: model.coordinator.phase,
+                          canResume: model.coordinator.canResume,
+                          elapsed: model.coordinator.elapsed)
+
+            Spacer(minLength: 8)
+
+            // Reserved, not inserted: `.opacity(0)` keeps the space and the row height
+            // constant while `.disabled` + `.accessibilityHidden` keep it unreachable by
+            // touch and by VoiceOver in the phases where it is not really there.
+            Button("Done") { Task { await model.done() } }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .accessibilityIdentifier("capture.done")
+                .opacity(control.showsDoneButton ? 1 : 0)
+                .disabled(!control.showsDoneButton)
+                .accessibilityHidden(!control.showsDoneButton)
+        }
+        .frame(height: CaptureControlBarMetrics.statusRowHeight)
+        .padding(.horizontal, CaptureControlBarMetrics.horizontalPadding)
+    }
+
+    /// The voice switch, the record button, and the paragraph button on one line, with the
+    /// marks pushed out toward the screen edges.
+    ///
+    /// The owner's refinement on the mockup, verbatim: *"just make sure we separate the
+    /// clickable buttons as much as we can within that paradigm… BN and paragraph marker
+    /// could move towards the side just a bit"*. Hence the tighter inset here than on the
+    /// status row: Stop keeps the widest exclusion zone the row can give it, so a marker
+    /// tap during a reading cannot land on the one button that ends the recording.
+    private var recordRow: some View {
+        // The REAL markers model in every phase, with no `reservedForLayout` substitution:
+        // each marker slot is a fixed size that holds its space whether or not the control
+        // is shown, so the row's geometry no longer depends on what is visible in it.
+        RecordControlsRow(model: model, markers: markers) {
+            RecordButton(model: control, action: primaryAction)
+                .accessibilityIdentifier("capture.record")
+        }
+        .frame(height: CaptureControlBarMetrics.recordDiameter)
+        .padding(.horizontal, CaptureControlBarMetrics.controlRowHorizontalPadding)
     }
 
     /// The 3 most recently captured entries (M3 T4.5), sourced from `model.library` —
@@ -1191,15 +1230,25 @@ struct MultiVoiceField: View {
     }
 }
 
-/// The recording-time structure-marker controls (T6 §14, design §5): a thumb-reach voice
-/// switch showing the *active* voice, and a paragraph button that is always present while
-/// recording (owner decision 7 — paragraphs are structure in a single-voice reading too).
+/// The recorder's control row: the voice switch, the record button, and the paragraph
+/// button, side by side with the marks pushed toward the screen edges.
 ///
-/// Visibility and enablement come from the pure `MarkerControlsModel`; everything here is
+/// The structure-marker controls (T6 §14, design §5) are a thumb-reach voice switch
+/// showing the *active* voice, and a paragraph button always present while recording
+/// (owner decision 7 — paragraphs are structure in a single-voice reading too). Visibility
+/// and enablement still come from the pure `MarkerControlsModel`; everything here is
 /// presentation plus the two coordinator calls.
-struct MarkerControlsRow: View {
+///
+/// They used to occupy a row of their own beneath the record button, which cost the bar
+/// 44 pt plus a gap for two small buttons. Taking the record button as a centre slot lets
+/// all three share one row — the change that made the owner's ≤ ⅓ ruling reachable — and
+/// keeps the haptics, the enablement rule and the voice-label resolution in the one place
+/// that already owned them.
+struct RecordControlsRow<Center: View>: View {
     let model: CaptureScreenModel
     let markers: MarkerControlsModel
+
+    @ViewBuilder let center: () -> Center
 
     /// One player per row instance, reused across every marker tap for the capture's
     /// lifetime — the CHHapticEngine it lazily owns is worth keeping warm rather than
@@ -1234,43 +1283,107 @@ struct MarkerControlsRow: View {
         markers.isEnabled && !model.coordinator.markerLoggingBroken
     }
 
-    var body: some View {
-        if markers.showsVoiceControl || markers.showsParagraphControl {
-            HStack(spacing: 16) {
-                if markers.showsVoiceControl {
-                    Button(activeVoice) { model.coordinator.markVoice(otherVoice) }
-                        .accessibilityIdentifier("capture.voiceSwitch")
-                }
-                if markers.showsParagraphControl {
-                    Button("¶ Paragraph") { model.coordinator.markParagraph() }
-                        .accessibilityIdentifier("capture.paragraph")
-                }
+    /// One marker button: fixed size, hidden-but-present when its phase says it isn't
+    /// there, and dimmed when it's there but can't be tapped.
+    ///
+    /// **The fixed width is load-bearing.** The record button is centred by equal spacers,
+    /// so the two flanking slots have to be equal. Intrinsic widths would not be: "¶" is
+    /// far narrower than "BN", and the voice button's label CHANGES mid-capture — to
+    /// "LN", or to whatever the journal's own voice labels are, which can be any length.
+    /// Sizing to content would slide the Stop button sideways on every voice mark, which
+    /// is #53 all over again in the horizontal axis.
+    ///
+    /// **Hidden, never absent**, for the same reason: a slot that disappears when a
+    /// capture is single-voice, or between phases, lets the record button drift off
+    /// centre. `.opacity(0)` keeps the geometry while `.disabled` + `.accessibilityHidden`
+    /// keep the control unreachable by touch and by VoiceOver when it is not really there.
+    /// This replaces `MarkerControlsModel.reservedForLayout`, which reserved a whole ROW's
+    /// height back when the marks had a row of their own.
+    /// An ABSENT marker button still occupies its slot — as an empty space of exactly the
+    /// same size, not as a hidden button.
+    ///
+    /// `.opacity(0)` + `.accessibilityHidden(true)` was tried first and is not enough:
+    /// XCUITest still finds an accessibility-hidden `Button` by identifier, so the control
+    /// remained queryable (and, more to the point, VoiceOver-reachable) in phases where it
+    /// does nothing. `CaptureUITests.testVoiceControlsFollowTheMultiVoiceToggle` — which
+    /// asserts the voice switch does not exist during a single-voice capture — caught it,
+    /// and is the pin for it. A `Color.clear` of the same fixed size keeps the geometry
+    /// without keeping the control.
+    @ViewBuilder
+    private func markerButton(_ title: String,
+                              identifier: String,
+                              accessibilityLabel: String? = nil,
+                              isShown: Bool,
+                              action: @escaping () -> Void) -> some View {
+        if isShown {
+            Button(action: action) {
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .frame(width: CaptureControlBarMetrics.markerButtonWidth,
+                   height: CaptureControlBarMetrics.markerButtonHeight)
             .disabled(!isEnabled)
             .opacity(isEnabled ? 1 : 0.45)
-            // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-            // see the matching comment on `BackdateField` (issue #58 fix-round-1
-            // finding: `CaptureView` is the permanently-mounted NavigationStack root,
-            // so `preferredColorScheme` here would resolve to the whole window).
-            .environment(\.colorScheme, .dark)
-            // The owner is reading a page, not watching the screen: confirmation has to
-            // be felt (design §5). Watching `markerCount`, which counts what reached
-            // disk — a failed append is felt as the absence of a buzz.
-            //
-            // The `old, new` guard, not a bare "any change" trigger: `markerCount` resets
-            // to 0 at capture teardown (the coordinator is respawned per capture), and an
-            // unguarded trigger fires on that reset too — a phantom buzz on Done
-            // (plan §0.3.4). Firing only on an *increase* is what keeps teardown silent.
-            //
-            // CoreHaptics via `MarkerHapticsPlayer`, not `.sensoryFeedback(.impact, …)`:
-            // device feedback (2026-08-07) was "a weak single dot" — the dash-dot pattern
-            // (`MarkerHaptic`) needs a real duration on the first beat, which
-            // `.sensoryFeedback`/`UIImpactFeedbackGenerator` cannot express.
-            .onChange(of: model.coordinator.markerCount) { old, new in
-                if new > old { haptics.play() }
+            .accessibilityIdentifier(identifier)
+            .accessibilityLabel(accessibilityLabel ?? title)
+        } else {
+            Color.clear
+                .frame(width: CaptureControlBarMetrics.markerButtonWidth,
+                       height: CaptureControlBarMetrics.markerButtonHeight)
+                .accessibilityHidden(true)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            markerButton(activeVoice,
+                         identifier: "capture.voiceSwitch",
+                         isShown: markers.showsVoiceControl) {
+                model.coordinator.markVoice(otherVoice)
             }
+
+            // Pushes the marks apart as far as the row allows — the owner's refinement,
+            // so the Stop button keeps the widest possible exclusion zone around it.
+            Spacer(minLength: 12)
+
+            // The record button. Deliberately NOT inside the `.disabled` that gates the
+            // marks: a broken marker log must never take Stop down with it.
+            center()
+
+            Spacer(minLength: 12)
+
+            // "¶" alone on screen — the mockup's glyph — but spoken as "Paragraph".
+            markerButton("¶",
+                         identifier: "capture.paragraph",
+                         accessibilityLabel: "Paragraph",
+                         isShown: markers.showsParagraphControl) {
+                model.coordinator.markParagraph()
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
+        // see the matching comment on `BackdateField` (issue #58 fix-round-1
+        // finding: `CaptureView` is the permanently-mounted NavigationStack root,
+        // so `preferredColorScheme` here would resolve to the whole window).
+        .environment(\.colorScheme, .dark)
+        // The owner is reading a page, not watching the screen: confirmation has to
+        // be felt (design §5). Watching `markerCount`, which counts what reached
+        // disk — a failed append is felt as the absence of a buzz.
+        //
+        // The `old, new` guard, not a bare "any change" trigger: `markerCount` resets
+        // to 0 at capture teardown (the coordinator is respawned per capture), and an
+        // unguarded trigger fires on that reset too — a phantom buzz on Done
+        // (plan §0.3.4). Firing only on an *increase* is what keeps teardown silent.
+        //
+        // CoreHaptics via `MarkerHapticsPlayer`, not `.sensoryFeedback(.impact, …)`:
+        // device feedback (2026-08-07) was "a weak single dot" — the dash-dot pattern
+        // (`MarkerHaptic`) needs a real duration on the first beat, which
+        // `.sensoryFeedback`/`UIImpactFeedbackGenerator` cannot express.
+        .onChange(of: model.coordinator.markerCount) { old, new in
+            if new > old { haptics.play() }
         }
     }
 }

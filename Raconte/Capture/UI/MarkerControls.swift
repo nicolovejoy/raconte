@@ -18,20 +18,13 @@ struct MarkerControlsModel: Equatable, Sendable {
     /// (plan §0.3.9).
     var isEnabled: Bool
 
-    /// Whether this row draws anything at all.
-    var isVisible: Bool { showsVoiceControl || showsParagraphControl }
-
-    /// The widest arrangement this row can take, used ONLY to reserve height in phases
-    /// where the row draws nothing (issue #53).
-    ///
-    /// The control bar is anchored to the bottom of the screen, so anything that appears
-    /// inside it grows the bar UPWARD and shoves the record button up with it — measured
-    /// at 151 pt between idle and recording before this existed. Reserving the space in
-    /// every phase is what makes "the controls never move, idle or recording" true rather
-    /// than aspirational.
-    static let reservedForLayout = MarkerControlsModel(showsVoiceControl: true,
-                                                       showsParagraphControl: true,
-                                                       isEnabled: false)
+    // There was a `reservedForLayout` constant here, and an `isVisible` flag, from the
+    // #53 build: the marks had a ROW of their own inside a bottom-anchored bar, so the
+    // row's height had to be reserved in phases where it drew nothing or the record button
+    // moved 151 pt between idle and recording. Both are gone with the Option B rebuild
+    // (2026-08-15) — the marks now flank the record button in fixed-size slots that hold
+    // their space individually, so no phase-dependent substitute model is needed to keep
+    // the geometry constant. See `RecordControlsRow.markerButton`.
 
     static func make(phase: CaptureState, multiVoice: Bool) -> MarkerControlsModel {
         switch phase {

@@ -108,10 +108,15 @@ struct RecordButton: View {
                     .fill(model.tint.color)
                     .opacity(model.isBlinking && !blinkOn ? 0.35 : 1)
                 Image(systemName: model.systemImage)
-                    .font(.system(size: 46, weight: .semibold))
+                    .font(.system(size: CaptureControlBarMetrics.recordGlyphPointSize,
+                                  weight: .semibold))
                     .foregroundStyle(model.tint.foreground)
             }
-            .frame(width: 132, height: 132)
+            // 132 pt until 2026-08-15. Shrunk because the owner ruled the whole control
+            // section down to at most a third of the screen; it no longer has a row to
+            // itself, since the voice switch and paragraph button now flank it.
+            .frame(width: CaptureControlBarMetrics.recordDiameter,
+                   height: CaptureControlBarMetrics.recordDiameter)
             .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 2))
             .shadow(color: model.tint.color.opacity(0.4), radius: model.isBlinking ? 18 : 8)
         }

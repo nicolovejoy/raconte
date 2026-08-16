@@ -55,10 +55,32 @@ struct PrecisionDatePicker: View {
         // guard, this just keeps the wheel from offering a value it will reject.
         switch dayPickerStyle {
         case .compact:
+            #if os(macOS)
+            // `.field`, not `.compact`, on the Mac — a typed date field with NO popover.
+            //
+            // Owner smoke, 2026-08-15: "date picker is not working great on mac, now I
+            // can't pick a date at all". `.compact` on macOS is a small chip that opens a
+            // calendar POPOVER, and a popover is its own presentation: the capture
+            // screen's `.environment(\.colorScheme, .dark)` pin does not reach into it
+            // (`BackdateField` says so in its own comment — the transient popup is
+            // explicitly out of scope for #58), while the inherited white foreground may.
+            // A popover that renders white-on-light is unreadable, and one anchored inside
+            // this screen's clipped scroll band is worse.
+            //
+            // `.field` sidesteps the whole class: no popup to mis-render or mis-anchor,
+            // and typing a date suits the Mac, where the owner has said he wants to work
+            // from the keyboard. iOS keeps `.compact`, which he reports reads and works
+            // well there.
+            DatePicker("Entry date", selection: $date, in: ...Date(), displayedComponents: .date)
+                .labelsHidden()
+                .datePickerStyle(.field)
+                .accessibilityIdentifier("\(idPrefix).backdateField")
+            #else
             DatePicker("Entry date", selection: $date, in: ...Date(), displayedComponents: .date)
                 .labelsHidden()
                 .datePickerStyle(.compact)
                 .accessibilityIdentifier("\(idPrefix).backdateField")
+            #endif
         case .graphical:
             DatePicker("Entry date", selection: $date, in: ...Date(), displayedComponents: .date)
                 .labelsHidden()

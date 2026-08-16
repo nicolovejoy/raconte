@@ -1,5 +1,79 @@
 # CLAUDE.md
 
+## Session 2026-08-16 (laptop — capture-interface IA discussion → approach 2 built + TDD'd; 1269 → 1276 tests)
+
+Answered last session's queued opener: "what does the capture interface PROVIDE" — owner
+wanted purpose-level discussion, not a layout tweak. Grounded three candidate approaches
+in the actual code (`CaptureView.swift:843-916`, the IA decisions doc, the six rescued
+mocks) rather than proposing in the abstract, then built and TDD'd the one he picked.
+Committed `cc437d12`, pushed. Tree clean.
+
+- **Root cause, precisely located:** `setupRegion` was ALWAYS a `ScrollView` — sized to
+  content when idle, but squeezed into the `setupHeightWhileCapturing = 200` box while
+  capturing, which forced it to scroll internally. `transcriptRegion` is a second,
+  independent `ScrollView` right below it. Owner's complaint, verbatim: "there are three
+  sections... the fact that there's two scrollable sections above [the bar] doesn't make
+  any sense at all to me... I would rather have none, especially during the recording."
+  Both bands are '#53 residue', not a design — the code's own comments admitted it.
+- **Three approaches presented** (chat, not a spec doc — this was scoped as the
+  "propose 2-3 approaches" step of brainstorming, not full architectural ceremony):
+  (1) cut all setup content during capture, backdate becomes sheet-only; (2) keep the
+  content but stop rendering it as a `ScrollView` — redesign it to always fit
+  non-scrolling; (3) retire the phase-flag pattern entirely, split arm/record/review into
+  real navigated screens. Recommended 2 as the no-functional-loss fix inside the existing
+  "layout only" discipline; 3 as the one that actually matches his own diagnosis
+  ("artifact of how we got here") if he wants to stop patching this file a third time.
+  **Owner picked 2.**
+- **Built, TDD (red verified via git stash, not just "test written before code"):**
+  `CaptureLayoutModel` gained `usesCompactBackdateField` / `showsRecoveryBanners`
+  (`setupHeightWhileCapturing` deleted). While capturing, the setup band is now a static
+  VStack — journal name, a one-line `CompactBackdateSummary` ("Not backdated" / "Backdated
+  to Mar 4, 1998", tap opens the real editor in a sheet), build stamp — with no
+  `ScrollView` at all; recovery banners hidden too (past captures, not essential
+  mid-reading, reappear once idle). `BackdateField` split into `BackdateEditorContent`
+  (unstyled, shared) + two styling wrappers, since the sheet needs the identical
+  write-through bindings but system light/dark material, not the near-black-forced
+  styling the inline field needs. New `CaptureLabel.backdateSummary` case, checked by the
+  existing WCAG/size-floor/every-case-applied machinery. Idle is byte-for-byte unchanged.
+  **For the SwiftUI-view half (unit-untestable per this repo's own convention), RED was
+  verified by writing the new UI tests, `git stash push` on just the 3 production files,
+  running against the stashed-out pre-change code to watch them fail for the right
+  reason, then popping the stash back** — since implementing view wiring and its test in
+  one pass is unavoidable in Swift, this is the honest substitute for sequential red/green.
+- **A real regression the existing #53 suite caught:** `testVoiceSwitchStaysPutAndHittableWhileRecording`
+  swiped on `app.scrollViews.firstMatch` immediately after recording started — previously
+  always safe, since the setup band was ALWAYS a ScrollView. Now, correctly, no scroll
+  view exists at all until the transcript has content, so the swipe target can be briefly
+  absent. Fixed the test to wait for it rather than assume it (matches the new, better
+  reality; not a workaround).
+- **Four CaptureUITests (trash/scrub, unrelated to this change) flaked on the first full
+  regression pass — root-caused, not hand-waved.** All failed with generic "UI query
+  timed out", the simulator-accessibility-degradation pattern this repo's history already
+  documents for long back-to-back XCUITest runs. Settled with a controlled comparison
+  rather than a guess: ran the same tests solo+fresh **against the pre-change code**
+  (passed) and solo+fresh **with the change present** (also passed, 3-for-3) — proving
+  the failures were batch-length simulator wedging, not a regression. `simctl shutdown
+  all` between long UI runs is the fix; not code, so nothing to commit.
+- 1276 unit tests (+7: 2 in `CaptureLayoutModelTests`, 5 new `CompactBackdateSummaryTests`)
+  + `CaptureControlsUITests` 8 → 10, all green, including a full clean run of
+  `CaptureUITests`/`TranscriptEditorUITests`/`VoiceMarkingUITests`.
+- Not built: approaches 1 and 3 from the brainstorm. 3 (real navigated screens for
+  arm/record/review) is still the one that actually retires the phase-flag pattern if a
+  future session wants to stop patching `CaptureView.swift` a third time.
+
+**Next steps:**
+1. **#62** — trashed entry still shown on the capture screen (receipt not invalidated
+   when its entry leaves `library.allEntries`). Unchanged from prior handoffs.
+2. **#63** — macOS marker feedback (no haptics on Mac; needs a non-visual cue, since eyes
+   are on the paper — a sound cue risks landing in the mic). Unchanged from prior handoffs.
+3. Error-banner legibility ruling — 10 pt red text on the Mac, below the `CaptureLabel`
+   floor; folding it in extends the colour model to more than greys. Owner's call.
+4. Two unanswered cosmetics: timer at 24 pt vs the mockup's ~27/19, and the library route
+   reading "All entries & journals".
+5. Unified-editor design pass (#60, #59) — frameless-text marks refuse-vs-approximate,
+   atomic tokens vs validated markdown, both still open. ASC credential hygiene →
+   TestFlight remains queued underneath all of the above.
+
 ## Session 2026-08-15 night → 08-16 (laptop — Mac date picker rebuilt TWICE, THREE smoke rounds; CI flake; #53/#58 CLOSED; deep resync + docs; 1252 → 1269 tests)
 
 Owner went to bed after approving all five queued next-steps and asking for a date-picker

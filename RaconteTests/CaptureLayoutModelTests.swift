@@ -23,10 +23,18 @@ final class CaptureLayoutModelTests: XCTestCase {
     private let settledPhases: [CaptureState] =
         [.idle, .captured, .finalizing, .complete]
 
-    func testRecentListIsHiddenWhileCapturing() {
+    func testLastEntryIsHiddenWhileCapturing() {
         for phase in capturingPhases {
-            XCTAssertFalse(layout(phase).showsRecentList,
-                           "\(phase): the Recent list still occupies height during a capture")
+            XCTAssertFalse(layout(phase).showsLastEntry,
+                           "\(phase): the last-entry row still occupies height during a capture")
+        }
+    }
+
+    func testLibraryDoorIsHiddenWhileCapturing() {
+        for phase in capturingPhases {
+            XCTAssertFalse(layout(phase).showsLibraryDoor,
+                           "\(phase): the library route is still on screen during a capture — "
+                           + "the owner's rule is that recording shows the current recording")
         }
     }
 
@@ -47,12 +55,72 @@ final class CaptureLayoutModelTests: XCTestCase {
     /// The owner's explicit constraint: idle must look exactly as it did. This fix is not
     /// licence to redesign the capture landing — that redesign is separately scoped and
     /// deliberately deferred until it can be discussed on a large screen.
-    func testIdleLayoutIsUnchanged() {
+    func testIdleShowsTheLandingLayout() {
         let idle = layout(.idle)
-        XCTAssertTrue(idle.showsRecentList, "idle lost the Recent list")
+        XCTAssertEqual(idle.mode, .setup)
+        XCTAssertTrue(idle.showsLastEntry, "idle lost the last-entry row")
+        XCTAssertTrue(idle.showsLibraryDoor, "idle lost the route into the library")
         XCTAssertTrue(idle.showsMultiVoiceField, "idle lost the Two-voices toggle")
         XCTAssertFalse(idle.transcriptFillsAvailableHeight,
                        "idle must not give the transcript the whole screen")
+    }
+
+    // MARK: - The post-stop receipt (owner ruling 2026-08-15, option B)
+
+    /// The defect the receipt exists to fix. A finished capture leaves the coordinator
+    /// `.idle` — `finishCurrentCapture` spawns a fresh one — so the phase alone cannot
+    /// tell "just finished a reading" from "just opened the app". That is exactly why the
+    /// finished transcript ended up loose on the landing screen with nothing owning it:
+    /// there was no state for it to belong to.
+    func testReceiptIsItsOwnStateEvenThoughThePhaseIsIdle() {
+        let receipt = CaptureLayoutModel.make(phase: .idle, hasReceipt: true)
+        XCTAssertEqual(receipt.mode, .receipt)
+        XCTAssertNotEqual(receipt, layout(.idle),
+                          "a screen showing a receipt is indistinguishable from a plain "
+                          + "idle screen — which is the bug")
+    }
+
+    /// While the receipt is up, nothing about arming the NEXT reading is on screen.
+    func testReceiptReplacesTheLandingControls() {
+        let receipt = CaptureLayoutModel.make(phase: .idle, hasReceipt: true)
+        XCTAssertTrue(receipt.showsReceipt)
+        XCTAssertFalse(receipt.showsLastEntry,
+                       "the receipt IS the last entry; showing the row too is a duplicate")
+        XCTAssertFalse(receipt.showsMultiVoiceField)
+        XCTAssertFalse(receipt.showsLibraryDoor)
+    }
+
+    /// The stranded-text bug, pinned directly: the live transcript band must never be on
+    /// screen outside a capture, in either settled state.
+    func testLiveTranscriptOnlyExistsDuringACapture() {
+        for phase in capturingPhases {
+            XCTAssertTrue(layout(phase).showsLiveTranscript,
+                          "\(phase): no live transcript while capturing")
+        }
+        for phase in settledPhases {
+            XCTAssertFalse(layout(phase).showsLiveTranscript,
+                           "\(phase): the finished transcript is still on the landing "
+                           + "screen — this is the owner's 'messed up' report")
+            XCTAssertFalse(CaptureLayoutModel.make(phase: phase, hasReceipt: true)
+                            .showsLiveTranscript,
+                           "\(phase): the loose transcript band is drawn UNDER the receipt")
+        }
+    }
+
+    /// A live capture outranks a leftover receipt in every capturing phase.
+    ///
+    /// If a stale receipt could survive into a recording it would cover the live
+    /// transcript with the PREVIOUS entry's words — a worse version of the bug the receipt
+    /// exists to fix, and one that would look like the transcriber had failed.
+    func testACaptureAlwaysOutranksALeftoverReceipt() {
+        for phase in capturingPhases {
+            let withReceipt = CaptureLayoutModel.make(phase: phase, hasReceipt: true)
+            XCTAssertEqual(withReceipt.mode, .capturing, "\(phase)")
+            XCTAssertFalse(withReceipt.showsReceipt,
+                           "\(phase): a stale receipt is covering a live recording")
+            XCTAssertEqual(withReceipt, layout(phase),
+                           "\(phase): a leftover receipt changes the recording layout")
+        }
     }
 
     func testSettledPhasesRestoreTheSetupLayout() {

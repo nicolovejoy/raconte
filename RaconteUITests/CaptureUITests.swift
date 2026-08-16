@@ -42,6 +42,35 @@ final class CaptureUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "capture.recentRow")
     }
 
+    /// Wait for the post-stop receipt and dismiss it.
+    ///
+    /// Added 2026-08-15. Finishing a capture used to drop straight back to the landing
+    /// screen, so "a recording completed" could be read off a Recent row appearing. It now
+    /// raises a receipt that owns the screen until dismissed (owner ruling: the finished
+    /// transcript was being left stranded on the landing screen with nothing owning it),
+    /// so every test that records something needs this one step — the same step a person
+    /// takes. The receipt appearing is also a STRONGER completion signal than a row was:
+    /// it is only built after the finalizer, the transcript ref and the rescan have all
+    /// run, whereas a row could appear off a scan alone.
+    private func finishReceipt(_ app: XCUIApplication, _ what: String = "recording",
+                               file: StaticString = #filePath, line: UInt = #line) {
+        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+        guard dismiss.waitForExistence(timeout: 30) else {
+            XCTFail("\(what): the post-stop receipt never appeared", file: file, line: line)
+            return
+        }
+        press(dismiss)
+    }
+
+    /// Entries as the Library screen lists them.
+    ///
+    /// The capture screen shows only the single most recent entry now, so counting
+    /// distinct entries there is no longer possible — the library is where that question
+    /// is answerable.
+    private func libraryRows(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(identifier: "library.entryLink")
+    }
+
     private func recoveryBanner(_ app: XCUIApplication) -> XCUIElement {
         app.staticTexts["recovery.title"].firstMatch
     }
@@ -70,6 +99,7 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)    // let synthetic audio flow
         press(record)                       // Stop → flush → captured → finalize
 
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -108,6 +138,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 1)
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         app.terminate()                     // idle now — a clean-ish quit
 
@@ -133,11 +164,21 @@ final class CaptureUITests: XCTestCase {
             waitUntil(10, "cycle \(cycle): never entered recording") { record.label == "Stop" }
             Thread.sleep(forTimeInterval: 1)
             press(record)
-            waitUntil(30, "cycle \(cycle): entry never appeared") {
-                self.recentRows(app).count == cycle
-            }
+            // One receipt per cycle is itself the "each cycle produced its own entry"
+            // signal, and a stronger one than a row count: the receipt is built per
+            // capture, after that capture's finalizer has run.
+            finishReceipt(app, "cycle \(cycle)")
         }
-        XCTAssertEqual(recentRows(app).count, 3)
+
+        // Counted in the LIBRARY, not on the capture screen. The capture screen shows only
+        // the single most recent entry now (owner: "just see the most recent one and then
+        // have an obvious link to the Library"), so three rows can no longer be counted
+        // there — and quietly weakening this to "the newest one exists" would drop the
+        // separate-entries property this test is named for.
+        press(app.buttons["capture.libraryDoor"].firstMatch)
+        waitUntil(20, "three cycles did not produce three separate entries") {
+            self.libraryRows(app).count == 3
+        }
     }
 
     // MARK: issue #6 (flow) — drag the scrubber on a finished entry, from its detail screen
@@ -161,6 +202,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 3)    // ~3 s so half is unambiguous
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -218,6 +260,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 2)
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -266,6 +309,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 2)
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -341,6 +385,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 3)
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -413,6 +458,7 @@ final class CaptureUITests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 1)
         press(record)
+        finishReceipt(app)
         waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
@@ -428,7 +474,7 @@ final class CaptureUITests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 1)
         press(record)
-        waitUntil(30, "second entry never appeared") { self.recentRows(app).count == 2 }
+        finishReceipt(app, "second recording")
     }
 
     /// Drive a SwiftUI `Toggle` to a known state and confirm it landed there — the

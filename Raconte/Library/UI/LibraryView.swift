@@ -219,6 +219,15 @@ struct LibraryView: View {
                             NavigationLink(value: LibraryDestination.entry(item.captureID)) {
                                 LibraryEntryRow(item: item)
                             }
+                            // On the LINK, not on the row inside it. A `NavigationLink`
+                            // merges its label's children into one accessibility element,
+                            // so `LibraryEntryRow`'s own `library.row` identifier is not
+                            // independently queryable — the same flattening `capture
+                            // .recentRow` exists to work around, and which silently made
+                            // every library row unqueryable from a UI test until the
+                            // capture screen stopped listing three recents and the tests
+                            // had to come here instead.
+                            .accessibilityIdentifier("library.entryLink")
                             // Trailing swipe (trash first, so a full swipe trashes —
                             // platform convention) plus a Mac-convention right-click
                             // context menu with the same two handlers, reusing

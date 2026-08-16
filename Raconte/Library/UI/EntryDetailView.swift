@@ -618,19 +618,12 @@ struct EntryDetailView: View {
     /// `Text` concatenation keeps each segment's own explicit modifiers
     /// (font/color/italic) regardless of the outer `.font(.system(.body, design:
     /// .serif))` the call site applies, which is the mechanism the voice label relies on.
+    /// Delegates to `VoiceAttributedText`, which the capture screen's post-stop receipt
+    /// also renders through — one implementation of what a voice mark looks like, so the
+    /// receipt and the entry it opens into can never disagree about who said what.
     private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph,
                                      voiceLabels: [String: String]) -> Text {
-        let body = Text(paragraph.text)
-        let combined: Text
-        if let label = VoiceDisplay.label(forVoice: paragraph.voice, voiceLabels: voiceLabels) {
-            let prefix = Text("\(label): ")
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-            combined = prefix + body
-        } else {
-            combined = body
-        }
-        return VoiceDisplay.isItalic(voice: paragraph.voice) ? combined.italic() : combined
+        VoiceAttributedText.paragraph(paragraph, voiceLabels: voiceLabels)
     }
 
     // MARK: - Trash

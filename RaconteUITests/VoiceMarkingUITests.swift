@@ -45,14 +45,30 @@ final class VoiceMarkingUITests: XCTestCase {
         }
     }
 
+    /// Open one of the seeded fixtures, **from the library**.
+    ///
     /// `UITestVoiceMarkingSeed.seedIfRequested` seeds BOTH fixtures under the one env
-    /// gate, so both show up in the capture screen's Recent section. The tiebreak in
-    /// `LibraryScreenModel.mostRecentlyCaptured` (equal `capturedAt` -> larger
-    /// `captureID` first) is what orders them: `captureID` ("…TQZ6") sorts before
-    /// `unmarkedCaptureID` ("…TQZ2") — see `UITestVoiceMarkingSeed`'s doc comment — so
-    /// row 0 is always the marked entry and row 1 is always the unmarked one.
+    /// gate. The tiebreak in `LibraryScreenModel.mostRecentlyCaptured` (equal `capturedAt`
+    /// -> larger `captureID` first) is what orders them: `captureID` ("…TQZ6") sorts
+    /// before `unmarkedCaptureID` ("…TQZ2") — see `UITestVoiceMarkingSeed`'s doc comment —
+    /// so row 0 is always the marked entry and row 1 the unmarked one.
+    ///
+    /// This used to read those rows off the capture screen's Recent section. Since
+    /// 2026-08-15 that screen shows only the single most recent entry (owner: "just see
+    /// the most recent one and then have an obvious link to the Library"), so row 1 is not
+    /// there at all. The library lists every entry in the same newest-first order, so the
+    /// ordering note above still holds.
+    ///
+    /// Queried by `library.entryLink` — the identifier on the `NavigationLink` itself. The
+    /// row's own `library.row` is NOT queryable: the link merges its label's children into
+    /// one accessibility element, the same flattening `capture.recentRow` exists to work
+    /// around.
     private func openSeededEntry(_ app: XCUIApplication, row index: Int) {
-        let rows = app.descendants(matching: .any).matching(identifier: "capture.recentRow")
+        let door = app.buttons["capture.libraryDoor"].firstMatch
+        XCTAssertTrue(door.waitForExistence(timeout: 20), "library route never appeared")
+        press(door)
+
+        let rows = app.descendants(matching: .any).matching(identifier: "library.entryLink")
         let row = rows.element(boundBy: index)
         XCTAssertTrue(row.waitForExistence(timeout: 20), "seeded entry row \(index) never appeared")
         press(row)

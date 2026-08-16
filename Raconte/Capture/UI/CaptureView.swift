@@ -1083,14 +1083,23 @@ struct JournalHeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("capture.journalHeader")
+        // `.foregroundStyle(Color.primary)` on both fields, for the same reason the
+        // `.sheet` below resets it: an alert draws on the SYSTEM's own light material,
+        // but its content is a SwiftUI builder nested inside `CaptureView`, which sets
+        // `.foregroundStyle(.white)` for the near-black capture surface. That white is
+        // inherited straight into the text field — owner smoke, 2026-08-15: "the 'new
+        // folder' text field is white on white, can't read what I type. but it does
+        // work." Exactly that: the binding was fine, the text was invisible.
         .alert("New Journal", isPresented: $showingNewJournalPrompt) {
             TextField("Journal name", text: $draftName)
+                .foregroundStyle(Color.primary)
                 .accessibilityIdentifier("capture.newJournalNameField")
             Button("Create") { Task { await model.createJournal(name: draftName) } }
             Button("Cancel", role: .cancel) {}
         }
         .alert("Rename Journal", isPresented: $showingRenamePrompt) {
             TextField("Journal name", text: $draftName)
+                .foregroundStyle(Color.primary)
                 .accessibilityIdentifier("capture.renameJournalNameField")
             Button("Rename") { Task { await model.renameCurrentJournal(to: draftName) } }
             Button("Cancel", role: .cancel) {}

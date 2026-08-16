@@ -69,6 +69,29 @@ struct CaptureLayoutModel: Equatable, Sendable {
     /// Whether the receipt owns the middle of the screen.
     var showsReceipt: Bool
 
+    /// Whether the setup band renders the one-line `CompactBackdateSummary` (tap to open
+    /// an editor sheet) instead of the full inline `BackdateField`.
+    ///
+    /// Added for approach 2 of the 2026-08-16 IA discussion (owner: "there's two
+    /// scrollable sections above [the bar]... I would rather have none, especially during
+    /// the recording"). The full `BackdateField` — a toggle plus a precision date picker —
+    /// is not phase-gated (it writes through to the live capture mid-recording), so before
+    /// this it was squeezed into `setupHeightWhileCapturing` and forced to scroll
+    /// internally: a second scroll view stacked above the transcript's own. The backdate
+    /// is bounded content — a toggle and a date — so it should never need to scroll; only
+    /// the transcript is genuinely unbounded. Backdating stays reachable through the
+    /// compact summary's sheet, it just stops needing inline scroll space to do it.
+    var usesCompactBackdateField: Bool
+
+    /// Whether launch-recovered-capture banners are on screen.
+    ///
+    /// They are about PAST orphaned recordings, unrelated to whatever is happening now —
+    /// hiding them during a capture loses nothing (the state they're built from,
+    /// `visibleRecovered`, is untouched, so they reappear once idle again), and removes
+    /// the last piece of unbounded-in-principle content from the setup band while
+    /// recording, alongside `usesCompactBackdateField`.
+    var showsRecoveryBanners: Bool
+
     /// Whether the transcript fills the height available above the control bar (with its
     /// own scroll) instead of being capped.
     ///
@@ -76,14 +99,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
     /// pinned, that pressure is gone and the cap only wastes screen: the transcript is the
     /// one thing worth looking at while reading aloud.
     var transcriptFillsAvailableHeight: Bool
-
-    /// Height the setup band keeps while a capture is under way, in points.
-    ///
-    /// Enough for the journal header plus the backdate row, and scrollable for the rest.
-    /// A fixed slice rather than letting the setup band and the transcript both stretch:
-    /// two greedy views split the space between them by rules nobody chose, and the point
-    /// of #53 is that this screen's geometry stops being emergent.
-    static let setupHeightWhileCapturing: Double = 200
 
     /// `hasReceipt` is the screen's own state, not the machine's: a capture that has
     /// finalized leaves the coordinator `.idle` (a fresh one is spawned), so the phase
@@ -105,6 +120,8 @@ struct CaptureLayoutModel: Equatable, Sendable {
                          showsMultiVoiceField: false,
                          showsLiveTranscript: true,
                          showsReceipt: false,
+                         usesCompactBackdateField: true,
+                         showsRecoveryBanners: false,
                          transcriptFillsAvailableHeight: true)
 
         case .idle, .captured, .finalizing, .complete:
@@ -119,6 +136,8 @@ struct CaptureLayoutModel: Equatable, Sendable {
                              showsMultiVoiceField: false,
                              showsLiveTranscript: false,
                              showsReceipt: true,
+                             usesCompactBackdateField: false,
+                             showsRecoveryBanners: false,
                              transcriptFillsAvailableHeight: false)
             }
             // The landing screen: arm the next reading, glance at the last one, or leave
@@ -129,6 +148,8 @@ struct CaptureLayoutModel: Equatable, Sendable {
                          showsMultiVoiceField: true,
                          showsLiveTranscript: false,
                          showsReceipt: false,
+                         usesCompactBackdateField: false,
+                         showsRecoveryBanners: true,
                          transcriptFillsAvailableHeight: false)
         }
     }

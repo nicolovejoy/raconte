@@ -834,53 +834,21 @@ struct CaptureView: View {
     /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything
     /// that is setup or browsing rather than operating the recorder.
     ///
-    /// Given a fixed slice of the screen during a capture (`setupHeightWhileCapturing`)
-    /// rather than being removed: the backdate field is NOT phase-gated the way the
-    /// two-voices toggle is — it writes through to the live capture's `entry.json`
-    /// mid-recording — so it has to stay reachable, which here means "scroll this band".
-    /// A fixed slice, rather than letting this band and the transcript both stretch,
-    /// keeps the split deterministic instead of at the mercy of two greedy views.
+    /// Two different renderings by design (approach 2 of the 2026-08-16 IA discussion —
+    /// owner: "there's two scrollable sections above [the bar]... I would rather have
+    /// none, especially during the recording"). Idle is a browsing screen, so one honest
+    /// scroll region is fine. While capturing, nothing left in this band is unbounded —
+    /// journal name, backdate, build stamp — so nothing here scrolls at all;
+    /// `CaptureLayoutModel.usesCompactBackdateField`/`showsRecoveryBanners` strip the band
+    /// down to that bounded content instead of squeezing the full band into a fixed-height
+    /// box that then had to scroll internally, which is what stacked a second scroll view
+    /// above the transcript's own.
+    @ViewBuilder
     private var setupRegion: some View {
-        ScrollView {
-            VStack(spacing: 28) {
-                // DEBUG-HARNESS-MOUNT — transition-pause menu (T11) for the kill-at-every-transition sweep.
-                #if DEBUG
-                HStack {
-                    Spacer()
-                    Button("Debug") { showDebugMenu = true }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .sheet(isPresented: $showDebugMenu) {
-                    // Reset the capture screen's inherited .white foreground —
-                    // it renders invisible on the system sheet background.
-                    NavigationStack { DebugMenuView() }
-                        .foregroundStyle(Color.primary)
-                }
-                #endif
-
+        if layout.usesCompactBackdateField {
+            VStack(alignment: .leading, spacing: 12) {
                 JournalHeaderView(model: model)
-                BackdateField(model: model)
-
-                if layout.showsMultiVoiceField {
-                    MultiVoiceField(model: model)
-                }
-
-                ForEach(model.visibleRecovered) { rec in
-                    RecoveryBanner(recording: rec,
-                                   capturesRoot: model.capturesRoot,
-                                   onKeep: { model.keep(rec.captureID) },
-                                   onDelete: { model.delete(rec.captureID) })
-                }
-
-                if layout.showsLastEntry {
-                    lastEntrySection
-                }
-
-                if layout.showsLibraryDoor {
-                    libraryDoor
-                }
-
+                CompactBackdateSummary(model: model)
                 // Not DEBUG-gated: a wireless install is exactly when you can't tell
                 // which build you're holding, and TestFlight has the same problem.
                 Text(BuildInfo.stamp)
@@ -889,10 +857,60 @@ struct CaptureView: View {
                     .accessibilityIdentifier("capture.buildStamp")
             }
             .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ScrollView {
+                VStack(spacing: 28) {
+                    // DEBUG-HARNESS-MOUNT — transition-pause menu (T11) for the kill-at-every-transition sweep.
+                    #if DEBUG
+                    HStack {
+                        Spacer()
+                        Button("Debug") { showDebugMenu = true }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .sheet(isPresented: $showDebugMenu) {
+                        // Reset the capture screen's inherited .white foreground —
+                        // it renders invisible on the system sheet background.
+                        NavigationStack { DebugMenuView() }
+                            .foregroundStyle(Color.primary)
+                    }
+                    #endif
+
+                    JournalHeaderView(model: model)
+                    BackdateField(model: model)
+
+                    if layout.showsMultiVoiceField {
+                        MultiVoiceField(model: model)
+                    }
+
+                    if layout.showsRecoveryBanners {
+                        ForEach(model.visibleRecovered) { rec in
+                            RecoveryBanner(recording: rec,
+                                           capturesRoot: model.capturesRoot,
+                                           onKeep: { model.keep(rec.captureID) },
+                                           onDelete: { model.delete(rec.captureID) })
+                        }
+                    }
+
+                    if layout.showsLastEntry {
+                        lastEntrySection
+                    }
+
+                    if layout.showsLibraryDoor {
+                        libraryDoor
+                    }
+
+                    // Not DEBUG-gated: a wireless install is exactly when you can't tell
+                    // which build you're holding, and TestFlight has the same problem.
+                    Text(BuildInfo.stamp)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.35))
+                        .accessibilityIdentifier("capture.buildStamp")
+                }
+                .padding(24)
+            }
         }
-        .frame(maxHeight: layout.transcriptFillsAvailableHeight
-               ? CaptureLayoutModel.setupHeightWhileCapturing
-               : nil)
     }
 
     /// The live transcript: capped when idle, and free to take everything the setup band
@@ -1338,7 +1356,14 @@ struct JournalHeaderView: View {
 /// materialized into its sidecar (`EntryMetadata.originalDate == nil` means "use the
 /// capture's own date"). Settable before or during recording (M3 T3); the model pushes
 /// every change straight to the live capture's `entry.json` when one is in progress.
-struct BackdateField: View {
+/// The backdate toggle plus its precision date picker, with no styling applied. Two
+/// callers style this content for two different surfaces: `BackdateField` pins it to the
+/// near-black capture background (issue #58, the idle setup band's inline field);
+/// `CompactBackdateSummary`'s sheet leaves it in the system's own light/dark appearance —
+/// the same convention `JournalHeaderView`'s cover/voice-labels sheets already use, and
+/// the reason this content is factored out rather than duplicated (approach 2, 2026-08-16
+/// IA discussion: the sheet needs the identical write-through bindings, just un-styled).
+struct BackdateEditorContent: View {
     let model: CaptureScreenModel
 
     var body: some View {
@@ -1370,32 +1395,96 @@ struct BackdateField: View {
                     date: Binding(get: { model.backdateDate }, set: { model.setBackdateDate($0) }),
                     precision: Binding(get: { model.backdatePrecision }, set: { model.setBackdatePrecision($0) }),
                     idPrefix: "capture")
-                // Belt-and-suspenders alongside the pin below (issue #58): an explicit
-                // foreground/tint on the call site (not inside `PrecisionDatePicker`
-                // itself, which is shared with `EntryDetailView`'s light-background
-                // sheet and must not be forced) so the segmented control's and date
-                // field's own text/highlight read correctly even if the environment
-                // pin doesn't reach every native subview.
-                .tint(.white)
-                .foregroundStyle(.white)
             }
             .disabled(!model.backdateEnabled)
             .opacity(model.backdateEnabled ? 1 : 0.45)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // The capture screen's background is near-black regardless of the app's color
-        // scheme; an ambient-scheme system control renders dark-on-dark in light mode
-        // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
-        // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
-        // presentation, such as a popover or window" (Apple's own wording): this view
-        // lives inside `CaptureView`, the app's one permanently-mounted NavigationStack
-        // root (`ContentView.swift`), with no sheet/popover boundary around it, so a
-        // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
-        // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
-        // scoped `.environment` pin has no such reach; a control's own transient popup
-        // (the calendar/segment dropdown) is explicitly out of scope for #58 — it
-        // renders on its own material background, not the near-black screen.
-        .environment(\.colorScheme, .dark)
+    }
+}
+
+struct BackdateField: View {
+    let model: CaptureScreenModel
+
+    var body: some View {
+        BackdateEditorContent(model: model)
+            // Belt-and-suspenders alongside the `.environment` pin below (issue #58): an
+            // explicit foreground/tint at this call site (not inside
+            // `BackdateEditorContent`, which `CompactBackdateSummary`'s light-background
+            // sheet also uses and must not force) so the toggle's and date field's own
+            // text/highlight read correctly even if the environment pin doesn't reach
+            // every native subview.
+            .tint(.white)
+            .foregroundStyle(.white)
+            // The capture screen's background is near-black regardless of the app's color
+            // scheme; an ambient-scheme system control renders dark-on-dark in light mode
+            // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
+            // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
+            // presentation, such as a popover or window" (Apple's own wording): this view
+            // lives inside `CaptureView`, the app's one permanently-mounted NavigationStack
+            // root (`ContentView.swift`), with no sheet/popover boundary around it, so a
+            // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
+            // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
+            // scoped `.environment` pin has no such reach; a control's own transient popup
+            // (the calendar/segment dropdown) is explicitly out of scope for #58 — it
+            // renders on its own material background, not the near-black screen.
+            .environment(\.colorScheme, .dark)
+    }
+}
+
+/// One-line, non-scrolling stand-in for `BackdateField` while capturing (approach 2,
+/// 2026-08-16 IA discussion). Owner: "there's two scrollable sections above [the bar]...
+/// I would rather have none, especially during the recording." The full field is bounded
+/// (a toggle and a date), so it never needed a scroll region — it just needed to stop
+/// being drawn as one. Tapping opens the same write-through editor in a sheet, unstyled
+/// (system light/dark material), the same convention `JournalHeaderView`'s other sheets
+/// already use.
+struct CompactBackdateSummary: View {
+    let model: CaptureScreenModel
+    @State private var showingEditor = false
+
+    var body: some View {
+        Button {
+            showingEditor = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                Text(Self.summaryText(enabled: model.backdateEnabled,
+                                      date: model.backdateDate,
+                                      precision: model.backdatePrecision))
+                    .captureLabel(.backdateSummary)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .accessibilityIdentifier("capture.backdateSummary")
+        .sheet(isPresented: $showingEditor) {
+            NavigationStack {
+                Form {
+                    BackdateEditorContent(model: model)
+                }
+                .navigationTitle("Backdate")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showingEditor = false }
+                            .accessibilityIdentifier("capture.backdateSheetDone")
+                    }
+                }
+            }
+            // Reset the capture screen's inherited .white foreground — same reasoning as
+            // `JournalHeaderView`'s cover/voice-labels sheets, which render on the
+            // system's own light material, not the near-black capture surface.
+            .foregroundStyle(Color.primary)
+        }
+    }
+
+    /// Pulled out as its own pure function, same reasoning as
+    /// `EntryDetailView.navigationTitleText`: a name a test can call directly.
+    static func summaryText(enabled: Bool, date: Date, precision: DatePrecision,
+                            calendar: Calendar = .gregorianCurrent) -> String {
+        guard enabled else { return "Not backdated" }
+        let partial = PartialDate(from: date, precision: precision, calendar: calendar)
+        return "Backdated to \(partial.formatted(calendar: calendar))"
     }
 }
 

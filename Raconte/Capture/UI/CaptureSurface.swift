@@ -141,6 +141,11 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     /// calendar sheet instead of a system date picker, so unlike the iOS `.compact` chip
     /// this text is ours to size and colour, and therefore ours to check.
     case backdateDateButton
+    /// The one-line "Backdated to …" / "Not backdated" summary shown in place of the full
+    /// `BackdateField` while capturing (approach 2, 2026-08-16 IA discussion) — the same
+    /// role as `backdateDateButton`, just cross-platform and reachable during a recording
+    /// rather than only inside macOS's own picker.
+    case backdateSummary
     case multiVoiceToggle
     case recentHeader
     /// The full-width library route at the foot of the landing area (2026-08-15) —
@@ -163,7 +168,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         // The backdated date is a value the owner has to read back and confirm, not a
         // caption naming a control — full white, like the journal name and the receipt date.
         case .journalName, .receiptDate, .libraryDoor, .receiptSavedChip,
-             .backdateDateButton: 1.0
+             .backdateDateButton, .backdateSummary: 1.0
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
              .recentHeader, .libraryDoorChevron, .receiptSummary: 0.78
@@ -184,7 +189,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton: .callout    // 16
+                 .receiptSavedChip, .backdateDateButton, .backdateSummary: .callout    // 16
             }
         case .macOS:
             switch self {
@@ -193,7 +198,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton: .title2     // 17
+                 .receiptSavedChip, .backdateDateButton, .backdateSummary: .title2     // 17
             }
         }
     }

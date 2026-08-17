@@ -94,6 +94,19 @@ actor JournalCoverStore {
         try writeBytes(imageData, journalID: journalID)
     }
 
+    /// The removal half of ingest: the other device deleted its cover and won the stamp, so
+    /// this one's bytes go too. Unstamped and hook-free for the same reason `ingest` is —
+    /// the merged journal written alongside already carries the remote's
+    /// `modified["cover"]`, and stamping again here would restamp a received deletion as a
+    /// local edit.
+    ///
+    /// Without this, a deletion moved the stamp but not the bytes: the receiving device
+    /// kept displaying the deleted picture forever, and — now holding the remote's newer
+    /// stamp — its own cover could never win a later comparison either.
+    func removeIngested(journalID: String) {
+        try? FileManager.default.removeItem(at: url(journalID: journalID))
+    }
+
     private func writeBytes(_ data: Data, journalID: String) throws {
         let url = url(journalID: journalID)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),

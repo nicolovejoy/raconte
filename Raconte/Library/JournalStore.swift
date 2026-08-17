@@ -117,6 +117,37 @@ actor JournalStore {
         try save(registry)
     }
 
+    /// The ingest path's read-merge-write, as ONE isolated operation.
+    ///
+    /// The two-call version of this — read the journal, merge, write it back — was a lost
+    /// update, and the reason is worth stating precisely because the obvious defence does
+    /// not work: **an actor releases its isolation at every `await`.** The ingest side
+    /// being an actor bought nothing, because the read and the write were two separate
+    /// hops into *this* actor, and a `rename` landing between them was silently reverted —
+    /// `applySyncMerge` replaces the whole `Journal`, stamps included, so the newer local
+    /// stamp was destroyed, the revert was then pushed, and the edit was lost on both
+    /// devices.
+    ///
+    /// `decide` is **non-async on purpose**: a synchronous closure cannot suspend, so
+    /// load → decide → save runs to completion under this actor's isolation with nothing
+    /// able to interleave. Making it `async` would silently reintroduce the bug, which is
+    /// why the signature is the guard rather than a comment asking callers to be careful.
+    ///
+    /// The caller gets back whatever the closure decided about the cover, because the
+    /// cover's bytes live in a different store and cannot be written from here. Only the
+    /// registry's read-modify-write has to be atomic; see `SyncRecordExchange.ingestJournal`
+    /// for what the cover half then does and the one crash window it leaves.
+    ///
+    /// No restamping and no sync hook, for the same no-echo reason as `applySyncMerge`.
+    func applySyncMerge(id: String,
+                        decide: @Sendable (Journal?) -> JournalSyncMerge) throws -> JournalSyncMerge.CoverAction {
+        var registry = try load()
+        let outcome = decide(registry.journal(id: id))
+        registry.applySyncMerge(outcome.journal)
+        try save(registry)
+        return outcome.coverAction
+    }
+
     /// Sets (or clears, via an empty dict) a journal's voice labels (T7 Mark Voices,
     /// issue #56). Same load -> mutate -> save shape as `rename`; the pure trim/drop
     /// rule lives on `JournalRegistry.setVoiceLabels`.

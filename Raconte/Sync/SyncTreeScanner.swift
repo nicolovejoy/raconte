@@ -30,28 +30,6 @@ struct SyncTreeScanner {
         return SyncScanResult(artifacts: artifacts, skipped: skipped)
     }
 
-    /// The state of ONE artifact, without walking the whole tree.
-    ///
-    /// Exists so the upload ledger can be written with the *same* digest formula the
-    /// reconciliation scan will later compare against. A digest computed any other way
-    /// would never match, and the next launch would re-enqueue a record that is already
-    /// on the server — forever.
-    ///
-    /// Journals only for now; T6+ fill in the capture-side cases as their builders land.
-    /// Nil means "nothing to digest" (absent, unreadable, or not built yet), and the
-    /// caller's rule is to leave the ledger untouched — the safe direction, since a
-    /// missing ledger entry costs one redundant upload while a wrong one costs a lost
-    /// edit.
-    func artifact(for name: SyncRecordName) -> SyncArtifactState? {
-        switch name {
-        case .journal(let id):
-            var skipped: [String] = []
-            return scanJournals(skipped: &skipped).first { $0.name == .journal(id: id) }
-        case .entry, .audio, .revision, .liveLog, .markerStream:
-            return nil
-        }
-    }
-
     // MARK: Journals
 
     private func scanJournals(skipped: inout [String]) -> [SyncArtifactState] {
@@ -67,20 +45,31 @@ struct SyncTreeScanner {
         return registry.journals.map(journalArtifact)
     }
 
+    private func journalArtifact(_ journal: Journal) -> SyncArtifactState {
+        let coverURL = AppContainer.journalCoverURL(containerRoot: containerRoot, journalID: journal.id)
+        let digest = Self.journalDigest(journal: journal, coverURL: coverURL)
+        return SyncArtifactState(name: .journal(id: journal.id),
+                                  sha256: digest.sha256, bytes: digest.bytes)
+    }
+
     /// Digest definition (locked): sha256 of the journal's canonical single-journal
     /// JSON encoding (sorted-keys `lineEncoder`), plus — when a cover exists — the
     /// cover's OWN sha256 appended as a suffixed line, so a cover change alone flips
     /// this digest without the (potentially large, and irrelevant to "did the record
     /// change") image bytes ever being part of what `bytes` reports.
-    private func journalArtifact(_ journal: Journal) -> SyncArtifactState {
-        let coverURL = AppContainer.journalCoverURL(containerRoot: containerRoot, journalID: journal.id)
+    ///
+    /// Takes a `Journal` **value** rather than reading the registry, so the push path can
+    /// derive the ledger digest from the exact same journal it built the record from. When
+    /// it re-read the registry instead, an edit landing between the two reads was ledgered
+    /// as uploaded while the record carried the older content — after which reconciliation
+    /// saw ledger == disk and never sent the newer version.
+    static func journalDigest(journal: Journal, coverURL: URL) -> UploadedDigest {
         var source = (try? CaptureCoding.lineEncoder().encode(journal)) ?? Data()
         if let coverData = try? Data(contentsOf: coverURL) {
             source.append(Data("\n".utf8))
-            source.append(Data(Self.sha256Hex(coverData).utf8))
+            source.append(Data(sha256Hex(coverData).utf8))
         }
-        return SyncArtifactState(name: .journal(id: journal.id),
-                                  sha256: Self.sha256Hex(source), bytes: source.count)
+        return UploadedDigest(sha256: sha256Hex(source), bytes: source.count)
     }
 
     // MARK: Captures

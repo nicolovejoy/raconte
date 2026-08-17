@@ -19,7 +19,9 @@ struct ContentView: View {
         let library = LibraryScreenModel.live()
         _library = State(initialValue: library)
         _model = State(initialValue: CaptureScreenModel.liveWithTranscription(library: library))
-        _sync = State(initialValue: SyncCoordinator.live())
+        // Built from the library's own stores, never its own copies — see
+        // `SyncCoordinator.live(library:)`.
+        _sync = State(initialValue: SyncCoordinator.live(library: library))
     }
 
     var body: some View {

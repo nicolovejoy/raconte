@@ -20,12 +20,28 @@ actor JournalStore {
     private let mintID: @Sendable () -> String
     private let now: @Sendable () -> Date
 
+    /// M4 T5. Nil everywhere sync is off — unit tests, the UI-test harness, and any build
+    /// whose composition root refused to construct an engine. A store with no hook behaves
+    /// exactly as it did before M4.
+    private var syncHooks: (any SyncHooks)?
+
     init(containerRoot: URL,
          mintID: @escaping @Sendable () -> String = { ULID.make() },
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         syncHooks: (any SyncHooks)? = nil) {
         self.url = AppContainer.journalsURL(containerRoot: containerRoot)
         self.mintID = mintID
         self.now = now
+        self.syncHooks = syncHooks
+    }
+
+    /// Wired after construction because the composition root builds this store (inside
+    /// `LibraryScreenModel`) before it can build the sync coordinator that conforms to
+    /// `SyncHooks` — and the coordinator's own ingest path needs this store, so one of the
+    /// two has to be attached second. Doing it this way rather than with a two-phase init
+    /// leaves every existing `init` call site untouched.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     // MARK: Reads
@@ -47,7 +63,7 @@ actor JournalStore {
     // MARK: Writes
 
     @discardableResult
-    func create(name: String) throws -> Journal {
+    func create(name: String) async throws -> Journal {
         var registry = try load()
         // `insert` normalizes the name and hands back what it stored. One clock read,
         // reused for both `createdAt` and the M4 T1 `modified["name"]` stamp `insert`
@@ -57,25 +73,59 @@ actor JournalStore {
         let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: createdAt),
                                           now: createdAt)
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: created.id))
         return created
     }
 
     @discardableResult
-    func rename(id: String, to name: String) throws -> Journal {
+    func rename(id: String, to name: String) async throws -> Journal {
         var registry = try load()
         let renamed = try registry.rename(id: id, to: name, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return renamed
+    }
+
+    /// Stamps `modified["cover"]` — the LWW stamp for the cover image, which lives outside
+    /// this registry at `journals/<id>/cover.jpg`. Called by `JournalCoverStore` after it
+    /// writes or removes those bytes, so `journals.json` keeps exactly one writer (this
+    /// actor) while the stamp still lands.
+    ///
+    /// Fires the hook like any other local edit: the journal record's digest includes the
+    /// cover's own sha (`SyncTreeScanner.journalArtifact`), so a new cover really is a
+    /// change to the Journal record and has to be pushed.
+    func stampCoverModified(id: String) async throws {
+        var registry = try load()
+        try registry.stampCover(id: id, now: now())
+        try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
+    }
+
+    /// Writes a merged journal back verbatim (M4 T5, design §6) — **no restamping, and no
+    /// sync hook**.
+    ///
+    /// The missing hook is the no-echo rule, and it is load-bearing rather than an
+    /// optimization. A sync-caused save that announced itself as a local change would
+    /// re-upload what was just downloaded; and because `applySyncMerge` also does not
+    /// restamp, the echo would carry the *remote's* stamps back at the remote — which,
+    /// combined with the deviceID tie-break, is a loop two devices can sit in indefinitely,
+    /// each one's echo answering the other's. See `JournalRegistry.applySyncMerge` for why
+    /// the stamps travel untouched.
+    func applySyncMerge(_ journal: Journal) throws {
+        var registry = try load()
+        registry.applySyncMerge(journal)
+        try save(registry)
     }
 
     /// Sets (or clears, via an empty dict) a journal's voice labels (T7 Mark Voices,
     /// issue #56). Same load -> mutate -> save shape as `rename`; the pure trim/drop
     /// rule lives on `JournalRegistry.setVoiceLabels`.
     @discardableResult
-    func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
+    func setVoiceLabels(id: String, labels: [String: String]) async throws -> Journal {
         var registry = try load()
         let updated = try registry.setVoiceLabels(id: id, labels: labels, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return updated
     }
 

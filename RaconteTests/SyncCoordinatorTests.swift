@@ -184,7 +184,10 @@ final class SyncCoordinatorTests: XCTestCase {
     func testTheCompositionRootRefusesToBuildALiveEngineUnderTheTestRunner() {
         XCTAssertTrue(SyncCoordinator.isHostedByTestRunner,
                       "this test is only meaningful while it runs under XCTest")
-        XCTAssertNil(SyncCoordinator.live())
+        // A throwaway library, so this test's own construction can never touch the real
+        // container even if the guard were removed — the guard is what is under test, not
+        // where the stores point.
+        XCTAssertNil(SyncCoordinator.live(library: LibraryScreenModel(capturesRoot: capturesRoot)))
     }
 
     /// The gate's whole truth table. Both of its inputs read the running process and so

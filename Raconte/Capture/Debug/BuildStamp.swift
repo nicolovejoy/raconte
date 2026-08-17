@@ -189,5 +189,16 @@ enum BuildStamp {
             .flatMap { loadedImageUUID(forExecutablePath: $0.url.path) }
         return combinedDisplayString(dateString: dateString, identity: identity)
     }
+
+    // MARK: async entry point
+
+    /// Off-main-actor wrapper for `currentBuildDisplayString()` (nav T7, design §6):
+    /// the bundle enumeration and dyld image walk are file I/O, and running them
+    /// inline on the main actor stalls the first paint of the Debug screen. Not the
+    /// 2026-08-17 freeze — that was a modal sheet blocking ⌘Q, not a hang — fixed on
+    /// principle rather than as a root-cause remedy.
+    static func currentBuildDisplayStringAsync() async -> String? {
+        await Task.detached(priority: .utility) { currentBuildDisplayString() }.value
+    }
 }
 #endif

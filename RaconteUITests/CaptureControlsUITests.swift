@@ -319,7 +319,10 @@ final class CaptureControlsUITests: XCTestCase {
     private func assertBarFitsWithinAThird(_ app: XCUIApplication,
                                            _ phase: String,
                                            file: StaticString = #filePath, line: UInt = #line) {
-        let clock = app.staticTexts["capture.clock"].firstMatch
+        // Renamed from "capture.clock" (nav T6): RecStatusLine's clock Text now carries
+        // "capture.elapsed" — one identifier per element, so this is the same anchor
+        // under a new name, not a different element.
+        let clock = app.staticTexts["capture.elapsed"].firstMatch
         XCTAssertTrue(clock.waitForExistence(timeout: 10),
                       "elapsed timer not found — cannot locate the top of the control bar",
                       file: file, line: line)

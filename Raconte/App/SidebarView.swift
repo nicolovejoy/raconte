@@ -42,7 +42,9 @@ struct SidebarView: View {
             router.select(newPlace)
         })) {
             ForEach(rows) { row in
-                SidebarRowView(row: row, cover: row.journalID.flatMap { services.library.journalCovers[$0] })
+                SidebarRowView(row: row,
+                               cover: row.journalID.flatMap { services.library.journalCovers[$0] },
+                               live: row.place == .capture ? captureLiveRow : nil)
                     .tag(row.place)
                     .accessibilityIdentifier(row.accessibilityIdentifier)
             }
@@ -62,6 +64,19 @@ struct SidebarView: View {
         .onChange(of: router.place) { _, place in
             selection = place
         }
+    }
+
+    /// Design §5's visibility guarantee: "the coordinator already lives in
+    /// `CaptureScreenModel`, owned at the app root; unmounting the capture view must not
+    /// touch it. The sidebar's live indicator is the visibility guarantee." Read fresh
+    /// on every body evaluation, which — since `elapsed` is an `@Observable` published
+    /// property read directly here — re-evaluates the sidebar once per timer tick while a
+    /// capture is live. Accepted cost: the sidebar is a handful of rows, and the only
+    /// alternative (a coarser "something is recording" flag with no running time) throws
+    /// away the reason a live indicator exists in the first place.
+    private var captureLiveRow: CaptureSidebarRow {
+        CaptureSidebarRow.make(phase: services.capture.coordinator.phase,
+                               elapsed: services.capture.coordinator.elapsed)
     }
 
     private var rows: [PlaceRow] {
@@ -85,13 +100,15 @@ struct SidebarView: View {
 /// One sidebar row: a system icon (Capture, All Entries, Trash, Debug) or a journal cover
 /// thumbnail, the title, and an optional subtitle (a journal's derived date range).
 ///
-/// No `live` indicator yet — that is Task 6's `CaptureSidebarRow`, which shows whether a
-/// capture is in progress under a different place. This task only routes.
+/// `live` is non-nil only for the Capture row (nav T6, design §5) — the sidebar's own
+/// visibility guarantee for a recording that's running under a DIFFERENT place. Every
+/// other row passes `nil`.
 struct SidebarRowView: View {
     let row: PlaceRow
     let cover: Data?
+    let live: CaptureSidebarRow?
 
-    var body: some View {
+    @ViewBuilder private var titleGroup: some View {
         HStack(spacing: 10) {
             if row.journalID != nil {
                 JournalCoverThumbnail(data: cover, size: 30)
@@ -108,11 +125,64 @@ struct SidebarRowView: View {
                 }
             }
         }
-        .padding(.vertical, 2)
-        // Combined with an explicit label, same reasoning as `capture.libraryDoor`'s old
-        // combine (a two-`Text` VStack otherwise reads as two elements): the row's title
-        // plus its date range, or just the title when there is none.
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
+    }
+
+    var body: some View {
+        if let live, live.isLive, let elapsedText = live.elapsedText {
+            // The live-Capture-row shape ONLY: two independently addressable accessibility
+            // children (the title group, and the live badge), so `sidebar.capture.live`
+            // has its own queryable identifier distinct from the row's own. `.combine` on
+            // titleGroup + `.accessibilityElement(children: .contain)` on the outer HStack
+            // is required for that split — found empirically (`app.debugDescription` dump
+            // against a failing UI test): WITHOUT `.contain`, the ForEach's own
+            // `.accessibilityIdentifier(row.accessibilityIdentifier)` (Task 5, applied one
+            // level up) doesn't just merge children — it OVERWRITES every descendant
+            // accessibility element's identifier with its own string, while leaving their
+            // labels alone. Both `titleGroup` and the live badge reported identifier
+            // "sidebar.capture" (only their labels — "Capture" vs "Recording, 0:04" —
+            // stayed distinct) before `.contain` was added. A new variant of the
+            // container-flattening trap already known for `Button`/`NavigationLink`
+            // (`NavigationLinkIdentifierGoesOnTheLink` in memory): there it merges
+            // children into one element; here it silently overwrote their identifiers
+            // instead.
+            //
+            // Deliberately NOT the shape for any other row/state (see the `else` branch):
+            // `.contain` also broke `openSidebarRow`'s compound `label BEGINSWITH … AND
+            // identifier BEGINSWITH 'sidebar.journal.'` query (`NavigationUITests
+            // .testSelectingAJournalPlaceScopesTheEntryList`, caught by the full-suite
+            // run, reproduced solo too — a real regression, not a batch flake) — because
+            // under `.contain` the row's own identifier and its label no longer land on
+            // the SAME element. That query only exists for journal rows, which never
+            // carry a live badge, so scoping this shape to "only while the badge renders"
+            // fixes the regression while keeping the fix.
+            HStack(spacing: 10) {
+                titleGroup
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
+
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(elapsedText)
+                        .monospacedDigit()
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("sidebar.capture.live")
+                .accessibilityLabel("Recording, \(elapsedText)")
+            }
+            .accessibilityElement(children: .contain)
+            .padding(.vertical, 2)
+        } else {
+            // Every other row, and the Capture row whenever it isn't live: BYTE-IDENTICAL
+            // to Task 5's original shape — one `.combine` element directly on the row,
+            // carrying both the label and (via the ForEach one level up) the row's own
+            // identifier together. This is what `openPlace`/`openSidebarRow` depend on.
+            titleGroup
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
+        }
     }
 }

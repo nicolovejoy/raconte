@@ -1967,9 +1967,46 @@ delta passes, 32 tests total).
 ## Commands
 
 - `xcodegen generate` — (re)create Raconte.xcodeproj from project.yml
-- Build (macOS): `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' build`
-- Test (macOS): `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' test`
-- iOS simulator: same with `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names)
+
+**Signing changed with M4 (2026-08-17) — the old bare macOS commands no longer work.**
+The app now carries `com.apple.developer.icloud-*` entitlements, which are *restricted*:
+macOS refuses to ad-hoc-sign a binary that has them (`"Raconte" has entitlements that
+require signing with a development certificate`). Two macOS recipes, and it matters which:
+
+Test (macOS) — ad-hoc signs against `Raconte-nocloud.entitlements`, the shipping list
+minus the three sync keys. **Keeps the sandbox, which is not optional**: `RaconteTests`
+runs with the real app as its test host, so an unsandboxed run makes `AppContainer.root()`
+the owner's real `~/Library/Application Support/Raconte` rather than a container — the
+launching app would scan and sweep his actual archive. Never `CODE_SIGNING_ALLOWED=NO`
+here. (`EntitlementsParityTests` pins the override against the generated file, so adding
+a capability to project.yml and forgetting the override fails loudly.)
+
+📋 **COPY THE BELOW**:
+
+```
+xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements test
+```
+
+Owner-smoke app build (macOS) — real automatic signing, so the app actually carries the
+iCloud entitlement. **This is the only macOS build that can sync.** An app built with the
+nocloud override launches and behaves normally but `SyncCoordinator.live()` returns nil
+(it reads the signature's entitlement), so a sync smoke against it silently tests
+nothing. Needs the iCloud capability enabled on the App ID.
+
+📋 **COPY THE BELOW**:
+
+```
+xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' \
+  -derivedDataPath /tmp/raconte-smoke -allowProvisioningUpdates build
+```
+
+Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
+`dwarfdump --uuid` on `Raconte.debug.dylib` — see the DerivedData/stale-build traps above.
+
+- iOS compile check: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'generic/platform=iOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build`
+- iOS simulator: `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names). Simulator builds need **no** entitlements override — they don't validate restricted entitlements against a profile.
 - UI tests (simulator only — macOS needs interactive automation permission):
   `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' test`
 

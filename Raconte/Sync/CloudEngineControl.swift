@@ -36,6 +36,49 @@ protocol CloudEngineControl: Sendable {
 /// durable before the next launch.
 typealias SyncEngineStatePersistence = @Sendable (Data) async -> Void
 
+/// What an engine control does with changes it is handed before it can act on them.
+///
+/// The race is real and quiet: `SyncCoordinator.launch()` is fired from a `.task`, and
+/// the coordinator is an actor, so a local-change hook (Tasks 5+) can interleave at any
+/// of `launch()`'s suspension points — reading the engine state, or the whole
+/// reconciliation scan — and arrive while `start()` has not yet produced a
+/// `CKSyncEngine`. Dropping those names silently would make "the hooks are wired to an
+/// engine that never started" indistinguishable from working: nothing uploads, nothing
+/// logs, and the next launch's reconciliation quietly covers for it.
+///
+/// So they are buffered and replayed. **One ordered list, not a saves list and a deletes
+/// list**, because order between the two carries meaning for the same record — a save
+/// followed by a delete must not replay as a delete followed by a save.
+///
+/// Pure and separate from the actor precisely so this is unit-testable: everything
+/// inside `CloudKitEngineControl` needs CloudKit's servers to exercise, and this does
+/// not (`PendingEngineChangesTests`).
+struct PendingEngineChanges: Equatable, Sendable {
+    enum Change: Equatable, Sendable {
+        case save(SyncRecordName)
+        case delete(SyncRecordName)
+    }
+
+    private(set) var changes: [Change] = []
+
+    var isEmpty: Bool { changes.isEmpty }
+
+    mutating func bufferSaves(_ names: [SyncRecordName]) {
+        changes.append(contentsOf: names.map(Change.save))
+    }
+
+    mutating func bufferDeletes(_ names: [SyncRecordName]) {
+        changes.append(contentsOf: names.map(Change.delete))
+    }
+
+    /// Hands back everything buffered, in arrival order, and empties the buffer — so a
+    /// second drain replays nothing. Draining is the only way changes leave.
+    mutating func drain() -> [Change] {
+        defer { changes = [] }
+        return changes
+    }
+}
+
 /// The CloudKit coordinates, in one place (design §3, §8).
 enum SyncCloudIdentifiers {
     /// Reserved on the portal since 2026-07-31; these are the first entitlements that
@@ -70,6 +113,9 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
     private let persistState: SyncEngineStatePersistence
     private let log: Logger
     private var engine: CKSyncEngine?
+    /// Changes that arrived before `start()` produced an engine — see
+    /// `PendingEngineChanges`. Drained once, at the end of `start()`.
+    private var pending = PendingEngineChanges()
 
     init(containerIdentifier: String = SyncCloudIdentifiers.containerIdentifier,
          zoneID: CKRecordZone.ID = SyncCloudIdentifiers.zoneID,
@@ -114,20 +160,46 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         // silently never recovers if a previous run died between the two.
         engine.state.add(pendingDatabaseChanges: [.saveZone(CKRecordZone(zoneID: zoneID))])
         log.info("sync: engine started (resumed: \(serialization != nil, privacy: .public))")
+
+        // Replay anything a hook handed over while the engine was still booting, in
+        // arrival order. Nothing is lost to the race and nothing is enqueued twice: the
+        // buffer empties as it drains.
+        let replayed = pending.drain()
+        if !replayed.isEmpty {
+            log.notice("sync: replaying \(replayed.count, privacy: .public) change(s) buffered before start")
+            for change in replayed {
+                switch change {
+                case .save(let name): apply(.saveRecord(SyncCloudIdentifiers.recordID(name)), to: engine)
+                case .delete(let name): apply(.deleteRecord(SyncCloudIdentifiers.recordID(name)), to: engine)
+                }
+            }
+        }
     }
 
     func enqueueSaves(_ names: [SyncRecordName]) async {
-        guard let engine, !names.isEmpty else { return }
+        guard !names.isEmpty else { return }
+        guard let engine else {
+            pending.bufferSaves(names)
+            return
+        }
         engine.state.add(pendingRecordZoneChanges: names.map {
             .saveRecord(SyncCloudIdentifiers.recordID($0))
         })
     }
 
     func enqueueDeletes(_ names: [SyncRecordName]) async {
-        guard let engine, !names.isEmpty else { return }
+        guard !names.isEmpty else { return }
+        guard let engine else {
+            pending.bufferDeletes(names)
+            return
+        }
         engine.state.add(pendingRecordZoneChanges: names.map {
             .deleteRecord(SyncCloudIdentifiers.recordID($0))
         })
+    }
+
+    private func apply(_ change: CKSyncEngine.PendingRecordZoneChange, to engine: CKSyncEngine) {
+        engine.state.add(pendingRecordZoneChanges: [change])
     }
 
     func fetchNow() async {
@@ -159,6 +231,12 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             // token reset if this device ever needs it.
             log.debug("sync: fetched changes ignored (ingest not built yet)")
         case .sentRecordZoneChanges(let sent):
+            // Tasks 5+: this is where the upload ledger is written — a record that
+            // actually landed gets its sha256/bytes recorded via
+            // `SyncBookkeepingStore.recordUpload`, which is what stops the next launch's
+            // reconciliation from re-enqueueing it. Until then nothing lands (the batch
+            // builder below yields no records), so there is nothing to record, and the
+            // only handling here is surfacing failures.
             for failure in sent.failedRecordSaves {
                 log.error("""
                     sync: save failed \(failure.record.recordID.recordName, privacy: .public): \

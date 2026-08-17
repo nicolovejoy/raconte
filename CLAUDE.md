@@ -1,5 +1,87 @@
 # CLAUDE.md
 
+## Session 2026-08-16 evening (laptop — deep resync (zero drift); #62 CLOSED; error banner + #63 flash + "Library" shipped; editor rulings recorded; 1276 → 1289 tests)
+
+Live owner-in-the-loop session: deep resync, then four builds each ruled → built → smoked
+same-session. Tree clean, main at `2227e97c`, all pushed, CI green. Owner ended with a
+**pivot order: next session is device-to-device sync (M4)** — see Next Steps 0.
+
+- **Deep resync (three Explore agents, evidence = file:line + SHA): ZERO drift.** All 22
+  open issues genuinely TODO; the tracker is honest. One partial: **#29's BEHAVIOR is
+  fixed** (`CaptureCoordinator.swift:655` deactivates on every path, `3de4307b`) — only
+  the effect-table asymmetry remains, a model-honesty cleanup. **#43 re-scoped** to just
+  the `.part` staging collision; its createdAt-ms-truncation half moved into #51 (same
+  determinism cluster), both commented. No stale branches; CLAUDE.md claims all verified.
+- **#62 fixed and CLOSED (`0436f55f`, TDD red-verified).** `reconcileReceipt()` clears
+  the receipt when its captureID leaves `library.allEntries`, wired via
+  `onChange(of: allEntries)` on the always-mounted capture root — fires even while the
+  trash happens on a pushed screen. Restore deliberately does NOT revive the receipt,
+  pinned by a test a computed "hide while missing" implementation would fail.
+  **Stash-probe finding worth keeping: the receipt Open link's `simultaneousGesture`
+  dismiss fires reliably in the SIMULATOR but evidently did not fire on the owner's
+  iPhone — that gesture failing is the only reason #62 was reachable.** No simulator
+  flow can isolate the reconcile path (a standing receipt offers no other trash route),
+  so the discriminating pins are the three unit tests; the new UI test pins the
+  end-to-end repro honestly (its vacuousness against pre-fix sim code is documented in
+  the test).
+- **Error banner joined `CaptureLabel` as the model's first non-grey (`e56ba3f2`).**
+  `CaptureLabelColor` carries full sRGB so non-grey contrast stays checkable without
+  SwiftUI; greys unchanged. Banner: (1.0, 0.56, 0.52) ≈ 8.8:1 at .callout/.title2 —
+  replacing raw `.footnote` + `.red` (10 pt on Mac; dark-mode systemRed measures
+  **5.72:1** on this surface, below the 7.0 floor — mutation-verified the floor test
+  catches exactly that). Two new RED-verified adversaries: case-must-be-applied +
+  raw-`.red` source scan.
+- **#63 built, smoked, retuned same-session (`5cc62a89` + `2227e97c`); issue OPEN
+  pending final smoke.** `MarkerFlash` (pure, beside `MarkerHaptic`): the dash-dot as
+  light on the tapped marker button — beat times EQUAL the haptic pattern's (pinned, so
+  the two senses can't drift), subtle white overlay, hit-test-disabled. Coordinator
+  gained `lastMarkerKind` (follows the append like `markerCount`, so a failed write
+  flashes nothing; RED-verified). Owner smoke: "pass, a bit too flashy" → both blinks
+  now 0.05 s (the first held the dash's full 0.12 s of light, which reads bolder to the
+  eye than to the thumb), brightness 0.4/0.25 → 0.3/0.2. Owner picked flash over
+  trackpad haptic ("no trackpad in use here").
+- **Cosmetics all settled:** timer stays 24 pt (ruled good); library door reads
+  **"Library"** (`68131e25`, owner picked it over "Open the library"/"Past readings").
+  Owner then couldn't find the door twice — first a receipt was covering the landing
+  screen, then he was mid-recording (both states hide it by design). Found on the idle
+  screen; his verdict queued as Next Step 1.
+- **Unified-editor rulings RECORDED on #60** (cross-ref #59): (A) marks in newly typed
+  frameless text = **approximate, never refuse** — word-anchored like
+  `correctionBoundaryAdd`, approximate time on read, existing asterisk affordance.
+  (B) structure = **validated markdown using existing conventions** ("something like
+  .md, not a new invention"): paragraph break = blank line (Markdown's own rule, no ¶
+  glyph), voice change = speaker-label prefix on a block (`bn:`/`ln:` or journal
+  labels — matching the shipped inline `BN: text` rendering). Done parses and refuses
+  loudly. With the standing no-reorder constraint, the design pass is fully unblocked —
+  but owner re-queued it behind the sync pivot.
+- 1289 unit tests (+13: 3 receipt-reconcile, 2 error-banner adversaries + red-is-red,
+  5 MarkerFlash, 2 lastMarkerKind — grep-count; suite executes 1288–1289 by platform),
+  CaptureUITests 10 → 11, CaptureControlsUITests 10/10. The 4 laptop-local
+  `BuildStampTests` failures did NOT recur this session. Mac build handed over at
+  `~/Desktop/Raconte-latest.app`, dylib UUID `97503477`, old label verified gone.
+
+**Next steps:**
+0. **PIVOT (owner order, verbatim: "let's pivot to syncing data across my devices") —
+   M4 sync design/build starts next session.** Prior art:
+   `docs/native-rebuild-plan.md` M4 (CKSyncEngine → CloudKit private DB, custom zone),
+   `docs/plans/2026-07-29-data-model-and-migration.md` (CloudKit mapping), container
+   `iCloud.org.pianohouseproject.raconte` already reserved, entitlements deliberately
+   carry no iCloud keys yet. The mini has no entries by design until M4. Start with a
+   design conversation, not code — the append-only capture dirs + revision chain +
+   markers.jsonl all need a sync story, and the revision chain was designed for it
+   (create-once writes, ancestry-derived attachment).
+1. **Library door visual pass** (owner: "It's a lot like the last entry, visually —
+   make it look more substantially different"). Currently a bordered row directly under
+   the filled `Last entry` row (`CaptureView.swift:1095-1120`).
+2. **#63 final smoke** of the retuned two-wink flash (build on Desktop, UUID `97503477`);
+   close #63 if it passes. iPhone smoke of #62 rides along (also check the Open-link
+   gesture note in the issue).
+3. **Unified-editor design pass** (#60/#59, folds #13) — fully unblocked, rulings on
+   #60. Re-queued behind the sync pivot by the owner.
+4. Remaining backlog unchanged: #29 effect-table honesty, #50 body-free readability
+   check, #51 mint determinism (+#43's staging collision), #54/#55/#18/#35/#47/#46/#44,
+   ASC credential hygiene → TestFlight.
+
 ## Session 2026-08-16 (laptop — capture-interface IA discussion → approach 2 built + TDD'd; 1269 → 1276 tests)
 
 Answered last session's queued opener: "what does the capture interface PROVIDE" — owner

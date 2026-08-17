@@ -1,5 +1,63 @@
 # CLAUDE.md
 
+## Session 2026-08-16 night → 08-17 (laptop — M4 SYNC: design + plan committed, SDD Tasks 1-5 BUILT on `m4/sync`; 1288 → 1457 tests; Gate A smoke PENDING)
+
+The owner-ordered sync pivot ran: full brainstorm → design → plan → SDD loop in one
+session. **Resume point for the next session: the SDD ledger at
+`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`
+— it is authoritative (rulings, deferred minors, Gate A state), not this summary.**
+Worktree `/Users/nico/src/raconte-m4`, branch `m4/sync` at `63651ac3`, pushed. Main
+carries the two docs commits (`d5f23061` design, `5e8f268e` plan). Both trees clean.
+
+- **Design owner-approved live** (`docs/plans/2026-08-17-m4-sync-design.md`): full
+  replica + restore (delete-app-reinstall-reconstructs is the acceptance test);
+  record-per-artifact on CKSyncEngine (zone `RaconteZone`, private DB); per-field LWW
+  via additive `modified` stamp maps; marker log becomes per-device streams merged on
+  read (`at` timestamp added); revisions/audio/live.jsonl as immutable CKAssets;
+  entries sync only once finalized; sync-in deletes route through StagedRemover; ingest
+  is assemble-then-commit via rename. **Pause ruling recorded:** #26 pause yes
+  (interruption machinery, one m4a, independent of M4); mid-capture editing NO;
+  multi-recording door left open structurally (AudioAsset is its own 1..n record).
+- **Plan** (`docs/plans/2026-08-17-m4-sync-implementation-plan.md`): 12 tasks + Gate A
+  (after T5, journals slice + owner smoke) + Gate B (acceptance). Tasks 1-5 complete,
+  each through implementer + adversarial review; every review round caught real bugs
+  (T3: unreadable entry.json digested as absent — the documented un-delete hazard; T5:
+  ingest lost-update across actor hops, cover deletion never propagating + poisoning
+  the LWW stamp). 1288 → 1457 unit tests, iOS builds green throughout.
+- **Two traps discovered, both now encoded in the Commands section on the branch:**
+  (1) the iCloud entitlements CANNOT be ad-hoc signed — the macOS TEST command needs
+  `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` and NEVER
+  `CODE_SIGNING_ALLOWED=NO` (unsandboxes the app-hosted test runner onto the real
+  archive); (2) owner-smoke Mac builds need real signing:
+  `-allowProvisioningUpdates -allowProvisioningDeviceRegistration` (the MacBook wasn't
+  device-registered; owner had to re-sign into Xcode → Settings → Accounts first).
+  `SyncCoordinator.live()` refuses to sync in unentitled binaries — a nocloud-built
+  app runs normally but silently never syncs.
+- **Gate A: probes CLEAN** (no-echo, garbage-sync/-dir launch, all five journal hook
+  paths), signed builds verified carrying iCloud entitlements and installed — phone
+  (wireless, after the known tunnel-open retry) and `~/Desktop/Raconte-m4sync.app`
+  (dylib `4317692D`). **Owner smoke NOT yet run** — 5 steps, journal name + cover both
+  directions, checklist in task-5-report §6 (also pasted in chat 2026-08-17). Laptop
+  substitutes for the mini as the Mac device (mini needs the branch built if preferred).
+- Known open items for later tasks (ledger has the full list): no `aps-environment`
+  visible on the signed macOS binary (macOS key spelling — resolve before TestFlight);
+  T6/T8 must reuse encodeJSON stamp resolution (never native CKRecord Date fields);
+  T6 must not copy the per-record whole-registry digest shape; engine conflict routing
+  (.serverRecordChanged) is a known untested surface (CKSyncEngineDelegate unfakeable).
+
+**Next steps:**
+1. **Owner smoke Gate A** (5-step journal sync checklist, phone ↔ laptop Mac app). If
+   pass: close Gate A in the ledger, dispatch Task 6 (Entry + finalize artifacts push).
+   If fail: `log show --predicate 'subsystem == "org.pianohouseproject.raconte" AND
+   category == "sync"' --last 30m --info` on the Mac and chase.
+2. **Tasks 6-12** per the plan (entry push → assemble-then-commit ingest → field merge
+   → revisions → marker streams → trash/purge → debug status), then final review +
+   Gate B acceptance (delete app from a device, reinstall, archive reconstructs).
+3. At merge: CLAUDE.md Commands section from the branch supersedes main's (Task 4
+   rewrote it); `aps-environment` flip to production before TestFlight.
+4. Backlog unchanged: #63 final smoke (two-wink flash, build `97503477`), library door
+   visual pass, unified-editor design pass (#60/#59), #29/#50/#51/#54/#55/#18/#35/#47/#46/#44.
+
 ## Session 2026-08-16 evening (laptop — deep resync (zero drift); #62 CLOSED; error banner + #63 flash + "Library" shipped; editor rulings recorded; 1276 → 1289 tests)
 
 Live owner-in-the-loop session: deep resync, then four builds each ruled → built → smoked

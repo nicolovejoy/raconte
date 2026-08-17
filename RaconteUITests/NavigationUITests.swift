@@ -256,6 +256,15 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(kill.waitForExistence(timeout: 15))
         XCTAssertLessThan(build.frame.minY, kill.frame.minY,
                           "build info must sit above the harness — it is the row the owner visits")
+
+        // `debug.buildInfo` exists in BOTH the placeholder and populated states (same
+        // Text, different content), so existence alone pins nothing about the one line
+        // this task rewired (sync -> async call site). Wait for the real string —
+        // `.task` never populating is exactly the regression this line exists to catch.
+        waitUntil(15, "buildInfo never populated from the async call — label reads "
+                      + "\"\(build.label)\"") {
+            build.label.contains("Binary file date")
+        }
     }
 
     // MARK: - Journal scoping

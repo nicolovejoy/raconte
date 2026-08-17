@@ -1,7 +1,9 @@
 import XCTest
 
-/// Pins the navigation-redesign container swap (nav T4): `NavigationSplitView` with a
-/// non-nil sidebar selection, collapsed to a stack on iPhone.
+/// Pins the navigation-redesign container swap (nav T4/T5): `NavigationSplitView` with a
+/// non-nil sidebar selection, collapsed to a stack on iPhone, and the real `SidebarView`
+/// of places (journals, All Entries, Trash, Debug) that replaces the library door, the
+/// toolbar library button and the Debug sheet.
 final class NavigationUITests: XCTestCase {
 
     private var testID: String!
@@ -11,8 +13,6 @@ final class NavigationUITests: XCTestCase {
         testID = UUID().uuidString
     }
 
-    /// Copied from `CaptureUITests.swift:16-21` for now; Task 5 replaces all four copies
-    /// with the shared helper.
     private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["RACONTE_UITEST_ID"] = testID
@@ -20,56 +20,8 @@ final class NavigationUITests: XCTestCase {
         return app
     }
 
-    /// The load-bearing platform claim of the whole redesign: `NavigationSplitView` with a
-    /// non-nil sidebar selection, collapsed to a stack on iPhone, must show the DETAIL column
-    /// at launch — not the places list. If this fails, the fallback in Step 5 applies and the
-    /// owner must be told at Gate A that the phone's IA is a toolbar button, not a chevron.
-    func testLaunchLandsDirectlyOnCaptureWithNoTaps() {
-        let app = launchApp()
-        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
-        XCTAssertFalse(app.buttons["sidebar.allEntries"].firstMatch.exists,
-                       "the places list is showing instead of capture")
-        // `sidebar.allEntries` alone is vacuous until Task 5 adds that row (Step 2's own
-        // honest note). `sidebar.capture` — the stub sidebar's ONE real row — is the
-        // stronger discriminator: it exists in the List regardless of `launchPlace`, so
-        // it is only visible on screen when the sidebar column, not the detail column,
-        // is what got shown.
-        //
-        // Step 6 mutation-check evidence (both directions tried, not just the brief's
-        // literal instruction): mutating `PlaceRouting.launchPlace` to `.allEntries`
-        // does NOT fail this test, even with the `sidebar.capture` assertion above —
-        // the Task 4 stub's `detailRoot` renders `CaptureView` for every `Place` case,
-        // so the detail column's content never varies with `launchPlace`, and
-        // NavigationSplitView's iPhone collapse turned out not to require the
-        // selection to match a List row either (tried `columnVisibility = .all` too,
-        // also non-discriminating — compact width overrides it). The mutation that DOES
-        // reliably fail this test: removing the `List`'s `selection:` binding entirely
-        // (no pre-selected item at all) — `capture.record` never appears, confirming the
-        // real claim, that a bound, pre-set sidebar `selection` is what makes the
-        // collapsed iPhone split view land on the detail column. Both mutations reverted;
-        // neither is committed.
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "sidebar.capture")
-                          .firstMatch.exists,
-                       "the sidebar column is showing instead of the detail column")
-    }
-
-    /// The existing recentRow push must survive the container swap unchanged. Exercised
-    /// here via `capture.libraryButton` (R4 ruling: the toolbar push into
-    /// `RootDestination.library` must keep working inside the detail `NavigationStack`).
-    ///
-    /// Asserts on `library.trashLink` (a real `LibraryView` control), not
-    /// `app.staticTexts["Library"]` — that text also exists ON the capture screen itself
-    /// (`capture.libraryDoor`'s own label reads "Library"), so it gave a false pass
-    /// during this task's own investigation of the Step-3-snippet regression documented
-    /// in `ContentView.swift`.
-    func testTheDetailColumnStillPushesAnEntryFromTheCaptureScreen() {
-        let app = launchApp()
-        XCTAssertTrue(app.buttons["capture.libraryButton"].firstMatch.waitForExistence(timeout: 30),
-                      "the capture screen's library toolbar button did not appear")
-        press(app.buttons["capture.libraryButton"].firstMatch)
-        XCTAssertTrue(app.buttons["library.trashLink"].firstMatch.waitForExistence(timeout: 10),
-                      "the library button did not push the library screen inside the detail column")
+    private func recordButton(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons["capture.record"].firstMatch
     }
 
     /// Cross-platform activate: XCUIElement taps on iOS, clicks on macOS.
@@ -79,5 +31,194 @@ final class NavigationUITests: XCTestCase {
         #else
         element.tap()
         #endif
+    }
+
+    private func waitUntil(_ timeout: TimeInterval = 20, _ message: String,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ predicate: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate() {
+            if Date() > deadline { XCTFail(message, file: file, line: line); return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+    }
+
+    /// Reveal the sidebar (if collapsed) and tap the first element whose label BEGINS
+    /// WITH `prefix`. For journal rows, whose accessibility identifier carries a disk-
+    /// generated id the test cannot predict — the row's spoken label ("<name>" or
+    /// "<name>, <date range>") is the only address available. `openPlace` (shared
+    /// helper) is used everywhere an identifier IS known; this is only for the one place
+    /// it structurally cannot be.
+    ///
+    /// Matched on `identifier BEGINSWITH 'sidebar.journal.'` as well as the label — label
+    /// alone is not unique: creating a journal auto-selects it
+    /// (`CaptureScreenModel.createJournal`), so the capture screen's OWN journal-picker
+    /// button label becomes the new journal's name too, and a label-only predicate matches
+    /// that button before the sidebar is ever revealed (found empirically — the "reveal"
+    /// step never ran, and the tap landed on the picker, not a sidebar row). The identifier
+    /// prefix is the only address the sidebar row itself carries that the picker button does
+    /// not; the row's numeric suffix is still unknown, so this stays a prefix match.
+    private func openSidebarRow(_ app: XCUIApplication, labelBeginsWith prefix: String,
+                                file: StaticString = #filePath, line: UInt = #line) {
+        let row = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@ AND identifier BEGINSWITH 'sidebar.journal.'",
+                                  prefix)).firstMatch
+        if !row.waitForExistence(timeout: 3) {
+            if app.buttons["sidebar.toggle"].firstMatch.exists {
+                app.buttons["sidebar.toggle"].firstMatch.tap()
+            } else if app.navigationBars.buttons.firstMatch.exists {
+                app.navigationBars.buttons.firstMatch.tap()
+            }
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 15),
+                      "could not reach a sidebar row beginning \"\(prefix)\"", file: file, line: line)
+        press(row)
+    }
+
+    // MARK: - The load-bearing platform claim
+
+    /// `NavigationSplitView` with a non-nil sidebar selection, collapsed to a stack on
+    /// iPhone, must show the DETAIL column at launch — not the places list.
+    func testLaunchLandsDirectlyOnCaptureWithNoTaps() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+        XCTAssertFalse(app.buttons["sidebar.allEntries"].firstMatch.exists,
+                       "the places list is showing instead of capture")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "sidebar.capture")
+                          .firstMatch.exists,
+                       "the sidebar column is showing instead of the detail column")
+    }
+
+    /// The existing entry-list-in-the-detail-column flow, exercised through the real
+    /// sidebar now that `capture.libraryButton`/`RootDestination` are retired: selecting
+    /// All Entries must show the library screen inside the detail column, not a blank one.
+    func testSelectingAllEntriesShowsTheLibraryInTheDetailColumn() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+        openPlace(app, "sidebar.allEntries")
+        XCTAssertTrue(app.navigationBars["All Entries"].firstMatch.waitForExistence(timeout: 15),
+                      "selecting All Entries did not show the library screen in the detail column")
+    }
+
+    // MARK: - Design §3: the sidebar no longer hides the exits
+
+    func testTheSidebarIsReachableWhileRecording() {
+        // Design §3: the Debug/library routes used to exist only in the IDLE branch of the
+        // setup band, which is why the owner failed to find the Library door twice and why
+        // the Debug modal trapped the app. Reachability must no longer depend on capture
+        // phase.
+        let app = launchApp()
+        press(recordButton(app))
+        openPlace(app, "sidebar.allEntries")
+        XCTAssertTrue(app.descendants(matching: .any)
+                        .matching(identifier: "library.list").firstMatch.waitForExistence(timeout: 15)
+                      || app.descendants(matching: .any)
+                        .matching(identifier: "library.empty").firstMatch.waitForExistence(timeout: 15))
+    }
+
+    func testTheSidebarIsReachableWhileAReceiptIsUp() {
+        // Design §3: "it no longer hides the exits." A just-finished capture used to leave
+        // the receipt owning the whole screen with no route out except dismissing it first.
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 1)
+        press(record)
+
+        XCTAssertTrue(app.buttons["capture.receipt.dismiss"].firstMatch.waitForExistence(timeout: 30),
+                      "no receipt after a capture finished")
+
+        openPlace(app, "sidebar.allEntries")
+        XCTAssertTrue(app.descendants(matching: .any)
+                        .matching(identifier: "library.list").firstMatch.waitForExistence(timeout: 15),
+                      "the sidebar did not reach the library while the receipt was still up")
+    }
+
+    func testTheDebugPlaceIsAScreenNotAModal() {
+        let app = launchApp()
+        openPlace(app, "sidebar.debug")
+        XCTAssertTrue(app.descendants(matching: .any)
+                        .matching(identifier: "debug.list").firstMatch.waitForExistence(timeout: 15))
+        openCapture(app)      // must be possible: a modal sheet would make this impossible
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
+    }
+
+    // MARK: - Journal scoping
+
+    /// Record into the default journal, create a second journal, select it in the
+    /// sidebar, assert the list is empty; select the first, assert one row. Cardinality
+    /// ≥ 2 journals — a single-journal fixture cannot distinguish "the list is scoped"
+    /// from "the list always shows everything".
+    func testSelectingAJournalPlaceScopesTheEntryList() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 1)
+        press(record)
+        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 30), "no receipt after a capture finished")
+        press(dismiss)
+
+        // A second journal, named distinctly from the auto-created default "Journal".
+        //
+        // Queries `capture.journalHeader`, not the Menu's own `capture.journalPicker`
+        // (`JournalHeaderView`, out of scope here — capture-screen internals, design
+        // invariant 8): the accessibility hierarchy at failure showed BOTH the caption
+        // Text and the Menu's synthesized Button carrying the ENCLOSING VStack's
+        // `capture.journalHeader` identifier instead of the Menu's own — a pre-existing
+        // identifier-flattening bug this task's new test is the first to reach (no prior
+        // UI test ever queried `capture.journalPicker`). `capture.journalHeader` is what
+        // actually resolves to the button; filtered to `.buttons` so it cannot also match
+        // the caption's StaticText.
+        let journalPicker = app.buttons["capture.journalHeader"].firstMatch
+        XCTAssertTrue(journalPicker.waitForExistence(timeout: 15), "no journal picker on the landing screen")
+        press(journalPicker)
+        let newJournalItem = app.buttons["New Journal…"].firstMatch
+        XCTAssertTrue(newJournalItem.waitForExistence(timeout: 10), "no New Journal menu item")
+        press(newJournalItem)
+        // Not queried by `capture.newJournalNameField`: a SwiftUI `.accessibilityIdentifier`
+        // on an `.alert`'s `TextField` does not bridge onto the native `UIAlertController`
+        // text field it becomes — confirmed in the accessibility hierarchy at the point of
+        // failure, which showed the field present, focused, and carrying no identifier at
+        // all. It is the only text field on screen at this point, so `app.textFields.firstMatch`
+        // is unambiguous.
+        let nameField = app.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10), "no New Journal name field")
+        press(nameField)
+        nameField.typeText("Second Journal")
+        press(app.buttons["Create"].firstMatch)
+
+        // `LibraryScreenModel.journals` (what the sidebar reads) and
+        // `CaptureScreenModel.journals` (what `createJournal` just appended to, for the
+        // picker) are separate arrays that only reconcile through a rescan —
+        // `selectJournalScope` runs one, and `ContentView`'s `.onChange(of:
+        // services.router.place)` fires it whenever a `.allEntries`/`.journal` place is
+        // selected. The sidebar itself does not trigger this on its own, so the new
+        // journal cannot appear as a row until SOME such place has been selected once.
+        // Selecting All Entries is that trigger and a stable, already-existing route.
+        openPlace(app, "sidebar.allEntries")
+
+        // The new (empty) journal: selecting it shows no entries.
+        openSidebarRow(app, labelBeginsWith: "Second Journal")
+        waitUntil(15, "the new journal's library content never settled") {
+            app.descendants(matching: .any).matching(identifier: "library.list").firstMatch.exists
+            || app.descendants(matching: .any).matching(identifier: "library.empty").firstMatch.exists
+        }
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "library.entryLink").count, 0,
+                       "a brand-new journal is not empty")
+
+        // The default journal: selecting it shows the one entry recorded into it.
+        openSidebarRow(app, labelBeginsWith: "Journal")
+        waitUntil(15, "the default journal never showed its one recorded entry") {
+            app.descendants(matching: .any).matching(identifier: "library.entryLink").count == 1
+        }
     }
 }

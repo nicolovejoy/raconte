@@ -44,13 +44,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
     /// last row rendered sliced in half.
     var showsLastEntry: Bool
 
-    /// The full-width way into the library, at the foot of the landing area.
-    ///
-    /// Replaces the "See all" link that sat in the Recent header's top-right corner —
-    /// the least prominent element on screen for the only route to everything else
-    /// (owner: an obvious link to the Library, "not just up in the top right").
-    var showsLibraryDoor: Bool
-
     /// The Two-voices toggle. Already `.disabled` outside `.idle` (it can only be honoured
     /// before recording starts, since the frame-0 opening-voice marker is written at
     /// start), so hiding it during a capture removes a control that could not be used
@@ -116,7 +109,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
         case .preparing, .recording, .interrupted, .resuming, .stopping:
             return .init(mode: .capturing,
                          showsLastEntry: false,
-                         showsLibraryDoor: false,
                          showsMultiVoiceField: false,
                          showsLiveTranscript: true,
                          showsReceipt: false,
@@ -132,7 +124,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
             if hasReceipt {
                 return .init(mode: .receipt,
                              showsLastEntry: false,
-                             showsLibraryDoor: false,
                              showsMultiVoiceField: false,
                              showsLiveTranscript: false,
                              showsReceipt: true,
@@ -144,7 +135,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
             // for the library.
             return .init(mode: .setup,
                          showsLastEntry: true,
-                         showsLibraryDoor: true,
                          showsMultiVoiceField: true,
                          showsLiveTranscript: false,
                          showsReceipt: false,

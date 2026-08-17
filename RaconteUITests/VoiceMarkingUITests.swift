@@ -64,9 +64,7 @@ final class VoiceMarkingUITests: XCTestCase {
     /// one accessibility element, the same flattening `capture.recentRow` exists to work
     /// around.
     private func openSeededEntry(_ app: XCUIApplication, row index: Int) {
-        let door = app.buttons["capture.libraryDoor"].firstMatch
-        XCTAssertTrue(door.waitForExistence(timeout: 20), "library route never appeared")
-        press(door)
+        openPlace(app, "sidebar.allEntries")
 
         let rows = app.descendants(matching: .any).matching(identifier: "library.entryLink")
         let row = rows.element(boundBy: index)

@@ -241,37 +241,37 @@ final class CaptureControlsUITests: XCTestCase {
                         .matching(identifier: "capture.transcript").firstMatch.exists,
                        "the live transcript band is STILL on screen behind the receipt — "
                        + "this is the stranded-text bug the receipt exists to fix")
+        // The receipt IS the last entry; showing the recent row too would be a duplicate —
+        // `CaptureLayoutModel` sets `showsLastEntry: false` in receipt mode.
+        XCTAssertFalse(app.descendants(matching: .any)
+                        .matching(identifier: "capture.recentRow").firstMatch.exists,
+                       "the landing screen's last-entry row is showing behind the receipt")
 
         // And dismissing returns to a landing screen with neither the receipt nor the
-        // stranded text — the state the owner should have been getting all along.
+        // stranded text — the state the owner should have been getting all along. The
+        // library door itself is retired (nav T5, the sidebar replaces it), so the "landing
+        // screen came back" claim is now the recent row reappearing — a control that still
+        // exists, and one that can only show once the setup band has actually taken over.
         press(dismiss)
         waitUntil(10, "receipt never dismissed") { !dismiss.exists }
         XCTAssertFalse(app.descendants(matching: .any)
                         .matching(identifier: "capture.transcript").firstMatch.exists,
                        "the finished transcript came back after dismissing the receipt")
-        XCTAssertTrue(app.buttons["capture.libraryDoor"].firstMatch.exists,
-                      "the landing screen did not come back")
+        waitUntil(15, "the landing screen did not come back") {
+            app.descendants(matching: .any).matching(identifier: "capture.recentRow").firstMatch.exists
+        }
     }
 
-    /// One entry on the landing screen, and a full-width route to the rest.
+    /// One entry on the landing screen, and a reachable route to the rest via the sidebar.
     ///
     /// Owner: "I'd rather not have too many things scrolling around. Would be better just
     /// to see the most recent one and then have an obvious link to the Library. That's not
-    /// just up in the top right."
-    func testLandingScreenShowsOneEntryAndAProminentLibraryRoute() {
+    /// just up in the top right." The door itself retired in nav T5 — the sidebar is now
+    /// that "obvious link", reachable from every screen rather than only the landing one.
+    func testLandingScreenShowsExactlyOneRecentEntryAndAReachableLibrary() {
         let app = launchApp()
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
-
-        let door = app.buttons["capture.libraryDoor"].firstMatch
-        XCTAssertTrue(door.waitForExistence(timeout: 10), "no library route on the landing screen")
-        XCTAssertTrue(door.isHittable, "the library route is not reachable without scrolling")
-
-        // The old top-right "See all" link is gone, not merely moved: leaving both would
-        // be two routes to the same place, one of them the one he objected to.
-        XCTAssertFalse(app.descendants(matching: .any)
-                        .matching(identifier: "capture.seeAllLink").firstMatch.exists,
-                       "the top-right See all link is still there")
 
         // Record twice; the landing screen must still show exactly one entry.
         for _ in 1...2 {
@@ -291,6 +291,11 @@ final class CaptureControlsUITests: XCTestCase {
         XCTAssertEqual(app.descendants(matching: .any)
                         .matching(identifier: "capture.recentRow").count, 1,
                        "the landing screen is listing more than the single most recent entry")
+
+        // There is a route to everything else from the landing screen.
+        openPlace(app, "sidebar.allEntries")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "library.list")
+                        .firstMatch.waitForExistence(timeout: 15))
     }
 
     // MARK: - The ≤ ⅓ ruling (owner smoke, 2026-08-15)

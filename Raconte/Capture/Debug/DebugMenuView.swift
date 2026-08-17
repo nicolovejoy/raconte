@@ -45,6 +45,7 @@ struct DebugMenuView: View {
             }
         }
         .navigationTitle("Transition Breakpoints")
+        .accessibilityIdentifier("debug.list")
         .task {
             if buildInfo == nil {
                 buildInfo = BuildStamp.currentBuildDisplayString()

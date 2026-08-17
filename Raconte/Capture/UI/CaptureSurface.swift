@@ -176,11 +176,6 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case backdateSummary
     case multiVoiceToggle
     case recentHeader
-    /// The full-width library route at the foot of the landing area (2026-08-15) —
-    /// replaces the top-right "See all" link, which the owner called out as too small a
-    /// target for the only way into everything else.
-    case libraryDoor
-    case libraryDoorChevron
     /// Post-stop receipt (2026-08-15).
     case receiptDate
     case receiptSummary
@@ -205,11 +200,11 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         // same full-white weight the journal name does.
         // The backdated date is a value the owner has to read back and confirm, not a
         // caption naming a control — full white, like the journal name and the receipt date.
-        case .journalName, .receiptDate, .libraryDoor, .receiptSavedChip,
+        case .journalName, .receiptDate, .receiptSavedChip,
              .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .libraryDoorChevron, .receiptSummary: .grey(0.78)
+             .recentHeader, .receiptSummary: .grey(0.78)
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
         // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the
@@ -228,20 +223,20 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .iOS:
             switch self {
             case .journalName, .receiptDate: .title3   // 20
-            case .recentHeader, .libraryDoor: .headline // 17
+            case .recentHeader: .headline // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-                 .libraryDoorChevron, .receiptSummary,
+                 .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .errorBanner: .callout    // 16
             }
         case .macOS:
             switch self {
             case .journalName, .receiptDate: .title    // 22
-            case .recentHeader, .libraryDoor: .title2  // 17
+            case .recentHeader: .title2  // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-                 .libraryDoorChevron, .receiptSummary,
+                 .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .errorBanner: .title2     // 17
             }

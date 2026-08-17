@@ -162,8 +162,9 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
-    /// Concatenated source of every capture-screen view, comments stripped so a case merely
-    /// *named* in prose cannot satisfy the check above.
+    /// Concatenated source of every capture-screen view, comments stripped (via the
+    /// shared `strippingComments` helper) so a case merely *named* in prose cannot
+    /// satisfy the check above.
     private func captureUISources() throws -> String {
         let uiDir = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()          // RaconteTests
@@ -173,15 +174,10 @@ final class CaptureLabelTests: XCTestCase {
             .contentsOfDirectory(at: uiDir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
         XCTAssertFalse(files.isEmpty, "found no capture UI sources to scan")
-        return try files
+        let joined = try files
             .map { try String(contentsOf: $0, encoding: .utf8) }
             .joined(separator: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line -> Substring in
-                guard let slashes = line.range(of: "//") else { return line }
-                return line[line.startIndex..<slashes.lowerBound]
-            }
-            .joined(separator: "\n")
+        return strippingComments(joined)
     }
 
     private func captureViewSource() throws -> String {

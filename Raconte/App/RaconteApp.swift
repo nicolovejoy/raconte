@@ -33,5 +33,8 @@ struct RaconteApp: App {
         WindowGroup {
             ContentView(services: services)
         }
+        #if os(macOS)
+        .commands { RaconteCommands(services: services) }
+        #endif
     }
 }

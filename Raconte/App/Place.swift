@@ -169,4 +169,11 @@ final class AppRouter {
     }
 
     var canGoBack: Bool { !detailPath.isEmpty }
+
+    /// ⌘N (nav T8): must work from any place, not just the capture screen, so the flag
+    /// lives here rather than inside `JournalHeaderView`'s private `@State`. The root
+    /// alert on `ContentView` observes `showingNewJournalPrompt` directly.
+    func requestNewJournal() {
+        showingNewJournalPrompt = true
+    }
 }

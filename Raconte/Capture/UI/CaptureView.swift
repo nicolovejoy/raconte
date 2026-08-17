@@ -41,6 +41,22 @@ final class CaptureScreenModel {
     /// screen to a receipt for an entry you have just been reading would be a loop.
     func dismissReceipt() { receipt = nil }
 
+    /// #62: retire the receipt if its entry has left the library (trashed from the
+    /// detail screen or the library while the receipt sat here). The receipt's own
+    /// "stays until dismissed, never on a timer" ruling stands — this is not a timer,
+    /// it is the entry itself vanishing, and a receipt naming a trashed entry reads as
+    /// a lost recording.
+    ///
+    /// A state CLEAR, deliberately not a computed hide over `allEntries`: restoring the
+    /// entry from the trash must not resurrect the receipt (the acknowledgement moment
+    /// has passed), and a computed gate would bring it back on the restore rescan.
+    func reconcileReceipt() {
+        guard let receipt,
+              !library.allEntries.contains(where: { $0.captureID == receipt.captureID })
+        else { return }
+        self.receipt = nil
+    }
+
     let capturesRoot: URL
     /// The recent-recordings section (M3 T4.5) and the Library screen read through the
     /// SAME instance — one scanner, one `JournalStore`/`EntryMetadataStore` pair, per
@@ -806,6 +822,13 @@ struct CaptureView: View {
         }
         .onChange(of: model.coordinator.finalizeQueue) { _, _ in
             model.handleFinalizeQueue()
+        }
+        // #62: CaptureView is the permanently-mounted NavigationStack root, so this fires
+        // even while the library or an entry detail is pushed on top — which is exactly
+        // where the trash that invalidates a receipt happens. The rescan those paths run
+        // changes `allEntries`, and the model decides whether the receipt's entry is gone.
+        .onChange(of: model.library.allEntries) { _, _ in
+            model.reconcileReceipt()
         }
         #if os(iOS)
         // Derived from phase via `CaptureState.keepsDisplayAwake` (pure, unit-tested), not

@@ -244,6 +244,20 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
     }
 
+    /// Design §6 (nav T7): "Build info promoted to the top... it is the row the owner
+    /// actually visits." A rendered-frame assertion, not a source scan — the repo's own
+    /// `CaptureControlsUITests` precedent, and the only honest pin for "above".
+    func testDebugPlaceShowsBuildInfoAboveTheHarness() {
+        let app = launchApp()
+        openPlace(app, "sidebar.debug")
+        let build = app.descendants(matching: .any).matching(identifier: "debug.buildInfo").firstMatch
+        let kill = app.descendants(matching: .any).matching(identifier: "debug.killNow").firstMatch
+        XCTAssertTrue(build.waitForExistence(timeout: 15))
+        XCTAssertTrue(kill.waitForExistence(timeout: 15))
+        XCTAssertLessThan(build.frame.minY, kill.frame.minY,
+                          "build info must sit above the harness — it is the row the owner visits")
+    }
+
     // MARK: - Journal scoping
 
     /// Record into the default journal, create a second journal, select it in the

@@ -84,4 +84,49 @@ final class PlaceRoutingTests: XCTestCase {
         router.goBack()                       // must not trap
         XCTAssertEqual(router.detailPath, [])
     }
+
+    // Pins the WIRING, not just the pure `PlaceRouting.detailPath` it calls — reducing
+    // `select` to `self.place = place` (dropping the clear rule entirely) or emptying
+    // the body (dropping the place update too) must both fail this.
+    func testSelectingADifferentPlaceClearsThePathAndUpdatesPlace() {
+        let router = AppRouter()
+        router.place = .allEntries
+        router.detailPath = [.entry("A"), .entry("B")]
+        router.select(.trash)
+        XCTAssertEqual(router.place, .trash)
+        XCTAssertEqual(router.detailPath, [])
+    }
+
+    func testReselectingTheSamePlaceOnTheRouterKeepsThePath() {
+        let router = AppRouter()
+        router.place = .capture
+        router.detailPath = [.entry("A")]
+        router.select(.capture)
+        XCTAssertEqual(router.place, .capture)
+        XCTAssertEqual(router.detailPath, [.entry("A")],
+                       "tapping the place you are already in must not throw away where you are")
+    }
+
+    // Table-driven over every fixed (non-journal) row so a single-field typo or a
+    // whole-row corruption anywhere in the locked list is caught in one assertion,
+    // rather than relying on scattered single-field checks elsewhere in this file.
+    func testFixedRowsMatchTheLockedTitlesSymbolsAndIdentifiers() {
+        let rows = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: true)
+        let expected: [(place: Place, title: String, systemImage: String?, accessibilityIdentifier: String)] = [
+            (.capture, "Capture", "mic.circle", "sidebar.capture"),
+            (.allEntries, "All Entries", "books.vertical", "sidebar.allEntries"),
+            (.trash, "Trash", "trash", "sidebar.trash"),
+            (.debug, "Debug", "ladybug", "sidebar.debug"),
+        ]
+        for expectation in expected {
+            guard let row = rows.first(where: { $0.place == expectation.place }) else {
+                XCTFail("missing row for \(expectation.place)")
+                continue
+            }
+            XCTAssertEqual(row.title, expectation.title, "\(expectation.place) title")
+            XCTAssertEqual(row.systemImage, expectation.systemImage, "\(expectation.place) systemImage")
+            XCTAssertEqual(row.accessibilityIdentifier, expectation.accessibilityIdentifier,
+                           "\(expectation.place) accessibilityIdentifier")
+        }
+    }
 }

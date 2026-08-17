@@ -34,7 +34,10 @@ extension CapturePlatform {
 }
 
 extension CaptureLabel {
-    var color: Color { Color(white: whiteLevel) }
+    var color: Color {
+        let c = labelColor
+        return Color(red: c.red, green: c.green, blue: c.blue)
+    }
     var font: Font { textSize(on: .current).font }
 }
 

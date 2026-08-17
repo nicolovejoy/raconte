@@ -108,6 +108,22 @@ enum CaptureSurface {
         white <= 0.04045 ? white / 12.92 : pow((white + 0.055) / 1.055, 2.4)
     }
 
+    /// WCAG 2.1 relative luminance of a full sRGB colour. The grey overload above is this
+    /// with all three channels equal — `relativeLuminance(white:)` doubles as the
+    /// per-channel linearization, which is the same formula.
+    static func relativeLuminance(_ color: CaptureLabelColor) -> Double {
+        0.2126 * relativeLuminance(white: color.red)
+            + 0.7152 * relativeLuminance(white: color.green)
+            + 0.0722 * relativeLuminance(white: color.blue)
+    }
+
+    /// Contrast of a full-colour label against this screen's own background.
+    static func contrastOnSurface(_ color: CaptureLabelColor) -> Double {
+        let a = relativeLuminance(color)
+        let b = relativeLuminance(white: backgroundWhite)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+
     /// WCAG 2.1 contrast ratio between two sRGB greys. Symmetric; always >= 1.
     static func contrastRatio(white: Double, against other: Double) -> Double {
         let a = relativeLuminance(white: white)
@@ -120,6 +136,18 @@ enum CaptureSurface {
     /// Contrast of a label against this screen's own background.
     static func contrastOnSurface(white: Double) -> Double {
         contrastRatio(white: white, against: backgroundWhite)
+    }
+}
+
+/// An sRGB colour as pure channel values, so a non-grey label's contrast stays checkable
+/// without SwiftUI — same reasoning that keeps `CaptureTextSize` out of `Font`.
+struct CaptureLabelColor: Sendable, Equatable {
+    var red: Double
+    var green: Double
+    var blue: Double
+
+    static func grey(_ white: Double) -> CaptureLabelColor {
+        CaptureLabelColor(red: white, green: white, blue: white)
     }
 }
 
@@ -157,21 +185,36 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case receiptDate
     case receiptSummary
     case receiptSavedChip
+    /// Capture errors above the control bar (owner ruling 2026-08-16). Previously raw
+    /// `.footnote` + `.red` — 10 pt on the Mac, below the size floor, and dark-mode
+    /// system red only manages ~5.7:1 on this surface, below the contrast floor too.
+    /// An operating message ("the recorder died") is exactly what the floors exist for,
+    /// so it joins the model — as the model's first non-grey.
+    case errorBanner
 
     /// One secondary level (0.78 → 11.5:1) rather than the three near-identical greys this
     /// screen used to carry (0.55/0.6/0.7). Those greys were not expressing a hierarchy —
     /// they were drift — and the darkest of them was the reported bug.
-    var whiteLevel: Double {
+    ///
+    /// Almost everything here is a grey; the colour model exists in full-sRGB form for the
+    /// one label that is not (owner ruling 2026-08-16: the error banner joins the model
+    /// rather than living outside it at 10 pt).
+    var labelColor: CaptureLabelColor {
         switch self {
         // The receipt's date is the answer to "what did I just record", so it carries the
         // same full-white weight the journal name does.
         // The backdated date is a value the owner has to read back and confirm, not a
         // caption naming a control — full white, like the journal name and the receipt date.
         case .journalName, .receiptDate, .libraryDoor, .receiptSavedChip,
-             .backdateDateButton, .backdateSummary: 1.0
+             .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .libraryDoorChevron, .receiptSummary: 0.78
+             .recentHeader, .libraryDoorChevron, .receiptSummary: .grey(0.78)
+        // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
+        // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
+        // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the
+        // original 0.55 grey.
+        case .errorBanner: CaptureLabelColor(red: 1.0, green: 0.56, blue: 0.52)
         }
     }
 
@@ -189,7 +232,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton, .backdateSummary: .callout    // 16
+                 .receiptSavedChip, .backdateDateButton, .backdateSummary,
+                 .errorBanner: .callout    // 16
             }
         case .macOS:
             switch self {
@@ -198,7 +242,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .libraryDoorChevron, .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton, .backdateSummary: .title2     // 17
+                 .receiptSavedChip, .backdateDateButton, .backdateSummary,
+                 .errorBanner: .title2     // 17
             }
         }
     }

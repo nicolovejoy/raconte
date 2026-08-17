@@ -16,12 +16,23 @@ jobs:
         run: brew install xcodegen
       - name: Generate project
         run: xcodegen generate
+      # CODE_SIGN_ENTITLEMENTS override (M4 T4): `com.apple.developer.icloud-*` are
+      # restricted entitlements, so macOS refuses to ad-hoc-sign a binary carrying them
+      # ("has entitlements that require signing with a development certificate") and a
+      # runner has no development profile to fetch. The override drops exactly those
+      # keys and keeps the sandbox — which must stay, because RaconteTests runs with the
+      # real app as its host: unsandboxed, `AppContainer.root()` is a real home
+      # directory rather than a container. `EntitlementsParityTests` pins the two files
+      # against each other so the override can't silently lose a capability.
+      # The iOS simulator step below needs no override: simulator builds don't validate
+      # restricted entitlements against a profile (verified, 2026-08-17).
       - name: Build and test (macOS)
         run: |
           xcodebuild -project Raconte.xcodeproj -scheme Raconte \
             -destination 'platform=macOS' \
             -resultBundlePath TestResults/unit.xcresult \
             CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements \
             test
       - name: UI tests (iOS simulator)
         run: |

@@ -418,6 +418,14 @@ final class CaptureScreenModel {
         syncActiveEntryMetadata()
     }
 
+    /// `library.journals` (what the sidebar reads) and this model's own `journals` (the
+    /// picker's copy, patched above) are separate arrays with no shared storage — only a
+    /// rescan reconciles them, and nothing else on this path was triggering one (task
+    /// review, nav T5: a journal created here was invisible in the sidebar until some
+    /// unrelated place selection happened to rescan first). `await library.rescan()`
+    /// last, same convention as `LibraryScreenModel`'s own mutations
+    /// (`setJournalCover`/`trashEntry`): the write is durable before the rescan reads it
+    /// back, so the shared library never observes a half-applied change.
     @discardableResult
     func createJournal(name: String) async -> Journal? {
         guard let created = try? await journalStore.create(name: name) else { return nil }
@@ -426,13 +434,17 @@ final class CaptureScreenModel {
         currentJournal.select(created.id)
         resolveBackdateForJournalChange()
         syncActiveEntryMetadata()
+        await library.rescan()
         return created
     }
 
+    /// See `createJournal`'s doc comment — same reconciliation gap, worse consequence: a
+    /// STALE NAME left sitting in the sidebar rather than a missing row.
     func renameCurrentJournal(to name: String) async {
         guard let id = selectedJournalID,
               let renamed = try? await journalStore.rename(id: id, to: name) else { return }
         if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
+        await library.rescan()
     }
 
     /// Sets (or clears, via an empty dict) the current journal's voice labels

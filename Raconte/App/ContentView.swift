@@ -53,9 +53,13 @@ struct ContentView: View {
             }
         }
         // A deleted journal's place must not keep pointing at nothing forever — falls
-        // back to `.capture` rather than showing an empty list with no way out.
+        // back to `.capture` rather than showing an empty list with no way out. Routed
+        // through `router.select`, not a direct `router.place =` assignment (task review,
+        // minor 3): a direct assignment bypasses `AppRouter.select`'s clear-the-path
+        // contract, so a stale `detailPath` from the deleted journal's place could survive
+        // the fallback and push against a place it no longer belongs to.
         .onChange(of: services.library.journals) { _, journals in
-            router.place = PlaceRouting.resolve(router.place, journals: journals)
+            router.select(PlaceRouting.resolve(router.place, journals: journals))
         }
     }
 

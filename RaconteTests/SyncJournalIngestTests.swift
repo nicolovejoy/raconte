@@ -169,21 +169,49 @@ final class SyncJournalIngestTests: XCTestCase {
         let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
                                    modified: ["cover": stamp(20)],
                                    coverAsset: coverURL, deviceID: deviceHigh)
-        XCTAssertFalse(JournalMerge.adoptsRemoteCover(local: localNewer, remote: remote,
-                                                      localDeviceID: deviceLow, remoteDeviceID: deviceHigh))
+        XCTAssertEqual(JournalMerge.coverAction(local: localNewer, remote: remote,
+                                                localDeviceID: deviceLow, remoteDeviceID: deviceHigh), .leave)
 
         let localOlder = Journal(id: journalID, name: "J", createdAt: stamp(0),
                                  modified: ["cover": stamp(10)])
-        XCTAssertTrue(JournalMerge.adoptsRemoteCover(local: localOlder, remote: remote,
-                                                     localDeviceID: deviceLow, remoteDeviceID: deviceHigh))
+        XCTAssertEqual(JournalMerge.coverAction(local: localOlder, remote: remote,
+                                                localDeviceID: deviceLow, remoteDeviceID: deviceHigh), .adopt)
     }
 
-    func testARemoteWithNoCoverAssetNeverAdoptsOne() {
-        let local = Journal(id: journalID, name: "J", createdAt: stamp(0))
+    /// A remote with a WINNING cover stamp and no asset is a deletion, not a no-op. Reading
+    /// it as "nothing to do" left the receiving device showing a picture the owner had
+    /// deleted, while `merge` adopted the remote's newer stamp anyway — so its own cover
+    /// could never win a later comparison either.
+    func testARemoteWithAWinningCoverStampAndNoAssetIsADeletion() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            modified: ["cover": stamp(10)])
         let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
                                    modified: ["cover": stamp(99)], coverAsset: nil, deviceID: deviceHigh)
-        XCTAssertFalse(JournalMerge.adoptsRemoteCover(local: local, remote: remote,
-                                                      localDeviceID: deviceLow, remoteDeviceID: deviceHigh))
+        XCTAssertEqual(JournalMerge.coverAction(local: local, remote: remote,
+                                                localDeviceID: deviceLow, remoteDeviceID: deviceHigh),
+                       .remove)
+    }
+
+    /// The other direction: THIS device deleted its cover most recently, so an older remote
+    /// cover must not come back.
+    func testALosingRemoteCoverStampNeverResurrectsADeletedLocalCover() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            modified: ["cover": stamp(99)])
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   modified: ["cover": stamp(10)],
+                                   coverAsset: containerRoot.appendingPathComponent("old.jpg"),
+                                   deviceID: deviceHigh)
+        XCTAssertEqual(JournalMerge.coverAction(local: local, remote: remote,
+                                                localDeviceID: deviceLow, remoteDeviceID: deviceHigh),
+                       .leave)
+    }
+
+    func testAJournalNeitherSideEverGaveACoverLeavesTheCoverAlone() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0))
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0), deviceID: deviceHigh)
+        XCTAssertEqual(JournalMerge.coverAction(local: local, remote: remote,
+                                                localDeviceID: deviceLow, remoteDeviceID: deviceHigh),
+                       .leave)
     }
 
     // MARK: Hooks — every local mutation path reaches the engine
@@ -250,7 +278,6 @@ final class SyncJournalIngestTests: XCTestCase {
                           deviceID: String) -> SyncRecordExchange {
         SyncRecordExchange(journalStore: store, coverStore: covers,
                            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
-                           scanner: SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceID),
                            deviceID: deviceID)
     }
 
@@ -411,8 +438,8 @@ final class SyncJournalIngestTests: XCTestCase {
         let created = try await store.create(name: "1987 Journal")
         let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
         let scanner = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceLow)
-        let ex = SyncRecordExchange(journalStore: store, coverStore: covers, bookkeeping: bookkeeping,
-                                    scanner: scanner, deviceID: deviceLow)
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow)
 
         let built = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
         let record = try XCTUnwrap(built)
@@ -434,9 +461,8 @@ final class SyncJournalIngestTests: XCTestCase {
         let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
         let created = try await store.create(name: "1987 Journal")
         let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
-        let ex = SyncRecordExchange(journalStore: store, coverStore: covers, bookkeeping: bookkeeping,
-                                    scanner: SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceLow),
-                                    deviceID: deviceLow)
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow)
 
         let stray = SyncRecordBuilders.journalRecord(journal: created, coverFileURL: nil,
                                                      deviceID: deviceLow, zoneID: zoneID)
@@ -488,6 +514,270 @@ final class SyncJournalIngestTests: XCTestCase {
                                recordID: CKRecord.ID(recordName: "not-a-record-name", zoneID: zoneID))
         let toResave = await exchange(store, covers, deviceID: deviceLow).resolvePushConflicts([garbage])
         XCTAssertEqual(toResave, [])
+    }
+
+    // MARK: Atomicity of the ingest read-merge-write (review Critical 1)
+
+    /// A lost update, demonstrated and then fixed, in one test.
+    ///
+    /// **First half** reproduces the shape ingest used to have — read the journal, suspend,
+    /// merge against what was read, write the whole thing back — and shows a rename landing
+    /// in that window being silently reverted. `applySyncMerge` replaces the entire
+    /// `Journal`, stamps included, so the newer local stamp is destroyed too and the revert
+    /// is what the next push propagates: the edit is gone on both devices.
+    ///
+    /// **Second half** runs the same interleaving against `applySyncMerge(id:decide:)`. The
+    /// rename is fired first and deliberately made to arrive *while the merge is running*:
+    /// the `decide` closure holds the store's executor for 200 ms, and because the closure
+    /// is synchronous it cannot suspend, so nothing — not the rename, not another ingest —
+    /// can slip between the load and the save. The rename therefore applies on top of the
+    /// merge instead of being erased by it.
+    ///
+    /// Blocking inside an actor is exactly what production must never do; here it is the
+    /// instrument, and it is what makes this deterministic instead of a race the suite
+    /// would flake on.
+    func testAnIngestCannotRevertARenameThatLandsWhileItIsMerging() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let (jid, low, high) = (journalID, deviceLow, deviceHigh)
+        let seed = Journal(id: jid, name: "Original", createdAt: stamp(0),
+                           modified: ["name": stamp(10)])
+        _ = try await store.applySyncMerge(id: jid) { _ in
+            JournalSyncMerge(journal: seed, coverAction: .leave)
+        }
+        // A remote that changes nothing this test looks at, so any movement in `name` is
+        // the interleaving and not the merge.
+        let remote = RemoteJournal(id: jid, name: "Original", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: high)
+
+        // --- The old shape: read, suspend, write back a merge computed against the read.
+        let read = try await store.journal(id: journalID)
+        let staleRead = try XCTUnwrap(read)
+        _ = try await store.rename(id: journalID, to: "Renamed during the merge")
+        try await store.applySyncMerge(JournalMerge.merge(local: staleRead, remote: remote,
+                                                          localDeviceID: deviceLow,
+                                                          remoteDeviceID: deviceHigh))
+        let afterOldShape = try await store.journal(id: journalID)
+        XCTAssertEqual(afterOldShape?.name, "Original",
+                       "documents the defect: the rename was silently reverted")
+
+        // --- The fixed shape: one isolated call, with the rename racing it for real.
+        let renaming = Task { [store] in
+            try await store.rename(id: jid, to: "Renamed during the merge")
+        }
+        let action = try await store.applySyncMerge(id: jid) { local in
+            // Held long enough that the rename above is certainly waiting on this actor.
+            // A synchronous closure cannot suspend, so it cannot let go.
+            Thread.sleep(forTimeInterval: 0.2)
+            return JournalSyncMerge(
+                journal: JournalMerge.merge(local: local ?? seed, remote: remote,
+                                            localDeviceID: low, remoteDeviceID: high),
+                coverAction: .leave)
+        }
+        _ = try await renaming.value
+
+        let afterFixedShape = try await store.journal(id: journalID)
+        XCTAssertEqual(action, .leave)
+        XCTAssertEqual(afterFixedShape?.name, "Renamed during the merge",
+                       "the rename applied on top of the merge instead of being erased by it")
+    }
+
+    /// The same guarantee as a property rather than a single race: ten renames against ten
+    /// ingests, all at once. Every ingest's remote `name` stamp loses to every rename's, so
+    /// the survivor must be a name a rename actually wrote — never `Original` (a revert)
+    /// and never `Remote name` (a stale read winning).
+    func testConcurrentIngestsAndRenamesNeverProduceAStateNoWriterWrote() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let (jid, low, high) = (journalID, deviceLow, deviceHigh)
+        let seed = Journal(id: jid, name: "Original", createdAt: stamp(0),
+                           modified: ["name": stamp(10)])
+        _ = try await store.applySyncMerge(id: jid) { _ in
+            JournalSyncMerge(journal: seed, coverAction: .leave)
+        }
+        let remote = RemoteJournal(id: jid, name: "Remote name", createdAt: stamp(0),
+                                   modified: ["name": stamp(5)], deviceID: high)
+
+        await withTaskGroup(of: Void.self) { group in
+            for round in 0..<10 {
+                group.addTask { [store] in
+                    _ = try? await store.rename(id: jid, to: "Rename \(round)")
+                }
+                group.addTask { [store] in
+                    _ = try? await store.applySyncMerge(id: jid) { local in
+                        JournalSyncMerge(
+                            journal: JournalMerge.merge(local: local ?? seed, remote: remote,
+                                                        localDeviceID: low, remoteDeviceID: high),
+                            coverAction: .leave)
+                    }
+                }
+            }
+        }
+
+        let settled = try await store.journal(id: journalID)
+        let final = try XCTUnwrap(settled)
+        XCTAssertTrue(final.name.hasPrefix("Rename "), "ended on \(final.name)")
+    }
+
+    // MARK: Cover deletion propagation (review Critical 2)
+
+    func testACoverDeletedOnTheOtherDeviceIsRemovedHereAndTheStampMovesWithIt() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "J", createdAt: stamp(0),
+                                               modified: ["name": stamp(10), "cover": stamp(20)]))
+        try await covers.ingest(imageData: Data("a-real-cover".utf8), journalID: journalID)
+
+        // The other device deleted its cover: newer cover stamp, no asset on the record.
+        let deletion = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                     modified: ["name": stamp(10), "cover": stamp(50)],
+                                     coverAsset: nil, deviceID: deviceHigh)
+        await exchange(store, covers, deviceID: deviceLow)
+            .acceptRemote(remoteRecord(deletion, deviceID: deviceHigh))
+
+        let bytes = await covers.read(journalID: journalID)
+        let journal = try await store.journal(id: journalID)
+        XCTAssertNil(bytes, "the deleted cover must not keep being displayed here")
+        XCTAssertEqual(journal?.modified?["cover"], stamp(50),
+                       "and the stamp moved with it — the poisoned state is stamp-without-bytes, "
+                       + "where this device can never win a cover comparison again")
+    }
+
+    /// The reverse direction: a deletion made HERE is not undone by an older remote cover.
+    func testAnOlderRemoteCoverDoesNotResurrectACoverDeletedOnThisDevice() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "J", createdAt: stamp(0),
+                                               modified: ["name": stamp(10), "cover": stamp(90)]))
+        let stale = containerRoot.appendingPathComponent("stale.jpg")
+        try Data("an-old-cover".utf8).write(to: stale)
+
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   modified: ["name": stamp(10), "cover": stamp(20)],
+                                   deviceID: deviceHigh)
+        await exchange(store, covers, deviceID: deviceLow)
+            .acceptRemote(remoteRecord(remote, deviceID: deviceHigh, coverFileURL: stale))
+
+        let bytes = await covers.read(journalID: journalID)
+        let journal = try await store.journal(id: journalID)
+        XCTAssertNil(bytes)
+        XCTAssertEqual(journal?.modified?["cover"], stamp(90), "this device's deletion stands")
+    }
+
+    // MARK: In-flight build accounting (review Important 1 and 2)
+
+    /// Two builds of the same record before either confirms cannot be told apart by record
+    /// name, so neither confirmation may write the ledger. Crediting the confirmation to
+    /// the newer digest would ledger content that was never sent, and reconciliation would
+    /// then see ledger == disk and never send the second edit.
+    func testTwoBuildsBeforeAConfirmLeaveTheLedgerAloneSoReconciliationStillSends() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let created = try await store.create(name: "1987 Journal")
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let scanner = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceLow)
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow)
+
+        let firstBuild = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        let first = try XCTUnwrap(firstBuild)
+        _ = try await store.rename(id: created.id, to: "1987 Journal, renamed")
+        let secondBuild = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        XCTAssertNotNil(secondBuild)
+
+        // The FIRST build's save confirms. Its content is stale on disk by now.
+        await ex.noteSaved(first)
+
+        let ledger = await bookkeeping.ledger()
+        let plan = SyncPlanner.reconcile(scan: scanner.scan().artifacts, ledger: ledger)
+        XCTAssertEqual(ledger, [:], "an unattributable confirmation must not write the ledger")
+        XCTAssertTrue(plan.contains(.journal(id: created.id)),
+                      "the renamed journal is still queued to send")
+    }
+
+    /// The ledger must describe what was PUSHED, not what is on disk when the confirmation
+    /// arrives. Re-reading at confirm time would record the newer content as uploaded, and
+    /// the edit would never be sent at all.
+    func testTheLedgerRecordsTheContentThatWasBuiltNotWhatIsOnDiskAtConfirmTime() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let created = try await store.create(name: "1987 Journal")
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let scanner = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceLow)
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow)
+
+        let build = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        let built = try XCTUnwrap(build)
+        // The owner edits while that push is in flight.
+        _ = try await store.rename(id: created.id, to: "1987 Journal, renamed")
+        await ex.noteSaved(built)
+
+        let ledger = await bookkeeping.ledger()
+        let plan = SyncPlanner.reconcile(scan: scanner.scan().artifacts, ledger: ledger)
+        XCTAssertEqual(ledger.count, 1, "the confirmed build is ledgered")
+        XCTAssertTrue(plan.contains(.journal(id: created.id)),
+                      "and the newer content is still queued, because the ledger describes "
+                      + "what actually went up")
+    }
+
+    func testAFailedSaveDiscardsTheBuildSoALaterConfirmCannotBeCreditedToIt() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let created = try await store.create(name: "1987 Journal")
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow)
+
+        let build = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        let built = try XCTUnwrap(build)
+        await ex.noteSaveFailed(for: .journal(id: created.id))
+        await ex.noteSaved(built)
+
+        let ledger = await bookkeeping.ledger()
+        XCTAssertEqual(ledger, [:], "a build the server rejected must never reach the ledger")
+    }
+
+    // MARK: Ingest failure honesty (review Important 3)
+
+    /// A write that did not happen must not announce that it did — the UI would rescan and
+    /// re-render exactly what it already had, hiding the failure rather than surfacing it.
+    func testAFailedIngestWriteDoesNotSignalTheLibraryToReload() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        // An unreadable registry: present, undecodable. `JournalStore.load` throws rather
+        // than treating it as empty (issue #11's rule), so the ingest cannot write.
+        try Data("not json".utf8).write(to: AppContainer.journalsURL(containerRoot: containerRoot))
+
+        let signals = SignalCounter()
+        let ex = SyncRecordExchange(
+            journalStore: store, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: deviceLow,
+            localStoreDidChange: { await signals.increment() })
+
+        let remote = RemoteJournal(id: journalID, name: "Trip to France", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let count = await signals.count
+        XCTAssertEqual(count, 0, "nothing was written, so nothing should have been announced")
+    }
+
+    func testASuccessfulIngestDoesSignalTheLibraryToReload() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let signals = SignalCounter()
+        let ex = SyncRecordExchange(
+            journalStore: store, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: deviceLow,
+            localStoreDidChange: { await signals.increment() })
+
+        let remote = RemoteJournal(id: journalID, name: "Trip to France", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let count = await signals.count
+        XCTAssertEqual(count, 1, "or the rename sits on disk unseen until the next launch")
     }
 
     // MARK: Fixtures
@@ -546,4 +836,11 @@ final class AdvancingClock: @unchecked Sendable {
             return current
         }
     }
+}
+
+/// Counts the "something actually landed locally" announcements, so "did a failed write
+/// still tell the UI to reload?" is a question with an answer.
+actor SignalCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }

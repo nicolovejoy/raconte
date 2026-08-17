@@ -113,7 +113,6 @@ extension SyncCoordinator {
             journalStore: library.journalStore,
             coverStore: library.journalCoverStore,
             bookkeeping: bookkeeping,
-            scanner: scanner,
             deviceID: DeviceIdentity.stable(),
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old

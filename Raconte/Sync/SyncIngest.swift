@@ -135,7 +135,9 @@ enum JournalMerge {
         if resolve("name") == .remote { merged.name = remote.name }
         if resolve("voiceLabels") == .remote { merged.voiceLabels = remote.voiceLabels }
         // The cover's bytes are not a field of this type — only its stamp is, and it moves
-        // by the same rule. `adoptsRemoteCover` answers the bytes half.
+        // by the same rule whether or not the remote actually carries an image.
+        // `coverAction` answers the bytes half, including the deletion case that a bare
+        // "did the remote send one?" test would read as nothing to do.
         _ = resolve("cover")
 
         merged.modified = modified.isEmpty ? nil : modified
@@ -155,66 +157,113 @@ enum JournalMerge {
                 modified: remote.modified.isEmpty ? nil : remote.modified)
     }
 
-    /// Whether the remote's cover file should replace the local one.
+    /// What should happen to the local cover FILE.
     ///
     /// A separate question from `merge` because the cover is not a field of `Journal` at
     /// all — it is a file under `journals/<id>/cover.jpg`, written by `JournalCoverStore`.
     /// Only its LWW stamp lives in the registry, so the stamp merges with everything else
     /// while the bytes move (or don't) on this answer.
-    static func adoptsRemoteCover(local: Journal, remote: RemoteJournal,
-                                  localDeviceID: String, remoteDeviceID: String?) -> Bool {
-        guard remote.coverAsset != nil else { return false }
-        return LWWResolve.winner(localStamp: local.modified?["cover"],
-                                 remoteStamp: remote.modified["cover"],
-                                 localDeviceID: localDeviceID,
-                                 remoteDeviceID: remoteDeviceID) == .remote
+    ///
+    /// **`.remove` is not a nicety.** `merge` adopts the winning cover stamp whether or not
+    /// the remote carries an asset, because that is what per-field LWW means. Without a
+    /// removal answer, a cover deleted on the other device left this one displaying the
+    /// deleted picture forever AND holding the remote's newer stamp — so its own,
+    /// still-present cover could never win a later comparison either. The deletion has to
+    /// move the bytes as well as the stamp, exactly as `JournalCoverStore.delete` and the
+    /// record builder's explicitly-nil cover field both already assumed it would.
+    static func coverAction(local: Journal, remote: RemoteJournal,
+                            localDeviceID: String,
+                            remoteDeviceID: String?) -> JournalSyncMerge.CoverAction {
+        let winner = LWWResolve.winner(localStamp: local.modified?["cover"],
+                                       remoteStamp: remote.modified["cover"],
+                                       localDeviceID: localDeviceID,
+                                       remoteDeviceID: remoteDeviceID)
+        guard winner == .remote else { return .leave }
+        return remote.coverAsset == nil ? .remove : .adopt
     }
+}
+
+/// One ingest decision, carried out of `JournalStore.applySyncMerge(id:decide:)`.
+///
+/// Exists because the registry write and the cover-file write live in different stores: the
+/// registry half must be atomic under `JournalStore`'s isolation, and the cover half cannot
+/// be performed from there at all — so the decision is made inside the isolated call and
+/// the file work is handed back to the caller.
+struct JournalSyncMerge: Equatable, Sendable {
+    enum CoverAction: Equatable, Sendable {
+        /// The local cover file — or its absence — stands.
+        case leave
+        /// The remote's fetched asset replaces the local file.
+        case adopt
+        /// The other device deleted its cover; delete this one too.
+        case remove
+    }
+
+    var journal: Journal
+    var coverAction: CoverAction
 }
 
 /// The app's side of the CloudKit conversation: turns record names into records to push,
 /// and fetched records into local writes (design §6).
 ///
-/// An actor, and the reason is the no-echo rule. Ingest writes through `JournalStore`, the
-/// same actor the owner's own edits go through; serializing the whole
-/// decode → merge → save sequence here means a fetch landing mid-rename cannot read a
-/// half-applied registry. The writes themselves deliberately use `applySyncMerge`, which
-/// neither re-stamps `modified` nor fires the sync hook: a sync-caused save that echoed
-/// back as a local change would re-upload what was just downloaded, and with a fresh local
-/// stamp on it — two devices would then trade the same journal forever, each one's echo
-/// looking newer than the other's.
+/// An actor so that its own bookkeeping (`inFlight`) is not raced by the several engine
+/// callbacks that reach it concurrently.
+///
+/// **It is emphatically NOT what makes a read-merge-write safe**, and an earlier version of
+/// this file claimed it was. An actor releases its isolation at every `await`, so a
+/// sequence of hops into `JournalStore` from here interleaves with anything else calling
+/// that store — a local rename, or a second `acceptRemote` for the same journal, both of
+/// which really happen (`resolvePushConflicts` loops over `acceptRemote`, and fetched
+/// changes arrive in batches). The registry's read-merge-write is atomic because it happens
+/// inside one `JournalStore.applySyncMerge(id:decide:)` call whose closure cannot suspend —
+/// not because of anything this type is.
+///
+/// The writes deliberately use `applySyncMerge`, which neither re-stamps `modified` nor
+/// fires the sync hook: a sync-caused save that echoed back as a local change would
+/// re-upload what was just downloaded, and with a fresh local stamp on it — two devices
+/// would then trade the same journal forever, each one's echo looking newer than the
+/// other's.
 actor SyncRecordExchange: CloudRecordExchange {
     private let journalStore: JournalStore
     private let coverStore: JournalCoverStore
     private let bookkeeping: SyncBookkeepingStore
-    private let scanner: SyncTreeScanner
     private let deviceID: String
     private let log: Logger
-    /// Called after ingest writes anything, so the library reloads instead of showing
-    /// yesterday's journal names until the next launch. Optional — nothing about
+    /// Called after ingest actually writes something, so the library reloads instead of
+    /// showing yesterday's journal names until the next launch. Optional — nothing about
     /// correctness depends on it.
     private let localStoreDidChange: (@Sendable () async -> Void)?
 
-    /// Digests of what each in-flight push was actually built from, keyed by record name.
+    /// What each in-flight push was built from, keyed by record name.
     ///
     /// Recorded at build time rather than re-read at save-confirm time, and the difference
     /// is a real hole rather than a nicety: an edit landing between "record built" and
     /// "save confirmed" would otherwise be written into the ledger as though it had been
-    /// uploaded, and if the app died before the second push the reconciliation scan would
-    /// see ledger == disk and never send it. A missing entry here means the ledger is left
-    /// alone, which costs one redundant upload and never a lost one.
-    private var inFlightDigests: [String: UploadedDigest] = [:]
+    /// uploaded, and if the app died before the second push, the reconciliation scan would
+    /// see ledger == disk and never send it.
+    ///
+    /// `.ambiguous` exists because a record name is not enough to tell two builds apart. If
+    /// the same journal is built twice before the first save confirms, a confirmation
+    /// cannot be attributed to either one — and attributing it to the newer digest would
+    /// ledger content that was never sent, which loses the second edit exactly the way the
+    /// re-read version did. So a second build poisons the entry, and the confirmation
+    /// writes nothing. Every miss here costs one redundant upload; there is no arrangement
+    /// of it that loses an edit.
+    private enum InFlightBuild {
+        case one(UploadedDigest)
+        case ambiguous
+    }
+    private var inFlight: [String: InFlightBuild] = [:]
 
     init(journalStore: JournalStore,
          coverStore: JournalCoverStore,
          bookkeeping: SyncBookkeepingStore,
-         scanner: SyncTreeScanner,
          deviceID: String,
          localStoreDidChange: (@Sendable () async -> Void)? = nil,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
         self.journalStore = journalStore
         self.coverStore = coverStore
         self.bookkeeping = bookkeeping
-        self.scanner = scanner
         self.deviceID = deviceID
         self.localStoreDidChange = localStoreDidChange
         self.log = log
@@ -246,15 +295,38 @@ actor SyncRecordExchange: CloudRecordExchange {
         let coverURL = coverStore.url(journalID: id)
         let hasCover = FileManager.default.fileExists(atPath: coverURL.path)
 
-        if let artifact = scanner.artifact(for: name) {
-            inFlightDigests[name.rawValue] = UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes)
-        }
+        // The ledger digest is derived from the SAME `journal` value the record is built
+        // from, not from a second read of the registry. Re-reading here meant an edit
+        // landing between the two reads was ledgered as uploaded while the record carried
+        // the older content — after which reconciliation saw ledger == disk and never sent
+        // the newer version.
+        let digest = SyncTreeScanner.journalDigest(journal: journal, coverURL: coverURL)
+        note(build: digest, for: name)
+
         let base = await archivedRecord(for: name)
         return SyncRecordBuilders.journalRecord(journal: journal,
                                                 coverFileURL: hasCover ? coverURL : nil,
                                                 deviceID: deviceID,
                                                 zoneID: zoneID,
                                                 base: base)
+    }
+
+    private func note(build digest: UploadedDigest, for name: SyncRecordName) {
+        if inFlight[name.rawValue] == nil {
+            inFlight[name.rawValue] = .one(digest)
+        } else {
+            // A second build before the first confirmed. Neither confirmation can be
+            // attributed, so neither may write the ledger.
+            inFlight[name.rawValue] = .ambiguous
+            log.debug("sync: second build of \(name.rawValue, privacy: .public) in flight — ledger deferred")
+        }
+    }
+
+    /// A save this device attempted did not land. Drop the build record: leaving it would
+    /// let a *later*, unrelated confirmation for the same name ledger a digest describing
+    /// content that was never accepted.
+    func noteSaveFailed(for name: SyncRecordName) async {
+        inFlight.removeValue(forKey: name.rawValue)
     }
 
     /// A `CKRecord` rebuilt from this device's archived system fields, or nil when there
@@ -272,8 +344,20 @@ actor SyncRecordExchange: CloudRecordExchange {
     func noteSaved(_ record: CKRecord) async {
         guard let name = SyncCloudIdentifiers.name(of: record.recordID) else { return }
         await archiveSystemFields(of: record, for: name)
-        guard let digest = inFlightDigests.removeValue(forKey: name.rawValue) else { return }
-        try? await bookkeeping.recordUpload(digest, for: name.rawValue)
+        guard case .one(let digest)? = inFlight.removeValue(forKey: name.rawValue) else {
+            // No build on record, or an ambiguous one. The ledger is left alone, so the
+            // next reconciliation scan re-enqueues — one redundant upload, never a lost
+            // edit.
+            return
+        }
+        do {
+            try await bookkeeping.recordUpload(digest, for: name.rawValue)
+        } catch {
+            log.error("""
+                sync: could not record upload for \(name.rawValue, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
     }
 
     private func archiveSystemFields(of record: CKRecord, for name: SyncRecordName) async {
@@ -305,41 +389,74 @@ actor SyncRecordExchange: CloudRecordExchange {
             log.notice("sync: fetched Journal record could not be decoded — ignored")
             return
         }
-        // `try?` is not enough here: it would collapse "this journal is new to us" and
-        // "the registry could not be read" into the same nil, and adopting a remote
-        // journal over an unreadable registry is issue #11's mistake in a new place. An
-        // unreadable registry means we do not know what we have, so we write nothing —
-        // the record will be offered again after the next token reset, and the
-        // reconciliation scan reports the registry as skipped either way.
-        let local: Journal?
+        // ONE call into the store, doing load → merge → save with no suspension in the
+        // middle. Reading the journal here and writing it back in a second call was a lost
+        // update: a `rename` landing in the gap was reverted by a merge computed against
+        // the pre-rename value, and `applySyncMerge` replaces the whole record, stamps
+        // included, so the revert then propagated. Actor isolation does not close that gap
+        // — it is released at every `await`.
+        //
+        // A throw is the registry being unreadable. `try?` would collapse that with "this
+        // journal is new to us", and adopting a remote journal over a registry we merely
+        // failed to parse is issue #11's mistake in a new place. Nothing is written; the
+        // record is offered again after the next token reset.
+        let localDeviceID = deviceID
+        let coverAction: JournalSyncMerge.CoverAction
         do {
-            local = try await journalStore.journal(id: remote.id)
+            coverAction = try await journalStore.applySyncMerge(id: remote.id) { local in
+                guard let local else {
+                    // Unknown here: take it as-is, stamps included, and take its cover if
+                    // it has one.
+                    return JournalSyncMerge(journal: JournalMerge.adopted(remote: remote),
+                                            coverAction: remote.coverAsset == nil ? .leave : .adopt)
+                }
+                return JournalSyncMerge(
+                    journal: JournalMerge.merge(local: local, remote: remote,
+                                                localDeviceID: localDeviceID,
+                                                remoteDeviceID: remote.deviceID),
+                    coverAction: JournalMerge.coverAction(local: local, remote: remote,
+                                                          localDeviceID: localDeviceID,
+                                                          remoteDeviceID: remote.deviceID))
+            }
         } catch {
-            log.error("sync: journals registry unreadable — ingest skipped for this fetch")
+            log.error("""
+                sync: journals registry write failed for \(remote.id, privacy: .public) — \
+                ingest skipped: \(error.localizedDescription, privacy: .public)
+                """)
             return
         }
 
-        let merged: Journal
-        let takesCover: Bool
-        if let local {
-            merged = JournalMerge.merge(local: local, remote: remote,
-                                        localDeviceID: deviceID, remoteDeviceID: remote.deviceID)
-            takesCover = JournalMerge.adoptsRemoteCover(local: local, remote: remote,
-                                                        localDeviceID: deviceID,
-                                                        remoteDeviceID: remote.deviceID)
-        } else {
-            merged = JournalMerge.adopted(remote: remote)
-            takesCover = remote.coverAsset != nil
-        }
-
-        // Cover first: the registry stamp is what a later comparison reads, so writing it
-        // before the bytes are down would let a crash in between leave a journal claiming
-        // a cover it does not have.
-        if takesCover, let assetURL = remote.coverAsset, let bytes = try? Data(contentsOf: assetURL) {
-            try? await coverStore.ingest(imageData: bytes, journalID: remote.id)
-        }
-        try? await journalStore.applySyncMerge(merged)
+        // The cover's bytes live in a different store and cannot be written under the
+        // registry's isolation, so they move here, after the stamp.
+        //
+        // **Known window:** a crash between the two leaves this device holding the winning
+        // cover stamp with the losing bytes, and the stamps then match, so the picture only
+        // corrects on the next cover change on either device. Accepted rather than papered
+        // over — the alternative ordering (bytes first) would let a local cover pick landing
+        // in the same window be silently overwritten by the fetched one, which is a real
+        // loss rather than a stale thumbnail.
+        await applyCover(coverAction, for: remote)
         await localStoreDidChange?()
+    }
+
+    private func applyCover(_ action: JournalSyncMerge.CoverAction, for remote: RemoteJournal) async {
+        switch action {
+        case .leave:
+            return
+        case .adopt:
+            guard let assetURL = remote.coverAsset else { return }
+            do {
+                try await coverStore.ingest(imageData: try Data(contentsOf: assetURL),
+                                            journalID: remote.id)
+            } catch {
+                log.error("""
+                    sync: fetched cover for \(remote.id, privacy: .public) could not be \
+                    written: \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        case .remove:
+            await coverStore.removeIngested(journalID: remote.id)
+        }
     }
 
     func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName] {

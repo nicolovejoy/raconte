@@ -146,6 +146,11 @@ protocol CloudRecordExchange: Sendable {
     /// next launch's reconciliation does not re-enqueue it).
     func noteSaved(_ record: CKRecord) async
 
+    /// A save this device attempted did not land — for any reason, conflict included.
+    /// Discards whatever was remembered about that build, so a later confirmation for the
+    /// same record name can never be credited to content the server never accepted.
+    func noteSaveFailed(for name: SyncRecordName) async
+
     /// Server copies handed back by failed saves. Merges each one and returns the records
     /// that must be re-enqueued for save — the merged content is produced by the next
     /// `recordToPush`, which by then reads merged local state plus the freshly archived
@@ -337,6 +342,12 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
         for failure in failures {
+            // Every failure, conflict or not, retires what the exchange remembered about
+            // that build — the content it describes was not accepted, so no later
+            // confirmation may be credited to it.
+            if let name = SyncCloudIdentifiers.name(of: failure.record.recordID) {
+                await exchange.noteSaveFailed(for: name)
+            }
             if failure.error.code == .serverRecordChanged, let server = failure.error.serverRecord {
                 conflicts.append(server)
             } else {

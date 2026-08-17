@@ -49,17 +49,39 @@ Main carries `0286a4f8` (design) + `a26a4c45` (plan).
   (journalPicker container-flattening; alert TextField identifier not bridging) —
   details in the ledger.
 
+**Post-handoff, same day: Task 6 DONE, GATE A OPEN, Mac smoke PASSED.** Task 6 landed
+(`d1d447d1`, 1313 unit + 34 UI; two implementer stalls recovered by nudge; review
+approved with a CONFIRMED new AX trap variant, now in memory:
+container-identifier-overwrites-descendants). Gate A adversarial review: GATE OPEN —
+probe 1 proved the finalize-with-no-view-mounted path end-to-end in the simulator
+(breakpoint-armed `.captured`, released with capture unmounted, receipt built; the
+counterfactual fails). **Ledgered lesson: a library row is NOT evidence of
+finalization — pin via the receipt or final m4a.** Owner smoked the Mac half
+(steps 1-4, `~/Desktop/Raconte-nav.app`, dylib `6AD4095C`): **"pass all around"** —
+sidebar in all three capture states, recording survives navigation, ⌘Q with Debug up.
+**Bonus: owner saw his phone's journal names in the nav sidebar — first real-data
+evidence the m4/sync engine works** (nav has no sync code; the m4sync app had synced
+journals into the shared container). Entries absent on the laptop is CORRECT
+(sync T6-T10 unbuilt). Branch pushed through `d1d447d1`.
+
 **Next steps:**
-1. **Resume the nav SDD loop at the ledger** — Task 6 (live-capture sidebar indicator
-   + recording-survives-navigation pin) was mid-flight; then Gate A (adversarial
-   probes + 5-step owner smoke incl. macOS both-columns eyeball + phone
-   screen-doesn't-sleep check), Tasks 7-9, Gate B, PR.
-2. **M4 sync Gate A owner smoke** (unchanged from prior handoff): 5-step journal sync
-   checklist, phone ↔ `~/Desktop/Raconte-m4sync.app`, ONE instance only. Then m4/sync
-   Tasks 6-12.
-3. At nav-branch finish: file the two AX issues; note `ContentView.swift` will
-   conflict with `m4/sync` at second merge (accepted, design §10).
-4. Backlog unchanged: #63 final smoke, unified-editor design pass (#60/#59),
+1. **M4 sync smoke, remaining steps (do FIRST, while the m4sync build is still on the
+   phone):** rename a journal on the phone → see it in `~/Desktop/Raconte-m4sync.app`
+   (quit Raconte-nav.app first; ONE instance); set a cover on the laptop m4sync app →
+   see it on the phone; other journals unchanged. Pass ⇒ close m4 Gate A in the m4
+   ledger, unblocks m4/sync Tasks 6-12.
+2. **Nav Gate A phone half:** install the nav build on the phone (wireless devicectl;
+   replaces the m4sync build — do AFTER step 1), then smoke: launches into capture,
+   back-chevron reveals places, screen does NOT sleep while recording + navigating
+   (zero automated coverage exists for the real idle-timer hold), receipt doesn't
+   hide the sidebar. Pass ⇒ close nav Gate A in the nav ledger.
+3. **Resume the nav SDD loop at Task 7** (Debug place reshape) → T8 (Mac Commands +
+   ⌘-shortcuts; note deferred minor: `sidebar.toggle` identifier is produced nowhere —
+   openPlace's regular-width branch has never executed) → T9 docs → Gate B → PR.
+   Ledger: `/Users/nico/src/raconte-nav/.superpowers/sdd/2026-08-17-navigation-redesign-implementation-plan/progress.md`.
+4. At nav-branch finish: file the two AX issues from the ledger; `ContentView.swift`
+   conflicts with `m4/sync` at second merge (accepted, design §10).
+5. Backlog unchanged: #63 final smoke, unified-editor design pass (#60/#59),
    #29/#50/#51/#54/#55/#18/#35/#47/#46/#44.
 
 ## Session 2026-08-16 night → 08-17 (laptop — M4 SYNC: design + plan committed, SDD Tasks 1-5 BUILT on `m4/sync`; 1288 → 1457 tests; Gate A smoke PENDING)

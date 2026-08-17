@@ -1130,6 +1130,45 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.done()
     }
 
+    /// #63: the visual marker confirmation needs to know WHICH button's marker just
+    /// landed, and `markerCount` alone cannot say. Same honesty rule as the haptic:
+    /// `lastMarkerKind` reports what reached disk, so it follows the append, not the tap.
+    func testMarkerTapsPublishTheLastMarkerKind() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        XCTAssertNil(coordinator.lastMarkerKind, "nothing marked yet")
+
+        coordinator.markParagraph()
+        XCTAssertEqual(coordinator.lastMarkerKind, .paragraph)
+
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+        XCTAssertEqual(coordinator.lastMarkerKind, .voice)
+
+        await coordinator.done()
+    }
+
+    /// A failed append is confirmed by NOTHING — no haptic (existing rule) and no flash:
+    /// `lastMarkerKind` must stay nil when the marker never reached disk.
+    func testFailedMarkerAppendDoesNotPublishALastMarkerKind() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let coordinator = makeCoordinator(session: session, recorder: recorder)
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        try blockTranscriptDirectory()
+
+        coordinator.markParagraph()
+
+        XCTAssertEqual(coordinator.markerCount, 0, "harness: the append must have failed")
+        XCTAssertNil(coordinator.lastMarkerKind,
+                     "a marker that never landed must not be visually confirmed")
+
+        await coordinator.done()
+    }
+
     /// The opener is the literal frame 0, never the clock — feeding 750 frames FIRST
     /// is the mutation check: an implementation that reads `currentCaptureFrame`
     /// fails here at 750.

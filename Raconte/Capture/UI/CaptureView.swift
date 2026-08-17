@@ -1572,6 +1572,15 @@ struct RecordControlsRow<Center: View>: View {
     /// spinning up per tap.
     @State private var haptics = MarkerHapticsPlayer()
 
+    /// #63: the dash-dot as light. Current white-overlay opacity per marker kind — the
+    /// tapped button's surface pulses `MarkerFlash.steps` when its marker lands. Keyed by
+    /// kind because that is what `coordinator.lastMarkerKind` reports; each kind has
+    /// exactly one button.
+    @State private var flashBrightness: [StructureMarker.Kind: Double] = [:]
+    /// The in-flight pulse. A new marker cancels and replaces it — rapid taps each get a
+    /// fresh dash rather than queueing a light show.
+    @State private var flashTask: Task<Void, Never>?
+
     /// `coordinator.currentVoice` before a capture opens (or before its frame-0 `bn`
     /// marker lands) is `nil`; the main voice (`bn`) is the truth for that window, not
     /// a placeholder (plan §0.3.12) — same rule the pre-`VoiceDisplay` ternary encoded.
@@ -1631,6 +1640,7 @@ struct RecordControlsRow<Center: View>: View {
                               identifier: String,
                               accessibilityLabel: String? = nil,
                               isShown: Bool,
+                              flashKind: StructureMarker.Kind,
                               action: @escaping () -> Void) -> some View {
         if isShown {
             Button(action: action) {
@@ -1643,6 +1653,17 @@ struct RecordControlsRow<Center: View>: View {
                    height: CaptureControlBarMetrics.markerButtonHeight)
             .disabled(!isEnabled)
             .opacity(isEnabled ? 1 : 0.45)
+            // #63: the dash-dot, lit — a white pulse over the tapped button when its
+            // marker LANDS (driven off `markerCount`, like the haptic — a failed append
+            // flashes nothing). Purely decorative, so it must never intercept the next
+            // tap or say anything to VoiceOver.
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(.white)
+                    .opacity(flashBrightness[flashKind] ?? 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            )
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(accessibilityLabel ?? title)
         } else {
@@ -1657,7 +1678,8 @@ struct RecordControlsRow<Center: View>: View {
         HStack(spacing: 0) {
             markerButton(activeVoice,
                          identifier: "capture.voiceSwitch",
-                         isShown: markers.showsVoiceControl) {
+                         isShown: markers.showsVoiceControl,
+                         flashKind: .voice) {
                 model.coordinator.markVoice(otherVoice)
             }
 
@@ -1675,7 +1697,8 @@ struct RecordControlsRow<Center: View>: View {
             markerButton("¶",
                          identifier: "capture.paragraph",
                          accessibilityLabel: "Paragraph",
-                         isShown: markers.showsParagraphControl) {
+                         isShown: markers.showsParagraphControl,
+                         flashKind: .paragraph) {
                 model.coordinator.markParagraph()
             }
         }
@@ -1700,7 +1723,34 @@ struct RecordControlsRow<Center: View>: View {
         // (`MarkerHaptic`) needs a real duration on the first beat, which
         // `.sensoryFeedback`/`UIImpactFeedbackGenerator` cannot express.
         .onChange(of: model.coordinator.markerCount) { old, new in
-            if new > old { haptics.play() }
+            if new > old {
+                haptics.play()
+                playFlash(model.coordinator.lastMarkerKind)
+            }
+        }
+    }
+
+    /// Steps the tapped button's overlay through `MarkerFlash.steps` — the same rhythm
+    /// the haptic is buzzing, at the same trigger. On the Mac this pulse IS the marker
+    /// confirmation (#63: no haptic engine in use there); on iOS it rides along.
+    private func playFlash(_ kind: StructureMarker.Kind?) {
+        guard let kind else { return }
+        flashTask?.cancel()
+        // Synchronously, before the new pulse: a cancelled task stops mid-step without
+        // cleaning up, so a rapid cross-button tap must not leave the previous button's
+        // light stuck on.
+        flashBrightness = [:]
+        flashTask = Task { @MainActor in
+            var cursor = 0.0
+            for step in MarkerFlash.steps {
+                do {
+                    try await Task.sleep(for: .seconds(step.relativeTime - cursor))
+                    flashBrightness[kind] = step.brightness
+                    try await Task.sleep(for: .seconds(step.duration))
+                    flashBrightness[kind] = 0
+                    cursor = step.relativeTime + step.duration
+                } catch { return } // cancelled: a newer marker owns the light now
+            }
         }
     }
 }

@@ -10,7 +10,9 @@ import Foundation
 /// later improves every marker already on disk.
 struct StructureMarker: Codable, Sendable, Equatable {
 
-    enum Kind: Sendable, Equatable {
+    // Hashable so the UI can key per-kind state (#63's flash overlays) — synthesized,
+    // no effect on the string wire format below.
+    enum Kind: Sendable, Equatable, Hashable {
         case voice
         case paragraph
         /// Correction (T7 Task 6, locked decision 5 — raw taps are immutable):

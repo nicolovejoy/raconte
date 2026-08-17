@@ -43,6 +43,30 @@ final class NavigationUITests: XCTestCase {
         }
     }
 
+    /// Wait for the post-stop receipt and dismiss it. Local copy, not shared (R6):
+    /// `CaptureUITests.finishReceipt` is behaviorally identical but this class's
+    /// `press`/`waitUntil`/`launchApp` are already local per Task 5's ruling — the four
+    /// classes' helpers are not all byte-identical (`launchApp` diverges on seed env
+    /// vars), so `UITestNavigation.swift` carries only `openPlace`/`openCapture` and each
+    /// class keeps its own local copies of everything else.
+    private func finishReceipt(_ app: XCUIApplication, _ what: String = "recording",
+                               file: StaticString = #filePath, line: UInt = #line) {
+        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+        guard dismiss.waitForExistence(timeout: 30) else {
+            XCTFail("\(what): the post-stop receipt never appeared", file: file, line: line)
+            return
+        }
+        press(dismiss)
+    }
+
+    /// Rows in the capture screen's "Recent" section — see `CaptureUITests.recentRows`
+    /// for why this queries the `NavigationLink`'s own `capture.recentRow` identifier
+    /// rather than anything nested inside it. Local copy, same reasoning as
+    /// `finishReceipt` above.
+    private func recentRows(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.descendants(matching: .any).matching(identifier: "capture.recentRow")
+    }
+
     /// Reveal the sidebar (if collapsed) and tap the first element whose label BEGINS
     /// WITH `prefix`. For journal rows, whose accessibility identifier carries a disk-
     /// generated id the test cannot predict — the row's spoken label ("<name>" or
@@ -292,5 +316,67 @@ final class NavigationUITests: XCTestCase {
         waitUntil(15, "the default journal never showed its one recorded entry") {
             app.descendants(matching: .any).matching(identifier: "library.entryLink").count == 1
         }
+    }
+
+    // MARK: - Design §5: recording survives navigation
+
+    /// The sidebar's live indicator (`CaptureSidebarRow`, T6) is the visibility guarantee
+    /// design §5 promises: "the coordinator already lives in `CaptureScreenModel`, owned
+    /// at the app root; unmounting the capture view must not touch it." Start a recording,
+    /// leave for All Entries, come back — the same recording, still running, elapsed time
+    /// advanced.
+    ///
+    /// TWO deviations from the brief's snippet, both found empirically
+    /// (`app.debugDescription` dumps against a failing run) and both about the iPhone
+    /// (compact-width) collapsed `NavigationSplitView`, not about `CaptureSidebarRow`
+    /// itself:
+    ///
+    /// 1. The brief's snippet checks `live.waitForExistence` immediately after
+    ///    `openPlace(app, "sidebar.allEntries")`, with no reveal step. On iPhone the
+    ///    split view collapses to a STACK — selecting All Entries PUSHES the detail
+    ///    column over the sidebar, which leaves the accessibility tree entirely (a
+    ///    `debugDescription` dump confirmed it: only the "All Entries" nav bar + its
+    ///    content remain, no `sidebar.*` element anywhere). The sidebar is not
+    ///    simultaneously visible with a place's content on this width class; it must be
+    ///    revealed, via the same back-navigation gesture `openPlace`/`openCapture`
+    ///    already use internally. This IS exactly what owner-smoke step 3b (Gate A)
+    ///    describes: "while it is recording, reveal the sidebar again" — the guarantee is
+    ///    "always re-checkable", not "always on screen at once".
+    /// 2. The brief's snippet captures `first = live.label` (format "Recording, M:SS")
+    ///    and, in its iPhone fallback branch, compares it against `capture.elapsed`'s
+    ///    label (format "M:SS" — no "Recording, " prefix, no comma). Those two formats
+    ///    can never be equal, so `!= first` is true on the very first check — the
+    ///    elapsed-advance wait would pass immediately without ever proving elapsed time
+    ///    moved, on the one platform (iPhone) where that branch actually runs. Fixed by
+    ///    reading `capture.elapsed` TWICE (before/after `waitUntil`), the same identifier
+    ///    both times — no cross-element format bridging.
+    func testARecordingSurvivesNavigatingAwayAndComingBack() {
+        let app = launchApp()
+        press(recordButton(app))
+        Thread.sleep(forTimeInterval: 1.5)   // let the phase reach .recording before leaving
+
+        openPlace(app, "sidebar.allEntries")
+
+        // Deviation 1: reveal the sidebar before checking — see doc comment above.
+        revealSidebar(app)
+        let live = app.descendants(matching: .any).matching(identifier: "sidebar.capture.live").firstMatch
+        XCTAssertTrue(live.waitForExistence(timeout: 15),
+                      "a recording is invisible from everywhere but the capture screen")
+        XCTAssertTrue(live.label.hasPrefix("Recording, "),
+                      "the live indicator exists but its label reads \"\(live.label)\", not a recording readout")
+
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
+
+        // Deviation 2: same-identifier before/after comparison — see doc comment above.
+        let elapsedText = app.staticTexts.matching(identifier: "capture.elapsed").firstMatch
+        XCTAssertTrue(elapsedText.waitForExistence(timeout: 10), "no elapsed reading on the capture screen")
+        let beforeWait = elapsedText.label
+        waitUntil(20, "elapsed time did not advance — the coordinator was torn down") {
+            elapsedText.label != beforeWait
+        }
+        press(recordButton(app))     // stop
+        finishReceipt(app)
+        XCTAssertEqual(recentRows(app).count, 1, "the recording did not commit")
     }
 }

@@ -83,6 +83,31 @@ enum SidebarModel {
     }
 }
 
+/// The sidebar's Capture row visibility guarantee (design §5): whether a capture is
+/// live from ANY other place, and how long it's been running. Pure — `SidebarView`/
+/// `SidebarRowView` (nav T6) only render it; `NavigationUITests
+/// .testARecordingSurvivesNavigatingAwayAndComingBack` pins the SwiftUI half this type
+/// cannot express.
+struct CaptureSidebarRow: Equatable, Sendable {
+    var isLive: Bool
+    var elapsedText: String?     // nil when not live
+
+    /// `isLive` is true for exactly `.preparing, .recording, .interrupted, .resuming,
+    /// .stopping` — the same set `CaptureLayoutModel.make` treats as `.capturing`
+    /// (`CaptureLayoutModel.swift:116`). Exhaustive switch over `CaptureState`, no
+    /// `default` — same rule as `CaptureLayoutModel.make` and `MarkerControlsModel.make`:
+    /// a new phase must be classified here explicitly, not fall through silently.
+    static func make(phase: CaptureState, elapsed: TimeInterval) -> CaptureSidebarRow {
+        switch phase {
+        case .preparing, .recording, .interrupted, .resuming, .stopping:
+            return CaptureSidebarRow(isLive: true,
+                                     elapsedText: CaptureCoordinator.formatDuration(elapsed))
+        case .idle, .captured, .finalizing, .complete:
+            return CaptureSidebarRow(isLive: false, elapsedText: nil)
+        }
+    }
+}
+
 enum PlaceRouting {
     static let launchPlace: Place = .capture
 

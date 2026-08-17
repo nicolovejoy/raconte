@@ -13,6 +13,7 @@ import Foundation
 ///       journals.json          journals registry (M3 T1)
 ///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
 ///       trash-pending/<name>/  staged-removal holding pen (#25)
+///       sync/                  sync bookkeeping cache, disposable (M4 T2)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
@@ -30,6 +31,14 @@ enum AppContainer {
     /// still holds `final/recording.m4a`, so being unreachable by that walk is what keeps
     /// the quarantine rule from adopting it forever.
     static let trashPendingDirectoryName = "trash-pending"
+    /// M4: root of the sync engine's on-disk bookkeeping (`SyncBookkeepingStore`) — a
+    /// sibling of `captures/`, never inside it, for the reason this type's header
+    /// already gives: a stray child of `captures/` is walked by `DirectorySnapshot.gather`
+    /// and handed to the recovery planner. Unlike every other sibling here, this whole
+    /// directory is a disposable cache (CKSyncEngine state, per-record system fields, an
+    /// upload dedupe ledger) — losing it costs a resync against CloudKit, never data, so
+    /// its interior layout is owned by `SyncBookkeepingStore`, not spelled out here.
+    static let syncDirectoryName = "sync"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -72,6 +81,10 @@ enum AppContainer {
 
     static func trashPendingURL(containerRoot: URL, name: String) -> URL {
         trashPendingRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
+    }
+
+    static func syncRoot(containerRoot: URL) -> URL {
+        containerRoot.appendingPathComponent(syncDirectoryName, isDirectory: true)
     }
 
     /// The container root inferred from a captures root — the inverse of

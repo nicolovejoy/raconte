@@ -104,6 +104,10 @@ final class CaptureCoordinator {
     /// reached disk, not what was tapped: a failed append is felt as the absence of
     /// the buzz, plus the `lastError` line.
     private(set) var markerCount = 0
+    /// What kind the most recent LANDED marker was (#63) — how the visual confirmation
+    /// knows which button to flash when `markerCount` rises. Same honesty rule as the
+    /// count: follows the append, never the tap, so a failed write flashes nothing.
+    private(set) var lastMarkerKind: StructureMarker.Kind?
     /// Latched when the marker log could not be opened (mirrors
     /// `TranscriptionSession.loggingBroken`). `private(set)` rather than `private`
     /// because the capture screen disables the marker controls off it — a control
@@ -312,6 +316,7 @@ final class CaptureCoordinator {
             // `seq` is stamped by the writer, which resumes numbering from the file.
             try writer.append(StructureMarker(seq: 0, frame: frame, kind: kind, voice: voice))
             if case .voice = kind { currentVoice = voice }
+            lastMarkerKind = kind
             markerCount += 1
         } catch {
             // The recording is NEVER interrupted for a marker (design §7): continuity
@@ -773,6 +778,7 @@ final class CaptureCoordinator {
         currentVoice = nil
         didWriteOpeningVoice = false
         markerCount = 0
+        lastMarkerKind = nil
         activeFormat = nil
         activeCaptureID = nil
         recordingSegmentStart = nil

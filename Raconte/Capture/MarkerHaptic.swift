@@ -48,3 +48,47 @@ enum MarkerHaptic {
              sharpness: sharpness)
     ]
 }
+
+/// The SAME dash-dot, as light instead of touch (#63, owner ruling 2026-08-16: "a little
+/// visual signal that's subtle … i like that with the haptic too. nothing too bold, but
+/// easy to detect"). Macs have no haptic engine the owner uses, so on macOS this is the
+/// whole confirmation; on iOS it plays alongside the buzz — one rhythm, two senses.
+///
+/// Pure values like `MarkerHaptic` above, for the same reason: the pattern is testable
+/// without SwiftUI, and the view layer does no tuning of its own.
+enum MarkerFlash {
+
+    /// One lit interval on the pattern's own relative-time axis: the tapped button's
+    /// surface brightens by `brightness` (a white-overlay opacity) for `duration`.
+    struct Step: Equatable, Sendable {
+        var relativeTime: Double
+        var duration: Double
+        var brightness: Double
+    }
+
+    // Tune here, nowhere else — same convention as `MarkerHaptic`'s constants above.
+    /// The haptic dot is a transient; light needs screen time to exist at all, so the
+    /// visual dot borrows the gap's length — long enough to register, short enough that
+    /// the pair still ends inside the haptic's ≤ 0.25 s budget.
+    static let dotDuration: Double = 0.06
+    /// White-overlay opacities on the near-black capture surface: detectable in
+    /// peripheral vision, deliberately nowhere near a strobe ("nothing too bold").
+    static let dashBrightness: Double = 0.4
+    static let dotBrightness: Double = 0.25
+
+    /// The dash-dot, lit: same beat times as `MarkerHaptic.pattern`, dash brighter and
+    /// longer than the dot — the intensity hierarchy the thumb already knows, shown.
+    static let steps: [Step] = [
+        Step(relativeTime: 0,
+             duration: MarkerHaptic.dashDuration,
+             brightness: dashBrightness),
+        Step(relativeTime: MarkerHaptic.dashDuration + MarkerHaptic.gapDuration,
+             duration: dotDuration,
+             brightness: dotBrightness)
+    ]
+
+    /// When the last step's light goes out — the view's cue to tidy its overlay state.
+    static var totalDuration: Double {
+        steps.map { $0.relativeTime + $0.duration }.max() ?? 0
+    }
+}

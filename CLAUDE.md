@@ -1,5 +1,67 @@
 # CLAUDE.md
 
+## Session 2026-08-17 (laptop — Debug "freeze" root-caused; NAV REDESIGN designed + planned + SDD Tasks 1-5 BUILT on `nav/split-view`, Task 6 in flight; 1310 → 1311 unit + 33 UI on branch)
+
+Owner hit a hard "freeze" opening the Debug screen, then ordered a navigation-paradigm
+rethink; the session ran brainstorm → design → plan → SDD in one sitting. **Resume
+point: the SDD ledger at
+`/Users/nico/src/raconte-nav/.superpowers/sdd/2026-08-17-navigation-redesign-implementation-plan/progress.md`
+— authoritative (pre-flight rulings R1-R6, per-task reviews, deferred minors, issues to
+file). Task 6 was mid-flight at handoff; resume there.** Worktree
+`/Users/nico/src/raconte-nav`, branch `nav/split-view` at `6825f724`, pushed through T5.
+Main carries `0286a4f8` (design) + `a26a4c45` (plan).
+
+- **The Debug "freeze" was never a hang — log-proven.** The Debug sheet has NO dismiss
+  affordance, and macOS refuses ⌘Q while a modal sheet is up ("App termination blocked
+  by modal sheet" ×4 in the unified log; main thread alive throughout). Esc works only
+  via SwiftUI's default sheet cancel action. **The frozen app was `Raconte-latest.app`
+  — the OLD Aug-16 build with NO iCloud entitlement** (it never syncs, silently).
+  Owner deleted it; only `Raconte-m4sync.app` remains on the Desktop. **Never run two
+  Raconte instances** — they share one container; two CKSyncEngines clobber
+  `sync/engine-state.bin`, `journals.json` lost-updates, same DeviceIdentity. Owner
+  ruling saved to memory: laptop .app copies are disposable; **iPhone holds all real
+  data — never touch its app/container.**
+- **Nav redesign owner-approved** (`docs/plans/2026-08-17-navigation-redesign-design.md`):
+  NavigationSplitView on BOTH platforms, sidebar of places (Capture / journal rows /
+  All Entries / Trash / Debug-in-DEBUG), **Capture pre-selected at launch so the phone
+  still opens straight into capture** (verified: collapse preserves pre-selection, no
+  fallback needed). All three view-mount hacks REMOVED not relocated (#62 reconcile →
+  model-to-model observer; idle timer → model seam; **finalize/phase dispatch → 
+  withObservationTracking in CaptureScreenModel** — a third hack the planner found:
+  view-mounted finalize would have silently never encoded a capture finished while
+  browsing). Library door + toolbar button + Debug sheet deleted; Debug is a real
+  place (fixes the modal trap structurally). No global Esc (⌘[ only); ⌘1-4 fixed
+  places; ⌘N root-level.
+- **Plan** (`docs/plans/2026-08-17-navigation-redesign-implementation-plan.md`): 9
+  tasks + Gate A (after T6, owner smoke) + Gate B. **Tasks 1-5 complete**, every task
+  through Sonnet implementer + Opus adversarial review; every review caught real
+  defects: T1 AppRouter.select entirely unpinned; T4 the brief's bound
+  `NavigationStack(path:)` breaks heterogeneous pushes (typed-path contract, settled
+  empirically, binding landed in T5 once RootDestination died); **T5 Critical: the
+  sidebar row you just left was DEAD** (nil-as-no-op selection binding hid the List's
+  system-cleared selection — fixed with honest @State two-way synced), plus journals
+  created/renamed on the capture screen were missing/stale in the sidebar (rescan now
+  triggered). `CaptureView.swift` shed `CaptureScreenModel` into its own file (T2,
+  byte-verified mechanical).
+- 1311 unit + 33 UI green at `6825f724`. Baseline red: only the laptop-local
+  `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` (intermittent).
+  Two pre-existing production AX bugs queued to file as issues at branch finish
+  (journalPicker container-flattening; alert TextField identifier not bridging) —
+  details in the ledger.
+
+**Next steps:**
+1. **Resume the nav SDD loop at the ledger** — Task 6 (live-capture sidebar indicator
+   + recording-survives-navigation pin) was mid-flight; then Gate A (adversarial
+   probes + 5-step owner smoke incl. macOS both-columns eyeball + phone
+   screen-doesn't-sleep check), Tasks 7-9, Gate B, PR.
+2. **M4 sync Gate A owner smoke** (unchanged from prior handoff): 5-step journal sync
+   checklist, phone ↔ `~/Desktop/Raconte-m4sync.app`, ONE instance only. Then m4/sync
+   Tasks 6-12.
+3. At nav-branch finish: file the two AX issues; note `ContentView.swift` will
+   conflict with `m4/sync` at second merge (accepted, design §10).
+4. Backlog unchanged: #63 final smoke, unified-editor design pass (#60/#59),
+   #29/#50/#51/#54/#55/#18/#35/#47/#46/#44.
+
 ## Session 2026-08-16 night → 08-17 (laptop — M4 SYNC: design + plan committed, SDD Tasks 1-5 BUILT on `m4/sync`; 1288 → 1457 tests; Gate A smoke PENDING)
 
 The owner-ordered sync pivot ran: full brainstorm → design → plan → SDD loop in one

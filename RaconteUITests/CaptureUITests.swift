@@ -293,6 +293,53 @@ final class CaptureUITests: XCTestCase {
         }
     }
 
+    // MARK: #62 (owner smoke 2026-08-16) — trashing the receipt's entry retires the receipt
+
+    /// The owner's exact path: record → stop → the receipt appears → Open the entry from
+    /// the receipt → Move to Trash → land back on the capture screen. The receipt must
+    /// not still be standing there naming the entry that is now in the trash.
+    ///
+    /// HONESTY NOTE (stash-probe, 2026-08-16): this test also passes against the
+    /// pre-#62 code in the SIMULATOR, because the Open link's `simultaneousGesture`
+    /// dismiss fires reliably there — the very gesture that evidently did NOT fire on
+    /// the owner's iPhone, which is the only reason #62 was reachable. With the receipt
+    /// standing there is no other route to a trash affordance, so no simulator flow can
+    /// isolate the reconcile path; the discriminating pins are the three
+    /// `reconcileReceipt` unit tests in `CaptureScreenModelTests` (RED-verified against
+    /// a no-op). This test pins the end-to-end repro: it fails only if BOTH mechanisms
+    /// (gesture dismiss and library reconcile) regress at once — which is exactly the
+    /// user-visible bug.
+    func testTrashingTheReceiptsEntryRetiresTheReceipt() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 2)
+        press(record)
+
+        let open = app.descendants(matching: .any)
+            .matching(identifier: "capture.receipt.open").firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 30), "the post-stop receipt never appeared")
+        press(open)
+
+        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        press(trashButton)
+        let confirm = app.buttons["detail.confirmTrash"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
+        press(confirm)
+
+        // Back on the capture screen: the receipt is gone with its entry, and so is
+        // the Recent row (the row half already worked — trashEntry rescans).
+        XCTAssertTrue(record.waitForExistence(timeout: 20), "never landed back on the capture screen")
+        waitUntil(15, "the receipt still names the trashed entry") {
+            app.buttons["capture.receipt.dismiss"].firstMatch.exists == false
+        }
+        waitUntil(15, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+    }
+
     // MARK: owner report 2026-08-03 — Trash → Delete Now must actually erase the entry
 
     /// Record, trash it, then "Delete Now" + confirm from the Trash screen. Asserts the

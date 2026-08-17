@@ -116,6 +116,71 @@ final class CaptureScreenModelTests: XCTestCase {
                       "final m4a missing — live finalize did not complete")
     }
 
+    /// #62: trashing the receipt's entry must retire the receipt. The receipt's own
+    /// "stays until dismissed, never on a timer" ruling stands — but it never considered
+    /// the entry vanishing underneath it, and a receipt naming a trashed entry reads as
+    /// the library having lost a recording.
+    func testReconcileClearsTheReceiptWhenItsEntryIsTrashed() async throws {
+        let model = try await modelWithAFinishedCaptureReceipt()
+        let captureID = try XCTUnwrap(model.receipt?.captureID)
+
+        let trashed = await model.library.trashEntry(captureID)
+        XCTAssertTrue(trashed, "harness failure: trash itself must succeed")
+        model.reconcileReceipt()
+
+        XCTAssertNil(model.receipt, "receipt must not outlive its entry in the library")
+    }
+
+    /// The other direction: reconcile against an intact library is a no-op — the receipt
+    /// keeps its never-on-a-timer guarantee for entries that still exist.
+    func testReconcileKeepsTheReceiptWhileItsEntryExists() async throws {
+        let model = try await modelWithAFinishedCaptureReceipt()
+
+        model.reconcileReceipt()
+
+        XCTAssertNotNil(model.receipt, "reconcile must never clear a receipt whose entry is present")
+    }
+
+    /// #62 adjacent ruling: restoring the entry from the trash does NOT bring the receipt
+    /// back. The clear is a state change, not a live computation over the library — a
+    /// computed "hide while missing" implementation would fail exactly here.
+    func testRestoreDoesNotReviveAReconciledReceipt() async throws {
+        let model = try await modelWithAFinishedCaptureReceipt()
+        let captureID = try XCTUnwrap(model.receipt?.captureID)
+
+        _ = await model.library.trashEntry(captureID)
+        model.reconcileReceipt()
+        XCTAssertNil(model.receipt)
+
+        let restored = await model.library.restoreEntry(captureID)
+        XCTAssertTrue(restored, "harness failure: restore itself must succeed")
+        model.reconcileReceipt()
+
+        XCTAssertNil(model.receipt, "a dismissed-by-trash receipt stays dismissed after restore")
+    }
+
+    /// Shared #62 fixture: run one capture through the real finish path until its
+    /// receipt exists.
+    private func modelWithAFinishedCaptureReceipt() async throws -> CaptureScreenModel {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        let liveCoordinator = model.coordinator
+
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.done()
+        await waitUntil({ liveCoordinator.finalizeQueue.isEmpty == false },
+                        "capture never committed to finalizeQueue")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.receipt != nil }, "receipt never built")
+        return model
+    }
+
     /// Doc test 22 (rapid start/stop cycles): every cycle must land as its own
     /// finalized entry — none merged, none dropped, no stuck non-idle state after.
     ///

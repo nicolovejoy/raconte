@@ -175,7 +175,7 @@ final class CaptureUITests: XCTestCase {
         // have an obvious link to the Library"), so three rows can no longer be counted
         // there — and quietly weakening this to "the newest one exists" would drop the
         // separate-entries property this test is named for.
-        press(app.buttons["capture.libraryDoor"].firstMatch)
+        openPlace(app, "sidebar.allEntries")
         waitUntil(20, "three cycles did not produce three separate entries") {
             self.libraryRows(app).count == 3
         }
@@ -276,11 +276,7 @@ final class CaptureUITests: XCTestCase {
         // Back on the capture screen: the entry is gone from Recent.
         waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
 
-        press(app.buttons["capture.libraryButton"].firstMatch)
-        let trashLink = app.buttons["library.trashLink"].firstMatch
-        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
-        waitUntil(15, "trash count never showed the entry") { trashLink.label.contains("1") }
-        press(trashLink)
+        openPlace(app, "sidebar.trash")
 
         let remaining = app.staticTexts["trash.row.remaining"].firstMatch
         XCTAssertTrue(remaining.waitForExistence(timeout: 15), "trashed entry not listed")
@@ -371,11 +367,7 @@ final class CaptureUITests: XCTestCase {
 
         waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
 
-        press(app.buttons["capture.libraryButton"].firstMatch)
-        let trashLink = app.buttons["library.trashLink"].firstMatch
-        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
-        waitUntil(15, "trash count never showed the entry") { trashLink.label.contains("1") }
-        press(trashLink)
+        openPlace(app, "sidebar.trash")
 
         let remaining = app.staticTexts["trash.row.remaining"].firstMatch
         XCTAssertTrue(remaining.waitForExistence(timeout: 15), "trashed entry not listed")
@@ -392,7 +384,7 @@ final class CaptureUITests: XCTestCase {
                       "Trash not showing empty state after the only entry was deleted")
 
         // Back to the Library: the entry must not have resurrected there either.
-        app.navigationBars.buttons.firstMatch.tap()
+        openPlace(app, "sidebar.allEntries")
         waitUntil(15, "library still shows the permanently-deleted entry") {
             app.staticTexts.matching(identifier: "library.row.duration").count == 0
         }
@@ -406,12 +398,10 @@ final class CaptureUITests: XCTestCase {
         XCTAssertEqual(recentRows(relaunched).count, 0,
                        "permanently-deleted entry reappeared in Recent after relaunch")
 
-        press(relaunched.buttons["capture.libraryButton"].firstMatch)
-        let trashLinkAfter = relaunched.buttons["library.trashLink"].firstMatch
-        if trashLinkAfter.waitForExistence(timeout: 10) {
-            XCTAssertFalse(trashLinkAfter.label.contains("1"),
-                           "trash count shows the permanently-deleted entry after relaunch")
-        }
+        openPlace(relaunched, "sidebar.trash")
+        XCTAssertTrue(relaunched.descendants(matching: .any).matching(identifier: "trash.empty")
+                        .firstMatch.waitForExistence(timeout: 15),
+                      "trash shows the permanently-deleted entry after relaunch")
     }
 
     // MARK: owner report 2026-08-03 — Move to Trash while playback is running (device forensics)
@@ -454,18 +444,12 @@ final class CaptureUITests: XCTestCase {
 
         waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
 
-        press(app.buttons["capture.libraryButton"].firstMatch)
-        let trashLink = app.buttons["library.trashLink"].firstMatch
-        XCTAssertTrue(trashLink.waitForExistence(timeout: 15), "no Trash link in the library")
-        waitUntil(15, "trash count never showed the entry — the Move to Trash write likely "
-                      + "silently failed while playback was running") {
-            trashLink.label.contains("1")
-        }
-        press(trashLink)
+        openPlace(app, "sidebar.trash")
 
         let remaining = app.staticTexts["trash.row.remaining"].firstMatch
         XCTAssertTrue(remaining.waitForExistence(timeout: 15),
-                      "entry not listed in Trash after Move to Trash during playback")
+                      "entry not listed in Trash after Move to Trash during playback — the "
+                      + "write likely silently failed while playback was running")
     }
 
     // MARK: T6 §14 design §8 (flow) — the Two-voices toggle gates the voice switch

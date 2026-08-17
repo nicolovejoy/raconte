@@ -5,9 +5,6 @@ import SwiftUI
 /// chrome (design language: quiet personal journal; polish is Milestone 5).
 struct CaptureView: View {
     let model: CaptureScreenModel
-    #if DEBUG
-    @State private var showDebugMenu = false
-    #endif
 
     private var control: RecordControlModel {
         RecordControlModel.make(phase: model.coordinator.phase,
@@ -97,22 +94,6 @@ struct CaptureView: View {
         } else {
             ScrollView {
                 VStack(spacing: 28) {
-                    // DEBUG-HARNESS-MOUNT — transition-pause menu (T11) for the kill-at-every-transition sweep.
-                    #if DEBUG
-                    HStack {
-                        Spacer()
-                        Button("Debug") { showDebugMenu = true }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .sheet(isPresented: $showDebugMenu) {
-                        // Reset the capture screen's inherited .white foreground —
-                        // it renders invisible on the system sheet background.
-                        NavigationStack { DebugMenuView() }
-                            .foregroundStyle(Color.primary)
-                    }
-                    #endif
-
                     JournalHeaderView(model: model)
                     BackdateField(model: model)
 
@@ -131,10 +112,6 @@ struct CaptureView: View {
 
                     if layout.showsLastEntry {
                         lastEntrySection
-                    }
-
-                    if layout.showsLibraryDoor {
-                        libraryDoor
                     }
 
                     // Not DEBUG-gated: a wireless install is exactly when you can't tell
@@ -297,39 +274,6 @@ struct CaptureView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    /// The way into everything else, at full width and at the foot of the landing area.
-    ///
-    /// Replaces the "See all" link that sat in the Recent header's top-right corner. The
-    /// owner's words: he wants "an obvious link to the Library… not just up in the top
-    /// right like open more recent". A route this central should not be the smallest thing
-    /// on the screen.
-    private var libraryDoor: some View {
-        NavigationLink(value: RootDestination.library) {
-            HStack {
-                // "Library", not "All entries & journals" (owner ruling 2026-08-16): name
-                // the PLACE the door opens — which is what the destination screen calls
-                // itself — rather than describing its contents.
-                Text("Library")
-                    .captureLabel(.libraryDoor)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .captureLabel(.libraryDoorChevron)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
-        }
-        // Combined, with an explicit label: a NavigationLink wrapping an HStack of Text
-        // plus an Image is read out as two elements otherwise. This file has hit that
-        // flattening/splitting pair repeatedly (Task-6 backdate row, the control bar).
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Library")
-        .accessibilityIdentifier("capture.libraryDoor")
     }
 
     /// The post-stop receipt (owner ruling 2026-08-15, capture-landing option B).

@@ -124,6 +124,8 @@ enum PlaceRouting {
 @MainActor @Observable
 final class AppRouter {
     var place: Place = PlaceRouting.launchPlace
+    /// Not yet bound to a `NavigationStack` — nav T4 shipped an unbound detail stack (see
+    /// `ContentView.swift`); bound in T5 once `RootDestination` retires.
     var detailPath: [LibraryDestination] = []
     /// Consumed by T8's ⌘N and T8's root alert.
     var showingNewJournalPrompt = false

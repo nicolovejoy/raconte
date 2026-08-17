@@ -1095,7 +1095,10 @@ struct CaptureView: View {
     private var libraryDoor: some View {
         NavigationLink(value: RootDestination.library) {
             HStack {
-                Text("All entries & journals")
+                // "Library", not "All entries & journals" (owner ruling 2026-08-16): name
+                // the PLACE the door opens — which is what the destination screen calls
+                // itself — rather than describing its contents.
+                Text("Library")
                     .captureLabel(.libraryDoor)
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -1112,7 +1115,7 @@ struct CaptureView: View {
         // plus an Image is read out as two elements otherwise. This file has hit that
         // flattening/splitting pair repeatedly (Task-6 backdate row, the control bar).
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("All entries and journals")
+        .accessibilityLabel("Library")
         .accessibilityIdentifier("capture.libraryDoor")
     }
 

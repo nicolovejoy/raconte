@@ -1,7 +1,4 @@
 import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
 
 /// The Milestone 1 capture screen: recovery banners, elapsed timer + status, mic meter,
 /// the one big round record button, and a recent-recordings list. Dark-first, minimal
@@ -68,41 +65,19 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
-        .onChange(of: model.coordinator.phase) { _, _ in
-            model.handlePhase()
-        }
-        .onChange(of: model.coordinator.finalizeQueue) { _, _ in
-            model.handleFinalizeQueue()
-        }
         // #62: CaptureView is the permanently-mounted NavigationStack root, so this fires
         // even while the library or an entry detail is pushed on top — which is exactly
         // where the trash that invalidates a receipt happens. The rescan those paths run
         // changes `allEntries`, and the model decides whether the receipt's entry is gone.
+        //
+        // The coordinator-phase/finalizeQueue dispatch and the idle-timer hold that used
+        // to live here (view-mounted `.onChange`/`.onAppear`/`.onDisappear`) moved into
+        // `CaptureScreenModel.armCoordinatorObservation()` (nav T2) — a view-lifecycle
+        // hook stopped being a guarantee about anything once this screen can be pushed
+        // off a `NavigationSplitView` selection.
         .onChange(of: model.library.allEntries) { _, _ in
             model.reconcileReceipt()
         }
-        #if os(iOS)
-        // Derived from phase via `CaptureState.keepsDisplayAwake` (pure, unit-tested), not
-        // paired start/stop calls: whatever ends recording (stop, finalize, interruption,
-        // route-loss-without-resume) flips this back through the same onChange, and
-        // `initial: true` covers a screen that mounts already mid-recording (e.g. a
-        // relaunch) or a freshly spawned coordinator swapped in after finalize. `onDisappear`
-        // is the backstop against leaving it stuck true.
-        .onChange(of: model.coordinator.phase, initial: true) { _, phase in
-            UIApplication.shared.isIdleTimerDisabled = phase.keepsDisplayAwake
-        }
-        // `CaptureView` is the NavigationStack root: pushing Library/detail fires ITS
-        // onDisappear (below), and popping back never re-runs the onChange above —
-        // `initial: true` only fires once, at first mount, not on every reappearance.
-        // Without this, navigating away mid-recording and back drops the hold for the
-        // rest of the capture. onDisappear remains the backstop for every other exit.
-        .onAppear {
-            UIApplication.shared.isIdleTimerDisabled = model.coordinator.phase.keepsDisplayAwake
-        }
-        .onDisappear {
-            UIApplication.shared.isIdleTimerDisabled = false
-        }
-        #endif
     }
 
     /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything

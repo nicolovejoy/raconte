@@ -2,7 +2,7 @@ import XCTest
 import AVFAudio
 @testable import Raconte
 
-private final class ModelFakeSession: AudioSessionController, @unchecked Sendable {
+final class ModelFakeSession: AudioSessionController, @unchecked Sendable {
     let events: AsyncStream<SessionEvent>
     private let cont: AsyncStream<SessionEvent>.Continuation
     init() { (events, cont) = AsyncStream<SessionEvent>.makeStream() }
@@ -11,7 +11,7 @@ private final class ModelFakeSession: AudioSessionController, @unchecked Sendabl
     func deactivate() {}
 }
 
-private final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
+final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
     var isRunning = false
     var captureFormatDescriptor: AudioFormatDescriptor? =
         AudioFormatDescriptor(sampleRate: 48000, channels: 1,

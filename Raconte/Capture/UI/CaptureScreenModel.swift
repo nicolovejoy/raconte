@@ -21,6 +21,7 @@ final class CaptureScreenModel {
     private var finishing = false
     /// Tail of the sidecar-write chain — see `enqueueEntryMetadataWrite`.
     private var pendingMetadataWrite: Task<Void, Never>?
+    private let idleTimer: any IdleTimerControlling
 
     /// The just-finished capture's receipt, or nil when there is nothing to acknowledge.
     ///
@@ -146,6 +147,11 @@ final class CaptureScreenModel {
         recovered.filter { !dismissed.contains($0.captureID) }
     }
 
+    /// True while the CURRENT coordinator's phase must hold the display awake
+    /// (`CaptureState.keepsDisplayAwake`, pure and unit-tested). Re-derived off
+    /// `coordinator` on every read, so it is automatically correct across a respawn.
+    var keepsDisplayAwake: Bool { coordinator.phase.keepsDisplayAwake }
+
     init(capturesRoot: URL,
          makeSession: @escaping () -> AudioSessionController,
          makeRecorder: @escaping () -> EngineRecording,
@@ -155,7 +161,9 @@ final class CaptureScreenModel {
          transcription: LiveTranscriptionCoordinator? = nil,
          journalsContainerRoot: URL? = nil,
          journalPreferenceStore: any JournalPreferenceStore = UserDefaultsJournalPreferenceStore(),
-         library: LibraryScreenModel? = nil) {
+         library: LibraryScreenModel? = nil,
+         idleTimer: any IdleTimerControlling = PlatformIdleTimer()) {
+        self.idleTimer = idleTimer
         self.capturesRoot = capturesRoot
         self.transcription = transcription
         self.finalizer = FinalizerWorker(capturesRoot: capturesRoot, encoder: encoder)
@@ -186,6 +194,12 @@ final class CaptureScreenModel {
         }
         self.spawn = spawn
         self.coordinator = spawn()
+        // All stored properties are assigned by this point, so `self` is usable. The
+        // idle-timer call here is the `initial: true` the old view-mounted `.onChange`
+        // carried — an idle model must not hold the display awake, matching a fresh
+        // launch or a freshly respawned coordinator.
+        armCoordinatorObservation()
+        idleTimer.setIdleTimerDisabled(keepsDisplayAwake)
     }
 
     /// Live composition root: platform session controller, real engine recorder, and the
@@ -545,6 +559,38 @@ final class CaptureScreenModel {
     }
 
     // MARK: internals
+
+    /// Everything that used to be an `.onChange` on `CaptureView` — the screen is no
+    /// longer permanently mounted (nav T2: it must keep dispatching even while the owner
+    /// is elsewhere in the app, once `CaptureView` can be pushed off a
+    /// `NavigationSplitView` selection), so a view-lifecycle hook is no longer a
+    /// guarantee about anything.
+    ///
+    /// LEVEL-triggered, not edge-triggered: `withObservationTracking`'s `onChange` fires
+    /// *before* the new value is visible, so the work hops to the next main-actor turn
+    /// and every handler re-reads current state rather than trusting a delivered value.
+    /// Consequence worth stating: changes that land inside the hop window are coalesced,
+    /// never lost, because no handler depends on seeing a particular edge.
+    ///
+    /// Re-arming is mandatory and load-bearing twice over: `withObservationTracking`
+    /// fires at most once per arm, and `finishCurrentCapture` REPLACES `coordinator`
+    /// outright, so the arm must follow the new instance. Reading `coordinator.phase`
+    /// registers a dependency on `self.coordinator` as well as on `phase`, which is what
+    /// makes the swap itself a trigger.
+    private func armCoordinatorObservation() {
+        withObservationTracking {
+            _ = coordinator.phase
+            _ = coordinator.finalizeQueue
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.handlePhase()
+                self.handleFinalizeQueue()
+                self.idleTimer.setIdleTimerDisabled(self.keepsDisplayAwake)
+                self.armCoordinatorObservation()
+            }
+        }
+    }
 
     private func finishCurrentCapture() async {
         guard !finishing else { return }

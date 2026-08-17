@@ -73,6 +73,16 @@ struct SyncTreeScanner {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             var isDirectory: ObjCBool = false
             guard fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                // Non-directory children are ignored, not reported — matches
+                // `DirectorySnapshot.gather`'s existing convention.
+                continue
+            }
+            // A stray directory whose name isn't a well-formed ULID cannot be
+            // represented as `.entry(captureID:)`/`.audio(captureID:)`/etc. at all —
+            // `SyncRecordName` would refuse to parse a record built from it back.
+            // Report it rather than silently minting an unparseable name.
+            guard ULID.isWellFormed(captureID) else {
+                skipped.append(captureID)
                 continue
             }
             artifacts += scanCapture(captureID: captureID, directory: directory, skipped: &skipped)
@@ -81,10 +91,23 @@ struct SyncTreeScanner {
     }
 
     private func scanCapture(captureID: String, directory: URL, skipped: inout [String]) -> [SyncArtifactState] {
+        let fm = FileManager.default
         let manifestURL = SegmentLayout.manifestURL(captureDirectory: directory)
+        guard fm.fileExists(atPath: manifestURL.path) else {
+            // Not yet written — a capture directory created microseconds before its
+            // first manifest write. Ordinary and expected, not a diagnostic failure
+            // (same "absent is not an error" shape as `scanJournals`'s fileExists
+            // pre-check).
+            return []
+        }
         guard let manifestData = try? Data(contentsOf: manifestURL),
               let manifest = try? CaptureCoding.decoder().decode(Manifest.self, from: manifestData)
         else {
+            // Present but unreadable/undecodable — a real diagnostic failure. This is
+            // capture-level (nothing about this capture can be trusted without a
+            // manifest), so it gets the bare captureID: the one skip form that means
+            // "the whole capture is excluded," never confused with a specific missing
+            // artifact below (those are path-qualified).
             skipped.append(captureID)
             return []
         }
@@ -94,15 +117,27 @@ struct SyncTreeScanner {
 
         var artifacts: [SyncArtifactState] = []
 
-        artifacts.append(entryArtifact(captureID: captureID, directory: directory, manifestData: manifestData))
+        if let entry = entryArtifact(captureID: captureID, directory: directory, manifestData: manifestData) {
+            artifacts.append(entry)
+        } else {
+            // `entry.json` exists but could not be read — distinct from "absent"
+            // (EntryMetadataStore.read's own rule: absent = defaults, unreadable
+            // throws). Digesting a read failure as if the file were absent would make
+            // a corrupt sidecar byte-identical to a genuinely unfiled entry and
+            // silently enqueue it. No Entry artifact for this capture; everything
+            // else (audio, transcript, markers) is independent and still scanned.
+            skipped.append("\(captureID)/\(SegmentLayout.entryMetadataFileName)")
+        }
 
         if let audioArtifact = audioArtifact(captureID: captureID, directory: directory) {
             artifacts.append(audioArtifact)
         } else {
             // `final.verifiedAt` is set but the m4a is gone or unreadable — worth
-            // surfacing, same category as an unreadable manifest: something the
-            // manifest claims is sync-ready isn't actually there.
-            skipped.append(captureID)
+            // surfacing, but a DIFFERENT failure than an unreadable manifest, so it
+            // gets its own path-qualified form (matching the revision case below)
+            // rather than reusing the bare-captureID form that means "whole capture
+            // excluded."
+            skipped.append("\(captureID)/final/\(SegmentLayout.finalRecordingName)")
         }
 
         if let liveLog = liveLogArtifact(captureID: captureID, directory: directory) {
@@ -121,19 +156,32 @@ struct SyncTreeScanner {
     /// Digest definition (locked): sha256 of `entry.json` bytes + `manifest.json`
     /// bytes, concatenated in that order. An absent `entry.json` (the common case —
     /// every capture starts without one) contributes zero bytes, matching what "no
-    /// entry.json" already means on disk: `EntryMetadata.defaults`, i.e. `{}`.
-    private func entryArtifact(captureID: String, directory: URL, manifestData: Data) -> SyncArtifactState {
+    /// entry.json" already means on disk: `EntryMetadata.defaults`, i.e. `{}`. An
+    /// entry.json that EXISTS but can't be read returns nil (distinct from absent) —
+    /// the caller reports that as a skip and omits the Entry artifact entirely, never
+    /// silently treating a read failure as "no metadata."
+    private func entryArtifact(captureID: String, directory: URL, manifestData: Data) -> SyncArtifactState? {
+        let fm = FileManager.default
         let entryURL = SegmentLayout.entryMetadataURL(captureDirectory: directory)
-        let entryData = (try? Data(contentsOf: entryURL)) ?? Data()
+        let entryData: Data
+        if fm.fileExists(atPath: entryURL.path) {
+            guard let data = try? Data(contentsOf: entryURL) else { return nil }
+            entryData = data
+        } else {
+            entryData = Data()
+        }
         let source = entryData + manifestData
         return SyncArtifactState(name: .entry(captureID: captureID),
                                   sha256: Self.sha256Hex(source), bytes: source.count)
     }
 
     /// Digest definition (locked): sha256 of the verified final m4a's bytes, verbatim.
+    /// `.mappedIfSafe` avoids fully residentizing a multi-hour recording (can be
+    /// 100+ MB) just to hash it — `SHA256.hash(data:)` streams over the mapped region
+    /// the same way it would over an in-memory buffer, so the digest is unaffected.
     private func audioArtifact(captureID: String, directory: URL) -> SyncArtifactState? {
         let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: directory)
-        guard let data = try? Data(contentsOf: m4aURL) else { return nil }
+        guard let data = try? Data(contentsOf: m4aURL, options: .mappedIfSafe) else { return nil }
         return SyncArtifactState(name: .audio(captureID: captureID), sha256: Self.sha256Hex(data), bytes: data.count)
     }
 
@@ -143,7 +191,7 @@ struct SyncTreeScanner {
     /// never a record over zero bytes standing in for "none".
     private func liveLogArtifact(captureID: String, directory: URL) -> SyncArtifactState? {
         let liveURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
-        guard let data = try? Data(contentsOf: liveURL) else { return nil }
+        guard let data = try? Data(contentsOf: liveURL, options: .mappedIfSafe) else { return nil }
         return SyncArtifactState(name: .liveLog(captureID: captureID), sha256: Self.sha256Hex(data), bytes: data.count)
     }
 
@@ -154,7 +202,7 @@ struct SyncTreeScanner {
     /// beside it in `transcript/` is structurally invisible to this scan.
     private func markerStreamArtifact(captureID: String, directory: URL) -> SyncArtifactState? {
         let markerURL = SegmentLayout.markerLogURL(captureDirectory: directory)
-        guard let data = try? Data(contentsOf: markerURL) else { return nil }
+        guard let data = try? Data(contentsOf: markerURL, options: .mappedIfSafe) else { return nil }
         return SyncArtifactState(name: .markerStream(captureID: captureID, deviceID: deviceID),
                                   sha256: Self.sha256Hex(data), bytes: data.count)
     }
@@ -172,7 +220,7 @@ struct SyncTreeScanner {
         for name in names.sorted() {
             guard let revisionNumber = SegmentLayout.canonicalRevision(fromFileName: name) else { continue }
             let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: directory, revision: revisionNumber)
-            guard let data = try? Data(contentsOf: url),
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
                   let revision = try? CaptureCoding.decoder().decode(TranscriptRevision.self, from: data)
             else {
                 skipped.append("\(captureID)/\(name)")
@@ -195,12 +243,20 @@ struct SyncTreeScanner {
 }
 
 /// A tree scan's result: every sync-eligible artifact found, plus a diagnostic list of
-/// what was skipped and why — a captureID for an unreadable manifest or a missing/
-/// unreadable m4a despite `final.verifiedAt`, `"<captureID>/<fileName>"` for an
-/// unreadable revision file, `AppContainer.journalsFileName` for an unreadable
-/// registry. This is Debug-screen diagnostics (T12), never a decision input to
-/// `SyncPlanner` — a skipped item produces no artifact and is simply absent from
-/// `artifacts`, which is all the planner ever sees.
+/// what was skipped and why. Each string's SHAPE tells you what failed and how badly:
+/// a bare captureID means the manifest itself was unreadable/undecodable — the whole
+/// capture is excluded, nothing about it can be trusted; a captureID naming a stray
+/// `captures/` child that isn't a well-formed ULID (its record name could never parse
+/// back) is reported the same bare way, for the same reason — the whole thing is
+/// unusable. Everything else is path-qualified to name exactly which artifact failed
+/// while the rest of that capture still scanned normally:
+/// `"<captureID>/entry.json"` (entry.json exists but is unreadable — no Entry
+/// artifact), `"<captureID>/final/recording.m4a"` (verified but the file is gone or
+/// unreadable — no AudioAsset artifact), `"<captureID>/<fileName>"` for an unreadable
+/// revision file. `AppContainer.journalsFileName` names an unreadable registry. This is
+/// Debug-screen diagnostics (T12), never a decision input to `SyncPlanner` — a skipped
+/// item produces no artifact and is simply absent from `artifacts`, which is all the
+/// planner ever sees.
 struct SyncScanResult: Equatable, Sendable {
     var artifacts: [SyncArtifactState]
     var skipped: [String]

@@ -6,11 +6,17 @@ import CryptoKit
 /// decisions): a capture syncs only when its manifest reads cleanly AND reports a
 /// verified final m4a, and sits directly under `captures/` (never `trash-pending/`).
 /// Trashed-but-present entries ARE eligible.
+///
+/// Every capture/journal/device id here is a real 26-char Crockford ULID
+/// (`ULID.make()`), never a hand-typed placeholder — `SyncRecordName.init?(rawValue:)`
+/// validates every id component with `ULID.isWellFormed`, so a placeholder the wrong
+/// length or containing an excluded letter (I/L/O/U) would make build and parse sides
+/// silently never meet.
 final class SyncTreeScannerTests: XCTestCase {
 
     private var containerRoot: URL!
     private var capturesRoot: URL { AppContainer.capturesRoot(containerRoot: containerRoot) }
-    private let deviceID = "01DEVICEDEVICEDEVICEDEVIC"
+    private let deviceID = ULID.make()
     private let format = AudioFormatDescriptor(
         sampleRate: 48_000, channels: 1, commonFormat: .pcmFormatFloat32,
         interleaved: false, bytesPerFrame: 4)
@@ -59,6 +65,17 @@ final class SyncTreeScannerTests: XCTestCase {
         let data = try EntryMetadataStore.encode(metadata)
         try data.write(to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(id)))
         return data
+    }
+
+    /// A path that EXISTS at `entry.json`'s location but cannot be read as `Data` — a
+    /// directory sitting where a file should be, same trick `SyncBookkeepingTests`
+    /// uses for its "unreadable, not absent" case. Real corruption (bit rot, a
+    /// permissions error) fails `Data(contentsOf:)` the same way; garbage-but-readable
+    /// bytes would NOT reproduce this, since `Data(contentsOf:)` only cares whether the
+    /// bytes could be read, not whether they're valid JSON.
+    private func writeEntryMetadataAsUnreadableDirectory(id: String) throws {
+        let url = SegmentLayout.entryMetadataURL(captureDirectory: captureDir(id))
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
     @discardableResult
@@ -138,12 +155,12 @@ final class SyncTreeScannerTests: XCTestCase {
 
     // MARK: (a)/(b)/(c)/(d)/(e) eligibility fixture, cardinality >= 2 eligible
 
-    private let idFinalizedOne = "01FINALIZEDONEFINALIZED01"
-    private let idFinalizedTwo = "01FINALIZEDTWOFINALIZED02"
-    private let idInFlight = "01INFLIGHTINFLIGHTINFLI03"
-    private let idTrashedPresent = "01TRASHEDPRESENTTRASHED04"
-    private let idTrashPending = "01TRASHPENDINGTRASHPEND05"
-    private let idBadManifest = "01BADMANIFESTBADMANIFES06"
+    private let idFinalizedOne = ULID.make()
+    private let idFinalizedTwo = ULID.make()
+    private let idInFlight = ULID.make()
+    private let idTrashedPresent = ULID.make()
+    private let idTrashPending = ULID.make()
+    private let idBadManifest = ULID.make()
 
     private func buildEligibilityFixture() throws {
         // (a) finalized, eligible.
@@ -216,18 +233,102 @@ final class SyncTreeScannerTests: XCTestCase {
         XCTAssertFalse(result.skipped.contains(idTrashPending))
     }
 
-    func testUnreadableManifestIsExcludedAndReportedInSkipped() throws {
+    /// IMPORTANT 3 (review): the manifest-unreadable skip must be the bare captureID —
+    /// meaning "the whole capture is excluded" — and nothing else in this suite may
+    /// reuse that exact string for a narrower, single-artifact failure. Checked here by
+    /// asserting the EXACT skip set for this capture is just the one bare entry, not
+    /// also path-qualified forms a less careful implementation might additionally emit.
+    func testUnreadableManifestIsExcludedAndReportedInSkippedAsBareCaptureID() throws {
         try buildEligibilityFixture()
         let result = scanner().scan()
 
         XCTAssertNil(artifact(result, named: .entry(captureID: idBadManifest)))
-        XCTAssertTrue(result.skipped.contains(idBadManifest))
+        XCTAssertNil(artifact(result, named: .audio(captureID: idBadManifest)))
+        let related = result.skipped.filter { $0 == idBadManifest || $0.hasPrefix("\(idBadManifest)/") }
+        XCTAssertEqual(related, [idBadManifest],
+                       "manifest-unreadable is capture-level: exactly the bare id, no path-qualified duplicate")
+    }
+
+    /// IMPORTANT 4 (review): a capture directory that exists but has no manifest.json
+    /// AT ALL yet (created microseconds before the first manifest write) must be
+    /// excluded silently — same "absent is not a failure" shape as an absent
+    /// entry.json or an absent journals.json, distinct from a manifest that exists and
+    /// fails to read/decode.
+    func testCaptureDirectoryWithNoManifestYetIsExcludedSilently() throws {
+        let id = ULID.make()
+        try FileManager.default.createDirectory(at: captureDir(id), withIntermediateDirectories: true)
+        // No manifest.json written — the directory exists (e.g. `mkdir` landed, the
+        // manifest write hasn't yet), nothing else does.
+
+        let result = scanner().scan()
+        XCTAssertNil(artifact(result, named: .entry(captureID: id)))
+        XCTAssertFalse(result.skipped.contains(id),
+                       "a not-yet-written manifest is ordinary, not a diagnostic failure")
+    }
+
+    /// IMPORTANT 2 (review): a `captures/` child whose name isn't a well-formed ULID
+    /// can never be represented as a parseable `SyncRecordName` — it must be reported,
+    /// not silently turned into an unparseable name.
+    func testStrayNonULIDDirectoryUnderCapturesIsSkippedNotScanned() throws {
+        let strayName = "not-a-ulid-at-all"
+        let strayDir = capturesRoot.appendingPathComponent(strayName, isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        // Give it manifest-shaped content so a bug that skipped ULID validation would
+        // otherwise happily scan it as eligible.
+        var m = Manifest(captureID: strayName, createdAt: Date(timeIntervalSince1970: 1_700_000_030),
+                         state: .complete, stateSeq: 1,
+                         stateUpdatedAt: Date(timeIntervalSince1970: 1_700_000_030), format: format)
+        m.final = FinalRef(path: "final/recording.m4a", verifiedAt: Date(timeIntervalSince1970: 1_700_000_030),
+                           durationFrames: 48_000)
+        try CaptureCoding.encoder().encode(m).write(to: strayDir.appendingPathComponent("manifest.json"))
+
+        let result = scanner().scan()
+        XCTAssertTrue(result.skipped.contains(strayName))
+        XCTAssertTrue(result.artifacts.isEmpty)
+    }
+
+    // MARK: CRITICAL 1 (review) — unreadable entry.json must never digest as absent
+
+    func testUnreadableEntryMetadataProducesNoEntryArtifactAndIsSkipped() throws {
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_040))
+        try writeFinalM4A(id)
+        try writeEntryMetadataAsUnreadableDirectory(id: id)
+
+        let result = scanner().scan()
+
+        XCTAssertNil(artifact(result, named: .entry(captureID: id)),
+                     "a read failure must never digest the same as a genuinely absent sidecar")
+        XCTAssertTrue(result.skipped.contains("\(id)/\(SegmentLayout.entryMetadataFileName)"))
+        // Independent artifacts still scan — only the Entry artifact is affected.
+        XCTAssertNotNil(artifact(result, named: .audio(captureID: id)),
+                        "an unreadable entry.json must not take the rest of the capture's scan down with it")
+    }
+
+    func testUnreadableEntryMetadataDigestIsNotByteIdenticalToAnAbsentOne() throws {
+        // The concrete failure mode the Critical finding names: before the fix, a
+        // corrupt entry.json produced an Entry artifact byte-identical to a
+        // no-metadata capture, so it would silently sync as if nothing were wrong.
+        let unreadableID = ULID.make()
+        try writeManifest(unreadableID, verifiedAt: Date(timeIntervalSince1970: 1_700_000_041))
+        try writeFinalM4A(unreadableID)
+        try writeEntryMetadataAsUnreadableDirectory(id: unreadableID)
+
+        let absentID = ULID.make()
+        try writeManifest(absentID, verifiedAt: Date(timeIntervalSince1970: 1_700_000_041))
+        try writeFinalM4A(absentID)
+        // No entry.json at all for this one.
+
+        let result = scanner().scan()
+        XCTAssertNil(artifact(result, named: .entry(captureID: unreadableID)))
+        XCTAssertNotNil(artifact(result, named: .entry(captureID: absentID)),
+                        "the genuinely-absent sidecar still produces a normal Entry artifact")
     }
 
     // MARK: Entry digest
 
     func testEntryDigestIsSha256OfEntryJSONBytesConcatenatedWithManifestBytes() throws {
-        let id = "01ENTRYDIGESTENTRYDIGES07"
+        let id = ULID.make()
         let manifestData = try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_010))
         try writeFinalM4A(id)
         var metadata = EntryMetadata()
@@ -243,7 +344,7 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testEntryDigestWithNoEntryJSONIsJustManifestBytes() throws {
-        let id = "01NOENTRYJSONNOENTRYJS08"
+        let id = ULID.make()
         let manifestData = try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_011))
         try writeFinalM4A(id)
         // No entry.json written at all — the common case.
@@ -258,7 +359,7 @@ final class SyncTreeScannerTests: XCTestCase {
     // MARK: Audio digest
 
     func testAudioDigestIsSha256OfTheM4AFileBytes() throws {
-        let id = "01AUDIODIGESTAUDIODIGE09"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_012))
         let bytes = try writeFinalM4A(id, bytes: Data(repeating: 0x11, count: 64))
 
@@ -269,10 +370,25 @@ final class SyncTreeScannerTests: XCTestCase {
         XCTAssertEqual(audio.bytes, bytes.count)
     }
 
+    func testAudioMissingDespiteVerifiedAtIsSkippedWithPathQualifiedForm() throws {
+        // IMPORTANT 3: distinct skip shape from the manifest-unreadable case — this
+        // capture otherwise scans fine (Entry still produced), only Audio is missing.
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_042))
+        // No final/recording.m4a written at all, despite verifiedAt being set.
+
+        let result = scanner().scan()
+        XCTAssertNil(artifact(result, named: .audio(captureID: id)))
+        XCTAssertNotNil(artifact(result, named: .entry(captureID: id)))
+        XCTAssertTrue(result.skipped.contains("\(id)/final/\(SegmentLayout.finalRecordingName)"))
+        XCTAssertFalse(result.skipped.contains(id),
+                       "must not also emit the bare-id form that means the whole capture is excluded")
+    }
+
     // MARK: LiveLog
 
     func testLiveLogArtifactPresentWhenLiveJSONLExists() throws {
-        let id = "01LIVELOGPRESENTLIVELO10"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_013))
         try writeFinalM4A(id)
         let bytes = try writeLiveLog(id, bytes: Data("committed transcript lines".utf8))
@@ -285,7 +401,7 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testNoLiveLogArtifactWhenTranscriptionNeverRan() throws {
-        let id = "01NOLIVELOGNOLIVELOG011"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_014))
         try writeFinalM4A(id)
         // No transcript/ at all — a degraded capture. Entry + Audio still push;
@@ -300,7 +416,7 @@ final class SyncTreeScannerTests: XCTestCase {
     // MARK: MarkerStream — own only, never foreign
 
     func testMarkerStreamArtifactUsesOwnMarkersFileAndOwnDeviceID() throws {
-        let id = "01MARKEROWNMARKEROWN012"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_015))
         try writeFinalM4A(id)
         let ownBytes = try writeOwnMarkers(id, bytes: Data("own-taps".utf8))
@@ -313,12 +429,12 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testForeignMarkerStreamFileIsNeverScannedForUpload() throws {
-        let id = "01MARKERFOREIGNMARKERF13"
+        let id = ULID.make()
+        let foreignDeviceID = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_016))
         try writeFinalM4A(id)
         let ownBytes = try writeOwnMarkers(id, bytes: Data("own-taps-only".utf8))
-        try writeForeignMarkers(id, foreignDeviceID: "01FOREIGNDEVICEFOREIGN14",
-                                bytes: Data("someone-elses-taps".utf8))
+        try writeForeignMarkers(id, foreignDeviceID: foreignDeviceID, bytes: Data("someone-elses-taps".utf8))
 
         let result = scanner().scan()
         let markerArtifacts = result.artifacts.filter {
@@ -328,11 +444,11 @@ final class SyncTreeScannerTests: XCTestCase {
 
         XCTAssertEqual(markerArtifacts.count, 1, "exactly the own-device stream, nothing from the foreign file")
         XCTAssertEqual(markerArtifacts.first?.sha256, sha256(ownBytes))
-        XCTAssertNil(artifact(result, named: .markerStream(captureID: id, deviceID: "01FOREIGNDEVICEFOREIGN14")))
+        XCTAssertNil(artifact(result, named: .markerStream(captureID: id, deviceID: foreignDeviceID)))
     }
 
     func testNoMarkerStreamArtifactWhenNoMarkersWereEverTapped() throws {
-        let id = "01NOMARKERSNOMARKERS015"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_017))
         try writeFinalM4A(id)
 
@@ -346,7 +462,7 @@ final class SyncTreeScannerTests: XCTestCase {
     // MARK: Revisions — keyed by id, not file number
 
     func testRevisionArtifactKeyedByItsOwnIdNotItsFileNumber() throws {
-        let id = "01REVISIONIDREVISIONID16"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_018))
         try writeFinalM4A(id)
         let revisionID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
@@ -360,11 +476,11 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testTwoRevisionsBothScannedCardinalityCheck() throws {
-        let id = "01TWOREVISIONSTWOREVIS17"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_019))
         try writeFinalM4A(id)
-        let firstID = "01FIRSTREVISIONFIRSTRE18"
-        let secondID = "01SECONDREVISIONSECOND19"
+        let firstID = ULID.make()
+        let secondID = ULID.make()
         try writeCanonicalRevision(id, revisionNumber: 0, revisionFixture(id: firstID, text: "first"))
         try writeCanonicalRevision(id, revisionNumber: 1, revisionFixture(id: secondID, text: "second"))
 
@@ -374,10 +490,10 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testUnreadableRevisionFileIsSkippedButOthersStillScanned() throws {
-        let id = "01BADREVISIONBADREVISI20"
+        let id = ULID.make()
         try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_020))
         try writeFinalM4A(id)
-        let goodID = "01GOODREVISIONGOODREVI21"
+        let goodID = ULID.make()
         try writeCanonicalRevision(id, revisionNumber: 0, revisionFixture(id: goodID))
         try writeRawCanonical(id, revisionNumber: 1, bytes: "not a revision at all")
 
@@ -389,7 +505,7 @@ final class SyncTreeScannerTests: XCTestCase {
     // MARK: Journals
 
     func testJournalArtifactDigestWithNoCoverIsJustTheEncodedJournal() throws {
-        let journal = Journal(id: "01JOURNALNOCOVERJOURN22", name: "1987 Journal",
+        let journal = Journal(id: ULID.make(), name: "1987 Journal",
                               createdAt: Date(timeIntervalSince1970: 1_700_000_021))
         try writeJournals([journal])
 
@@ -402,7 +518,7 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testJournalArtifactDigestChangesWhenCoverChanges() throws {
-        let journal = Journal(id: "01JOURNALCOVERJOURNAL23", name: "Trip to France",
+        let journal = Journal(id: ULID.make(), name: "Trip to France",
                               createdAt: Date(timeIntervalSince1970: 1_700_000_022))
         try writeJournals([journal])
         try writeCover(journalID: journal.id, bytes: Data(repeating: 0x01, count: 8))
@@ -415,7 +531,7 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testJournalArtifactDigestMatchesTheSuffixedCoverDigestFormula() throws {
-        let journal = Journal(id: "01JOURNALFORMULAJOURN24", name: "Formula Check",
+        let journal = Journal(id: ULID.make(), name: "Formula Check",
                               createdAt: Date(timeIntervalSince1970: 1_700_000_023))
         try writeJournals([journal])
         let coverBytes = Data(repeating: 0x42, count: 16)
@@ -432,9 +548,9 @@ final class SyncTreeScannerTests: XCTestCase {
     }
 
     func testMultipleJournalsAllScanned() throws {
-        let journalA = Journal(id: "01JOURNALAJOURNALAJOU25", name: "A",
+        let journalA = Journal(id: ULID.make(), name: "A",
                                createdAt: Date(timeIntervalSince1970: 1_700_000_024))
-        let journalB = Journal(id: "01JOURNALBJOURNALBJOU26", name: "B",
+        let journalB = Journal(id: ULID.make(), name: "B",
                                createdAt: Date(timeIntervalSince1970: 1_700_000_025))
         try writeJournals([journalA, journalB])
 
@@ -462,6 +578,31 @@ final class SyncTreeScannerTests: XCTestCase {
             if case .journal = $0.name { return true }
             return false
         }.isEmpty)
+    }
+
+    // MARK: IMPORTANT 2 (review) — build and parse sides must actually meet
+
+    /// Every name this scanner ever mints must survive its own `rawValue` → parse
+    /// round trip. Runs across the richest fixture in this file (every artifact kind
+    /// at once) so a mismatch in any single case would be caught.
+    func testEveryScannedArtifactNameRoundTripsThroughSyncRecordName() throws {
+        try buildEligibilityFixture()
+
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_050))
+        try writeFinalM4A(id)
+        try writeLiveLog(id)
+        try writeOwnMarkers(id)
+        try writeCanonicalRevision(id, revisionNumber: 0, revisionFixture(id: ULID.make()))
+        try writeJournals([Journal(id: ULID.make(), name: "Round Trip",
+                                   createdAt: Date(timeIntervalSince1970: 1_700_000_051))])
+
+        let result = scanner().scan()
+        XCTAssertFalse(result.artifacts.isEmpty)
+        for scanned in result.artifacts {
+            XCTAssertEqual(SyncRecordName(rawValue: scanned.name.rawValue), scanned.name,
+                           "\(scanned.name.rawValue) failed to round-trip")
+        }
     }
 
     // MARK: sha256Hex formula, testable without a real tree

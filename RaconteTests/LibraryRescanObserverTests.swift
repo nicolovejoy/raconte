@@ -96,6 +96,32 @@ final class LibraryRescanObserverTests: XCTestCase {
                      "the model-to-model rescan hook must clear the receipt with no view mounted")
     }
 
+    // MARK: - Restore-does-not-revive, through the wiring (no explicit call)
+
+    /// #62 adjacent ruling, now pinned on the path production actually uses.
+    /// `CaptureScreenModelTests.testRestoreDoesNotReviveAReconciledReceipt` drives
+    /// `reconcileReceipt()` by an EXPLICIT call — but `reconcileReceipt()` now has
+    /// exactly one production caller, `libraryDidRescan()`, so that test alone
+    /// survives an empty `libraryDidRescan()` body (mutation check 3 already proves
+    /// the same gap for the trash half). This continues the trash scenario through
+    /// `restoreEntry` with NO explicit `reconcileReceipt()` call anywhere: both the
+    /// trash-side clear and the restore-side non-revive must happen purely through
+    /// the new wiring, or this goes red.
+    func testRestoringThroughTheLibraryDoesNotReviveTheReceiptWithNoViewMounted() async throws {
+        let (model, captureID) = try await makeModelWithACommittedReceipt()
+
+        let trashed = await model.library.trashEntry(captureID)   // ends in rescan()
+        XCTAssertTrue(trashed, "harness failure: trash itself must succeed")
+        XCTAssertNil(model.receipt, "harness failure: the wiring must clear it before restore")
+
+        let restored = await model.library.restoreEntry(captureID)   // ends in rescan() too
+        XCTAssertTrue(restored, "harness failure: restore itself must succeed")
+
+        XCTAssertNil(model.receipt,
+                     "a dismissed-by-trash receipt must stay dismissed after restore, through the "
+                     + "wiring, with no explicit reconcileReceipt() call")
+    }
+
     // MARK: - Ordering safety against finishCurrentCapture's own rescan
 
     /// `finishCurrentCapture` does `rescan()` THEN `buildReceipt()` — pins that the new

@@ -200,6 +200,12 @@ final class CaptureScreenModel {
         // launch or a freshly respawned coordinator.
         armCoordinatorObservation()
         idleTimer.setIdleTimerDisabled(keepsDisplayAwake)
+        // Last, deliberately (nav T3, #62): nothing above can trigger a rescan
+        // synchronously during init (that only happens from `bootstrap()`, which the
+        // caller runs after construction returns), so there is no correctness reason
+        // to register earlier — this just keeps the true "last thing init does" reading
+        // honest rather than splitting it across two spots.
+        resolvedLibrary.rescanObserver = self
     }
 
     /// Live composition root: platform session controller, real engine recorder, and the
@@ -796,4 +802,11 @@ final class CaptureScreenModel {
         await finalizer.enqueue(contentsOf: ids)
         _ = await finalizer.drain()
     }
+}
+
+/// #62, nav redesign §5.1: `library`'s rescan notifies straight into `reconcileReceipt()`
+/// — model-to-model, no view required. Registered as `library.rescanObserver` at the end
+/// of `init`; see `reconcileReceipt()`'s own doc comment for what the invariant means.
+extension CaptureScreenModel: LibraryRescanObserver {
+    func libraryDidRescan() { reconcileReceipt() }
 }

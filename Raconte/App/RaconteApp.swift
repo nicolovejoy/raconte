@@ -15,6 +15,13 @@ final class AppServices {
         self.library = library
         self.capture = CaptureScreenModel.liveWithTranscription(library: library)
         self.router = AppRouter()
+        // Invariant 3 (design §8): one `LibraryScreenModel` app-wide. `CaptureScreenModel`
+        // resolves its own `library` internally (accepting an already-built instance or
+        // minting one), so an assert here — not a unit test, which would have to stand up
+        // the live composition root to check it, worse than the bug it guards — is the
+        // same style as `CaptureScreenModel.swift:173`/`:214`.
+        assert(capture.library === library,
+               "AppServices must thread ONE LibraryScreenModel into CaptureScreenModel")
     }
 }
 

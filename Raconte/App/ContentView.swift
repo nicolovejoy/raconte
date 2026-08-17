@@ -26,31 +26,38 @@ struct ContentView: View {
         } detail: {
             // DEVIATION FROM THE BRIEF'S STEP 3 SNIPPET, evidence-based (Step 5 spirit —
             // a second load-bearing platform claim, found while satisfying the first):
-            // `NavigationStack(path: $router.detailPath)` — the brief's literal code —
-            // silently breaks EVERY `NavigationLink(value: RootDestination.library)` push
-            // (both `capture.libraryButton` and `capture.libraryDoor`), even the very
-            // first one, on a freshly launched app. Confirmed by a controlled A/B: with
-            // the binding, `library.trashLink` never appears (2/2 runs, cold simulator,
-            // reliable identifier — not the flaky `app.staticTexts["Library"]` locator,
-            // which gave a false pass by matching `capture.libraryDoor`'s own on-screen
-            // "Library" label); removing only the `path:` binding fixes it (1/1). Binding
-            // `path:` to a homogeneously-typed `[LibraryDestination]` array while ALSO
-            // declaring `.navigationDestination(for: RootDestination.self)` for an
-            // unrelated type does not reliably coexist on this SwiftUI/iOS 26.5 sim,
-            // despite `LibraryDestination`-typed pushes (same type as the array) working
-            // fine through that same binding.
+            // `NavigationStack(path: $router.detailPath)` — the brief's literal code, where
+            // `detailPath: [LibraryDestination]` — silently breaks EVERY
+            // `NavigationLink(value: RootDestination.library)` push (both
+            // `capture.libraryButton` and `capture.libraryDoor`), even the very first one,
+            // on a freshly launched app.
+            //
+            // This is a deterministic contract, not an SDK flake: a typed `path:` binding
+            // has storage only for the type it was declared with, so a push of a DIFFERENT
+            // type (`RootDestination`, which is not `LibraryDestination`) has no slot to
+            // land in and is inert. `LibraryDestination`-typed pushes through that same
+            // binding are fully verified working — confirmed both in this task's own A/B
+            // (with the binding, `library.trashLink` never appears after a
+            // `RootDestination.library` push, 2/2 cold-simulator runs, reliable identifier
+            // — not the flaky `app.staticTexts["Library"]` locator, which gave a false pass
+            // by matching `capture.libraryDoor`'s own on-screen "Library" label; removing
+            // only the `path:` binding fixes the RootDestination push, 1/1) and
+            // independently by the task review, which found `TranscriptEditorUITests`
+            // passing 2/2 through a bound `[LibraryDestination]` path in the very same run
+            // where the `RootDestination` push failed. So: bound path + same-typed pushes
+            // = verified working; only the heterogeneous `RootDestination` push is
+            // impossible, by design of typed paths, not by platform unreliability.
             //
             // Nothing in Task 4 depends on `router.detailPath` driving the real stack —
             // `goBack()`/`canGoBack`/`detailPath` are not called from any view yet (the
             // sidebar stub has one row, so `select()` is never exercised against a second
             // place). Implicit (unbound) `NavigationStack` is exactly what the pre-T4
             // `ContentView` used, so this preserves proven-working behaviour rather than
-            // introducing new risk. Task 5 must re-verify this the moment `detailPath`
-            // needs to drive real pops (SidebarView's place-switching) — once
-            // `RootDestination` retires that task, only `LibraryDestination` remains on
-            // the stack, which this investigation already showed works through a bound
-            // path; if some other heterogeneous type is still needed then, prefer
-            // `navigationDestination(isPresented:)` over mixing another `for:` type.
+            // introducing new risk. Task 5 should be able to bind `path: $router.detailPath`
+            // with full confidence the moment `detailPath` needs to drive real pops
+            // (SidebarView's place-switching): once `RootDestination` retires that task,
+            // only `LibraryDestination` remains on the stack, and that combination is
+            // already proven to work above.
             NavigationStack {
                 detailRoot
                     .navigationDestination(for: LibraryDestination.self) { destination in

@@ -9,11 +9,17 @@ import SwiftUI
 struct ContentView: View {
     @State private var library: LibraryScreenModel
     @State private var model: CaptureScreenModel
+    /// Nil in every build that must not talk to CloudKit — see `SyncCoordinator.live()`,
+    /// which refuses under XCTest (this app is the unit suite's test host) and under the
+    /// UI-test harness. Nothing on screen depends on it: sync is a background concern
+    /// that never blocks or delays capture (M4 design §8).
+    @State private var sync: SyncCoordinator?
 
     init() {
         let library = LibraryScreenModel.live()
         _library = State(initialValue: library)
         _model = State(initialValue: CaptureScreenModel.liveWithTranscription(library: library))
+        _sync = State(initialValue: SyncCoordinator.live())
     }
 
     var body: some View {
@@ -56,6 +62,11 @@ struct ContentView: View {
                     }
                 }
         }
+        // Sync boots once, alongside the UI, and is never awaited by anything the owner
+        // is waiting on. A `.task` on the root rather than `CaptureScreenModel.bootstrap`
+        // on purpose: bootstrap is the recovery path a capture depends on, and sync must
+        // not be able to delay it.
+        .task { await sync?.launch() }
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 560)
         #endif

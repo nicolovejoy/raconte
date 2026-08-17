@@ -30,6 +30,28 @@ struct SyncTreeScanner {
         return SyncScanResult(artifacts: artifacts, skipped: skipped)
     }
 
+    /// The state of ONE artifact, without walking the whole tree.
+    ///
+    /// Exists so the upload ledger can be written with the *same* digest formula the
+    /// reconciliation scan will later compare against. A digest computed any other way
+    /// would never match, and the next launch would re-enqueue a record that is already
+    /// on the server — forever.
+    ///
+    /// Journals only for now; T6+ fill in the capture-side cases as their builders land.
+    /// Nil means "nothing to digest" (absent, unreadable, or not built yet), and the
+    /// caller's rule is to leave the ledger untouched — the safe direction, since a
+    /// missing ledger entry costs one redundant upload while a wrong one costs a lost
+    /// edit.
+    func artifact(for name: SyncRecordName) -> SyncArtifactState? {
+        switch name {
+        case .journal(let id):
+            var skipped: [String] = []
+            return scanJournals(skipped: &skipped).first { $0.name == .journal(id: id) }
+        case .entry, .audio, .revision, .liveLog, .markerStream:
+            return nil
+        }
+    }
+
     // MARK: Journals
 
     private func scanJournals(skipped: inout [String]) -> [SyncArtifactState] {

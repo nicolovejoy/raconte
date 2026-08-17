@@ -15,7 +15,7 @@ import Security
 /// Everything CloudKit is behind `engine`, so this whole type — the only part with
 /// decisions in it — is exercised by `SyncCoordinatorTests` against a fake with zero
 /// server traffic.
-actor SyncCoordinator {
+actor SyncCoordinator: SyncHooks {
     private let bookkeeping: SyncBookkeepingStore
     private let scanner: SyncTreeScanner
     private let engine: any CloudEngineControl
@@ -97,21 +97,42 @@ extension SyncCoordinator {
     /// degradation. It is reachable: any macOS build made with the
     /// `Raconte-nocloud.entitlements` override (the recipe CI uses, and the one a
     /// hurried owner-smoke build might copy) produces exactly such a binary.
-    @MainActor static func live() -> SyncCoordinator? {
+    /// Takes the library's own stores rather than building its own, and that is not
+    /// tidiness: `JournalStore` is an actor precisely because `journals.json` is
+    /// read-modify-written whole, so a second instance over the same file would be a
+    /// second, uncoordinated writer — an ingest and a rename could interleave and lose
+    /// one of them. One store, one queue.
+    @MainActor static func live(library: LibraryScreenModel) -> SyncCoordinator? {
         guard shouldSync(hostedByTestRunner: isHostedByTestRunner,
                          hasCloudKitEntitlement: hasCloudKitEntitlement) else { return nil }
 
         let containerRoot = AppContainer.root()
         let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let scanner = SyncTreeScanner(containerRoot: containerRoot, deviceID: DeviceIdentity.stable())
+        let exchange = SyncRecordExchange(
+            journalStore: library.journalStore,
+            coverStore: library.journalCoverStore,
+            bookkeeping: bookkeeping,
+            scanner: scanner,
+            deviceID: DeviceIdentity.stable(),
+            // Ingest writes straight to the stores, which the screen model has already
+            // read into published state — without this it would keep showing the old
+            // journal names until the next launch.
+            localStoreDidChange: { [weak library] in await library?.rescan() })
         // The engine writes its own state blob, because it is constructed before the
         // coordinator that would otherwise own that write.
-        let engine = CloudKitEngineControl(persistState: { [bookkeeping] data in
+        let engine = CloudKitEngineControl(exchange: exchange, persistState: { [bookkeeping] data in
             try? await bookkeeping.saveEngineState(data)
         })
-        return SyncCoordinator(
-            bookkeeping: bookkeeping,
-            scanner: SyncTreeScanner(containerRoot: containerRoot, deviceID: DeviceIdentity.stable()),
-            engine: engine)
+        let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine)
+        // Wired last, and in this order, because each half needs the other: the stores
+        // notify the coordinator, and the coordinator's exchange writes through the
+        // stores. See `JournalStore.attach(syncHooks:)`.
+        Task { [journalStore = library.journalStore, coverStore = library.journalCoverStore] in
+            await journalStore.attach(syncHooks: coordinator)
+            await coverStore.attach(journalStore: journalStore)
+        }
+        return coordinator
     }
 
     /// The whole gate as a pure function, so the policy is unit-tested even though

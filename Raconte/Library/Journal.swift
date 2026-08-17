@@ -169,6 +169,49 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// M4 T5: stamps `modified["cover"]` and nothing else.
+    ///
+    /// The cover image itself lives outside this registry (`journals/<id>/cover.jpg`, via
+    /// `JournalCoverStore`), but its LWW stamp has to live *in* it — that is the only
+    /// place a per-field stamp map exists, and the stamp is what a receiving device reads
+    /// to decide whether the fetched cover is newer than its own. Routing the stamp
+    /// through this type rather than letting `JournalCoverStore` touch `journals.json`
+    /// keeps the registry single-writer.
+    ///
+    /// Unknown journal throws, like every other mutator here: stamping a cover on a
+    /// journal that does not exist would leave a stamp nothing can ever explain.
+    @discardableResult
+    mutating func stampCover(id: String, now: Date = Date()) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        var modified = journals[index].modified ?? [:]
+        modified["cover"] = now
+        journals[index].modified = modified
+        return journals[index]
+    }
+
+    /// M4 T5: writes a merged journal back **verbatim** — same values, same `modified`
+    /// stamps, no clock read anywhere.
+    ///
+    /// Deliberately not `insert`/`rename`, and that is the whole reason this method
+    /// exists: both of those stamp `modified` with the local clock. A journal arriving
+    /// from another device already carries the stamps that say who wrote what and when,
+    /// and restamping them with "now" would make this device look like the most recent
+    /// writer of a name it merely received — after which a genuinely newer edit on a
+    /// third device could never win. A sync-caused write is not an edit.
+    ///
+    /// Replaces by id when the journal is known, appends when it is not (design §6,
+    /// "journals merged by id"). Insertion order is presentation-only, so appending an
+    /// ingested journal at the end is the same non-decision `insert` already makes.
+    mutating func applySyncMerge(_ journal: Journal) {
+        if let index = journals.firstIndex(where: { $0.id == journal.id }) {
+            journals[index] = journal
+        } else {
+            journals.append(journal)
+        }
+    }
+
     /// Replaces a journal's voice labels wholesale (T7 Mark Voices, issue #56). Mirrors
     /// `rename`'s shape exactly: find-by-id-or-throw, mutate in place, hand back the
     /// stored result. Values are trimmed, and a value that is empty after trimming is

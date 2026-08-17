@@ -93,8 +93,64 @@ enum SyncCloudIdentifiers {
     }
 
     static func recordID(_ name: SyncRecordName) -> CKRecord.ID {
+        recordID(name, zoneID: zoneID)
+    }
+
+    /// Explicit-zone overload: the record builders take a zone rather than reaching for
+    /// the global one, so a test can build records in a throwaway zone and still assert
+    /// the exact `recordName` production would mint.
+    static func recordID(_ name: SyncRecordName, zoneID: CKRecordZone.ID) -> CKRecord.ID {
         CKRecord.ID(recordName: name.rawValue, zoneID: zoneID)
     }
+
+    static func name(of recordID: CKRecord.ID) -> SyncRecordName? {
+        SyncRecordName(rawValue: recordID.recordName)
+    }
+}
+
+/// What a local write chokepoint tells the sync layer (design §3). One method, one
+/// direction, no answer: a store that has just written a file says which record changed
+/// and returns immediately. Nothing on a capture path may ever wait on sync (design §8),
+/// and nothing here gives a store a way to.
+///
+/// Optional at every injection site — `nil` in unit tests, in the UI-test harness, and in
+/// any build where `SyncCoordinator.live()` refused to construct an engine. A store with
+/// no hook behaves exactly as it did before M4.
+protocol SyncHooks: Sendable {
+    func noteLocalChange(_ name: SyncRecordName) async
+}
+
+/// The CloudKit-side seam, and the mirror of `CloudEngineControl`.
+///
+/// `CloudEngineControl` is how the app talks *down* to CloudKit and deliberately carries
+/// no CloudKit types. This is how CloudKit talks *up* to the app, and unavoidably does
+/// carry them — a fetched change IS a `CKRecord`. Keeping the two directions in separate
+/// protocols is what stops `SyncCoordinator` (the launch/enqueue decisions, driven in
+/// tests by `FakeCloudEngine`) from ever having to import CloudKit.
+///
+/// Both conformers are testable without a server: `CKRecord`, `CKRecord.ID` and `CKAsset`
+/// are all constructible offline. Only `CKSyncEngine` needs an account, which is why the
+/// engine sits behind `CloudEngineControl` and this does not.
+protocol CloudRecordExchange: Sendable {
+    /// Build the record to push for `name`, or nil when there is nothing to push (the
+    /// artifact is gone, or its kind is not built yet). Nil is `CKSyncEngine`'s documented
+    /// "drop this one" answer.
+    func recordToPush(for name: SyncRecordName, zoneID: CKRecordZone.ID) async -> CKRecord?
+
+    /// A record arrived from the server — a fetched change, or the server's copy handed
+    /// back on a save conflict. Merges it into local state.
+    func acceptRemote(_ record: CKRecord) async
+
+    /// A record this device pushed actually landed. Archives its system fields (so the
+    /// next push carries the server's change tag) and records the upload digest (so the
+    /// next launch's reconciliation does not re-enqueue it).
+    func noteSaved(_ record: CKRecord) async
+
+    /// Server copies handed back by failed saves. Merges each one and returns the records
+    /// that must be re-enqueued for save — the merged content is produced by the next
+    /// `recordToPush`, which by then reads merged local state plus the freshly archived
+    /// server system fields.
+    func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName]
 }
 
 /// The production `CloudEngineControl`: a thin wrapper around `CKSyncEngine` plus its
@@ -110,6 +166,7 @@ enum SyncCloudIdentifiers {
 actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
     private let containerIdentifier: String
     private let zoneID: CKRecordZone.ID
+    private let exchange: any CloudRecordExchange
     private let persistState: SyncEngineStatePersistence
     private let log: Logger
     private var engine: CKSyncEngine?
@@ -119,10 +176,12 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
 
     init(containerIdentifier: String = SyncCloudIdentifiers.containerIdentifier,
          zoneID: CKRecordZone.ID = SyncCloudIdentifiers.zoneID,
+         exchange: any CloudRecordExchange,
          persistState: @escaping SyncEngineStatePersistence,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
         self.containerIdentifier = containerIdentifier
         self.zoneID = zoneID
+        self.exchange = exchange
         self.persistState = persistState
         self.log = log
     }
@@ -225,24 +284,29 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             // Signing out/in is not an error and never touches `captures/`; the engine
             // itself stops or resumes. Tasks 5+ decide whether anything local reacts.
             log.notice("sync: account change \(String(describing: change.changeType), privacy: .public)")
-        case .fetchedRecordZoneChanges, .fetchedDatabaseChanges:
-            // Ingest is Tasks 5+ (design §6). Skipping a fetched change here is safe:
-            // nothing is written, and the engine will hand it over again after the next
-            // token reset if this device ever needs it.
-            log.debug("sync: fetched changes ignored (ingest not built yet)")
-        case .sentRecordZoneChanges(let sent):
-            // Tasks 5+: this is where the upload ledger is written — a record that
-            // actually landed gets its sha256/bytes recorded via
-            // `SyncBookkeepingStore.recordUpload`, which is what stops the next launch's
-            // reconciliation from re-enqueueing it. Until then nothing lands (the batch
-            // builder below yields no records), so there is nothing to record, and the
-            // only handling here is surfacing failures.
-            for failure in sent.failedRecordSaves {
-                log.error("""
-                    sync: save failed \(failure.record.recordID.recordName, privacy: .public): \
-                    \(failure.error.localizedDescription, privacy: .public)
-                    """)
+        case .fetchedRecordZoneChanges(let fetched):
+            for modification in fetched.modifications {
+                await exchange.acceptRemote(modification.record)
             }
+            if !fetched.deletions.isEmpty {
+                // Task 11 owns delete ingest (design §5 — a sync-in delete must route
+                // through `StagedRemover`, never a raw remove). Ignoring one is safe:
+                // nothing local changes, and journals have no delete at all.
+                log.debug("sync: \(fetched.deletions.count, privacy: .public) deletion(s) ignored (T11)")
+            }
+        case .fetchedDatabaseChanges:
+            // Zone-level changes. Nothing to do while this app has exactly one zone that
+            // it creates itself on every start.
+            break
+        case .sentRecordZoneChanges(let sent):
+            // Where the upload ledger is written: a record that actually landed gets its
+            // sha256/bytes recorded, which is what stops the next launch's reconciliation
+            // from re-enqueueing it, plus its system fields archived so the next push
+            // carries the server's change tag.
+            for record in sent.savedRecords {
+                await exchange.noteSaved(record)
+            }
+            await handleFailedSaves(sent.failedRecordSaves, syncEngine: syncEngine)
         case .sentDatabaseChanges(let sent):
             for failure in sent.failedZoneSaves {
                 log.error("""
@@ -258,6 +322,37 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
     }
 
+    /// A save that came back `.serverRecordChanged` is the push half of design §4's
+    /// per-field LWW. The server's copy is merged into local state through the same ingest
+    /// path a fetched change takes — same rules, one implementation — and the record is
+    /// re-enqueued. The merged CONTENT is not assembled here: the next
+    /// `nextRecordZoneChangeBatch` rebuilds it from the now-merged store plus the freshly
+    /// archived server system fields, so there is exactly one path from local state to a
+    /// pushed record.
+    ///
+    /// Any other failure is logged and dropped. Dropping is safe for the same reason the
+    /// batch builder's nil is: no ledger entry was written, so the next launch's
+    /// reconciliation scan re-enqueues it.
+    private func handleFailedSaves(_ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
+                                   syncEngine: CKSyncEngine) async {
+        var conflicts: [CKRecord] = []
+        for failure in failures {
+            if failure.error.code == .serverRecordChanged, let server = failure.error.serverRecord {
+                conflicts.append(server)
+            } else {
+                log.error("""
+                    sync: save failed \(failure.record.recordID.recordName, privacy: .public): \
+                    \(failure.error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
+        guard !conflicts.isEmpty else { return }
+        let toResave = await exchange.resolvePushConflicts(conflicts)
+        syncEngine.state.add(pendingRecordZoneChanges: toResave.map {
+            .saveRecord(SyncCloudIdentifiers.recordID($0, zoneID: zoneID))
+        })
+    }
+
     func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext,
                                    syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let pending = syncEngine.state.pendingRecordZoneChanges.filter {
@@ -265,16 +360,21 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
         guard !pending.isEmpty else { return nil }
 
-        // Record population is Tasks 5+. Until a builder exists, every pending change
-        // resolves to nil, which is CKSyncEngine's documented "drop this one" answer —
-        // deliberately chosen over returning nil for the whole batch, which would leave
-        // the same unfulfillable changes pending and re-asked forever. Dropping is safe
-        // because the upload ledger is only written after a record actually lands, so
-        // the next launch's reconciliation scan re-enqueues everything dropped here.
+        // A change whose record cannot be built resolves to nil, which is CKSyncEngine's
+        // documented "drop this one" answer — deliberately chosen over returning nil for
+        // the whole batch, which would leave the same unfulfillable changes pending and
+        // re-asked forever. Dropping is safe because the upload ledger is only written
+        // after a record actually lands, so the next launch's reconciliation scan
+        // re-enqueues everything dropped here.
         let log = self.log
+        let exchange = self.exchange
+        let zoneID = self.zoneID
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
-            log.debug("sync: no record builder yet for \(recordID.recordName, privacy: .public)")
-            return nil
+            guard let name = SyncCloudIdentifiers.name(of: recordID) else {
+                log.error("sync: pending change for an unparseable record name — dropped")
+                return nil
+            }
+            return await exchange.recordToPush(for: name, zoneID: zoneID)
         }
     }
 }

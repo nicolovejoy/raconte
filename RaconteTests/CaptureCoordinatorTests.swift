@@ -1130,6 +1130,35 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.done()
     }
 
+    /// M4 T1: the capture-tap path (as opposed to the correction path,
+    /// `MarkerCorrectionsTests`) stamps `at` from the coordinator's own injected clock —
+    /// the same clock `recordingSegmentStart`/`pendingInterruptionEndedAt` already use,
+    /// never a second, uninjectable `Date()` read inside the marker log writer.
+    ///
+    /// Deliberately a FROZEN clock, not an advancing one: `now()` is also read by
+    /// `startRecordingClock`/`tick` on a background 100 ms timer this test doesn't
+    /// control, so an advancing clock's exact values at the moment of each tap would be
+    /// racy. A frozen, recognizably-not-real-time instant still discriminates the thing
+    /// this test exists to catch — the coordinator's OWN clock reaching the marker,
+    /// rather than `MarkerLogWriter`'s uninjected `Date.init` default (which would show
+    /// real "now", nowhere near this fixture's constant).
+    func testMarkerAppendsCarryAtFromTheCoordinatorsInjectedClock() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let fixedNow = Date(timeIntervalSince1970: 1_650_000_000)
+        let coordinator = makeCoordinator(session: session, recorder: recorder, now: { fixedNow })
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        coordinator.markParagraph()
+        recorder.feed(frames: 240)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+
+        let markers = loadMarkers().markers
+        XCTAssertEqual(markers.map(\.at), [fixedNow, fixedNow])
+
+        await coordinator.done()
+    }
+
     /// #63: the visual marker confirmation needs to know WHICH button's marker just
     /// landed, and `markerCount` alone cannot say. Same honesty rule as the haptic:
     /// `lastMarkerKind` reports what reached disk, so it follows the append, not the tap.

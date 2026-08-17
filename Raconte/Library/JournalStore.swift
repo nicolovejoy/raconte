@@ -49,8 +49,13 @@ actor JournalStore {
     @discardableResult
     func create(name: String) throws -> Journal {
         var registry = try load()
-        // `insert` normalizes the name and hands back what it stored.
-        let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: now()))
+        // `insert` normalizes the name and hands back what it stored. One clock read,
+        // reused for both `createdAt` and the M4 T1 `modified["name"]` stamp `insert`
+        // writes — the journal's creation instant and its name's first-write instant
+        // are the same moment.
+        let createdAt = now()
+        let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: createdAt),
+                                          now: createdAt)
         try save(registry)
         return created
     }
@@ -58,7 +63,7 @@ actor JournalStore {
     @discardableResult
     func rename(id: String, to name: String) throws -> Journal {
         var registry = try load()
-        let renamed = try registry.rename(id: id, to: name)
+        let renamed = try registry.rename(id: id, to: name, now: now())
         try save(registry)
         return renamed
     }
@@ -69,7 +74,7 @@ actor JournalStore {
     @discardableResult
     func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
         var registry = try load()
-        let updated = try registry.setVoiceLabels(id: id, labels: labels)
+        let updated = try registry.setVoiceLabels(id: id, labels: labels, now: now())
         try save(registry)
         return updated
     }

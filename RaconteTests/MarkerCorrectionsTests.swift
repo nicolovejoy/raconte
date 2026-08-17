@@ -417,4 +417,42 @@ final class MarkerCorrectionsTests: XCTestCase {
         XCTAssertEqual(loaded.markers.count, 1, "one decodable record after the call")
         XCTAssertEqual(loaded.markers[0].voice, "bn")
     }
+
+    // MARK: - M4 T1: `at` stamping on correction appends
+
+    /// Every `MarkerCorrectionWriter` entry point threads its `now:` through to the
+    /// underlying append — "correction" is the other half of "capture tap AND
+    /// correction" the M4 T1 brief names. One fixed instant, one call each, covering
+    /// all five writer functions.
+    func testEveryCorrectionEntryPointStampsAtFromItsNowParameter() throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000)
+        let spans = [span("one", .inherited, 0, 10_000)]
+
+        try MarkerCorrectionWriter.addOpeningVoice(voice: "bn", captureDirectory: captureDir, now: stamp)
+        try MarkerCorrectionWriter.addBoundary(atSpanIndex: 0, spans: spans,
+                                               captureDirectory: captureDir, now: stamp)
+        try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: 0, spans: spans, voice: "ln",
+                                                    captureDirectory: captureDir, now: stamp)
+        try MarkerCorrectionWriter.correctVoice(frame: 0, voice: "bn",
+                                                captureDirectory: captureDir, now: stamp)
+        try MarkerCorrectionWriter.retract(seq: 0, captureDirectory: captureDir, now: stamp)
+
+        let onDisk = MarkerLogReader.load(captureDirectory: captureDir).markers
+        XCTAssertEqual(onDisk.count, 5)
+        XCTAssertEqual(onDisk.map(\.at), Array(repeating: stamp, count: 5))
+    }
+
+    /// Frozen-clock trap (memory: frozen-clock-two-mints-coin-flip-order): the two
+    /// `now` values here must differ, or a writer bug that ignores its `now:` parameter
+    /// entirely (and stamps off some other, incidentally-identical clock) could pass.
+    func testConsecutiveCorrectionAppendsCarryDistinctAtStampsFromDistinctNowValues() throws {
+        let first = Date(timeIntervalSince1970: 1_650_000_000)
+        let second = Date(timeIntervalSince1970: 1_650_000_050)
+
+        try MarkerCorrectionWriter.addOpeningVoice(voice: "bn", captureDirectory: captureDir, now: first)
+        try MarkerCorrectionWriter.addOpeningVoice(voice: "ln", captureDirectory: captureDir, now: second)
+
+        let onDisk = MarkerLogReader.load(captureDirectory: captureDir).markers
+        XCTAssertEqual(onDisk.map(\.at), [first, second])
+    }
 }

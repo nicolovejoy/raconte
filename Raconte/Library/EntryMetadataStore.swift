@@ -29,9 +29,16 @@ enum EntryMetadataError: Error, Equatable {
 /// so a torn write would lose the whole record.
 actor EntryMetadataStore {
     nonisolated let capturesRoot: URL
+    /// M4 T1: the single clock `update` reads once per call, for both the audit-log
+    /// record's `at` and every `EntryMetadata.modified` stamp that call produces — one
+    /// read, so the log and the sync stamps can never disagree about when an edit
+    /// happened. Matches `JournalStore`'s injected-clock shape (`now`, same name, same
+    /// default), the sibling registry actor.
+    private let now: @Sendable () -> Date
 
-    init(capturesRoot: URL) {
+    init(capturesRoot: URL, now: @escaping @Sendable () -> Date = { Date() }) {
         self.capturesRoot = capturesRoot
+        self.now = now
     }
 
     nonisolated func url(captureID: String) -> URL {
@@ -76,6 +83,12 @@ actor EntryMetadataStore {
     /// before the diff ever runs). Append failure is silent (§7.2 rule 4): this is
     /// diagnostics, and `EntryDegradation` is scan-derived with nowhere to carry a
     /// log-write failure.
+    ///
+    /// M4 T1: the same diff also stamps `EntryMetadata.modified[field]` for every
+    /// changed field, ahead of `write` — so, unlike the log, the stamps are part of the
+    /// durable sidecar itself. A field the mutate closure didn't actually change (its
+    /// before/after values are equal) gets no stamp; a mutation that changes nothing at
+    /// all leaves `modified` untouched entirely.
     @discardableResult
     func update<T>(captureID: String,
                    cause: EntryLogCause = .userEdit,
@@ -89,9 +102,22 @@ actor EntryMetadataStore {
         let before = try read(captureID: captureID)
         var metadata = before
         let result = mutate(&metadata)
+
+        // M4 T1: one clock read, shared by the log record below and every stamp here —
+        // computed from the SAME before/after diff the log already needed, so "what
+        // changed" is never derived two different ways. Stamped into `metadata` before
+        // `write`, so the stamps are part of what actually lands on disk; a field that
+        // didn't change gets no stamp at all (`changes` only lists fields that differ).
+        let stamp = now()
+        let changes = EntryLogRecord.diff(from: before, to: metadata, at: stamp, cause: cause)
+        if !changes.isEmpty {
+            var modified = metadata.modified ?? [:]
+            for change in changes { modified[change.field] = stamp }
+            metadata.modified = modified
+        }
+
         try write(metadata, captureID: captureID)
 
-        let changes = EntryLogRecord.diff(from: before, to: metadata, at: Date(), cause: cause)
         for record in changes {
             do {
                 try EntryLogWriter.append(record, captureDirectory: captureDirectory)

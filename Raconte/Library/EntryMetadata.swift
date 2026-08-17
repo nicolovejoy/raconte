@@ -96,14 +96,28 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// relaunch. No separate preference store, and nothing to keep in sync with the file.
     var multiVoice: Bool
 
+    /// M4 T1: per-field last-writer-wins substrate for CloudKit sync. Keys are exactly
+    /// this type's other field names (`journalID`, `originalDate`, `trashedAt`,
+    /// `detectedDate`, `detectionRan`, `multiVoice`); the value is when that field was
+    /// last written. Stamped exclusively by `EntryMetadataStore.update`, which already
+    /// diffs before/after to write the audit log (`EntryLogRecord.diff`) — the stamp
+    /// reuses that same diff rather than re-deriving "what changed" a second way.
+    ///
+    /// Additive and lenient like `detectedDate`/`multiVoice`: every sidecar on disk
+    /// today predates this field, and a damaged stamp map must not take the journal,
+    /// backdate or trash state down with it. Nothing reads this yet — later M4 tasks are
+    /// what turn it into an actual merge rule.
+    var modified: [String: Date]?
+
     init(journalID: String? = nil, originalDate: PartialDate? = nil, trashedAt: Date? = nil,
          detectedDate: PartialDate? = nil, detectionRan: Bool? = nil,
-         multiVoice: Bool = false) {
+         multiVoice: Bool = false, modified: [String: Date]? = nil) {
         self.journalID = journalID
         self.originalDate = originalDate
         self.trashedAt = trashedAt
         self.detectedDate = detectedDate
         self.multiVoice = multiVoice
+        self.modified = modified
         // Defaults to "ran iff we have a value" for callers that don't think about the
         // flag at all — the only place that constructs the ran-but-valueless state is the
         // decoder itself.
@@ -156,7 +170,7 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     /// field a legacy `originalDate` (an ISO8601 instant) needs alongside it to convert
     /// into a `PartialDate`. New sidecars never write it.
     private enum CodingKeys: String, CodingKey {
-        case journalID, originalDate, trashedAt, detectedDate, detectionRan, multiVoice
+        case journalID, originalDate, trashedAt, detectedDate, detectionRan, multiVoice, modified
         case legacyPrecision = "precision"
     }
 
@@ -201,6 +215,9 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // above does; the outer `?? false` is this field's own "absent ⇒ single-voice".)
         multiVoice = ((try? container.decodeIfPresent(Bool.self, forKey: .multiVoice)) ?? nil)
             ?? false
+        // Additive and lenient, same reasoning as `multiVoice`/`detectedDate` immediately
+        // above: a damaged sync-stamp map must cost only the stamps, never the sidecar.
+        modified = (try? container.decodeIfPresent([String: Date].self, forKey: .modified)) ?? nil
     }
 
     private static func decodeOriginalDate(
@@ -245,6 +262,12 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // encoder's own stated convention that an unfiled, untouched entry is `{}`.
         if multiVoice {
             try container.encode(true, forKey: .multiVoice)
+        }
+        // Only when non-nil AND non-empty: an untouched entry must still encode as
+        // exactly `{}` (the byte-pin every other optional field on this type honours),
+        // and an empty stamp map carries no information a nil one doesn't already.
+        if let modified, !modified.isEmpty {
+            try container.encode(modified, forKey: .modified)
         }
     }
 }

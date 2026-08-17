@@ -19,11 +19,23 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// leniently, unlike `id`/`name`/`createdAt`.
     var voiceLabels: [String: String]
 
-    init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:]) {
+    /// M4 T1: per-field last-writer-wins substrate for CloudKit sync, the same
+    /// convention as `EntryMetadata.modified`. Keys are `"name"`, `"voiceLabels"`,
+    /// `"cover"` — the three journal attributes an owner can actually edit after
+    /// creation (`id`/`createdAt` are immutable, so they need no stamp). `"cover"` is
+    /// declared here ahead of any writer stamping it (the cover image itself lives
+    /// outside this registry, at `journals/<id>/cover.jpg` via `JournalCoverStore`) —
+    /// same "the field lands now so the format doesn't churn later" precedent as
+    /// `EntryMetadata.trashedAt` before M3 T5 shipped trash.
+    var modified: [String: Date]?
+
+    init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
+         modified: [String: Date]? = nil) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.voiceLabels = voiceLabels
+        self.modified = modified
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -44,6 +56,9 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // take the journal's id/name/createdAt down with it. Absent or garbage -> no
         // labels, which is also what every pre-feature journal actually has.
         voiceLabels = ((try? container.decodeIfPresent([String: String].self, forKey: .voiceLabels)) ?? nil) ?? [:]
+        // Additive and lenient, same reasoning as `voiceLabels` immediately above: a
+        // damaged sync-stamp map must cost only the stamps, never the journal's identity.
+        modified = (try? container.decodeIfPresent([String: Date].self, forKey: .modified)) ?? nil
     }
 
     /// Hand-written per the same rule: the synthesized encoder does not know
@@ -60,10 +75,15 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if !voiceLabels.isEmpty {
             try container.encode(voiceLabels, forKey: .voiceLabels)
         }
+        // Only when non-nil AND non-empty, same "an untouched record's bytes don't
+        // change" rule `voiceLabels` follows above.
+        if let modified, !modified.isEmpty {
+            try container.encode(modified, forKey: .modified)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, voiceLabels
+        case id, name, createdAt, voiceLabels, modified
     }
 }
 
@@ -109,24 +129,39 @@ struct JournalRegistry: Codable, Sendable, Equatable {
     ///
     /// Names are *not* required to be unique — two "1987 Journal"s are the user's
     /// business, and an id collision is the only thing that would corrupt filing.
+    ///
+    /// M4 T1: stamps `modified["name"]` — creation is the name's first write, same as
+    /// every later `rename`. `now` defaults to `Date()` (the pure-function convention
+    /// this file's other mutators don't currently need a clock for) so existing callers
+    /// that construct a `Journal` directly and insert it — this type's own tests —
+    /// keep compiling unchanged; `JournalStore.create` passes its injected clock.
     @discardableResult
-    mutating func insert(_ journal: Journal) throws -> Journal {
+    mutating func insert(_ journal: Journal, now: Date = Date()) throws -> Journal {
         guard !Self.normalized(journal.name).isEmpty else { throw JournalError.emptyName }
         guard !contains(id: journal.id) else { throw JournalError.duplicateID(journal.id) }
         var stored = journal
         stored.name = Self.normalized(journal.name)
+        var modified = stored.modified ?? [:]
+        modified["name"] = now
+        stored.modified = modified
         journals.append(stored)
         return stored
     }
 
+    /// M4 T1: stamps `modified["name"]` only — `voiceLabels`' own stamp (`setVoiceLabels`
+    /// below) is untouched, the same per-field cardinality `EntryMetadataStore.update`
+    /// pins for the sidecar.
     @discardableResult
-    mutating func rename(id: String, to name: String) throws -> Journal {
+    mutating func rename(id: String, to name: String, now: Date = Date()) throws -> Journal {
         let trimmed = Self.normalized(name)
         guard !trimmed.isEmpty else { throw JournalError.emptyName }
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
         journals[index].name = trimmed
+        var modified = journals[index].modified ?? [:]
+        modified["name"] = now
+        journals[index].modified = modified
         return journals[index]
     }
 
@@ -139,8 +174,9 @@ struct JournalRegistry: Codable, Sendable, Equatable {
     /// stored result. Values are trimmed, and a value that is empty after trimming is
     /// dropped rather than stored as a blank label — the same "no label configured"
     /// state as never having set one.
+    /// M4 T1: stamps `modified["voiceLabels"]` only — `name`'s own stamp is untouched.
     @discardableResult
-    mutating func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
+    mutating func setVoiceLabels(id: String, labels: [String: String], now: Date = Date()) throws -> Journal {
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
@@ -151,6 +187,9 @@ struct JournalRegistry: Codable, Sendable, Equatable {
             trimmed[voice] = value
         }
         journals[index].voiceLabels = trimmed
+        var modified = journals[index].modified ?? [:]
+        modified["voiceLabels"] = now
+        journals[index].modified = modified
         return journals[index]
     }
 }

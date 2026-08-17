@@ -67,23 +67,28 @@ enum MarkerFlash {
     }
 
     // Tune here, nowhere else — same convention as `MarkerHaptic`'s constants above.
-    /// The haptic dot is a transient; light needs screen time to exist at all, so the
-    /// visual dot borrows the gap's length — long enough to register, short enough that
-    /// the pair still ends inside the haptic's ≤ 0.25 s budget.
-    static let dotDuration: Double = 0.06
+    /// Both blinks are this long. Owner smoke 2026-08-16 on the first cut ("pass, a bit
+    /// too flashy — just a single blink would be fine, or two very short ones"): the
+    /// first blink used to hold the dash's full 0.12 s of light, which reads bolder to
+    /// the eye than the same duration does to the thumb. Two very short winks keep the
+    /// dash-dot identity with the haptic; only the lit time shrank.
+    static let blinkDuration: Double = 0.05
     /// White-overlay opacities on the near-black capture surface: detectable in
     /// peripheral vision, deliberately nowhere near a strobe ("nothing too bold").
-    static let dashBrightness: Double = 0.4
-    static let dotBrightness: Double = 0.25
+    /// Dropped from 0.4/0.25 in the same smoke round.
+    static let dashBrightness: Double = 0.3
+    static let dotBrightness: Double = 0.2
 
-    /// The dash-dot, lit: same beat times as `MarkerHaptic.pattern`, dash brighter and
-    /// longer than the dot — the intensity hierarchy the thumb already knows, shown.
+    /// The dash-dot, lit: the same BEAT TIMES as `MarkerHaptic.pattern` (pinned by test —
+    /// the two senses never disagree about when a marker landed), with the dash's light
+    /// slightly brighter than the dot's — the intensity hierarchy the thumb already
+    /// knows, shown rather than held.
     static let steps: [Step] = [
         Step(relativeTime: 0,
-             duration: MarkerHaptic.dashDuration,
+             duration: blinkDuration,
              brightness: dashBrightness),
         Step(relativeTime: MarkerHaptic.dashDuration + MarkerHaptic.gapDuration,
-             duration: dotDuration,
+             duration: blinkDuration,
              brightness: dotBrightness)
     ]
 

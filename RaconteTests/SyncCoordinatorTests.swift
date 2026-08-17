@@ -187,6 +187,24 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertNil(SyncCoordinator.live())
     }
 
+    /// The gate's whole truth table. Both of its inputs read the running process and so
+    /// cannot be varied inside a test — which is exactly why the decision they feed is
+    /// pure and this can be pinned at all.
+    ///
+    /// The entitlement half is not redundant with the test-runner half: a macOS build
+    /// made with `Raconte-nocloud.entitlements` (CI's recipe, and the tempting
+    /// workaround for the owner-smoke build now that the shipping entitlements need a
+    /// real certificate) is signed WITHOUT the iCloud keys yet runs in no test
+    /// environment at all. `CKContainer(identifier:)` raises an Objective-C exception
+    /// for an identifier the binary does not claim, and Swift cannot catch one — so this
+    /// has to refuse before the engine is ever constructed.
+    func testSyncIsRefusedUnlessBothOutsideATestRunnerAndProperlyEntitled() {
+        XCTAssertTrue(SyncCoordinator.shouldSync(hostedByTestRunner: false, hasCloudKitEntitlement: true))
+        XCTAssertFalse(SyncCoordinator.shouldSync(hostedByTestRunner: true, hasCloudKitEntitlement: true))
+        XCTAssertFalse(SyncCoordinator.shouldSync(hostedByTestRunner: false, hasCloudKitEntitlement: false))
+        XCTAssertFalse(SyncCoordinator.shouldSync(hostedByTestRunner: true, hasCloudKitEntitlement: false))
+    }
+
     // MARK: noteLocalChange
 
     func testNoteLocalChangeEnqueuesExactlyThatRecord() async throws {

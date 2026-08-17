@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import Security
+#endif
 
 /// The app's one sync brain (M4 §3): it decides *what* to sync and *when*, and hands the
 /// result to a `CloudEngineControl` that knows how. An actor because it serializes the
@@ -86,8 +89,17 @@ extension SyncCoordinator {
     /// All three are environment checks rather than `#if DEBUG`, because a Debug build
     /// the owner actually runs *should* sync — the thing to exclude is the test runner,
     /// not the configuration.
+    ///
+    /// And a fourth, which is not about environment at all: **a binary signed without
+    /// the iCloud entitlement never syncs.** `CKContainer(identifier:)` raises an
+    /// Objective-C exception for an identifier the binary does not claim, and an ObjC
+    /// exception cannot be caught in Swift — so that path is a hard crash, not a
+    /// degradation. It is reachable: any macOS build made with the
+    /// `Raconte-nocloud.entitlements` override (the recipe CI uses, and the one a
+    /// hurried owner-smoke build might copy) produces exactly such a binary.
     @MainActor static func live() -> SyncCoordinator? {
-        guard !isHostedByTestRunner else { return nil }
+        guard shouldSync(hostedByTestRunner: isHostedByTestRunner,
+                         hasCloudKitEntitlement: hasCloudKitEntitlement) else { return nil }
 
         let containerRoot = AppContainer.root()
         let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
@@ -102,6 +114,13 @@ extension SyncCoordinator {
             engine: engine)
     }
 
+    /// The whole gate as a pure function, so the policy is unit-tested even though
+    /// neither of its two inputs can be (both read the running process). Repo idiom:
+    /// decisions in a testable core, environment reads in the thin shell.
+    static func shouldSync(hostedByTestRunner: Bool, hasCloudKitEntitlement: Bool) -> Bool {
+        !hostedByTestRunner && hasCloudKitEntitlement
+    }
+
     /// Internal, not private, so `SyncCoordinatorTests` can assert the refusal directly
     /// — it runs inside exactly the environment this is meant to catch.
     static var isHostedByTestRunner: Bool {
@@ -109,5 +128,34 @@ extension SyncCoordinator {
         return environment["XCTestConfigurationFilePath"] != nil
             || environment["RACONTE_UITEST_ID"] != nil
             || environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
+    /// Does the running binary's code signature actually claim the CloudKit container?
+    ///
+    /// **macOS reads it; iOS assumes true, deliberately.** `SecTaskCopyValueForEntitlement`
+    /// is public API on macOS but ships on iOS with no public header — it is SPI there,
+    /// and this app is bound for TestFlight and the App Store, where reaching for that
+    /// symbol is a rejection risk not worth taking for a guard. The exposure the guard
+    /// exists to close is macOS-shaped anyway: the entitlement-stripped build recipe is
+    /// the macOS test/CI one. Every iOS build is signed with a provisioning profile that
+    /// carries the capability, and the iOS simulator case is already covered by the
+    /// `RACONTE_UITEST_ID` check above.
+    ///
+    /// Only the *false* answer is verifiable in this suite (`SyncCoordinatorTests` runs
+    /// in a host built with the override), and even that is not asserted — a developer
+    /// running the suite against a properly signed build would get a true answer and a
+    /// spurious failure. The true answer is device-verifiable only, at Gate A. What IS
+    /// pinned is `shouldSync`, which is where the decision lives.
+    static var hasCloudKitEntitlement: Bool {
+        #if os(macOS)
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let key = "com.apple.developer.icloud-container-identifiers" as CFString
+        guard let value = SecTaskCopyValueForEntitlement(task, key, nil) else { return false }
+        // Present but empty claims nothing — treat it as absent rather than trusting the
+        // key's mere existence.
+        return ((value as? [String]) ?? []).contains(SyncCloudIdentifiers.containerIdentifier)
+        #else
+        return true
+        #endif
     }
 }

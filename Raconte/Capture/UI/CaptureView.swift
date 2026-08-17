@@ -965,8 +965,7 @@ struct CaptureView: View {
     private var errorBanner: some View {
         if let error = model.coordinator.lastError {
             Text(error)
-                .font(.footnote)
-                .foregroundStyle(.red)
+                .captureLabel(.errorBanner)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)

@@ -46,7 +46,7 @@ final class CaptureLabelTests: XCTestCase {
 
     func testEveryControlLabelClearsTheContrastFloor() {
         for label in CaptureLabel.allCases {
-            let ratio = CaptureSurface.contrastOnSurface(white: label.whiteLevel)
+            let ratio = CaptureSurface.contrastOnSurface(label.labelColor)
             XCTAssertGreaterThanOrEqual(
                 ratio, CaptureSurface.minimumControlContrast,
                 "\(label.rawValue): \(String(format: "%.2f", ratio)):1 against the capture "
@@ -91,6 +91,26 @@ final class CaptureLabelTests: XCTestCase {
         XCTAssertEqual(CaptureTextSize.caption.pointSize(on: .macOS), 10)
         XCTAssertEqual(CaptureTextSize.footnote.pointSize(on: .macOS), 10)
         XCTAssertEqual(CaptureTextSize.caption2.pointSize(on: .macOS), 10)
+    }
+
+    /// The error banner is the model's one non-grey (owner ruling 2026-08-16), and this
+    /// pins the "non-" half: the floor test above would happily accept a grey here, and a
+    /// grey error banner stops reading as an error at all. Red must dominate.
+    func testErrorBannerIsActuallyRedNotAGreyThatPassesTheFloor() {
+        let c = CaptureLabel.errorBanner.labelColor
+        XCTAssertGreaterThan(c.red, c.green + 0.2, "error banner has stopped being red")
+        XCTAssertGreaterThan(c.red, c.blue + 0.2, "error banner has stopped being red")
+    }
+
+    /// Same shape as the dim-grey scan below, for the literal the errorBanner case
+    /// replaced: a raw `.red` + `.footnote` banner in CaptureView would satisfy every
+    /// model rule while drawing 10 pt at 5.7:1 on the Mac.
+    func testCaptureViewDoesNotReintroduceTheRawRedErrorBanner() throws {
+        let source = try captureViewSource()
+        XCTAssertFalse(
+            source.contains(".foregroundStyle(.red)"),
+            "CaptureView draws a raw .red label — the error banner must route through "
+            + "CaptureLabel.errorBanner so its size and contrast are checkable")
     }
 
     /// Guards the one assumption every ratio above rests on: that this really is the colour

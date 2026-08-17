@@ -75,6 +75,78 @@ final class NavigationUITests: XCTestCase {
         press(row)
     }
 
+    /// Reveal the bare sidebar WITHOUT selecting anything — the system Back button
+    /// clears the `List`'s own selection to show the places list with nothing pre-picked.
+    /// `openPlace`/`openCapture` always end by tapping a row; this stops one step short,
+    /// so a test can set up "the sidebar is bare, tap something from here" scenarios.
+    private func revealSidebar(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        if app.buttons["sidebar.toggle"].firstMatch.exists {
+            app.buttons["sidebar.toggle"].firstMatch.tap()
+        } else if app.navigationBars.buttons.firstMatch.exists {
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "sidebar.allEntries")
+                        .firstMatch.waitForExistence(timeout: 15),
+                      "the bare sidebar never appeared", file: file, line: line)
+    }
+
+    // MARK: - Re-selection after backing out (task review, Critical 1)
+    //
+    // Round-1 fix (the sidebar's binding setter ignoring `nil` instead of coalescing it
+    // to `.capture`) traded one bug for a worse one. The `List`'s OWN selection is
+    // cleared by the system when Back reveals the bare sidebar, but a naive
+    // `Binding(get: { router.place }, ...)` getter keeps reporting the OLD place — so
+    // re-tapping the SAME row you just left writes a value SwiftUI already believes is
+    // selected, which it silently drops as a no-op. Nothing navigates. These two tests
+    // are the permanent pins for that scenario (nothing before this covered
+    // re-selection at all).
+
+    /// The general case: leave a place, come back to the bare sidebar, tap that SAME
+    /// place again — it must reopen, not silently no-op.
+    func testReselectingThePlaceYouJustLeftReopensIt() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+        openPlace(app, "sidebar.allEntries")
+        XCTAssertTrue(app.navigationBars["All Entries"].firstMatch.waitForExistence(timeout: 15),
+                      "selecting All Entries did not show the library screen")
+
+        revealSidebar(app)
+        let allEntriesRow = app.descendants(matching: .any)
+            .matching(identifier: "sidebar.allEntries").firstMatch
+        XCTAssertTrue(allEntriesRow.waitForExistence(timeout: 15))
+        press(allEntriesRow)
+
+        XCTAssertTrue(app.navigationBars["All Entries"].firstMatch.waitForExistence(timeout: 15),
+                      "re-tapping the place you just left from the bare sidebar did nothing")
+    }
+
+    /// The Capture-specific case, and the one the review called out as user-stranding:
+    /// Capture is the ONE place with no OTHER route back to it once left (every other
+    /// place still has its own row to fall back on; a stuck Capture selection has no
+    /// exit at all).
+    func testTappingCaptureFromTheBareSidebarReturnsToCapture() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+
+        // Straight from Capture — the launch place — to the bare sidebar, with NO
+        // intermediate place change in between. `router.place` never left `.capture`,
+        // so tapping the Capture row writes the exact value a naive binding's getter
+        // already reports as selected — this is what makes Capture uniquely stranded
+        // (every other place still has a DIFFERENT row to fall back on first; going via
+        // one of those and back is not the same defect, since it makes a real value
+        // change along the way — see `testReselectingThePlaceYouJustLeftReopensIt` for
+        // that general case, exercised through All Entries).
+        revealSidebar(app)
+        let captureRow = app.descendants(matching: .any).matching(identifier: "sidebar.capture").firstMatch
+        XCTAssertTrue(captureRow.waitForExistence(timeout: 15))
+        press(captureRow)
+
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15),
+                      "tapping Capture from the bare sidebar did not return to the capture screen")
+    }
+
     // MARK: - The load-bearing platform claim
 
     /// `NavigationSplitView` with a non-nil sidebar selection, collapsed to a stack on

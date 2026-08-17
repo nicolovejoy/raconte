@@ -9,29 +9,35 @@ import SwiftUI
 struct SidebarView: View {
     let services: AppServices
 
+    // DEVIATION FROM THE BRIEF'S STEP 4 SNIPPET, evidence-based (same shape as T4's
+    // documented `NavigationStack(path:)` deviation) — SECOND round, superseding the
+    // first fix.
+    //
+    // Round 1 made the binding's setter ignore `nil` (a no-op on deselection) instead of
+    // coalescing it to `.capture`. That fixed the reveal bug but created a worse one,
+    // caught by task review: the List's OWN internal selection is cleared to nil by the
+    // system on collapse-back (to show the bare sidebar with nothing pre-picked), but a
+    // `Binding(get: { router.place }, ...)` getter keeps reporting the OLD place — so
+    // re-tapping the row you just left writes the SAME value the getter already claims
+    // is selected. SwiftUI drops a same-value `List` selection write as a no-op: no
+    // change fires, nothing navigates. Reproduced: back out to the bare sidebar, tap the
+    // place you just came from — nothing happens. For Capture this strands the user
+    // (no OTHER route back to it once you've left).
+    //
+    // Fix: track the List's own selection as real `@State`, separate from `router.place`.
+    // The getter/setter pair now tells the truth about what the LIST believes is
+    // selected (so nil-then-same-value writes are honoured as real transitions), while
+    // `router.place` — which drives the detail column — is kept in sync in both
+    // directions: tapping a row pushes `router.select(new)`; the router changing from
+    // elsewhere (e.g. `PlaceRouting.resolve` retargeting a deleted journal) pulls
+    // `selection` back into agreement via `.onChange(of: router.place)`.
+    @State private var selection: Place? = PlaceRouting.launchPlace
+
     var body: some View {
         @Bindable var router = services.router
-        List(selection: Binding(get: { router.place },
+        List(selection: Binding(get: { selection },
                                 set: { newPlace in
-            // DEVIATION FROM THE BRIEF'S STEP 4 SNIPPET, evidence-based (same shape as
-            // T4's documented `NavigationStack(path:)` deviation): the brief's literal
-            // `set: { router.select($0 ?? .capture) }` forces a nil selection back to
-            // `.capture` unconditionally. On iPhone, tapping the collapsed split view's
-            // system Back button CLEARS the List's selection to nil to reveal the bare
-            // sidebar (so nothing reads as pre-picked while browsing it) — that is the
-            // moment this fires. Coalescing nil to `.capture` fights that: it
-            // immediately re-selects `.capture`, and since `.capture` is a real place
-            // change whenever the prior place was anything else, the split view
-            // re-collapses straight past the sidebar into the capture detail — the
-            // sidebar is never actually shown. Reproduced directly:
-            // `testTheDebugPlaceIsAScreenNotAModal` (Debug → Back → straight to Capture,
-            // never landing on the bare sidebar) and `testDeleteNowPermanentlyRemovesEntry`
-            // (Trash → Back after a second reveal, same failure) both failed against the
-            // literal snippet, both pass with this fix — confirmed by the accessibility
-            // hierarchy captured at the moment of failure, which showed `capture.record`
-            // on screen where `sidebar.capture` was expected. A `nil` selection is now a
-            // no-op: `router.place` — and the detail column behind the momentarily-bare
-            // sidebar — stays exactly where it was until a row is actually tapped.
+            selection = newPlace
             guard let newPlace else { return }
             router.select(newPlace)
         })) {
@@ -42,10 +48,20 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Raconte")
-        // NO accessibilityIdentifier on the List itself — the container-flattening trap
-        // this repo has hit three times (design §8.4). Putting one here would merge every
-        // row into one accessibility element and make none of the `sidebar.*` identifiers
-        // above independently queryable.
+        // NO accessibilityIdentifier on the List itself — by convention (design §8.4),
+        // matching the flattening hazard already established for `Button`/`NavigationLink`
+        // in this repo (Task-6 backdate row, the control bar, `NavigationLink` rows: an
+        // identifier on the wrapping container merges its children into one accessibility
+        // element). Measured, not assumed, for THIS container type specifically: Task 5's
+        // mutation check 3 put `.accessibilityIdentifier("sidebar.list")` on this exact
+        // `List` and re-ran the full `NavigationUITests` class plus two other
+        // `openPlace`-driven tests — none broke. On this iOS 26 simulator, a `List`'s own
+        // identifier does NOT flatten its rows the way `Button`/`NavigationLink` do; the
+        // convention is kept anyway (no reason to add an identifier nothing here needs),
+        // but the absence is a choice, not evidence of a hazard reproduced for `List`.
+        .onChange(of: router.place) { _, place in
+            selection = place
+        }
     }
 
     private var rows: [PlaceRow] {

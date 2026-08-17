@@ -205,6 +205,15 @@ final class CaptureScreenModel {
         // caller runs after construction returns), so there is no correctness reason
         // to register earlier — this just keeps the true "last thing init does" reading
         // honest rather than splitting it across two spots.
+        //
+        // The slot is single-occupancy: a second `CaptureScreenModel` built over the
+        // SAME `library` (a caller passing an already-observed instance in) would
+        // silently steal the slot and unhook the first model's #62 reconcile with no
+        // test anywhere failing — Debug-only, loud, rather than a silent
+        // last-writer-wins.
+        assert(resolvedLibrary.rescanObserver == nil,
+               "a second CaptureScreenModel has taken over this library's rescanObserver slot; "
+               + "the first model's #62 receipt-reconcile is now silently unhooked")
         resolvedLibrary.rescanObserver = self
     }
 

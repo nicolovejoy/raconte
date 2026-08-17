@@ -192,13 +192,41 @@ enum BuildStamp {
 
     // MARK: async entry point
 
+    /// Test-only observation hook (nav T7 review): true iff the last call to
+    /// `currentBuildDisplayStringAsync()` began executing — i.e. reached the first
+    /// line of the function body, BEFORE its own inner `Task.detached` — on the main
+    /// thread. Written synchronously at function entry, before any `await`, so from a
+    /// caller that is itself off-main (as the test's own `Task.detached` wrapper is)
+    /// this is `false` today because the function carries no actor annotation. If a
+    /// future edit accidentally marks the function `@MainActor`, calling it from that
+    /// same off-main caller forces the compiler to insert an actor hop back onto the
+    /// main thread just to enter the body — flipping this to `true` — even though the
+    /// function's own inner `Task.detached` would still, misleadingly, off-load the
+    /// real I/O. A `Task.detached` wrapper at the CALL SITE alone (the original test)
+    /// cannot observe that hop; it only proves the caller can await off-main, which is
+    /// also true of a `@MainActor` function called with `await`. This hook is what
+    /// makes `testAsyncCallDoesNotRequireTheMainActor` an independent pin rather than
+    /// a duplicate of `testAsyncStringMatchesTheSynchronousOne`'s content check.
+    ///
+    /// `nonisolated(unsafe)`: safe despite being mutable global state because the
+    /// write happens-before the read in every caller — the write is synchronous at
+    /// function entry, and the read only ever happens after the caller's own `await`
+    /// on this function's result has completed, which is a synchronizes-with edge.
+    /// Not a general-purpose mutable global; DEBUG-only file, test-observation only.
+    nonisolated(unsafe) static var lastAsyncEntryWasOnMainThread: Bool?
+
     /// Off-main-actor wrapper for `currentBuildDisplayString()` (nav T7, design §6):
     /// the bundle enumeration and dyld image walk are file I/O, and running them
     /// inline on the main actor stalls the first paint of the Debug screen. Not the
     /// 2026-08-17 freeze — that was a modal sheet blocking ⌘Q, not a hang — fixed on
     /// principle rather than as a root-cause remedy.
     static func currentBuildDisplayStringAsync() async -> String? {
-        await Task.detached(priority: .utility) { currentBuildDisplayString() }.value
+        // `Thread.isMainThread` is `NS_SWIFT_UNAVAILABLE_FROM_ASYNC` (Swift 6 pushes
+        // callers toward `@MainActor` instead); `pthread_main_np()` is the raw POSIX
+        // primitive underneath it and carries no such restriction, so it is the
+        // synchronous, concurrency-checker-legal way to answer the same question here.
+        lastAsyncEntryWasOnMainThread = pthread_main_np() != 0
+        return await Task.detached(priority: .utility) { currentBuildDisplayString() }.value
     }
 }
 #endif

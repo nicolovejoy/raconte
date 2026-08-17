@@ -15,11 +15,20 @@ final class BuildStampAsyncTests: XCTestCase {
     }
 
     func testAsyncCallDoesNotRequireTheMainActor() async {
-        // Runs off the main actor; the point of the change. Compiles-and-passes IS the
-        // assertion here, so it is paired with the mutation check (Step 5 in the task
-        // brief: swap the body for a constant) rather than standing alone.
+        // Runs off the main actor; the point of the change. A `Task.detached` wrapper
+        // at the CALL SITE alone (as this test originally read) only proves the caller
+        // can await off-main — that is equally true of a `@MainActor`-annotated
+        // function called with `await`, so it cannot detect that regression, and its
+        // only actual failing mode (content mismatch) duplicates
+        // `testAsyncStringMatchesTheSynchronousOne`. `lastAsyncEntryWasOnMainThread`
+        // is the real pin: see its doc comment in BuildStamp.swift for why a future
+        // accidental `@MainActor` flips it to `true` from this same off-main caller.
+        BuildStamp.lastAsyncEntryWasOnMainThread = nil
         let value = await Task.detached { await BuildStamp.currentBuildDisplayStringAsync() }.value
         XCTAssertEqual(value, BuildStamp.currentBuildDisplayString())
+        XCTAssertEqual(BuildStamp.lastAsyncEntryWasOnMainThread, false,
+                       "currentBuildDisplayStringAsync entered on the main thread from an "
+                       + "off-main caller — it has become main-actor-isolated")
     }
 }
 #endif

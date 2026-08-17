@@ -298,9 +298,14 @@ final class MultiVoiceCarryOverTests: XCTestCase {
 
         let captureID = try await startRecording(model, recorder)
         let loaded = MarkerLogReader.load(captureDirectory: captureDir(captureID))
-        XCTAssertEqual(loaded.markers,
-                       [StructureMarker(seq: 0, frame: 0, kind: .voice,
-                                        voice: StructureMarker.Voice.bigNico)])
+        // Field-wise, not full-struct equality: `MarkerLogWriter.append` now stamps `at`
+        // from the coordinator's real (unfixed here) clock (M4 T1), so a literal
+        // comparison can never match. `at != nil` is checked separately below.
+        XCTAssertEqual(loaded.markers.map(\.seq), [0])
+        XCTAssertEqual(loaded.markers.map(\.frame), [0])
+        XCTAssertEqual(loaded.markers.map(\.kind), [.voice])
+        XCTAssertEqual(loaded.markers.map(\.voice), [StructureMarker.Voice.bigNico])
+        XCTAssertNotNil(loaded.markers.first?.at, "M4 T1: every append is stamped")
         XCTAssertEqual(model.coordinator.currentVoice, StructureMarker.Voice.bigNico)
         await model.done()
 

@@ -19,11 +19,12 @@ final class JournalStoreTests: XCTestCase {
 
     private var registryURL: URL { AppContainer.journalsURL(containerRoot: containerRoot) }
 
-    private func store(ids: [String] = [], at date: Date = Date(timeIntervalSince1970: 1)) -> JournalStore {
+    private func store(ids: [String] = [], at date: Date = Date(timeIntervalSince1970: 1),
+                       now: (@Sendable () -> Date)? = nil) -> JournalStore {
         let box = IDBox(ids: ids)
         return JournalStore(containerRoot: containerRoot,
                             mintID: { box.next() },
-                            now: { date })
+                            now: now ?? { date })
     }
 
     /// Deterministic id sequence; falls back to a real ULID once exhausted.
@@ -272,5 +273,120 @@ final class JournalStoreTests: XCTestCase {
     private func writeRegistry(_ json: String) throws -> URL {
         try Data(json.utf8).write(to: registryURL)
         return registryURL
+    }
+
+    // MARK: M4 T1 — sync stamps (`modified`)
+
+    /// Advances on every call — same frozen-clock trap this codebase always guards
+    /// against (memory: frozen-clock-two-mints-coin-flip-order): two writes sharing one
+    /// frozen clock could stamp two different keys with the identical instant, letting a
+    /// "the other key's stamp is untouched" assertion pass even if every write re-stamped
+    /// everything.
+    private final class AdvancingClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(start: Date) { self.current = start }
+        func next() -> Date {
+            lock.lock(); defer { lock.unlock() }
+            let value = current
+            current = current.addingTimeInterval(1)
+            return value
+        }
+    }
+
+    func testCreateStampsModifiedName() async throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000)
+        let s = store(ids: ["J1"], now: { stamp })
+        let created = try await s.create(name: "1987 Journal")
+        XCTAssertEqual(created.modified, ["name": stamp])
+    }
+
+    /// Cardinality (mirrors `EntryMetadataStoreTests`' pin for the sidecar): `rename`
+    /// stamps `name` only. A prior `setVoiceLabels` stamp on the SAME journal is left
+    /// exactly as it was.
+    func testRenameStampsNameAndLeavesVoiceLabelsStampUntouched() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let s = store(ids: ["J1"], now: { clock.next() })
+        _ = try await s.create(name: "Untitled")
+        let labelled = try await s.setVoiceLabels(id: "J1", labels: ["bn": "Grandpa"])
+        let voiceLabelsStamp = try XCTUnwrap(labelled.modified?["voiceLabels"])
+        XCTAssertNotNil(labelled.modified?["name"], "create already stamped name")
+
+        let renamed = try await s.rename(id: "J1", to: "1987 Journal")
+        XCTAssertEqual(renamed.modified?["voiceLabels"], voiceLabelsStamp,
+                       "renaming must not touch voiceLabels' own stamp")
+        let nameStampAfterRename = try XCTUnwrap(renamed.modified?["name"])
+        XCTAssertGreaterThan(nameStampAfterRename, voiceLabelsStamp,
+                             "sanity: the clock genuinely advanced")
+
+        // Reaches disk, not just the in-memory return value.
+        let reread = try await JournalStore(containerRoot: containerRoot).list()
+        XCTAssertEqual(reread.first?.modified, renamed.modified)
+    }
+
+    /// The mirror direction: `setVoiceLabels` stamps `voiceLabels` only, leaving a prior
+    /// `rename`'s `name` stamp untouched.
+    func testSetVoiceLabelsStampsVoiceLabelsAndLeavesNameStampUntouched() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let s = store(ids: ["J1"], now: { clock.next() })
+        _ = try await s.create(name: "Untitled")
+        let renamed = try await s.rename(id: "J1", to: "1987 Journal")
+        let nameStamp = try XCTUnwrap(renamed.modified?["name"])
+        XCTAssertNil(renamed.modified?["voiceLabels"], "no labels set yet — no stamp for it")
+
+        let labelled = try await s.setVoiceLabels(id: "J1", labels: ["bn": "Grandpa"])
+        XCTAssertEqual(labelled.modified?["name"], nameStamp,
+                       "setting labels must not touch name's own stamp")
+        XCTAssertNotNil(labelled.modified?["voiceLabels"])
+    }
+
+    /// Byte-pin, the `Journal` counterpart to `EntryMetadata`'s: a journal nobody has
+    /// touched through `create`/`rename`/`setVoiceLabels` (built directly, as every
+    /// pre-M4 registry on disk was) carries no `modified` key at all — extends
+    /// `testDefaultVoiceLabelsAreOmittedFromTheRegistryBytes`' exact pin.
+    func testUntouchedJournalOmitsTheModifiedKeyFromTheRegistryBytes() throws {
+        let registry = JournalRegistry(journals: [
+            Journal(id: "A", name: "1987 Journal", createdAt: Date(timeIntervalSince1970: 0))
+        ])
+        let text = String(decoding: try JournalStore.encode(registry), as: UTF8.self)
+        XCTAssertFalse(text.contains("modified"))
+    }
+
+    func testGarbageModifiedMapDecodesNilWithoutLosingIdentityFields() throws {
+        let registry = try JournalStore.load(url: writeRegistry(
+            #"{"journals":[{"id":"A","name":"N","createdAt":"1970-01-01T00:00:00.000Z","modified":"oops"}]}"#))
+        XCTAssertEqual(registry.journals.first?.modified, nil)
+        XCTAssertEqual(registry.journals.first?.id, "A")
+    }
+
+    /// A minimal stand-in for "a build that predates `modified`" — mirrors
+    /// `EntryMetadataStoreTests.PreM4EntryMetadataShape`.
+    private struct PreM4JournalShape: Decodable {
+        var id: String
+        var name: String
+    }
+
+    /// Forward-compat pin (M4 T1): a journal record a NEWER build wrote (carrying
+    /// `modified`) must still decode on a build that has never heard of the field.
+    func testJournalWithModifiedDecodesInAnOldShapedDecoderIgnoringIt() throws {
+        let json = Data(
+            #"{"id":"A","name":"N","modified":{"name":"2024-01-01T00:00:00.000Z"}}"#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(PreM4JournalShape.self, from: json)
+        XCTAssertEqual(decoded.id, "A")
+        XCTAssertEqual(decoded.name, "N")
+    }
+
+    func testModifiedMapRoundTripsThroughDisk() throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000.5)
+        let registry = JournalRegistry(journals: [
+            Journal(id: "A", name: "N", createdAt: Date(timeIntervalSince1970: 0),
+                   modified: ["name": stamp])
+        ])
+        let data = try JournalStore.encode(registry)
+        let reloaded = try JournalStore.load(url: {
+            try data.write(to: registryURL)
+            return registryURL
+        }())
+        XCTAssertEqual(reloaded.journals.first?.modified, ["name": stamp])
     }
 }

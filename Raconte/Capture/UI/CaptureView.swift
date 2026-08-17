@@ -65,19 +65,6 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
-        // #62: CaptureView is the permanently-mounted NavigationStack root, so this fires
-        // even while the library or an entry detail is pushed on top — which is exactly
-        // where the trash that invalidates a receipt happens. The rescan those paths run
-        // changes `allEntries`, and the model decides whether the receipt's entry is gone.
-        //
-        // The coordinator-phase/finalizeQueue dispatch and the idle-timer hold that used
-        // to live here (view-mounted `.onChange`/`.onAppear`/`.onDisappear`) moved into
-        // `CaptureScreenModel.armCoordinatorObservation()` (nav T2) — a view-lifecycle
-        // hook stopped being a guarantee about anything once this screen can be pushed
-        // off a `NavigationSplitView` selection.
-        .onChange(of: model.library.allEntries) { _, _ in
-            model.reconcileReceipt()
-        }
     }
 
     /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything

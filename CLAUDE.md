@@ -1,5 +1,71 @@
 # CLAUDE.md
 
+## Session 2026-08-17 late night (laptop — m4 amended cover-sync smoke run: NEW UNEXPLAINED BUG, no code found; Gate A still open)
+
+Readup was clean (no drift, CI green, branch correct). Owner ran the amended m4 Gate A
+smoke from the last handoff (cover phone→laptop, rename laptop→phone). Cover step
+surfaced a new, reproducible, UNFILED bug: after setting a "peaches" cover photo on the
+phone (journal "Sync Testing") and letting it sync, `~/Desktop/Raconte-m4sync.app`'s
+capture screen renders that cover photo full-bleed as a background behind the ENTIRE
+setup region (backdate toggle, two-voices, last-entry card, Library door, build stamp),
+nearly illegible. **Survives force-quit + clean relaunch** (not a stale window snapshot —
+`ps aux` showed zero Raconte process before relaunch) and **reflows live when the window
+is resized** (ruling out a cached/stale compositor frame). A stray "Debug" tap also
+reproduced the KNOWN pre-existing modal-sheet freeze (root-caused 2026-08-17, fixed on
+`nav/split-view` but not yet merged to `m4/sync`) — that part is expected, not new.
+
+**Extensive investigation found NO code path that explains the full-bleed image, and
+that conclusion is now solid, not just unfinished:** every usage of a journal's cover
+bytes across the whole app is exactly 3 call sites (`CaptureView.swift:1280` header
+thumbnail at `size: 34`, `LibraryView.swift:185` chip at `size: 30`,
+`JournalCoverPickerSheet.swift:40` preview at fixed `height: 180`), all explicitly
+frame-constrained — `JournalCoverThumbnail` is
+`.resizable().scaledToFill().frame(width:size,height:size).clipShape(...)`, standard and
+correct. `ContentView.swift` (the actual app root, checked for the first time this
+session) has no cover rendering either — just a plain `books.vertical` SF Symbol toolbar
+button. The installed binary's identity was verified against the source:
+`dwarfdump --uuid` on `Raconte-m4sync.app`'s debug dylib gives `4317692D…`, which matches
+exactly what the m4 ledger recorded for the Gate A build at commit `63651ac3` — so the
+running app is provably the reviewed, committed code, not a stale build carrying a
+discarded local experiment. Reflog showed no evidence of one either.
+
+**Owner called out that the reasoning had stopped converging** (accessibility-zoom and
+window-vibrancy theories were both weakly evidenced and not resolving anything) — fair:
+this needed live debugging tooling (Xcode attached to the process, or the macOS
+Accessibility Inspector / view-debugger) that this session didn't have, not more static
+code reading or remote-screenshot guessing. **Nothing was filed as a GitHub issue and no
+code was changed.** Next session should either get live-debug access to the running
+process, or narrow the repro with the owner's hands (does a DIFFERENT journal without a
+cover show the same bleed? does a freshly-created journal with a cover set FROM THE MAC
+— once #68 is worked around some other way — also bleed? is it tied to this SPECIFIC
+peaches photo, e.g. a HEIC/orientation edge case, or does any photo do it?) before
+touching the SwiftUI code again — there's a solid chance the current theory space is
+simply wrong.
+
+**m4 Gate A verdict: still open, and now MORE uncertain, not less.** Bytes clearly moved
+phone→laptop (a cover appeared at all), which is evidence sync itself works, but the
+rendering defect makes it impossible to visually confirm "the cover matches" the way the
+smoke checklist wants. The laptop→phone rename direction was never reached this session.
+
+**Next steps:**
+1. **File the cover full-bleed bug as a GitHub issue** (never filed this session) with
+   the repro (set any journal's cover, open its capture screen on `Raconte-m4sync.app`
+   on macOS) and the negative findings above, so the next session doesn't re-walk the
+   same dead ends.
+2. **Get live debugging on it** — attach Xcode to the running process, or use the
+   Accessibility Inspector / macOS view debugger — rather than more remote-screenshot
+   code reading. Also worth the owner's hands: try a second journal/photo to see if it's
+   cover-content-specific (e.g. this exact HEIC) or universal.
+3. Once diagnosed and fixed (or worked around), re-run the amended m4 Gate A smoke
+   (cover phone→laptop visually confirmed + rename laptop→phone, both from the last two
+   handoffs) before closing Gate A / resuming the m4 SDD loop at Task 6.
+4. PR #64 (nav) merge is still Nico's; m4 worktree carries one pre-existing uncommitted
+   file (`Raconte/Sync/SyncCoordinator.swift` — the fetch-on-launch fix dispatched but
+   never landed per the m4 ledger's "Task 4 fix round 2" note) — not from this session,
+   still needs a decision (commit it or discard and re-dispatch).
+5. Backlog unchanged: #68 (macOS cover picker sheet empty), #65-67 (nav follow-ups), nav
+   Gate B/phone smoke, unified-editor #60/#59, rest of the numbered backlog below.
+
 ## Session 2026-08-17 night (laptop — NAV BRANCH FINISHED: T7-T9 + Gate B + fix wave; PR #64 OPEN; issues #65-67; 1313 → 1319 unit + 35 UI)
 
 Ran the nav SDD loop to completion unattended (Sonnet implementers, Opus adversarial

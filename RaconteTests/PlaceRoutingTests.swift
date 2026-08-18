@@ -46,11 +46,13 @@ final class PlaceRoutingTests: XCTestCase {
                        [])
     }
 
-    func testReselectingTheSamePlaceKeepsTheDetailPath() {
+    func testReselectingTheSamePlacePopsTheDetailPathToRoot() {
         let path: [LibraryDestination] = [.entry("A")]
         XCTAssertEqual(PlaceRouting.detailPath(afterSelecting: .capture, from: .capture, path: path),
-                       path,
-                       "tapping the place you are already in must not throw away where you are")
+                       [],
+                       "re-selecting the place you're already in pops to its root — the universal "
+                       + "sidebar idiom, and what makes ⌘1-4 do something when Capture has a pushed "
+                       + "recent-row or receipt-open entry under it")
     }
 
     func testAJournalPlaceForAMissingJournalFallsBackToCapture() {
@@ -97,14 +99,29 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertEqual(router.detailPath, [])
     }
 
-    func testReselectingTheSamePlaceOnTheRouterKeepsThePath() {
+    // Cardinality ≥ 2: a non-empty path proves the pop actually happens; an
+    // already-empty path proves re-selecting is a true no-op (place unchanged, no
+    // spurious churn) rather than something that only happens to look right when the
+    // path was empty to begin with.
+    func testReselectingTheSamePlaceOnTheRouterPopsToRoot() {
         let router = AppRouter()
         router.place = .capture
         router.detailPath = [.entry("A")]
         router.select(.capture)
         XCTAssertEqual(router.place, .capture)
-        XCTAssertEqual(router.detailPath, [.entry("A")],
-                       "tapping the place you are already in must not throw away where you are")
+        XCTAssertEqual(router.detailPath, [],
+                       "re-selecting the current place must pop to root — on Mac this is what ⌘1-4 "
+                       + "do, and a Capture place with a pushed recent-row/receipt entry under it "
+                       + "must not be a dead click")
+    }
+
+    func testReselectingTheSamePlaceWithAnAlreadyEmptyPathIsANoOp() {
+        let router = AppRouter()
+        router.place = .capture
+        router.detailPath = []
+        router.select(.capture)
+        XCTAssertEqual(router.place, .capture)
+        XCTAssertEqual(router.detailPath, [])
     }
 
     // Table-driven over every fixed (non-journal) row so a single-field typo or a

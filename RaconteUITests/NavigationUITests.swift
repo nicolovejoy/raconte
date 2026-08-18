@@ -88,8 +88,12 @@ final class NavigationUITests: XCTestCase {
             .matching(NSPredicate(format: "label BEGINSWITH %@ AND identifier BEGINSWITH 'sidebar.journal.'",
                                   prefix)).firstMatch
         if !row.waitForExistence(timeout: 3) {
-            if app.buttons["sidebar.toggle"].firstMatch.exists {
-                app.buttons["sidebar.toggle"].firstMatch.tap()
+            // Gate B M1: `sidebar.toggle` is an identifier no production view applies —
+            // that query always failed and fell through to the detail screen's back
+            // button on iPad, silently popping instead of revealing. Fixed the same way
+            // as `UITestNavigation.openPlace`: the real system button, by its label.
+            if app.buttons["Show Sidebar"].firstMatch.exists {
+                app.buttons["Show Sidebar"].firstMatch.tap()
             } else if app.navigationBars.buttons.firstMatch.exists {
                 app.navigationBars.buttons.firstMatch.tap()
             }
@@ -104,8 +108,11 @@ final class NavigationUITests: XCTestCase {
     /// `openPlace`/`openCapture` always end by tapping a row; this stops one step short,
     /// so a test can set up "the sidebar is bare, tap something from here" scenarios.
     private func revealSidebar(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        if app.buttons["sidebar.toggle"].firstMatch.exists {
-            app.buttons["sidebar.toggle"].firstMatch.tap()
+        // Gate B M1: same fix as `openSidebarRow` above — `sidebar.toggle` is dead,
+        // `app.buttons["Show Sidebar"]` is the real system button (label query, empty
+        // identifier). The nav-bar-back fallback stays for iPhone's collapsed stack.
+        if app.buttons["Show Sidebar"].firstMatch.exists {
+            app.buttons["Show Sidebar"].firstMatch.tap()
         } else if app.navigationBars.buttons.firstMatch.exists {
             app.navigationBars.buttons.firstMatch.tap()
         }

@@ -184,3 +184,74 @@ Same harness, reshaped as a screen (`DebugMenuView.swift`):
 - Multi-window Mac (`openWindow`) — the split view must not preclude it.
 - M4 sync Tasks 6–12 (separate branch `m4/sync`; a merge of either branch will
   conflict in `ContentView.swift` — accepted, resolve at second merge).
+
+## 11. As-built (rulings the SDD build made that this design didn't)
+
+Recorded at Task 9, against branch `nav/split-view` @ `9503f0f3`.
+
+- **Journal chips are gone from `LibraryView`, not just re-homed.** The design's §3
+  said journals get sidebar rows; it didn't say the library screen's own filter chips
+  would be deleted outright. They were (Task 5) — the sidebar row IS the filter now,
+  so a second filter control inside the library screen would be a redundant, and
+  potentially disagreeing, second source of "which journal am I looking at."
+- **`LibraryDestination` is trimmed to one case: `.entry(String)`** (`LibraryView.swift:9`).
+  `.trash` is gone (Trash is `Place.trash`, reached directly, never nested under a
+  library push). `RootDestination` is deleted outright, not superseded-in-place —
+  grep confirms it exists nowhere in `Raconte/` except comments explaining its
+  deletion. `library.trashLink` is likewise gone; so are `capture.libraryDoor` and
+  `capture.libraryButton` (the sidebar replaced both, per §3's "what dissolves").
+- **A third hack retirement, beyond §5's two.** `handlePhase()`/`handleFinalizeQueue()`
+  — the dispatch that reacts to the coordinator finishing transcription or queuing a
+  finalize — was itself firing off a view-mounted `.onChange` on the old permanently-
+  mounted `CaptureView`. §5 named only the receipt-reconcile hack and the idle-timer
+  hack; this one surfaced only once `CaptureView` could actually be pushed off screen.
+  Left as designed, a capture finished while the owner was browsing elsewhere would
+  have silently never been encoded — nothing would have been listening. Fixed by
+  moving the dispatch into `CaptureScreenModel` itself via `withObservationTracking`,
+  re-armed after every fire (`CaptureScreenModel.swift:590-619`,
+  `armCoordinatorObservation()`). It is level-triggered, not edge-triggered: the
+  observation's `onChange` fires before the new value is visible, so the actual work
+  hops to the next main-actor turn and re-reads current state rather than trusting a
+  delivered value — changes landing inside that hop window are coalesced, never lost.
+- **The idle-timer hold is not a scene-root `onChange`, as §5.2 sketched — it's the
+  model calling a seam.** `CaptureScreenModel` holds an `any IdleTimerControlling`
+  (`Raconte/Capture/Debug/IdleTimerControl.swift:11`, live impl `PlatformIdleTimer`)
+  and calls `setIdleTimerDisabled` itself, from the same observation described above,
+  whenever `keepsDisplayAwake` changes. No view — root or otherwise — participates.
+  macOS has no idle timer to disable; the live implementation is a no-op there rather
+  than `#if os(iOS)`-gating the call site.
+- **No global Esc; ⌘[ only** (`Raconte/App/RaconteCommands.swift`). A menu-bound
+  keyboard shortcut wins the responder chain unconditionally, so a global Esc would
+  fight `TranscriptEditorView`'s own Esc-closes-and-saves contract every time the
+  editor has focus — the design's §7 flagged this risk; the as-built answer is to
+  never bind Esc at the menu level at all, full stop, rather than trying to make the
+  menu command lose gracefully. ⌘1–⌘4 select `.capture`/`.allEntries`/`.trash`/`.debug`
+  only; journals get no digit shortcuts (there can be arbitrarily many). ⌘4/Debug is
+  wrapped in `#if DEBUG` to match the sidebar row's own `#if DEBUG` gate — a shortcut
+  reaching a place with no sidebar row in Release would be a way to reach a screen
+  that doesn't exist there.
+- **⌘N presents a root-level alert**, not `JournalHeaderView`'s own new-journal alert —
+  that one is reachable only from the capture screen's own menu, which a Mac menu
+  command must not require. `AppRouter.requestNewJournal()` sets
+  `showingNewJournalPrompt`, observed by an `.alert` on `ContentView` itself
+  (`Raconte/App/ContentView.swift:75`, `Raconte/App/Place.swift:158,176`). The two
+  alerts are independent state — `JournalHeaderView`'s own New Journal menu item and
+  alert are untouched — so nothing double-presents.
+  **A side effect worth recording as intended, not accidental:** `RaconteCommands`
+  installs its New Journal button via `CommandGroup(replacing: .newItem)`, which
+  replaces the platform's default File ▸ New Window item rather than adding beside it.
+  Raconte has one window; a New Window command that did nothing useful is gone.
+- **Task 4's structural fallback was not needed.** The design worried (§4, §7) that
+  the collapsed iPhone split view might land on the sidebar rather than the
+  pre-selected detail column, and planned three fallback strategies. None fired: the
+  phone's collapse-to-stack lands directly on the Capture detail column on the first
+  attempt and on every cold-simulator re-run since — a bound, pre-set `selection` on
+  the sidebar `List` is sufficient by itself (confirmed by mutation: removing the
+  `selection:` binding entirely is what breaks it, not `launchPlace`'s value or
+  `columnVisibility`'s initial state). The phone's actual IA is exactly what §2
+  promised: instant-on into capture, back chevron reveals the places list.
+- **macOS window `minWidth` moved 420 → 720** (`ContentView.swift:52`, one
+  `.frame(minWidth:minHeight:)` on the whole `NavigationSplitView`). 420 was sized for
+  a single capture surface; a real two-column split view — sidebar plus a Mail-style
+  entry list/detail — needs materially more room to avoid the columns fighting each
+  other for space.

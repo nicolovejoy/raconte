@@ -2,7 +2,7 @@ import XCTest
 import AVFAudio
 @testable import Raconte
 
-private final class ModelFakeSession: AudioSessionController, @unchecked Sendable {
+final class ModelFakeSession: AudioSessionController, @unchecked Sendable {
     let events: AsyncStream<SessionEvent>
     private let cont: AsyncStream<SessionEvent>.Continuation
     init() { (events, cont) = AsyncStream<SessionEvent>.makeStream() }
@@ -11,7 +11,7 @@ private final class ModelFakeSession: AudioSessionController, @unchecked Sendabl
     func deactivate() {}
 }
 
-private final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
+final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
     var isRunning = false
     var captureFormatDescriptor: AudioFormatDescriptor? =
         AudioFormatDescriptor(sampleRate: 48000, channels: 1,
@@ -402,5 +402,51 @@ final class CaptureScreenModelTests: XCTestCase {
 
         XCTAssertEqual(model.selectedJournalVoiceLabels, [:],
                        "the freshly created journal has no labels of its own")
+    }
+
+    // MARK: journal create/rename must reach the shared library (nav T5 review, Important 2)
+    //
+    // `LibraryScreenModel.journals` (what the sidebar reads) and `CaptureScreenModel.journals`
+    // (this model's own copy, appended/patched in place by `createJournal`/
+    // `renameCurrentJournal`) are separate arrays that only reconcile through a rescan.
+    // Discovered empirically by nav T5's own UI test: a journal created on the capture
+    // screen was invisible in the sidebar until some UNRELATED place selection happened
+    // to trigger a rescan first. `createJournal`/`renameCurrentJournal` must trigger that
+    // rescan themselves rather than leaving it to whatever the caller does next.
+
+    func testCreateJournalIsVisibleThroughTheSharedLibrary() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            journalsContainerRoot: root)
+        await model.bootstrap()
+
+        let result = await model.createJournal(name: "Second Journal")
+        let created = try XCTUnwrap(result)
+
+        XCTAssertTrue(model.library.journals.contains(where: { $0.id == created.id }),
+                      "the shared library's own journals array never learned about the new journal")
+    }
+
+    /// Rename is the worse failure mode of the two: not a missing row, but a STALE NAME
+    /// sitting in the sidebar.
+    func testRenameCurrentJournalIsVisibleThroughTheSharedLibrary() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            journalsContainerRoot: root)
+        await model.bootstrap()
+        let id = try XCTUnwrap(model.selectedJournalID,
+                               "harness failure: no default journal selected after bootstrap")
+
+        await model.renameCurrentJournal(to: "Renamed Journal")
+
+        let inLibrary = model.library.journals.first(where: { $0.id == id })
+        XCTAssertEqual(inLibrary?.name, "Renamed Journal",
+                       "the shared library still has the journal's OLD name")
     }
 }

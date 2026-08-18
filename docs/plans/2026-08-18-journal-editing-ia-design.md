@@ -75,7 +75,11 @@ This is the `voiceLabels` / `modified` precedent in `Journal.swift` exactly, and
 decoder rule from M2 design §11 (Swift's synthesized decoder ignores property defaults, so
 additive fields must be hand-decoded).
 
-**The `modified` LWW map gains a `"span"` key**, joining `name` / `voiceLabels` / `cover`.
+**The `modified` LWW map gains a `"span"` key**, joining `name` / `voiceLabels` / `cover` —
+**but not on this branch.** `main` has no `Raconte/Sync/` and `Journal` on main has no
+`modified` field at all; the whole sync layer lives only on `m4/sync`. See §"Branch split"
+below: `span` lands on main without a stamp, and its sync wiring is a tripwire-enforced
+task on `m4/sync`.
 
 **Validation lives in the model**, like `JournalError.emptyName`: an inverted span (end
 before start, compared at their coarsest common precision) is rejected, so the registry can
@@ -190,16 +194,43 @@ Pure core, TDD red-first:
 View wiring follows this repo's convention: unit-untestable, RED verified by stashing the
 production files and running the new UI tests against the stashed-out code.
 
+## Branch split
+
+`main` has no `Raconte/Sync/`, and `Journal` on main has no `modified` field. The sync layer
+— `SyncIngest`, `SyncRecordBuilders`, `RemoteJournal`, `JournalMerge`, the LWW stamp map —
+exists only on `m4/sync`. About 90% of this design needs none of it: the span type,
+validation, `contains(_:)`, display precedence, the out-of-span flag, the journal header,
+the editor, the sidebar `+` and the #69 picker fix are all pure core or UI, and depend on
+**nav**, which is now on main.
+
+Owner ruling: **build on main; wire sync separately, enforced by a tripwire.**
+
+- **On main:** everything above. `Journal.span` lands with no `modified` key, because that
+  field does not exist on this branch.
+- **On `m4/sync`:** a `Mirror`-based field-count tripwire over `Journal`'s sync round-trip,
+  modelled on the one `writeCapturedManifest` already carries (M2 T2.5, issue #7). **Written
+  before the wiring**, so it is red first. Its job is to fail whenever `Journal` carries a
+  field the sync layer does not, which means that when `m4/sync` merges main and picks up
+  `span`, the suite goes red until `span` is wired through all six sync sites
+  (`SyncJournalField`, `SyncRecordBuilders.journalRecord`, `RemoteJournal`,
+  `RemoteJournal.init?(record:)`, `JournalMerge.adopted(remote:)`, `JournalMerge.merge`) and
+  given its `modified["span"]` key.
+
+This is what turns the two-branch split from the exact hazard #70 describes into a caught
+error. See #70 for the probe results behind it.
+
 ## Sequencing
 
-1. Nico merges **PR #64** (nav) to main.
-2. `m4/sync` takes main — with the `ContentView.onChange(of: journals)` guard, or a
-   background CKSyncEngine journals pull pops the user out of whatever they are reading.
-   `ContentView.swift` + `CLAUDE.md` conflict there (accepted, nav design §10).
-3. This work builds on main. **The capture-picker change is task 1**, so #69 dies early
+1. ~~Nico merges **PR #64** (nav) to main.~~ **Done 2026-08-18** — main at `20beecc7`;
+   `nav/split-view` worktree, local branch and remote branch all deleted.
+2. This work builds on main. **The capture-picker change is task 1**, so #69 dies early
    rather than riding to the end of the branch.
+3. `m4/sync` takes main — with the `ContentView.onChange(of: journals)` guard, or a
+   background CKSyncEngine journals pull pops the user out of whatever they are reading.
+   `ContentView.swift` + `CLAUDE.md` conflict there (accepted, nav design §10). The
+   tripwire task above lands on this branch.
 
-Until step 3, #69 is live on `Raconte-m4sync.app` and m4 Gate A stays blocked. That is the
+Until step 2, #69 is live on `Raconte-m4sync.app` and m4 Gate A stays blocked. That is the
 accepted cost of ruling 1.
 
 ## Appendix — #69 root cause evidence

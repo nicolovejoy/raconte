@@ -2030,6 +2030,11 @@ delta passes, 32 tests total).
 - iOS simulator: same with `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names)
 - UI tests (simulator only — macOS needs interactive automation permission):
   `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' test`
+- **When `m4/sync` merges**, the macOS `test` command above will need
+  `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` added, and must NEVER
+  gain `CODE_SIGNING_ALLOWED=NO` — that flag unsandboxes the app-hosted test runner
+  onto the real iCloud-entitled data path rather than a stripped test one. Until that
+  merge, the plain commands above work as written on `main`.
 
 ## Working style
 
@@ -2042,6 +2047,19 @@ delta passes, 32 tests total).
   enrollment: TestFlight, CloudKit containers, push and Live Activities are all available
   now. (Verified 2026-07-31 from the on-disk profiles: App Store distribution profiles and
   year-long expiries, neither of which a free personal team can produce.)
+- **UI tests reach places through `openPlace(app, "sidebar.…")` in
+  `RaconteUITests/UITestNavigation.swift`.** Never hard-code a navigation tap in a test
+  class — `openPlace` already handles the iPhone-collapsed-vs-Mac/iPad-both-columns
+  difference (back-button vs. straight tap) in one place.
+- **Nothing that must happen while a capture is running may hang off a view's
+  lifecycle.** `CaptureView` is no longer permanently mounted (nav redesign) — it can
+  be navigated away from at any time. Anything that must keep working regardless
+  (phase dispatch, the idle-timer hold, receipt reconciliation) lives on
+  `CaptureScreenModel` itself, driven by the model's own observation of its state,
+  never by `.onAppear`/`.onDisappear`/`.onChange` on a view.
+- **`ContentView.swift` is rewritten by both `nav/split-view` and `m4/sync`** and the
+  two will conflict on merge — expected and accepted (nav design §10); whichever
+  branch merges second resolves the conflict by hand.
 
 <!-- SHARED-CONVENTIONS:BEGIN v=e5fb79b2ef4d — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions

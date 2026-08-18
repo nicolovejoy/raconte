@@ -267,13 +267,7 @@ final class PrecisionDatePickerTests: XCTestCase {
                 .deletingLastPathComponent()      // repo root
                 .appendingPathComponent("Raconte/Capture/UI/PrecisionDatePicker.swift"),
             encoding: .utf8)
-        return raw
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { line -> Substring in
-                guard let slashes = line.range(of: "//") else { return line }
-                return line[line.startIndex..<slashes.lowerBound]
-            }
-            .joined(separator: "\n")
+        return strippingComments(raw)
     }
 
     /// Without this, `pickerSource()` could quietly stop stripping and every assertion above

@@ -228,6 +228,51 @@ T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
 [T6 build plan](plans/archive/2026-08-08-revision-chain-implementation-plan.md),
 [T7 build plan](plans/archive/2026-08-09-t7-editor-ui-plan.md)
 
+## 6. Navigation: a sidebar of places (nav — built, on `nav/split-view`, pending Gate B + PR)
+
+The app is one `NavigationSplitView` on both platforms. The sidebar lists **places** —
+Capture, one row per journal, All Entries, Trash, and (debug builds only) Debug — and
+selecting one shows that place in the detail column. **Capture is selected the moment
+the app launches.** On iPhone the split view collapses to a stack whose root is the
+places list, so the phone still opens straight into the capture screen exactly as
+before; the only visible change is a back chevron that reveals the sidebar. On Mac and
+iPad both columns show at once, Mail-style.
+
+While a recording is running, the Capture row in the sidebar shows a live indicator
+(red dot + elapsed time) — so a recording started, then navigated away from, is never
+invisible. That's deliberate: the coordinator lives at the app root, not inside the
+capture screen, so leaving the screen no longer risks the capture.
+
+Inside the detail column, the existing pushes are unchanged in kind: an entry list
+pushes to an entry's detail, which pushes to its transcript editor, Mark voices, or
+revision history. Back-is-Done still applies to all three — pressing back saves before
+leaving (on Mac, ⌘[ walks the list→detail hop).
+
+```mermaid
+flowchart LR
+    S["Sidebar\n(places)"] -->|"select"| P1["Capture"]
+    S -->|"select"| P2["Journal row"]
+    S -->|"select"| P3["All Entries"]
+    S -->|"select"| P4["Trash"]
+    S -->|"select, DEBUG only"| P5["Debug"]
+    P2 --> L["Entry list\n(detail column)"]
+    P3 --> L
+    L -->|"push"| ED["Entry detail"]
+    ED -->|"push"| EE["Transcript editor /\nMark voices /\nrevision history"]
+```
+
+Two things this replaced, both load-bearing hacks tied to the capture screen's view
+lifecycle: the receipt-reconcile rule (clearing a stale "Saved" receipt when its entry
+is trashed) and the screen-stays-awake-while-recording rule now both live on the
+capture model itself, driven by state, not by a view happening to be on screen. A
+third one surfaced only once the screen could be pushed off-mounted: the model's own
+dispatch of finished-transcription/finalize-queue work had been running off a
+view-mounted hook too, and needed the same fix, or a capture finished while you were
+browsing elsewhere would silently never get encoded.
+
+Details: [navigation redesign design](plans/2026-08-17-navigation-redesign-design.md)
+(§11 = as-built rulings the design doc didn't anticipate).
+
 ## Where the project is
 
 ```mermaid

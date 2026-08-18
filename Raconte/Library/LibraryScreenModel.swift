@@ -1,5 +1,15 @@
 import Foundation
 
+/// Model-to-model rescan notification (#62, nav redesign §5.1). `CaptureScreenModel`
+/// conforms so `LibraryScreenModel.rescan()` can tell it directly that the world may
+/// have changed — no view, no `.onChange`, in the loop. "A receipt whose entry left the
+/// library is cleared" becomes a model invariant that holds regardless of what is
+/// mounted, rather than a fact only true while `CaptureView` happens to be on screen.
+@MainActor
+protocol LibraryRescanObserver: AnyObject {
+    func libraryDidRescan()
+}
+
 /// Composition + orchestration for the library and entry-detail screens (M3 T4).
 ///
 /// Constraints this shape exists to hold:
@@ -77,6 +87,12 @@ final class LibraryScreenModel {
     private(set) var lastSweep: TrashSweepResult?
 
     var journalScope: JournalScope = .all
+
+    /// WEAK. `CaptureScreenModel` holds `library` strongly; a strong back-reference here
+    /// would be a retain cycle — and although both live for the app's lifetime in the
+    /// running app, every test that builds a `CaptureScreenModel`/`LibraryScreenModel`
+    /// pair (there are many) would leak one for the length of the test process.
+    weak var rescanObserver: (any LibraryRescanObserver)?
 
     /// Bumped on entry to `rescan()` and checked before results are assigned. Three UI
     /// paths (`selectJournalScope`, `moveEntry`, `setBackdate`) each fire their own Task,
@@ -184,6 +200,11 @@ final class LibraryScreenModel {
         allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
         recent = Self.mostRecentlyCaptured(allEntries, limit: 3)
         isLoading = false
+        // Model-to-model, no view in the loop (#62, nav redesign §5.1). Placed after
+        // every published assignment and after the superseded-scan guard above: the
+        // observer's whole job is to compare a receipt against `allEntries`, so it must
+        // never see a half-applied scan or one this model has already abandoned.
+        rescanObserver?.libraryDidRescan()
     }
 
     /// Derived, not stored — see `JournalDateRange`. `nil` for a journal with no

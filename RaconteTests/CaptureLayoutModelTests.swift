@@ -30,14 +30,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         }
     }
 
-    func testLibraryDoorIsHiddenWhileCapturing() {
-        for phase in capturingPhases {
-            XCTAssertFalse(layout(phase).showsLibraryDoor,
-                           "\(phase): the library route is still on screen during a capture — "
-                           + "the owner's rule is that recording shows the current recording")
-        }
-    }
-
     func testMultiVoiceFieldIsHiddenWhileCapturing() {
         for phase in capturingPhases {
             XCTAssertFalse(layout(phase).showsMultiVoiceField,
@@ -85,7 +77,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         let idle = layout(.idle)
         XCTAssertEqual(idle.mode, .setup)
         XCTAssertTrue(idle.showsLastEntry, "idle lost the last-entry row")
-        XCTAssertTrue(idle.showsLibraryDoor, "idle lost the route into the library")
         XCTAssertTrue(idle.showsMultiVoiceField, "idle lost the Two-voices toggle")
         XCTAssertFalse(idle.transcriptFillsAvailableHeight,
                        "idle must not give the transcript the whole screen")
@@ -117,7 +108,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         XCTAssertFalse(receipt.showsLastEntry,
                        "the receipt IS the last entry; showing the row too is a duplicate")
         XCTAssertFalse(receipt.showsMultiVoiceField)
-        XCTAssertFalse(receipt.showsLibraryDoor)
     }
 
     /// The stranded-text bug, pinned directly: the live transcript band must never be on

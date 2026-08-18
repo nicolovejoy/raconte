@@ -55,26 +55,51 @@ ledger (kept until merge) has the full record.
   `bootstatus` — an immediate launch fails preflight. One Opus dispatch died to the
   monthly spend limit; owner raised it, SendMessage-resume continued cleanly.
 
-**Next steps:**
-1. **Nico: merge PR #64** (auto-mode can't). At merge: delete worktree
-   `/Users/nico/src/raconte-nav` + its SDD workspace. `ContentView.swift` + `CLAUDE.md`
-   will conflict with `m4/sync` at second merge (accepted, design §10; see the ⚠️ above).
-2. **m4 sync smoke, cover step** (laptop `~/Desktop/Raconte-m4sync.app` → phone; quit
-   Raconte-nav.app first, ONE instance). Pass ⇒ close m4 Gate A in the m4 ledger
-   (`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`),
-   unblocks m4/sync Tasks 6-12.
-3. **Gate B owner smoke** (after merging or on the branch build): steps 1-6 in the plan's
-   Gate B section — Mac keyboard (⌘1/2/3, ⌘[ tri-state: root disabled → push enabled →
-   pop disabled, and ⌘1 from a PUSHED entry now returns to capture), ⌘N from All Entries
-   (note: it also selects the new journal for capture — #67 item), Esc-belongs-to-editor,
-   Debug place + ⌘Q, iPhone full walk, iPad sanity. File ▸ New Window is gone by design.
-4. **Nav phone half** (AFTER step 2 — the install replaces the m4sync build): wireless
-   devicectl install, then smoke: launches into capture, back-chevron reveals places,
-   screen does NOT sleep while recording + navigating, receipt doesn't hide the sidebar.
-   Pass ⇒ close nav Gate A in the nav ledger.
-5. **Then m4/sync Tasks 6-12** (entry push → ingest → merge → revisions → markers →
-   trash → debug status) per its plan; backlog unchanged (#63 final smoke,
-   unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight).
+**Post-handoff addendum (same night): macOS cover picker BROKEN — #68 filed; m4 smoke
+AMENDED, results pending.** Owner tried the cover step on the laptop: the cover sheet
+renders EMPTY on macOS — title + Cancel only, the `PhotosPicker` row absent
+(`JournalCoverPickerSheet.swift:56`). Discriminator run: clicking the blank area does
+nothing ⇒ control absent, not invisible (NOT the #58 white-on-white class).
+Pre-existing since #14 (file byte-identical main↔m4/sync); owner is simply the first
+person ever to open that sheet on a Mac. Issue #68 has three leads + the workaround.
+The m4 Gate A smoke was AMENDED to route around it — both directions still proven:
+(a) cover set on the PHONE → appears on the laptop (assets sync), (b) rename on the
+LAPTOP → appears on the phone (laptop-side push), (c) nothing else moved. Owner had
+not yet reported results at handoff. Also: owner briefly trashed Raconte-nav.app
+(restored) — the two-apps split (m4sync = sync + old nav; nav = sidebar, no sync)
+confused him twice; explain it up front next session.
+
+**Next steps — written for a Sonnet-driven session; follow literally, in order:**
+1. **Ask the owner for the amended m4 smoke results** (cover phone→laptop, rename
+   laptop→phone, nothing-else-moved). If not yet run, re-send the checklist from issue
+   #68's workaround section + this addendum. On PASS: open
+   `/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`
+   and append `GATE A: CLOSED — owner smoke passed (amended route, see main CLAUDE.md
+   2026-08-17 night addendum + #68)`. On FAIL: run the sync log command (issue #68 /
+   task-5-report §6) and debug before anything else.
+2. **Resume the m4/sync SDD loop at Task 6** (entry + finalize artifacts push). Read
+   the m4 ledger FIRST — it is authoritative (rulings, deferred minors, what T6 must
+   not do: no native CKRecord Date fields — reuse encodeJSON stamp resolution; no
+   per-record whole-registry digest). Worktree `/Users/nico/src/raconte-m4`, branch
+   `m4/sync`, plan `docs/plans/2026-08-17-m4-sync-implementation-plan.md`, skill
+   superpowers:subagent-driven-development. **Models (owner cost ruling 2026-08-17):
+   Sonnet implementers AND Sonnet task reviews; Opus only for Gates.** Tell every
+   implementer: run test suites in the FOREGROUND, never background a build you intend
+   to wait on (3 stalls last session, all that shape).
+3. **Nico: merge PR #64** (nav). At merge: delete worktree `/Users/nico/src/raconte-nav`
+   + its SDD workspace. `ContentView.swift` + `CLAUDE.md` conflict with `m4/sync` at
+   second merge (accepted, design §10) — and see the ⚠️ above: guard ContentView's
+   `.onChange(of: journals)` at that merge or background sync pops the detail column.
+4. **Owner smokes, whenever convenient:** (a) nav Gate B steps — Mac keyboard (⌘1/2/3;
+   ⌘[ tri-state root-disabled→push-enabled→pop-disabled; ⌘1 from a pushed entry now
+   returns to capture), ⌘N from All Entries (it also selects that journal for capture,
+   #67), Esc only in the editor, Debug + ⌘Q, iPhone full walk. File ▸ New Window gone
+   by design. (b) nav phone half AFTER step 1's smoke passes (install replaces the
+   m4sync build): wireless devicectl install; launches into capture, back-chevron
+   reveals places, screen does NOT sleep while recording+navigating, receipt doesn't
+   hide the sidebar. Pass ⇒ append nav Gate A phone-half CLOSED to the nav ledger.
+5. Backlog unchanged: #68 (macOS cover picker), #65-67 (nav follow-ups), #63 final
+   smoke, unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
 
 ## Session 2026-08-17 (laptop — Debug "freeze" root-caused; NAV REDESIGN designed + planned + SDD Tasks 1-5 BUILT on `nav/split-view`, Task 6 in flight; 1310 → 1311 unit + 33 UI on branch)
 

@@ -1,5 +1,81 @@
 # CLAUDE.md
 
+## Session 2026-08-17 night (laptop — NAV BRANCH FINISHED: T7-T9 + Gate B + fix wave; PR #64 OPEN; issues #65-67; 1313 → 1319 unit + 35 UI)
+
+Ran the nav SDD loop to completion unattended (Sonnet implementers, Opus adversarial
+reviews, owner directive). Branch `nav/split-view` final at `cb0ed9f7`, pushed. **PR #64
+open — merge is Nico's.** Every task review caught something real; the SDD workspace
+ledger (kept until merge) has the full record.
+
+- **T7 Debug place** (`e993c1b2`+`658d8559`): build info first, harness fenced below,
+  build stamp genuinely async. Review Important: the brief's own off-main test was
+  vacuous (a future `@MainActor` annotation would still pass) — fixed with a
+  `pthread_main_np()` hook recorded inside the call path, counterfactual-verified
+  (`Thread.isMainThread` is unavailable from async contexts; SDK constraint).
+- **T8 Mac menu bar** (`9503f0f3`): Go menu ⌘1-4 (⌘4 DEBUG-gated matching the sidebar
+  row), ⌘[ Back, ⌘N root-level alert. Approved clean — first zero-Important task review
+  on the branch. Implementer extracted the shared `strippingComments` helper
+  (`RaconteTests/SourceScanning.swift`) from two byte-identical private copies; the Esc
+  source-scan is self-adversarial (the doc comment contains `.cancelAction`, so stripper
+  regression FAILS the test). Note: `CommandGroup(replacing: .newItem)` removes
+  File ▸ New Window — deliberate.
+- **T9 docs** (`d7334b95`+`c4f19bab`): overview nav section + design §11 as-built +
+  CLAUDE.md conventions (on the branch). Review caught two factual errors — docs claimed
+  ⌘[ saves from inside the editor (it only pops `detailPath`; the editor is a
+  `navigationDestination(isPresented:)` push ABOVE it), and a fallback citation pointed
+  at the wrong doc. Both fixed; the ⌘[ substance became a Gate B probe.
+- **GATE B (Opus, independent): everything re-verified** — 1318 unit + 35/35 UI on a
+  fresh sim, both builds, probes 1-6 SAFE. Two empirical wins: **an open editor's draft
+  SURVIVES its entry being popped from underneath** (`onDisappear` + unstructured Task
+  finishes the write; iPad probe, typed inside the debounce window), and
+  clear-on-place-switch proven on iPad landscape. One Important, fixed same session
+  (`cb0ed9f7`): **re-selecting the current place was a dead click with an entry pushed
+  under it — on Mac that's ⌘1-4** (the keep-the-path rule was iPhone-era, where the path
+  is provably always empty). Now pops to root; old pin restated, RED+mutation verified.
+  Also fixed: the `sidebar.toggle` helper branch was dead code that silently POPPED on
+  iPad portrait (SwiftUI's reveal button has an empty identifier; query
+  `app.buttons["Show Sidebar"]` by label).
+- **Issues filed at branch finish:** #65 (AX: `capture.journalPicker` invisible —
+  container identifier overwrites it, confirmed in a live AX dump), #66 (AX: alert
+  TextField identifiers don't bridge onto UIAlertController — includes the branch's own
+  new `root.newJournalNameField` instance), #67 (consolidated deferred follow-ups from
+  all nine reviews + Gate B triage, 11 items).
+- **⚠️ For whoever merges `m4/sync` second** (also in #67 and the PR body):
+  `ContentView`'s `.onChange(of: journals)` calls `router.select` unconditionally, and
+  re-select now POPS the detail column — a background CKSyncEngine journals pull while
+  the user is mid-read would pop them to the list. Unreachable today; guard the onChange
+  when the merge happens.
+- **m4 sync smoke, partial:** rename phone → laptop **PASSED** (owner). Cover
+  laptop → phone NOT yet run (checklist re-sent in chat; also task-5-report §6 in the
+  m4 ledger). m4 Gate A stays open until it passes.
+- **Process notes:** 3 implementer stalls, all the same shape — agent backgrounds a UI
+  suite then stops to "wait for a notification" that never reaches subagents; one firm
+  nudge recovers every time (memory updated: tell dispatches to run suites in the
+  foreground). Gate B sim lore: after `simctl shutdown all`, boot explicitly and wait on
+  `bootstatus` — an immediate launch fails preflight. One Opus dispatch died to the
+  monthly spend limit; owner raised it, SendMessage-resume continued cleanly.
+
+**Next steps:**
+1. **Nico: merge PR #64** (auto-mode can't). At merge: delete worktree
+   `/Users/nico/src/raconte-nav` + its SDD workspace. `ContentView.swift` + `CLAUDE.md`
+   will conflict with `m4/sync` at second merge (accepted, design §10; see the ⚠️ above).
+2. **m4 sync smoke, cover step** (laptop `~/Desktop/Raconte-m4sync.app` → phone; quit
+   Raconte-nav.app first, ONE instance). Pass ⇒ close m4 Gate A in the m4 ledger
+   (`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`),
+   unblocks m4/sync Tasks 6-12.
+3. **Gate B owner smoke** (after merging or on the branch build): steps 1-6 in the plan's
+   Gate B section — Mac keyboard (⌘1/2/3, ⌘[ tri-state: root disabled → push enabled →
+   pop disabled, and ⌘1 from a PUSHED entry now returns to capture), ⌘N from All Entries
+   (note: it also selects the new journal for capture — #67 item), Esc-belongs-to-editor,
+   Debug place + ⌘Q, iPhone full walk, iPad sanity. File ▸ New Window is gone by design.
+4. **Nav phone half** (AFTER step 2 — the install replaces the m4sync build): wireless
+   devicectl install, then smoke: launches into capture, back-chevron reveals places,
+   screen does NOT sleep while recording + navigating, receipt doesn't hide the sidebar.
+   Pass ⇒ close nav Gate A in the nav ledger.
+5. **Then m4/sync Tasks 6-12** (entry push → ingest → merge → revisions → markers →
+   trash → debug status) per its plan; backlog unchanged (#63 final smoke,
+   unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight).
+
 ## Session 2026-08-17 (laptop — Debug "freeze" root-caused; NAV REDESIGN designed + planned + SDD Tasks 1-5 BUILT on `nav/split-view`, Task 6 in flight; 1310 → 1311 unit + 33 UI on branch)
 
 Owner hit a hard "freeze" opening the Debug screen, then ordered a navigation-paradigm

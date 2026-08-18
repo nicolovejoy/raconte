@@ -111,12 +111,21 @@ struct CaptureSidebarRow: Equatable, Sendable {
 enum PlaceRouting {
     static let launchPlace: Place = .capture
 
-    /// Selecting a DIFFERENT place clears the detail path; re-selecting the same place
-    /// keeps it — tapping the place you're already in must not throw away where you are.
+    /// Selecting any place — including the one you're already in — resets the detail
+    /// path to root. Different place: obviously clears it. Same place: pops to root
+    /// too, the universal sidebar idiom (Mail, Notes, Files) — re-clicking a row you're
+    /// already on returns to that place's landing screen rather than being a dead click.
+    /// Superseded 2026-08-17 (Gate B I1): the old rule ("re-selecting keeps the path")
+    /// was written for iPhone, where the sidebar is reachable only at depth 0 so the
+    /// path is always empty when a re-select can even happen. On Mac/iPad the Capture
+    /// place can carry a pushed entry (its `capture.recentRow` link, or the post-stop
+    /// receipt's Open link — both push onto this same path), and re-selecting Capture
+    /// via its sidebar row or ⌘1 did nothing — a dead click on the exact gesture meant
+    /// to return there.
     static func detailPath(afterSelecting new: Place,
                            from old: Place,
                            path: [LibraryDestination]) -> [LibraryDestination] {
-        new == old ? path : []
+        []
     }
 
     /// A `.journal(id)` for a journal that is not in the registry falls back to

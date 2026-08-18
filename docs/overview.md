@@ -245,8 +245,8 @@ capture screen, so leaving the screen no longer risks the capture.
 
 Inside the detail column, the existing pushes are unchanged in kind: an entry list
 pushes to an entry's detail, which pushes to its transcript editor, Mark voices, or
-revision history. Back-is-Done still applies to all three — pressing back (or, on Mac,
-⌘[) saves before leaving.
+revision history. Back-is-Done still applies to all three — pressing back saves before
+leaving (on Mac, ⌘[ walks the list→detail hop).
 
 ```mermaid
 flowchart LR

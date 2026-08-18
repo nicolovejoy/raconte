@@ -241,9 +241,10 @@ Recorded at Task 9, against branch `nav/split-view` @ `9503f0f3`.
   installs its New Journal button via `CommandGroup(replacing: .newItem)`, which
   replaces the platform's default File ▸ New Window item rather than adding beside it.
   Raconte has one window; a New Window command that did nothing useful is gone.
-- **Task 4's structural fallback was not needed.** The design worried (§4, §7) that
-  the collapsed iPhone split view might land on the sidebar rather than the
-  pre-selected detail column, and planned three fallback strategies. None fired: the
+- **Task 4's structural fallback was not needed.** The implementation plan worried
+  (`2026-08-17-navigation-redesign-implementation-plan.md:681-685`) that the collapsed
+  iPhone split view might land on the sidebar rather than the pre-selected detail
+  column, and ordered three fallback strategies to try if it did. None fired: the
   phone's collapse-to-stack lands directly on the Capture detail column on the first
   attempt and on every cold-simulator re-run since — a bound, pre-set `selection` on
   the sidebar `List` is sufficient by itself (confirmed by mutation: removing the

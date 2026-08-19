@@ -243,4 +243,40 @@ final class JournalEditorUITests: XCTestCase {
                         .waitForExistence(timeout: 15),
                       "selecting a journal did not show its header")
     }
+
+    /// The sidebar `+` (nav T9) is a third caller of the one existing creation path
+    /// (`CaptureScreenModel.createJournal`, also used by the capture screen's own "New
+    /// Journal…" and the Mac's ⌘N) and, unlike either of those, pushes straight into the
+    /// new journal's editor — the owner's ruling that this is the moment the metadata is
+    /// actually in hand.
+    func testSidebarPlusCreatesAJournalAndOpensItsEditor() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+
+        // Reveal the sidebar on compact width before reaching for its toolbar.
+        // `openPlace` reveals AND selects — selecting pushes past the sidebar onto the
+        // chosen place's own screen, hiding the sidebar (and its toolbar) again. The `+`
+        // lives on the sidebar itself, so this needs the reveal-only helper.
+        revealSidebar(app)
+        let plus = app.buttons["sidebar.newJournal"].firstMatch
+        XCTAssertTrue(plus.waitForExistence(timeout: 15),
+                      "the sidebar has no New Journal button")
+        press(plus)
+
+        // Not queried by `root.newJournalNameField` (issue #66): a SwiftUI
+        // `.accessibilityIdentifier` on an `.alert`'s `TextField` does not bridge onto the
+        // native `UIAlertController` text field it becomes. It is the only text field on
+        // screen at this point, so `app.textFields.firstMatch` is unambiguous — same
+        // workaround `NavigationUITests` already uses for this identical alert reached via
+        // ⌘N/the capture picker.
+        let field = app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 15))
+        press(field)
+        field.typeText("Blue rabbit 2027")
+        app.buttons["Create"].firstMatch.tap()
+
+        XCTAssertTrue(app.textFields["journalEditor.name"].firstMatch
+                        .waitForExistence(timeout: 15),
+                      "creating from the sidebar did not open the new journal's editor")
+    }
 }

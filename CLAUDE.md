@@ -2409,6 +2409,38 @@ delta passes, 32 tests total).
 - **`ContentView.swift` is rewritten by both `nav/split-view` and `m4/sync`** and the
   two will conflict on merge — expected and accepted (nav design §10); whichever
   branch merges second resolves the conflict by hand.
+- **Never put an `Image` in a macOS `Menu` label.** On macOS a `Menu`'s label discards
+  SwiftUI's sizing of a resizable `Image` and paints it at intrinsic size — a 768×1024
+  cover photo laid out at 768×1024 *points*, covering the whole screen and pushing the
+  rest of the label off-window (#69). Proven by a six-variant harness: no in-place
+  clamp and no `.menuStyle` fixes it — the image has to leave the label entirely. A
+  `Button` label is fine; the image only breaks inside a `Menu`.
+- **A `JournalSpan`/date-range endpoint is a unit, not an instant.** `PartialDate` is
+  `Comparable` by `anchorDate`, which fills absent components with the FIRST — "2001"
+  anchors to 1 Jan 2001. A naive `start <= d && d <= end` comparison against raw
+  `PartialDate`s therefore excludes most of the range it claims to cover. Expand each
+  endpoint to its precision's unit before comparing: `start` to the earliest instant of
+  its unit, `end` to an EXCLUSIVE upper bound (the first instant of the unit right after
+  `end`'s), and test `date >= lowerBound && date < exclusiveUpperBound`. Subtracting a
+  fixed second to fake an inclusive bound under-covers the final second of the unit —
+  build the exclusive bound from `calendar.dateInterval(of:for:).end` untouched instead.
+- **A `.sheet` attached to a `Form`'s `Section` silently never presents, on iOS 26** —
+  observed, mechanism unconfirmed. Attach `.sheet`/`.fullScreenCover` to the screen's
+  outer view (the `Form` itself, or above it), never to a `Section` or other child.
+- **`.tap()` on a `Toggle` inside a `Form`/`List` hits the row's merged label+switch
+  accessibility frame at its CENTRE, which for a full-width row is the label, not the
+  switch — the tap silently never flips it.** Real finger taps work fine; this is an
+  XCUITest-harness gap. Tap near the trailing edge instead, e.g.
+  `coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5))` — re-tune the offset
+  per row width if a wider layout (iPad) is ever covered.
+- **A pushed screen that can be popped without warning must write through on commit,
+  never hold a Done-button-shaped batch of unsaved edits.**
+  `PlaceRouting.detailPath(afterSelecting:from:path:)` always returns `[]`, so any
+  sidebar click (and on the Mac, ⌘1-4) pops the top of `detailPath` with zero chance for
+  that screen to intervene. The pattern (`JournalEditorView`, matching `BackdateField`):
+  commit each field twice, redundantly — on losing focus (the ordinary case), and again
+  in `onDisappear` via an **unstructured `Task {}`, never `.task`** (SwiftUI cancels
+  `.task` on disappear, defeating the whole point of the safety net).
 
 <!-- SHARED-CONVENTIONS:BEGIN v=e5fb79b2ef4d — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions

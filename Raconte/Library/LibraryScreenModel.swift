@@ -334,6 +334,21 @@ final class LibraryScreenModel {
         return true
     }
 
+    /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
+    /// false-on-store-failure shape as `renameJournal`/`setJournalVoiceLabels`. The
+    /// registry's own `setSpan` never rejects the span's shape — an inverted pair is
+    /// refused earlier, by `JournalSpan.init` itself, and `JournalSpanEditor` never
+    /// calls this with one — so the only failure reachable here is an id no longer in
+    /// the registry.
+    @discardableResult
+    func setJournalSpan(_ journalID: String, span: JournalSpan?) async -> Bool {
+        guard (try? await journalStore.setSpan(id: journalID, span: span)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
     // MARK: - Journal cover (issue #14 part 3)
 
     /// Sets or replaces a journal's cover image. `imageData` is any ImageIO-decodable

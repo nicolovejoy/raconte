@@ -34,6 +34,22 @@ struct JournalDateRange: Equatable {
     }
 }
 
+extension DatePrecision {
+    /// The coarser of two precisions. Lifted out of `JournalDateRange`'s private scope
+    /// so `JournalSpan` can share it rather than carry a second rank table that would
+    /// drift (standing branch rule: call the shared primitive, never copy it).
+    static func coarser(_ a: DatePrecision, _ b: DatePrecision) -> DatePrecision {
+        func rank(_ p: DatePrecision) -> Int {
+            switch p {
+            case .day: return 0
+            case .yearMonth: return 1
+            case .year: return 2
+            }
+        }
+        return rank(a) >= rank(b) ? a : b
+    }
+}
+
 extension JournalDateRange {
     /// Terse, collapsed display: a single precision-aware date when the range is a
     /// point (`PartialDate.formatted`, so a lone year-only entry reads "1998" rather
@@ -44,7 +60,7 @@ extension JournalDateRange {
     /// "January – July 1998".
     func formatted(calendar: Calendar = .current) -> String {
         if minDate == maxDate {
-            let precision = Self.coarser(minPrecision, maxPrecision)
+            let precision = DatePrecision.coarser(minPrecision, maxPrecision)
             return PartialDate(from: minDate, precision: precision, calendar: calendar)
                 .formatted(calendar: calendar)
         }
@@ -62,19 +78,5 @@ extension JournalDateRange {
             return "\(minMonth) – \(maxMonth) \(minYear)"
         }
         return "\(minYear)–\(maxYear)"
-    }
-
-    /// Coarser of two precisions, day < yearMonth < year. Used when a range collapses
-    /// to a point but its bounds were set by entries of differing precision — the
-    /// coarser one is the honest description of what's actually known.
-    private static func coarser(_ a: DatePrecision, _ b: DatePrecision) -> DatePrecision {
-        func rank(_ p: DatePrecision) -> Int {
-            switch p {
-            case .day: return 0
-            case .yearMonth: return 1
-            case .year: return 2
-            }
-        }
-        return rank(a) >= rank(b) ? a : b
     }
 }

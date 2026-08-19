@@ -1,5 +1,103 @@
 # CLAUDE.md
 
+## Session 2026-08-18 (laptop — #69 ROOT-CAUSED AND PROVEN; PR #64 MERGED; journal-editing IA designed + planned; issues #69-#71)
+
+The cover full-bleed bug that defeated the last session is solved, and the fix is a
+proven empirical result rather than another theory. Main at `3de886d2`, tree clean,
+everything pushed. No code shipped — this session was diagnosis + design + plan.
+
+- **#69 ROOT CAUSE: on macOS a `Menu`'s label discards SwiftUI's sizing of a resizable
+  `Image` and paints it at intrinsic size.** `CaptureView.swift:1280` had
+  `JournalCoverThumbnail(size: 34)` inside the picker's `Menu` label; the covers on this
+  device are 768×1024, so the label laid out at **768×1024 points** — covering the whole
+  setup region AND pushing the journal name + chevron out past the right edge of the
+  window, which is the "can't even select a different journal" half the owner reported.
+  Same class as the `DatePicker(.compact)` popover this project hit twice: the system
+  draws the control and our modifiers don't reach inside it.
+- **How it was settled: a throwaway six-variant harness**, not more code reading. A
+  standalone macOS SwiftUI app in the same near-black `ScrollView`/`VStack(spacing:28)`/
+  `.padding(24)` shell as `setupRegion`, using the owner's real peaches JPEG pulled from
+  the container. **A** (thumbnail in `Menu` label) BROKEN; **B** (same HStack, no Menu)
+  fine; **C** (thumbnail outside the Menu) fine; **D** (`Button` label — the
+  `LibraryView` chip and nav sidebar row shape) fine; **E** (thumbnail rebuilt to report
+  no intrinsic size upward via `Color.clear` + `.overlay`) **STILL BROKEN**; **F**
+  (`.menuStyle(.button)`) **STILL BROKEN**. E and F are the load-bearing results: **no
+  in-place clamp and no menu style fixes it — the image must leave the label.**
+  The last session's negative findings were all correct; it just read the frame
+  modifiers as dispositive, which they are not inside a macOS `Menu` label.
+- **Lesson worth repeating:** the previous session died chaining unfalsifiable theories
+  (accessibility zoom, window vibrancy). What broke the deadlock was picking the
+  cheapest **falsifiable** probe and building it — ten minutes, one screenshot, done.
+- **PR #64 (nav) MERGED** by Nico (`20beecc7`). Worktree `/Users/nico/src/raconte-nav`
+  removed, branch deleted local + remote. Only `m4/sync` remains as a worktree.
+  **Baseline measured on the merged tree: 1319 unit tests, 1 failure** — the known
+  laptop-local `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage`.
+- **Journal-editing IA designed and owner-approved**
+  (`docs/plans/2026-08-18-journal-editing-ia-design.md`, nine numbered rulings). Owner's
+  complaint, verbatim: *"editing the name and image and so forth for journals doesn't
+  necessarily belong naturally in the journal picker for the capture screen… there should
+  be an interface where we edit a journal… right off of the list of journals page."*
+  Capture picker becomes selection-only (journals + New Journal), which removes the
+  broken construct as a side effect; journal editing moves to a pushed editor reached by
+  tapping a new journal header above that journal's entries; the sidebar gets a `+` that
+  creates then opens the editor. **Journals gain a STORED `JournalSpan`** of two
+  `PartialDate`s — a half-transcribed 1998 journal must not advertise itself as an Aug
+  2026 journal. Stored wins, derived is the fallback; an entry dated outside its journal's
+  span is **flagged, never blocked**.
+- **Plan** (`docs/plans/2026-08-18-journal-editing-implementation-plan.md`): 10 tasks +
+  adversarial gate, on main. **Task 1 is the capture picker, so #69 dies in the first
+  commit** rather than riding to the end of the branch.
+- **Branch-split discovery that reshaped the plan: `main` has no `Raconte/Sync/` at all,
+  and `Journal` on main has no `modified` field.** The whole sync layer lives only on
+  `m4/sync`. ~90% of the design needs only nav (now on main), so `span` lands on main
+  **without** a stamp, and the sync wiring becomes a **tripwire-enforced task on
+  `m4/sync`**: a `Mirror` field-count tripwire written red-first, so picking up `span` at
+  that merge fails the suite until it is wired through all six sync sites. Turns the
+  two-branch split from #70's hazard into a caught error.
+- **Trap the design missed, now a named plan requirement:** `PartialDate` is `Comparable`
+  by `anchorDate`, which fills absent components with the FIRST — so "2001" anchors to
+  1 Jan 2001, and a naive `contains` would flag everything after that date as outside a
+  "1998 – 2001" journal. **Span endpoints expand to their precision's unit**: start to
+  the earliest instant, end to the LATEST. Mutation check named in the plan.
+- **Issues filed: #69** (the cover bug, with full root cause and harness table), **#70**
+  (`Journal`'s decoder drops unknown keys — silent lost-update under M4 sync across build
+  versions), **#71** (out-of-span flag, deferred out of the build branch by the owner to
+  keep it shorter; ruling 4 unchanged, only its delivery moved).
+- **#70 probe, run rather than argued:** `CKRecord.encodeSystemFields` carries **no data
+  fields** — a record rebuilt via `CKRecord(coder:)` has `allKeys() == []`, so an older
+  build's push neither carries an unknown field nor marks it changed. Severity is lower
+  than first written: an older build also cannot *overwrite* a field it doesn't know
+  during merge (it isn't in `RemoteJournal`), so a field-aware device never loses its
+  local copy to an older peer. Permanent loss needs **every** device to lapse at once.
+  The more actionable finding is in the issue: **adding one journal field is a ~9-site
+  change with only ~3 compiler-enforced** — miss `JournalMerge.adopted(remote:)` and the
+  field silently never syncs while everything compiles and the suite passes.
+- **#68 becomes load-bearing:** once Task 1 removes the capture-screen route, the editor
+  is the ONLY cover path, and that sheet renders empty on macOS. **Owner accepted losing
+  cover-setting for the duration** ("only a couple dozen entries so far, no images I'm
+  concerned about; waiting on a working system before ingesting the paper journals"), so
+  #68 sequences after rather than blocking.
+
+**Next steps:**
+1. **Execute `docs/plans/2026-08-18-journal-editing-implementation-plan.md`** on a branch
+   off main, subagent-driven. **Owner ruling: Sonnet implementers AND Sonnet task
+   reviews; Opus for the gate only.** Tell every implementer to run suites in the
+   FOREGROUND. Read the design doc first — it carries the nine rulings the plan argues
+   from. Baseline to beat: 1319 unit / 1 known laptop-local failure.
+2. **`m4/sync` takes main** — 27 commits behind as of this session. `ContentView.swift` +
+   `CLAUDE.md` conflict (accepted, nav design §10), and `ContentView`'s
+   `.onChange(of: journals)` must be guarded at that merge or a background CKSyncEngine
+   journals pull pops the reader out of an entry (#67). The `Journal` sync tripwire lands
+   on this branch too. **The longer the journal-editing branch stays open, the worse this
+   merge gets.**
+3. **m4 Gate A is still open** and still blocked by #69 on `Raconte-m4sync.app` until
+   Task 1 lands. The amended smoke (cover phone→laptop, rename laptop→phone) has never
+   been completed.
+4. **#68** (macOS cover picker sheet empty) — after the editor lands, it is the only
+   cover path on the Mac.
+5. Backlog unchanged: #71, #70, #65-67 (nav follow-ups), #63 final smoke, unified-editor
+   #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
 ## Session 2026-08-17 late night (laptop — m4 amended cover-sync smoke run: NEW UNEXPLAINED BUG, no code found; Gate A still open)
 
 Readup was clean (no drift, CI green, branch correct). Owner ran the amended m4 Gate A

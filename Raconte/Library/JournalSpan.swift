@@ -71,6 +71,18 @@ struct JournalSpan: Sendable, Equatable, Hashable {
     }
 }
 
+/// Which date line a journal shows (spec ruling 3): the stored span if it has one, else
+/// what its entries imply, else nothing. One rule, one place, so the sidebar row, the
+/// journal header and the editor cannot disagree.
+enum JournalDateLine {
+    static func text(span: JournalSpan?,
+                     derived: JournalDateRange?,
+                     calendar: Calendar = .gregorianCurrent) -> String? {
+        if let span { return span.formatted(calendar: calendar) }
+        return derived?.formatted(calendar: calendar)
+    }
+}
+
 extension JournalSpan: Codable {
     private enum CodingKeys: String, CodingKey { case start, end }
 

@@ -148,8 +148,12 @@ Not in this work:
 - **Journal delete** — #35 has its own friction design (easy / confirm / locked).
 - **Backfilling spans onto existing journals** — they stay nil and show the derived range,
   exactly as today.
-- **The unknown-key drop hazard** (§8) — files as its own issue.
+- **The unknown-key drop hazard** (§8) — filed as #70.
 - **Any progress readout** beyond the editor's derived line.
+- **The out-of-span flag itself** — cut from the build branch by the owner on 2026-08-18 and
+  filed as **#71**. Ruling 4 above still stands and is unchanged; only its delivery moved.
+  `JournalSpan.contains(_:)` still ships in the build branch, so #71 is purely the two
+  surfaces (`LibraryEntryRow`, `EntryDetailView`).
 
 Folded in while the picker is already open:
 

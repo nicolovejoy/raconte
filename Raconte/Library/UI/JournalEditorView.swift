@@ -29,6 +29,7 @@ struct JournalEditorView: View {
     @State private var renameFailed = false
     @State private var voiceLabelsFailed = false
     @State private var spanFailed = false
+    @State private var showingCoverPicker = false
     @FocusState private var nameFocused: Bool
 
     private var journal: Journal? { model.journals.first { $0.id == journalID } }
@@ -46,18 +47,37 @@ struct JournalEditorView: View {
                         .accessibilityIdentifier("journalEditor.name")
                 }
 
+                // Field order: name -> cover -> span -> voice labels -> derived (design
+                // doc, editor field order). Task 7 originally mounted span above voice
+                // labels but below cover's intended slot; its review flagged the miss
+                // without fixing it, so this task also moves span/voice-labels into the
+                // right order while landing the cover row.
+                Section("Cover") {
+                    if let cover = model.journalCovers[journalID] {
+                        JournalCoverPreview(data: cover)
+                            .listRowInsets(EdgeInsets())
+                        Button("Replace…") { showingCoverPicker = true }
+                            .accessibilityIdentifier("journalEditor.cover.replace")
+                        Button("Remove", role: .destructive) {
+                            Task { await model.removeJournalCover(journalID) }
+                        }
+                        .accessibilityIdentifier("journalEditor.cover.remove")
+                    } else {
+                        Button("Add a cover photo…") { showingCoverPicker = true }
+                            .accessibilityIdentifier("journalEditor.cover.add")
+                    }
+                }
+
+                JournalSpanEditor(initial: journal.span) { newSpan in
+                    commitSpan(newSpan)
+                }
+
                 // Focus for the two label fields lives entirely inside the section (one
                 // shared enum, two cases) — it notifies us only that SOME field lost
                 // focus, via `onFieldCommit`, so this view never needs to know which.
                 JournalVoiceLabelsSection(mainLabel: $draftMainLabel,
                                           alternativeLabel: $draftAlternativeLabel,
                                           onFieldCommit: commitVoiceLabels)
-
-                JournalSpanEditor(initial: journal.span) { newSpan in
-                    commitSpan(newSpan)
-                }
-
-                // Task 8 inserts the cover section here.
 
                 Section {
                     // The one place the stored span and what is ACTUALLY in the journal
@@ -100,6 +120,28 @@ struct JournalEditorView: View {
             }
             .alert("Couldn’t save this date range", isPresented: $spanFailed) {
                 Button("OK", role: .cancel) {}
+            }
+            // #68: this sheet renders EMPTY on macOS — the PhotosPicker row is absent,
+            // so the Mac currently has no way to set a cover at all now that the
+            // capture-screen route is gone. Accepted by the owner (spec ruling 9) and
+            // tracked separately; do not paper over it here.
+            .sheet(isPresented: $showingCoverPicker) {
+                // Reset the inherited foreground — the sheet draws on system material,
+                // the same treatment the capture screen gave it before Task 1 removed
+                // that route.
+                JournalCoverPickerSheet(
+                    journalName: journal.name,
+                    currentCover: model.journalCovers[journalID],
+                    onPick: { data in
+                        do {
+                            try await model.setJournalCover(journalID, imageData: data)
+                            return true
+                        } catch {
+                            return false
+                        }
+                    },
+                    onRemove: { await model.removeJournalCover(journalID) })
+                    .foregroundStyle(Color.primary)
             }
         } else {
             // Deleted underneath us. Never a blank push — same treatment ContentView

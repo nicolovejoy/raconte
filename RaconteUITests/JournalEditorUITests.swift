@@ -180,6 +180,46 @@ final class JournalEditorUITests: XCTestCase {
                       + "header label was: \(headerAgain.label)")
     }
 
+    /// Task 8: the cover row is the editor's only remaining route to a journal's cover
+    /// now that the capture screen's picker is gone. This pins the wiring end-to-end —
+    /// tapping "Add a cover photo…" presents the real `JournalCoverPickerSheet` (its
+    /// title names the journal, its Choose-from-Library row is reachable) — without
+    /// actually driving a photo pick, which XCUITest cannot do against a real Photos
+    /// library. Cancel proves it is a real dismissible sheet, not a dead tap.
+    func testAddingACoverOpensTheRealPickerSheet() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+
+        let journalRow = firstJournalRow(app)
+        XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
+        press(journalRow)
+
+        let header = app.descendants(matching: .any)
+            .matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15))
+        press(header)
+
+        let nameField = app.textFields["journalEditor.name"].firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 15))
+
+        let addCoverButton = app.buttons["journalEditor.cover.add"].firstMatch
+        XCTAssertTrue(addCoverButton.waitForExistence(timeout: 15),
+                      "a journal with no cover must offer an add-cover affordance")
+        press(addCoverButton)
+
+        let choosePhoto = app.buttons["journalCover.choosePhoto"].firstMatch
+        XCTAssertTrue(choosePhoto.waitForExistence(timeout: 15),
+                      "tapping Add a cover photo… did not present the real cover picker sheet")
+
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 15))
+        press(cancel)
+
+        XCTAssertTrue(app.textFields["journalEditor.name"].firstMatch.waitForExistence(timeout: 15),
+                      "Cancel should dismiss the sheet back to the still-open editor")
+    }
+
     /// A journal place shows the journal itself above its entries — All Entries does not.
     func testSelectingAJournalShowsItsHeader() {
         let app = launchApp()

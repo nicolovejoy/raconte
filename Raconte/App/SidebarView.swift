@@ -82,8 +82,8 @@ struct SidebarView: View {
     private var rows: [PlaceRow] {
         var ranges: [String: String] = [:]
         for journal in services.library.journals {
-            if let range = services.library.dateRange(forJournal: journal.id) {
-                ranges[journal.id] = range.formatted()
+            if let line = services.library.dateLine(forJournal: journal.id) {
+                ranges[journal.id] = line
             }
         }
         #if DEBUG

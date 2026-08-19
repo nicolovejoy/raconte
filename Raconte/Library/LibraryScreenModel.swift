@@ -213,6 +213,13 @@ final class LibraryScreenModel {
         JournalDateRange.compute(from: allEntries.filter { $0.journalID == journalID })
     }
 
+    /// The one date line for a journal, span-first. `SidebarView` and the journal header
+    /// both read this rather than deciding for themselves.
+    func dateLine(forJournal journalID: String) -> String? {
+        JournalDateLine.text(span: journals.first { $0.id == journalID }?.span,
+                             derived: dateRange(forJournal: journalID))
+    }
+
     /// Durable per-journal multi-voice carry-over (T6 §14, owner decision 5): the
     /// journal's most recently captured non-trashed entry decides. Derived from
     /// `allEntries` — the same collection `dateRange(forJournal:)` reads — so it costs

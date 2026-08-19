@@ -39,4 +39,24 @@ final class JournalHeaderSourceTests: XCTestCase {
         XCTAssertTrue(source.contains("selectJournal"))
         XCTAssertTrue(source.contains("New Journal"))
     }
+
+    /// Task 4 fix round 1, Important: the picker's `menuTitle` used to format
+    /// `dateRange(forJournal:)` (the derived range) directly, so a journal with a stored
+    /// `JournalSpan` could read "1998 – 2001" in the sidebar but "(August 2026)" here —
+    /// two surfaces disagreeing about the same journal's dates. There is no SwiftUI unit
+    /// test available for a private `View` method's return value in this repo (macOS UI
+    /// tests aren't run here — see the file-level doc comment), so this is a source scan,
+    /// same shape as the other tests in this class. It can confirm the call site was
+    /// swapped; it cannot confirm the menu actually RENDERS the shared value correctly at
+    /// runtime.
+    func testJournalPickerMenuTitleRoutesThroughTheSharedDateLine() throws {
+        let source = try captureViewSource
+        XCTAssertTrue(source.contains("dateLine(forJournal:"),
+                      "the picker menu must call the shared LibraryScreenModel.dateLine(forJournal:), "
+                      + "not format a derived range itself")
+        XCTAssertFalse(source.contains("dateRange(forJournal:"),
+                       "standing branch rule: call the shared primitive, never copy it — "
+                       + "dateRange(forJournal:) is JournalDateLine's own fallback input, "
+                       + "not something this file should call directly")
+    }
 }

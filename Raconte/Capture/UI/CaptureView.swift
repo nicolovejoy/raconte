@@ -480,12 +480,16 @@ struct JournalHeaderView: View {
         }
     }
 
-    /// Journal name plus its derived date range in parentheses (issue #14 part 2), e.g.
-    /// "1987 (1987)" or "Trip to France (March – July 1998)". Omitted for an empty
-    /// journal — appending "()" to a journal nobody has recorded into yet is noise.
+    /// Journal name plus its date line in parentheses (issue #14 part 2; spec ruling 3),
+    /// e.g. "1987 (1987)" or "Trip to France (March – July 1998)". Routed through the
+    /// shared `dateLine(forJournal:)` — never `dateRange(forJournal:)` directly — so this
+    /// menu, the sidebar row and the journal editor cannot disagree about what a journal
+    /// covers (a stored span outranks the range derived from when its entries were
+    /// captured). Omitted for a journal with neither a stored span nor any entries —
+    /// appending "()" to one nobody has recorded into yet is noise.
     private func menuTitle(for journal: Journal) -> String {
-        guard let range = model.library.dateRange(forJournal: journal.id) else { return journal.name }
-        return "\(journal.name) (\(range.formatted()))"
+        guard let line = model.library.dateLine(forJournal: journal.id) else { return journal.name }
+        return "\(journal.name) (\(line))"
     }
 }
 

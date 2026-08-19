@@ -28,6 +28,7 @@ struct JournalEditorView: View {
     @State private var draftAlternativeLabel = ""
     @State private var renameFailed = false
     @State private var voiceLabelsFailed = false
+    @State private var spanFailed = false
     @FocusState private var nameFocused: Bool
 
     private var journal: Journal? { model.journals.first { $0.id == journalID } }
@@ -52,7 +53,10 @@ struct JournalEditorView: View {
                                           alternativeLabel: $draftAlternativeLabel,
                                           onFieldCommit: commitVoiceLabels)
 
-                // Task 7 inserts the span section here.
+                JournalSpanEditor(initial: journal.span) { newSpan in
+                    commitSpan(newSpan)
+                }
+
                 // Task 8 inserts the cover section here.
 
                 Section {
@@ -94,6 +98,9 @@ struct JournalEditorView: View {
             .alert("Couldn’t save voice labels", isPresented: $voiceLabelsFailed) {
                 Button("OK", role: .cancel) {}
             }
+            .alert("Couldn’t save this date range", isPresented: $spanFailed) {
+                Button("OK", role: .cancel) {}
+            }
         } else {
             // Deleted underneath us. Never a blank push — same treatment ContentView
             // gives a missing entry (issue #32's rule).
@@ -119,6 +126,19 @@ struct JournalEditorView: View {
             if await model.renameJournal(journalID, to: trimmed) == false {
                 renameFailed = true
                 draftName = journal.name
+            }
+        }
+    }
+
+    /// `JournalSpanEditor` already refused an inverted pair itself (never calls this with
+    /// one) — the only failure reachable here is the store rejecting an unknown journal
+    /// id, i.e. this journal was deleted out from under an open editor. No draft to reset
+    /// on failure: the span editor owns its own field state, not this view.
+    private func commitSpan(_ span: JournalSpan?) {
+        guard journal != nil else { return }
+        Task {
+            if await model.setJournalSpan(journalID, span: span) == false {
+                spanFailed = true
             }
         }
     }

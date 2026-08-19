@@ -91,7 +91,13 @@ enum JournalError: Error, Equatable {
     case emptyName
     case unknownJournal(String)
     case duplicateID(String)
-    case invalidSpan
+    // No `invalidSpan` case: `JournalRegistry.setSpan`/`JournalStore.setSpan` both take
+    // an ALREADY-CONSTRUCTED `JournalSpan?`, so an inverted pair is refused earlier, by
+    // `JournalSpan.init` throwing `JournalSpanError.inverted` — a different type, thrown
+    // before a `JournalError` could ever apply. Task 3 added a case here to satisfy the
+    // plan's interface list; Task 7 (the only plausible caller) traced it and found no
+    // path that could ever throw it, so it was deleted rather than left unreachable and
+    // untested.
 }
 
 /// The registry file's body, and the pure operations over it. Every rule about journals

@@ -8,6 +8,8 @@ import SwiftUI
 /// directly rather than as a push nested under the library screen.
 enum LibraryDestination: Hashable {
     case entry(String)
+    /// The journal editor (Task 6), pushed from `JournalHeaderCard.onEdit`. Journal id.
+    case journalEditor(String)
 }
 
 /// The library screen (M3 T4, phone mockup; nav T5 dropped the journal filter chips and
@@ -21,9 +23,8 @@ struct LibraryView: View {
     /// The journal itself, when this place is a single journal — `nil` for All Entries,
     /// which is not a journal and shows no header (spec ruling 5).
     let journal: Journal?
-    /// Task 6 replaces this with a real push to the journal editor. A no-op default so
-    /// this task can ship the header without the editor existing yet — deliberate
-    /// staging, not an oversight.
+    /// Pushes `.journalEditor(id)` onto `router.detailPath` (wired in `ContentView`).
+    /// A no-op default keeps `#Preview`/tests that never tap the header working.
     var onEditJournal: (String) -> Void = { _ in }
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to

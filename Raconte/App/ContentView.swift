@@ -44,6 +44,8 @@ struct ContentView: View {
                                                       + "It may have been permanently deleted."))
                                 .accessibilityIdentifier("entry.unavailable")
                             }
+                        case .journalEditor(let journalID):
+                            JournalEditorView(model: services.library, journalID: journalID)
                         }
                     }
             }
@@ -99,7 +101,8 @@ struct ContentView: View {
         case .journal(let id):
             LibraryView(model: services.library,
                         title: libraryTitle,
-                        journal: services.library.journals.first { $0.id == id })
+                        journal: services.library.journals.first { $0.id == id },
+                        onEditJournal: { services.router.detailPath.append(.journalEditor($0)) })
         case .trash:
             TrashView(model: services.library)
         case .debug:

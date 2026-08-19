@@ -88,8 +88,9 @@ shared, not re-implemented — standing branch rule: call the shared primitive, 
 
 ## Display rules
 
-- **Span set** → it is the journal's date line everywhere: sidebar row subtitle, Library
-  chip subtitle, journal header.
+- **Span set** → it is the journal's date line everywhere: sidebar row subtitle and
+  journal header. (As built: this spec originally also named a "Library chip subtitle"
+  as a third surface — that chip no longer exists. See As-built below.)
 - **Span nil** → today's derived `JournalDateRange`, unchanged.
 - **The editor is the one place that shows both** — the stored span (editable) and a
   read-only line giving the derived range and entry count, so "what is actually in here"
@@ -259,3 +260,164 @@ does. The harness was throwaway; it is not kept in the repo.
 
 Same class as the `DatePicker(.compact)` popover this project hit twice: the system draws
 the control, and our modifiers do not reach inside it.
+
+## As-built (2026-08-19)
+
+All nine code tasks are built (unit 1319 → 1368, iOS UI 35 → 43; commits `a6fdbc03` ..
+`fee194fe`). This section records where the build differed from the spec above, and why.
+
+### "Library chip" was already gone before this branch started
+
+The Display rules section named three span-display surfaces, including "Library chip
+subtitle". That surface does not exist — the nav redesign folded journal selection into
+`SidebarView` before this branch began; `LibraryView.swift`'s own header comment records
+it: "nav T5 dropped the journal filter chips and the Trash link — both are sidebar places
+now" (`Raconte/Library/UI/LibraryView.swift:15-16`). The real surfaces are the sidebar row
+subtitle and the journal header (`JournalHeaderCard`), plus the editor's own two lines
+(the stored span, editable, and the derived range, read-only). All of them read through
+one function — `LibraryScreenModel.dateLine(forJournal:)` — which is the "one rule, one
+place" the spec asked for, just with one fewer call site than planned.
+
+### Editor field order: shipped wrong by one task, fixed by the next
+
+The editor's field order is name → cover → span → voice labels → the read-only derived
+line (`Raconte/Library/UI/JournalEditorView.swift:42-96`). Task 7 shipped span above
+voice labels but below where cover was meant to land (cover did not exist yet). Its own
+task review flagged the miss and assigned the fix to Task 8 rather than spending a fix
+round on a one-line reorder, since Task 8 was about to edit the same `Form` to add the
+cover section anyway. Task 8 landed all five fields in the documented order in one
+commit. `JournalEditorSourceTests.testFieldsAppearInDesignOrder` now pins the order by
+scanning the file, so a future edit that reorders a section fails loudly.
+
+### `JournalError.invalidSpan`: added to satisfy an interface list, then deleted as dead code
+
+Task 3 added `JournalError.invalidSpan` because the plan's interface list named it. Task
+7 traced every possible caller and found none: both `JournalRegistry.setSpan` and
+`JournalStore.setSpan` take an already-constructed `JournalSpan?`, so an inverted pair is
+refused earlier — by `JournalSpan.init(start:end:)` throwing `JournalSpanError.inverted`,
+a different type entirely, before a `JournalError` could ever apply. The case was deleted
+rather than left unreachable and untested; `Journal.swift:94-100` records the reasoning
+in place so nobody re-adds it later just to match an interface list. If a future editor
+path ever mints spans by hand-assembling a value that bypasses `JournalSpan.init`, this
+is the case that would need to come back.
+
+### Decoder ruling: an inverted span found on disk decodes to `nil`, not a thrown error
+
+`Journal.init(from:)` decodes the field as
+`span = (try? container.decodeIfPresent(JournalSpan.self, forKey: .span)) ?? nil`
+(`Journal.swift:59`). Because `JournalSpan.init(from:)` re-validates the same inversion
+invariant the throwing initializer enforces, a structurally valid JSON object whose `end`
+precedes its `start` throws from inside that same `decodeIfPresent` call — and `try?`
+treats that identically to malformed JSON. Both are "a damaged span", and a damaged span
+costs only the span: the three identity fields (`id`/`name`/`createdAt`) stay strict and
+decode normally regardless, so one journal's corrupt span can never fail the whole
+registry. This app cannot itself produce an inverted span on disk — `JournalSpanEditor`
+only ever calls the throwing initializer — so this state is reachable only by external
+file corruption (hand-editing `journals.json`, a bad sync merge, etc.), not by anything
+the UI can do.
+
+### #67 is very likely fixed here, ahead of the `m4/sync` merge that was supposed to fix it
+
+Spec §"Branch split" named the `ContentView.onChange(of: journals)` guard as work for
+`m4/sync` alone. It shipped on THIS branch instead, as a side effect of fixing a hazard
+Task 9 found in its own feature (the sidebar `+`'s create-then-push-editor sequence was
+losing its own push): `library.journals` changes on every rescan — creating a journal,
+renaming one, setting a cover, setting a span — and `router.select` unconditionally
+cleared `detailPath`, so ANY of those mutations popped whatever was pushed, including an
+open editor mid-edit. Fixed by guarding the call
+(`Raconte/App/ContentView.swift:108-113`):
+
+```swift
+.onChange(of: services.library.journals) { _, journals in
+    let resolved = PlaceRouting.resolve(router.place, journals: journals)
+    if resolved != router.place {
+        router.select(resolved)
+    }
+}
+```
+
+`PlaceRouting.resolve` (`Raconte/App/Place.swift:135-142`) is an identity function for
+every `Place` case except `.journal(id)` when that id has vanished from the registry, so
+`resolved != router.place` can only be true in the genuine-deletion fallback — an
+unrelated rename/cover/span/create now leaves `router.select` uncalled and `detailPath`
+untouched. An independent task reviewer mutation-verified this both directions: reverting
+the guard to the old unconditional call fails
+`testRenamingFromTheOpenEditorDoesNotPopTheEditorItself` ("the editor was popped by its
+own in-place rename"); restoring it passes.
+
+This reads as a full fix for #67, not a partial one, but it was **not** closed by this
+branch — an issue gets closed by a human confirming it, not inferred from a related fix
+landing elsewhere. Whoever performs the `m4/sync` ← `main` merge should read
+`ContentView.swift:95-113`'s comment before re-deriving this guard from scratch — it is
+already there, already pinned, and the spec's own deferred-work list is now stale on this
+one point.
+
+### `JournalSpan` endpoints are units, not instants — and the first cut mishandled the edge
+
+The spec's data-model section already states the underlying trap: `PartialDate` is
+`Comparable` by `anchorDate`, which fills absent components with the FIRST, so "2001"
+anchors to 1 Jan 2001 and a naive comparison would call everything after New Year's Day
+2001 outside a "1998 – 2001" journal. The as-built fix (`Raconte/Library/JournalSpan.swift`)
+expands `start` to the earliest instant of its precision's unit and treats `end` as an
+**exclusive** upper bound — the first instant of the unit immediately *after* `end`'s —
+with containment as `date >= lowerBound && date < exclusiveUpperBound`.
+
+The first cut got this wrong in a way worth naming: it built an *inclusive* upper bound
+by subtracting a fixed 1.0 second from the exclusive one, which excluded the final second
+of every span (`23:59:59.000`–`23:59:59.999` of the true last day was wrongly outside a
+year- or month-precision end bound). Fixed in the Task 2 review's fix round
+(commit `6e62ce43`) by keeping `calendar.dateInterval(of:for:).end` untouched and switching
+the comparison to strict `<`, plus edge-anchored tests (exact sub-second `DateComponents`
+instants, not noon fixtures, since noon fixtures cannot discriminate an off-by-one).
+Mutation-verified against three distinct regressions: restoring the subtraction, and
+flipping either comparison direction — each caught by a different, correctly-reasoned
+subset of the containment tests.
+
+### A convention worth naming: write-through commit on a screen that can be popped without warning
+
+`PlaceRouting.detailPath(afterSelecting:from:path:)` (`Place.swift:125-129`) always
+returns `[]` — any sidebar click, and on the Mac any of ⌘1-4, pops whatever is on the
+detail stack with no chance for that screen to intervene. `JournalEditorView` therefore
+cannot hold a Done-button-shaped batch of unsaved edits (the same discipline
+`BackdateField`/`BackdateEditorContent` already used for exactly this reason). Each field
+commits itself on **two** deliberately redundant triggers:
+
+- **Losing focus** (`onChange` of a `FocusState`, or a picker/toggle's own `onChange`) —
+  the ordinary case, fires the instant a real tap moves elsewhere on the same screen.
+- **`onDisappear`**, via an **unstructured `Task {}`, never `.task`** (SwiftUI cancels
+  `.task` on disappear) — the safety net for the case this screen exists to guard
+  against: the screen is torn down by a sidebar/⌘-place switch before any focus-loss
+  event has a chance to fire. Same shape that let a transcript-editor draft survive its
+  entry being popped from underneath it (nav branch, Gate B).
+
+This shipped as a one-off justified by a comment on `JournalEditorView`
+(`Raconte/Library/UI/JournalEditorView.swift:9-21`). It is really a general answer to
+"how does a pushed, always-editing screen behave under a routing layer that can pop it
+unconditionally at any time" — any future screen with the same shape (pushed, not
+sheeted, no Done button, sitting under `PlaceRouting`) should reach for the same two
+triggers rather than re-deriving them.
+
+### Two SwiftUI/XCUITest traps found on this branch
+
+**A `.sheet` attached to a `Form`'s `Section` silently never presents, on iOS 26.** The
+plan's own code sketch attached `JournalCoverPickerSheet`'s `.sheet(isPresented:)`
+directly to `Section("Cover")`; built exactly as sketched, tapping "Add a cover photo…"
+did nothing observable — no sheet, no navigation bar, confirmed with a live accessibility
+tree dump. Moving the identical modifier to the enclosing `Form` fixed it immediately,
+verified by re-running the same UI test. **The mechanism was never pinned** — the task
+reviewer checked for state-ownership or stale-binding explanations (the `@State` binding
+is the same value in both positions) and found none, but nobody traced this into
+SwiftUI's internals. Treat it as an observed behaviour with a reproduction, not an
+explanation: attach `.sheet`/`.fullScreenCover` to a screen's outer view, never to a
+`Form` child.
+
+**`.tap()` on a `Toggle` inside a `Form` hits the merged label+switch accessibility
+frame's centre — which for a full-width row is the label, not the switch — so the tap
+never registers.** Confirmed by probing every layer down to a bare `Toggle` with nothing
+else on screen and reading its accessibility `value` directly after a synthesized tap
+(stayed `"0"`). This is an XCUITest-harness gap, not a production defect: a real finger
+tap anywhere on a Settings-style `Form` row does flip the control. Worked around with a
+trailing-edge coordinate tap (`coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy:
+0.5))`, where the switch actually renders) — validated on iPhone 17 simulator only, so
+the hardcoded normalized offset is fragile for a wider row (iPad) and would need
+re-tuning if iPad UI coverage is ever added.

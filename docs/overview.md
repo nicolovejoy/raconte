@@ -228,7 +228,42 @@ T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
 [T6 build plan](plans/archive/2026-08-08-revision-chain-implementation-plan.md),
 [T7 build plan](plans/archive/2026-08-09-t7-editor-ui-plan.md)
 
-## 6. Navigation: a sidebar of places (nav — built, on `nav/split-view`, pending Gate B + PR)
+## 6. Journals: their own screen, not a capture-time menu
+
+A journal is a name plus an optional **stored span** — the actual date range the paper
+journal covers ("1998 – 2001"), set by you, not inferred. It's independent of how much
+has been transcribed so far: a journal you've only read the first few pages of should not
+advertise itself as "Aug 2026" just because that's when you happened to record it. When a
+span is set, it's the one date line shown wherever a journal's dates appear (its sidebar
+row, its header); with no span, the app falls back to what the recorded entries
+themselves imply, exactly as before.
+
+Two screens now split what used to be crammed into one capture-time menu:
+
+- **The capture picker is selection-only** — pick a journal, or start a new one. That's
+  the whole job: "which journal am I recording into right now."
+- **Selecting a journal in the sidebar** shows that journal's own header above its entry
+  list — cover, name, date line, entry count — and tapping the header pushes the
+  **journal editor**: rename, set/replace/remove the cover, edit the span, set per-voice
+  labels (§4), and a read-only line showing what's actually in the journal (entry count +
+  derived range) beside the span you typed. The sidebar's own `+` creates a journal and
+  lands you straight in this editor, since that's the one moment you have the metadata to
+  hand.
+
+Splitting these apart also fixed a real bug: the old picker put the cover photo inside a
+macOS `Menu`'s label, and on macOS an `Image` inside a `Menu` label renders at its full
+intrinsic size rather than the frame SwiftUI gave it — a full-resolution cover photo
+covered the whole capture screen and pushed the picker itself off the window. Moving the
+cover out of any `Menu` label removes the failure mode outright, not just the symptom.
+
+Entries dated outside their journal's span are meant to get a visible flag — cut from
+this build to keep it shorter, tracked separately. The span type and its containment
+check already ship; only the two display sites (`LibraryEntryRow`, `EntryDetailView`)
+don't yet.
+
+Details: [journal-editing IA design](plans/2026-08-18-journal-editing-ia-design.md).
+
+## 7. Navigation: a sidebar of places (nav — built, on `nav/split-view`, pending Gate B + PR)
 
 The app is one `NavigationSplitView` on both platforms. The sidebar lists **places** —
 Capture, one row per journal, All Entries, Trash, and (debug builds only) Debug — and

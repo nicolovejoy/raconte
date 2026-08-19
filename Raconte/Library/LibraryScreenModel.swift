@@ -309,6 +309,31 @@ final class LibraryScreenModel {
         return succeeded
     }
 
+    // MARK: - Journal editing (journal-editing IA, Task 6)
+
+    /// Renames a journal. Returns `false` (sidecar untouched) when the store throws — an
+    /// empty/whitespace-only name or an id no longer in the registry (deleted underneath
+    /// an open editor). Same shape as `moveEntry`: the caller alerts on `false`.
+    @discardableResult
+    func renameJournal(_ journalID: String, to name: String) async -> Bool {
+        guard (try? await journalStore.rename(id: journalID, to: name)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
+    /// Sets this journal's voice labels wholesale (empty dict clears both). Same
+    /// false-on-store-failure shape as `renameJournal`.
+    @discardableResult
+    func setJournalVoiceLabels(_ journalID: String, labels: [String: String]) async -> Bool {
+        guard (try? await journalStore.setVoiceLabels(id: journalID, labels: labels)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
     // MARK: - Journal cover (issue #14 part 3)
 
     /// Sets or replaces a journal's cover image. `imageData` is any ImageIO-decodable

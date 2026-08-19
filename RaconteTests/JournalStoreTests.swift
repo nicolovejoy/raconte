@@ -273,4 +273,91 @@ final class JournalStoreTests: XCTestCase {
         try Data(json.utf8).write(to: registryURL)
         return registryURL
     }
+
+    // MARK: - span (spec ruling 2)
+
+    func testSpanIsAdditiveAndLenient() throws {
+        // Every registry on disk predates this field. Absent -> nil, garbage -> nil, and
+        // neither may take the journal's identity down with it.
+        let absent = Data(#"{"id":"J1","name":"N","createdAt":"1998-03-04T00:00:00.000Z"}"#.utf8)
+        XCTAssertNil(try CaptureCoding.decoder().decode(Journal.self, from: absent).span)
+
+        let garbage = Data(#"{"id":"J1","name":"N","createdAt":"1998-03-04T00:00:00.000Z","span":7}"#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(Journal.self, from: garbage)
+        XCTAssertNil(decoded.span)
+        XCTAssertEqual(decoded.name, "N", "a damaged span must cost only the span")
+    }
+
+    /// `JournalSpan.init(from:)` re-checks the inverted-bounds invariant on every decode
+    /// (Task 2), so a structurally valid span object with end < start throws from inside
+    /// `container.decodeIfPresent`. This project's decoder rule treats any span decode
+    /// failure identically, whether the JSON shape is wrong (`"span":7` above) or the
+    /// shape is right but the value violates an invariant: both are "a damaged span",
+    /// and a damaged span must cost only the span, never the journal's identity.
+    func testInvertedSpanOnDiskDecodesToNilNotThrow() throws {
+        let inverted = Data(#"""
+        {"id":"J1","name":"N","createdAt":"1998-03-04T00:00:00.000Z",
+         "span":{"start":"2001","end":"1998"}}
+        """#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(Journal.self, from: inverted)
+        XCTAssertNil(decoded.span)
+        XCTAssertEqual(decoded.name, "N", "an invariant-violating span must cost only the span")
+    }
+
+    func testAJournalWithoutASpanEncodesByteIdentically() throws {
+        // The bytes of every registry already on disk must not change.
+        let journal = Journal(id: "J1", name: "N",
+                              createdAt: Date(timeIntervalSince1970: 0))
+        let data = try JournalStore.encode(JournalRegistry(journals: [journal]))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("span"))
+    }
+
+    func testSetSpanPersistsAndReloads() async throws {
+        let s = store(ids: ["J1"])
+        let created = try await s.create(name: "1998 Journal")
+        let span = try JournalSpan(start: PartialDate(year: 1998),
+                                   end: PartialDate(year: 2001))
+        _ = try await s.setSpan(id: created.id, span: span)
+        let reloaded = try await s.journal(id: created.id)
+        XCTAssertEqual(reloaded?.span, span)
+    }
+
+    func testSetSpanOnAnUnknownJournalThrowsAndLeavesTheFileAlone() async throws {
+        let s = store(ids: ["J1"])
+        _ = try await s.create(name: "Keep me")
+        let before = try Data(contentsOf: registryURL)
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: nil)
+        do {
+            _ = try await s.setSpan(id: "missing", span: span)
+            XCTFail("expected unknownJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .unknownJournal("missing"))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    func testClearingASpanRemovesTheKey() async throws {
+        let s = store(ids: ["J1"])
+        let created = try await s.create(name: "N")
+        _ = try await s.setSpan(id: created.id,
+                                span: try JournalSpan(start: PartialDate(year: 1998), end: nil))
+        _ = try await s.setSpan(id: created.id, span: nil)
+        let reloaded = try await s.journal(id: created.id)
+        XCTAssertNil(reloaded?.span)
+        XCTAssertFalse(String(decoding: try Data(contentsOf: registryURL), as: UTF8.self)
+                        .contains("span"))
+    }
+
+    /// A tripwire, not a style check. `Journal.encode(to:)` enumerates fields by hand, so a
+    /// field added to `Journal` is dropped on every write by default and no existing test
+    /// notices. If this fails: carry the new field over in `encode(to:)` AND `init(from:)`,
+    /// assert it round-trips above, then bump the count.
+    ///
+    /// The SYNC half of this enforcement lives on `m4/sync` (spec, "Branch split") — that
+    /// branch enumerates journal fields in six more places this branch cannot see.
+    func testJournalFieldCountIsPinnedSoNewFieldsGetEncoded() {
+        let journal = Journal(id: "J1", name: "N", createdAt: Date())
+        XCTAssertEqual(Mirror(reflecting: journal).children.count, 5,
+                       "Journal gained or lost a field — see Journal.encode(to:)")
+    }
 }

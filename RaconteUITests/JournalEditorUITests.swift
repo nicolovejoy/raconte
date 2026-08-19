@@ -279,4 +279,113 @@ final class JournalEditorUITests: XCTestCase {
                         .waitForExistence(timeout: 15),
                       "creating from the sidebar did not open the new journal's editor")
     }
+
+    /// Fix-round-1 pin: `ContentView`'s `.onChange(of: library.journals)` must NOT
+    /// re-select the current place on every journals mutation. `library.journals`
+    /// changes on EVERY rescan — a rename, a cover set, an unrelated journal being
+    /// created (nav T9's own sidebar `+`) — and `router.select` unconditionally clears
+    /// `detailPath` (`PlaceRouting.detailPath` always returns `[]`), EVEN when the
+    /// resolved place is identical to the one already showing. This is the exact shape
+    /// issue #67 flags for the `m4/sync` merge: a background CloudKit journals pull
+    /// must not pop the reader mid-read.
+    ///
+    /// No sidebar-`+`/⌘N-driven repro is reachable from this suite while keeping
+    /// `detailPath` non-empty: reaching the sidebar's `+` requires revealing the
+    /// sidebar first, which — on the collapsed iPhone stack this suite drives — pops
+    /// any open push BEFORE the `+` is even visible (see `revealSidebar`'s doc
+    /// comment), and ⌘N is `#if os(macOS)`-only, absent from this target entirely
+    /// (`RaconteCommands.swift`). Renaming a journal from its OWN open editor is the
+    /// cheapest real trigger that keeps `detailPath` non-empty throughout: it mutates
+    /// `library.journals` (`LibraryScreenModel.renameJournal` → `rescan()`) while the
+    /// editor itself stays the visible, pushed screen — no navigation involved at all.
+    /// If the guard regresses to an unconditional `router.select`, this in-place
+    /// rename immediately pops the editor back to the journal's plain library, purely
+    /// as a side effect of committing its own name field.
+    func testRenamingFromTheOpenEditorDoesNotPopTheEditorItself() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+
+        let journalRow = firstJournalRow(app)
+        XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
+        press(journalRow)
+
+        let header = app.descendants(matching: .any)
+            .matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15))
+        press(header)
+
+        let nameField = app.textFields["journalEditor.name"].firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 15))
+        press(nameField)
+        // "\n" hits `.onSubmit { commitName() }` — commits WITHOUT navigating
+        // anywhere, the in-place mutation the guard must survive.
+        nameField.typeText(" Renamed In Place\n")
+
+        // Let the async rename + rescan round trip land, then assert the editor is
+        // STILL the screen on top — not popped back to the journal's library. A
+        // fixed settle wait, not a `waitForExistence` poll: the field exists BEFORE
+        // the round trip lands too, so polling for its existence would pass
+        // vacuously before the regression this test exists to catch has any chance
+        // to fire.
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(app.textFields["journalEditor.name"].firstMatch.exists,
+                      "the editor was popped by its own in-place rename — "
+                      + "the journals-onChange guard regressed to an unconditional select")
+
+        // Confirm the rename genuinely reached the registry (not a false pass from
+        // the async write never landing at all): leave and come back, same pattern
+        // as `testRenameSurvivesTheEditorBeingPoppedFromUnderneathBySidebarNavigation`.
+        revealSidebar(app)
+        openPlace(app, "sidebar.allEntries")
+        let journalRowAgain = firstJournalRow(app)
+        XCTAssertTrue(journalRowAgain.waitForExistence(timeout: 15))
+        press(journalRowAgain)
+        let headerAgain = app.descendants(matching: .any)
+            .matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(headerAgain.waitForExistence(timeout: 15))
+        XCTAssertTrue(headerAgain.label.contains("Renamed In Place"),
+                      "the in-place rename did not actually reach the registry — "
+                      + "header was: \(headerAgain.label)")
+    }
+
+    /// Fix-round-1 item 2: the capture screen's own "New Journal…" (`JournalHeaderView`,
+    /// `CaptureView.swift:398,421,474`) is a DIFFERENT code path from the shared root
+    /// alert the sidebar `+`/⌘N use (`ContentView.swift`'s `$router.showingNewJournalPrompt`)
+    /// — it owns its own private `showingNewJournalPrompt`/`draftName` state and its
+    /// Create button calls `model.createJournal` directly with no `router` interaction
+    /// at all. By design (spec ruling 6, #69): you meet a new paper journal at the
+    /// moment you sit down to read it, and editing its name/cover/span is housekeeping
+    /// for later — dropping the owner into an editor mid-capture would be wrong. Pinned
+    /// here so a future edit that accidentally routes this path through the shared
+    /// alert (and inherits its editor push) can't do so silently.
+    func testCaptureScreenNewJournalStaysOnCapture() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+
+        // Not `capture.journalPicker` (the Menu's own identifier) — the enclosing
+        // VStack's `capture.journalHeader` is what actually resolves to a queryable
+        // button, per the container-identifier-flattening trap `NavigationUITests`
+        // already documents for this exact control.
+        let journalPicker = app.buttons["capture.journalHeader"].firstMatch
+        XCTAssertTrue(journalPicker.waitForExistence(timeout: 15))
+        press(journalPicker)
+        let newJournalItem = app.buttons["New Journal…"].firstMatch
+        XCTAssertTrue(newJournalItem.waitForExistence(timeout: 10))
+        press(newJournalItem)
+
+        // Not `capture.newJournalNameField` (issue #66): an alert `TextField`'s
+        // `.accessibilityIdentifier` does not bridge onto the native
+        // `UIAlertController` field it becomes. Only text field on screen.
+        let nameField = app.textFields.firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10))
+        press(nameField)
+        nameField.typeText("Capture Path Journal")
+        app.buttons["Create"].firstMatch.tap()
+
+        // Must still be ON the capture screen, never the journal editor.
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15),
+                      "creating a journal from the capture screen navigated away from capture")
+        XCTAssertFalse(app.textFields["journalEditor.name"].firstMatch.exists,
+                       "the capture screen's New Journal must never open the journal editor")
+    }
 }

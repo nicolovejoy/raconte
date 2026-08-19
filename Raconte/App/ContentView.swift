@@ -73,6 +73,17 @@ struct ContentView: View {
             if case .journal(let id) = place, router.pendingEditorPush == id {
                 router.pendingEditorPush = nil
                 let pushedRouter = services.router
+                // Deliberately NOT inline (see the paragraph above): this Task defers
+                // the append past the CURRENT SwiftUI update transaction — the one that
+                // just swapped `detailRoot`'s content to the new root — onto the next
+                // MainActor turn, which is what lets the push survive. It is a
+                // deterministic one-turn defer, not a sleep-based race, but it is still
+                // a race against whatever ELSE is queued on that same turn (e.g. another
+                // `Task` from this same `.onChange`, or a `library.journals` mutation
+                // landing at the same moment). Do not "simplify" this back into an
+                // inline `pushedRouter.detailPath.append(...)` or a same-transaction
+                // step — both were tried and both silently dropped the push (verified
+                // with `os_log` tracing before this shape was settled on).
                 Task { @MainActor in
                     pushedRouter.detailPath.append(.journalEditor(id))
                 }

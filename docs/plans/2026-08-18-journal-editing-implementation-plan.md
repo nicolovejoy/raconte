@@ -1486,92 +1486,7 @@ detailPath append must follow router.select, which always clears the path."
 
 ---
 
-### Task 10: Flag entries dated outside their journal's span
-
-Spec ruling 4: flagged, never blocked.
-
-**Files:**
-- Modify: `Raconte/Library/UI/LibraryView.swift` (`LibraryEntryRow`), `Raconte/Library/UI/EntryDetailView.swift`
-- Test: `RaconteTests/JournalSpanTests.swift` (extend)
-
-**Interfaces:**
-- Consumes: `JournalSpan.contains(_:calendar:)` (Task 2), `EntryListItem.effectiveDate` (existing).
-
-- [ ] **Step 1: Write the failing test**
-
-```swift
-    func testAnEntryOutsideItsJournalsSpanIsFlaggedAndStillFiled() throws {
-        let span = try JournalSpan(start: PartialDate(year: 1998),
-                                   end: PartialDate(year: 2001))
-        XCTAssertFalse(span.contains(date(2026, 8, 18), calendar: cal))
-        XCTAssertTrue(span.contains(date(1999, 6, 1), calendar: cal))
-    }
-
-    func testAJournalWithNoSpanMakesNoClaimSoNothingIsEverFlagged() {
-        // Guard against the flag becoming "every entry in an unspanned journal is wrong".
-        XCTAssertNil(JournalDateLine.text(span: nil, derived: nil, calendar: cal))
-    }
-```
-
-- [ ] **Step 2: Run to verify, then implement the badge**
-
-Add the pure predicate beside `JournalSpan` so both views share one rule:
-
-```swift
-extension JournalSpan {
-    /// Spec ruling 4. A journal with no span makes no claim, so nothing in it is ever
-    /// flagged — that is why this takes an optional span and answers `false` for nil,
-    /// rather than each view remembering to check.
-    static func flags(_ span: JournalSpan?, _ date: Date,
-                      calendar: Calendar = .gregorianCurrent) -> Bool {
-        guard let span else { return false }
-        return !span.contains(date, calendar: calendar)
-    }
-}
-```
-
-In `LibraryEntryRow`, beside the existing date text:
-
-```swift
-if JournalSpan.flags(item.journal?.span, item.effectiveDate) {
-    Image(systemName: "calendar.badge.exclamationmark")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .accessibilityLabel("Dated outside this journal’s range")
-        .accessibilityIdentifier("library.outOfSpan")
-}
-```
-
-In `EntryDetailView`, the same condition carrying a sentence rather than a bare glyph:
-
-```swift
-if JournalSpan.flags(item.journal?.span, item.effectiveDate),
-   let spanText = item.journal?.span?.formatted() {
-    Label("This entry’s date is outside \(item.journal?.name ?? "this journal")’s "
-          + "range (\(spanText)).",
-          systemImage: "calendar.badge.exclamationmark")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .accessibilityIdentifier("detail.outOfSpan")
-}
-```
-
-**The entry must still save, file, sync and render normally.** Nothing about this flag may gate a write, disable a control, or change what `EntryListFilter` returns. If you find yourself adding a condition to a write path, you have misread the ruling.
-
-- [ ] **Step 3: Run both suites and commit**
-
-```bash
-git add Raconte/Library/UI/LibraryView.swift Raconte/Library/UI/EntryDetailView.swift \
-        RaconteTests/JournalSpanTests.swift
-git commit -m "feat: flag entries dated outside their journal's span
-
-Visible, never blocking — the entry saves, files and renders exactly as before.
-Journals with no span make no claim, so nothing in them is ever flagged."
-```
-
----
-
-### Task 11: Documentation
+### Task 10: Documentation
 
 **Files:**
 - Modify: `docs/plans/2026-08-18-journal-editing-ia-design.md` (as-built section), `docs/overview.md`, `CLAUDE.md`
@@ -1598,6 +1513,14 @@ Dispatch an independent reviewer (Opus) that has NOT implemented any task.
 - [ ] Triage any deferred minors into the ledger and file issues at branch finish.
 
 ---
+
+## Deferred to a follow-up (NOT this plan)
+
+- **#71 — flag entries dated outside their journal's span** (spec ruling 4). Cut from this
+  branch by the owner on 2026-08-18 to keep it shorter. Everything it needs — `JournalSpan`,
+  `Journal.span`, `contains(_:)` — ships here; #71 is purely the surfacing, on
+  `LibraryEntryRow` and `EntryDetailView`. Note for the gate: the spec still describes this
+  behaviour, so its absence is deliberate, not a coverage gap.
 
 ## Deferred to `m4/sync` (NOT this plan)
 

@@ -18,6 +18,13 @@ struct LibraryView: View {
     /// From the PLACE that routed here (`ContentView.libraryTitle`) — "All Entries" for
     /// the cross-journal scope, a journal's own name for a scoped one.
     let title: String
+    /// The journal itself, when this place is a single journal — `nil` for All Entries,
+    /// which is not a journal and shows no header (spec ruling 5).
+    let journal: Journal?
+    /// Task 6 replaces this with a real push to the journal editor. A no-op default so
+    /// this task can ship the header without the editor existing yet — deliberate
+    /// staging, not an oversight.
+    var onEditJournal: (String) -> Void = { _ in }
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
     /// trash or move, if any. Held here rather than per-row `@State` because the
@@ -34,6 +41,13 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.journalsUnreadable { registryBanner }
+            // Above `content`, not inside the List's non-empty branch: a freshly
+            // created journal has zero entries and would otherwise show `emptyState`
+            // with no header at all — an owner-created journal with nothing recorded
+            // yet must still be reachable for editing (spec ruling 5 doesn't carve out
+            // an exception for an empty one).
+            journalHeader
+                .padding(.horizontal, 16)
             content
             #if DEBUG
             skippedNote
@@ -135,6 +149,19 @@ struct LibraryView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .accessibilityIdentifier("library.sweepNote")
+        }
+    }
+
+    /// The journal itself, above its entries (spec ruling 5) — `nil` (renders nothing)
+    /// for All Entries, which is not a journal.
+    @ViewBuilder
+    private var journalHeader: some View {
+        if let journal {
+            JournalHeaderCard(name: journal.name,
+                              cover: model.journalCovers[journal.id],
+                              dateLine: model.dateLine(forJournal: journal.id),
+                              entryCount: model.items.count,
+                              onEdit: { onEditJournal(journal.id) })
         }
     }
 

@@ -94,8 +94,12 @@ struct ContentView: View {
         switch services.router.place {
         case .capture:
             CaptureView(model: services.capture)
-        case .allEntries, .journal:
-            LibraryView(model: services.library, title: libraryTitle)
+        case .allEntries:
+            LibraryView(model: services.library, title: "All Entries", journal: nil)
+        case .journal(let id):
+            LibraryView(model: services.library,
+                        title: libraryTitle,
+                        journal: services.library.journals.first { $0.id == id })
         case .trash:
             TrashView(model: services.library)
         case .debug:

@@ -39,3 +39,23 @@ func openPlace(_ app: XCUIApplication,
 func openCapture(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     openPlace(app, "sidebar.capture", file: file, line: line)
 }
+
+/// The first sidebar row for a real journal (`sidebar.journal.<id>`) — for tests that
+/// need to reach a journal whose id is minted fresh per run and so can't be named
+/// exactly the way `openPlace` requires. Mirrors `openPlace`'s own reveal step
+/// (Mac/iPad keep both columns visible and never need it; iPhone collapses the split
+/// view, so a place already selected pops the sidebar off the visible stack — reveal
+/// via the nav bar's back button before searching).
+func firstJournalRow(_ app: XCUIApplication) -> XCUIElement {
+    let row = app.descendants(matching: .any)
+        .matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.journal.'"))
+        .firstMatch
+    if !row.waitForExistence(timeout: 3) {
+        if app.buttons["Show Sidebar"].firstMatch.exists {
+            app.buttons["Show Sidebar"].firstMatch.tap()
+        } else if app.navigationBars.buttons.firstMatch.exists {
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+    }
+    return row
+}

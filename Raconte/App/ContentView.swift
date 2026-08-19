@@ -57,6 +57,26 @@ struct ContentView: View {
             if let scope = PlaceRouting.journalScope(for: place) {
                 Task { await services.library.selectJournalScope(scope) }
             }
+            // Sidebar `+` (nav T9): the deferred half of `pendingEditorPush` — see its
+            // doc comment on `AppRouter` for the full story. This fires once `place` has
+            // already changed to the new journal, but the append STILL can't happen
+            // inline here: `.onChange`'s closure runs as part of the SAME SwiftUI update
+            // transaction that just swapped `detailRoot`'s content (the switch over
+            // `place` below), and empirically a `NavigationStack` whose root content and
+            // `path` both change within one transaction discards the path — verified with
+            // `os_log` tracing showing `detailPath` correctly holding the push in memory
+            // right after being set, yet the editor never rendered. An unstructured
+            // `Task { @MainActor in … }` schedules the append as a genuinely separate
+            // MainActor turn, after this transaction has committed and the new root has
+            // actually rendered; a bare synchronous append or a same-transaction `Task`
+            // step (tried: plain `.onChange` body) both reproduced the loss.
+            if case .journal(let id) = place, router.pendingEditorPush == id {
+                router.pendingEditorPush = nil
+                let pushedRouter = services.router
+                Task { @MainActor in
+                    pushedRouter.detailPath.append(.journalEditor(id))
+                }
+            }
         }
         // A deleted journal's place must not keep pointing at nothing forever — falls
         // back to `.capture` rather than showing an empty list with no way out. Routed
@@ -64,8 +84,21 @@ struct ContentView: View {
         // minor 3): a direct assignment bypasses `AppRouter.select`'s clear-the-path
         // contract, so a stale `detailPath` from the deleted journal's place could survive
         // the fallback and push against a place it no longer belongs to.
+        //
+        // Guarded to fire only when `resolve` actually disagrees with the current place
+        // (nav T9): `library.journals` changes on EVERY rescan — creating a journal
+        // (sidebar `+`), renaming one, setting a cover — and `router.select` unconditionally
+        // clears `detailPath` (`PlaceRouting.detailPath` always returns `[]`). Before this
+        // guard, the sidebar `+`'s create-then-push-editor sequence lost its own push the
+        // instant `createJournal`'s rescan landed here: this handler re-selected the SAME
+        // place a moment later and wiped the just-appended `.journalEditor` destination.
+        // Reproduced empirically (a UI test landed on the journal's library screen instead
+        // of its editor) before being traced to this unconditional call.
         .onChange(of: services.library.journals) { _, journals in
-            router.select(PlaceRouting.resolve(router.place, journals: journals))
+            let resolved = PlaceRouting.resolve(router.place, journals: journals)
+            if resolved != router.place {
+                router.select(resolved)
+            }
         }
         // ⌘N (nav T8, `RaconteCommands`) must work from any place — All Entries, Trash,
         // a journal, not just Capture — so this alert lives on the outermost view rather
@@ -86,7 +119,26 @@ struct ContentView: View {
             Button("Create") {
                 let name = newJournalName
                 newJournalName = ""
-                Task { await services.capture.createJournal(name: name) }
+                Task {
+                    // Sidebar `+` (nav T9): push the new journal's editor once it exists.
+                    // `createJournal` awaits `library.rescan()` before returning, so the
+                    // journal is already in `services.library.journals` by the time this
+                    // continuation resumes — `router.select` and the JournalEditorView
+                    // lookup it drives cannot observe a not-yet-registered journal.
+                    //
+                    // The push itself is queued, not inline (`AppRouter.pendingEditorPush`
+                    // doc comment has the full story): a `NavigationStack` whose ROOT
+                    // content changes in the SAME synchronous update as a non-empty `path`
+                    // discards the path, so `select` immediately followed by
+                    // `detailPath.append` in one breath silently drops the push — confirmed
+                    // empirically with `os_log` traces before this queue replaced it.
+                    // `select` still runs first, since `pendingEditorPush` is consumed by
+                    // `.onChange(of: place)`, which only fires once `place` has actually
+                    // changed.
+                    guard let created = await services.capture.createJournal(name: name) else { return }
+                    services.router.pendingEditorPush = created.id
+                    services.router.select(.journal(created.id))
+                }
             }
             Button("Cancel", role: .cancel) { newJournalName = "" }
         }

@@ -165,6 +165,17 @@ final class AppRouter {
     var detailPath: [LibraryDestination] = []
     /// Consumed by T8's ⌘N and T8's root alert.
     var showingNewJournalPrompt = false
+    /// A journal editor to push once its journal's place has actually become root
+    /// (nav T9, sidebar `+`). NOT pushed inline with `select`: a `NavigationStack`
+    /// whose ROOT content identity changes (via `ContentView.detailRoot`'s switch,
+    /// following `place`) in the SAME synchronous update as a non-empty `path` discards
+    /// the path — the stack resets to show just the new root. Confirmed empirically
+    /// (os_log traces showed `detailPath` correctly holding `[.journalEditor]`
+    /// immediately after `select` + `.append`, yet the rendered screen was the journal's
+    /// plain library, never the editor) before this queue replaced the inline append.
+    /// `ContentView`'s `.onChange(of: place)` consumes this once the new root has
+    /// actually rendered, in a later, separate update pass.
+    var pendingEditorPush: String?
 
     func select(_ place: Place) {
         detailPath = PlaceRouting.detailPath(afterSelecting: place, from: self.place, path: detailPath)

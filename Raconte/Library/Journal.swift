@@ -264,12 +264,21 @@ struct JournalRegistry: Codable, Sendable, Equatable {
     /// `setVoiceLabels`'s exact shape: find-by-id-or-throw, mutate in place, hand back
     /// the stored result. `JournalSpan`'s own initializer already refuses an inverted
     /// range, so there is nothing further to validate here.
+    ///
+    /// M4 sync (#70): stamps `modified["span"]` only — `name`'s and `voiceLabels`' own
+    /// stamps are untouched, the same per-field cardinality every other mutator here
+    /// keeps. Stamped on BOTH a set and a clear: a clear that did not stamp could never
+    /// win a later LWW comparison against a peer that has not yet heard the field was
+    /// deleted (the same bug class cover deletion hit on this branch).
     @discardableResult
-    mutating func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+    mutating func setSpan(id: String, span: JournalSpan?, now: Date = Date()) throws -> Journal {
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
         journals[index].span = span
+        var modified = journals[index].modified ?? [:]
+        modified["span"] = now
+        journals[index].modified = modified
         return journals[index]
     }
 }

@@ -33,9 +33,10 @@ final class SyncJournalRecordTests: XCTestCase {
     }
 
     private func journal(voiceLabels: [String: String] = [:],
+                         span: JournalSpan? = nil,
                          modified: [String: Date]? = nil) -> Journal {
         Journal(id: journalID, name: "1987 Journal", createdAt: stamp(0),
-                voiceLabels: voiceLabels, modified: modified)
+                voiceLabels: voiceLabels, span: span, modified: modified)
     }
 
     // MARK: Builder — field coverage
@@ -67,6 +68,60 @@ final class SyncJournalRecordTests: XCTestCase {
         // LWW at all and silently falls back to whole-record.
         let stamps: [String: Date] = SyncRecordBuilders.decodeJSON(record["modified"] as? String)
         XCTAssertEqual(stamps, ["name": stamp(10), "voiceLabels": stamp(20)])
+    }
+
+    // MARK: span — record coverage (for #70)
+
+    private func span(startYear: Int, endYear: Int? = nil) -> JournalSpan {
+        try! JournalSpan(start: PartialDate(year: startYear),
+                         end: endYear.map { PartialDate(year: $0) })
+    }
+
+    /// Mirrors `testVoiceLabelsTravelAsASortedKeysJSONString`: a span travels as a JSON
+    /// string through the same `encodeJSON` helper, so it can be decoded with no CloudKit
+    /// account and compared byte-for-byte.
+    func testAJournalWithASpanWritesASpanFieldOnTheRecord() {
+        let source = journal(span: span(startYear: 1998, endYear: 2001))
+        let record = SyncRecordBuilders.journalRecord(journal: source, coverFileURL: nil,
+                                                      deviceID: deviceID, zoneID: zoneID)
+        let decoded: JournalSpan? = SyncRecordBuilders.decodeJSON(record["span"] as? String)
+        XCTAssertEqual(decoded, span(startYear: 1998, endYear: 2001))
+    }
+
+    /// Mirrors `testAbsentCoverProducesNoAssetFieldAtAll`: a nil span must not even carry a
+    /// present-but-empty key, or `RemoteJournal.init?(record:)` could never distinguish "no
+    /// span" from "an empty one" if this type ever needed to.
+    func testNilSpanWritesNoSpanFieldAtAllOnAFreshRecord() {
+        let record = SyncRecordBuilders.journalRecord(journal: journal(), coverFileURL: nil,
+                                                      deviceID: deviceID, zoneID: zoneID)
+        XCTAssertNil(record["span"])
+        XCTAssertFalse(record.allKeys().contains("span"))
+    }
+
+    /// This is what propagates span DELETION: a `base:` record that previously carried a
+    /// span must have the key actually removed when the journal's span is now nil, exactly
+    /// like the cover asset field's clearing behaviour
+    /// (`testRebuildingOnArchivedSystemFieldsKeepsRecordIdentityAndAppliesNewValues`) — a
+    /// key merely left alone would leave the server's stale span in place forever.
+    func testClearingASpanOnABaseRecordThatHadOneRemovesTheKey() throws {
+        let withSpan = SyncRecordBuilders.journalRecord(
+            journal: journal(span: span(startYear: 1998, endYear: 2001)),
+            coverFileURL: nil, deviceID: deviceID, zoneID: zoneID)
+        XCTAssertNotNil(withSpan["span"], "sanity: the first record really carries a span")
+
+        let archiver = NSKeyedArchiver(requiringSecureCoding: true)
+        withSpan.encodeSystemFields(with: archiver)
+        archiver.finishEncoding()
+        let unarchiver = try NSKeyedUnarchiver(forReadingFrom: archiver.encodedData)
+        unarchiver.requiresSecureCoding = true
+        let base = try XCTUnwrap(CKRecord(coder: unarchiver))
+        unarchiver.finishDecoding()
+
+        let cleared = SyncRecordBuilders.journalRecord(journal: journal(span: nil),
+                                                       coverFileURL: nil, deviceID: deviceID,
+                                                       zoneID: zoneID, base: base)
+        XCTAssertNil(cleared["span"], "the deletion must reach the wire as a removed key")
+        XCTAssertFalse(cleared.allKeys().contains("span"))
     }
 
     func testVoiceLabelsTravelAsASortedKeysJSONString() {
@@ -127,6 +182,7 @@ final class SyncJournalRecordTests: XCTestCase {
         let coverURL = containerRoot.appendingPathComponent("cover.jpg")
         try Data("jpeg-bytes".utf8).write(to: coverURL)
         let source = journal(voiceLabels: ["bn": "Grandpa"],
+                             span: span(startYear: 1998, endYear: 2001),
                              modified: ["name": stamp(10), "cover": stamp(30)])
         let record = SyncRecordBuilders.journalRecord(journal: source, coverFileURL: coverURL,
                                                       deviceID: deviceID, zoneID: zoneID)
@@ -136,9 +192,23 @@ final class SyncJournalRecordTests: XCTestCase {
         XCTAssertEqual(remote.name, "1987 Journal")
         XCTAssertEqual(remote.createdAt, stamp(0))
         XCTAssertEqual(remote.voiceLabels, ["bn": "Grandpa"])
+        XCTAssertEqual(remote.span, span(startYear: 1998, endYear: 2001))
         XCTAssertEqual(remote.modified, ["name": stamp(10), "cover": stamp(30)])
         XCTAssertEqual(remote.coverAsset, coverURL)
         XCTAssertEqual(remote.deviceID, deviceID)
+    }
+
+    /// An old build's record simply never wrote a `span` field at all — absence must not
+    /// fail the init, the same lenient treatment `voiceLabels`/`modified` already get.
+    func testRemoteJournalTreatsAnAbsentSpanFieldAsNilRatherThanFailingTheInit() throws {
+        let record = CKRecord(recordType: "Journal",
+                              recordID: CKRecord.ID(recordName: "j.\(journalID)", zoneID: zoneID))
+        record["name"] = "1987 Journal"
+        record["createdAt"] = stamp(0)
+        // Deliberately no "span" key at all — an old build's record.
+
+        let remote = try XCTUnwrap(RemoteJournal(record: record))
+        XCTAssertNil(remote.span)
     }
 
     /// The load-bearing one. `journals.json` stores stamps at millisecond resolution
@@ -218,5 +288,19 @@ final class SyncJournalRecordTests: XCTestCase {
         XCTAssertEqual(remote.name, "1987 Journal")
         XCTAssertEqual(remote.voiceLabels, [:])
         XCTAssertEqual(remote.modified, [:])
+    }
+
+    /// Same rule, applied to span: a present-but-garbage `span` field must cost only the
+    /// span, never the journal's identity.
+    func testRemoteJournalDegradesDamagedSpanToNil() throws {
+        let record = CKRecord(recordType: "Journal",
+                              recordID: CKRecord.ID(recordName: "j.\(journalID)", zoneID: zoneID))
+        record["name"] = "1987 Journal"
+        record["createdAt"] = stamp(0)
+        record["span"] = "not json at all"
+
+        let remote = try XCTUnwrap(RemoteJournal(record: record))
+        XCTAssertEqual(remote.name, "1987 Journal")
+        XCTAssertNil(remote.span)
     }
 }

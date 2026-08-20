@@ -128,6 +128,88 @@ final class SyncJournalIngestTests: XCTestCase {
         XCTAssertEqual(merged.voiceLabels, ["bn": "Local label"])
     }
 
+    // MARK: span — merge (for #70)
+
+    private func span(_ startYear: Int, _ endYear: Int? = nil) -> JournalSpan {
+        try! JournalSpan(start: PartialDate(year: startYear),
+                         end: endYear.map { PartialDate(year: $0) })
+    }
+
+    /// Mirrors `testARemoteNewerNameAndALocalNewerVoiceLabelsBothSurvive`'s shape, for the
+    /// field #70 exists to wire through: a newer-stamped remote span replaces the local one.
+    func testRemoteNewerSpanWins() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            span: span(1990), modified: ["span": stamp(10)])
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   span: span(1998, 2001), modified: ["span": stamp(20)],
+                                   deviceID: deviceHigh)
+
+        let merged = JournalMerge.merge(local: local, remote: remote,
+                                        localDeviceID: deviceLow, remoteDeviceID: deviceHigh)
+
+        XCTAssertEqual(merged.span, span(1998, 2001), "remote's span stamp is newer")
+        XCTAssertEqual(merged.modified?["span"], stamp(20))
+    }
+
+    /// The other direction: a newer local span survives an older remote one.
+    func testLocalNewerSpanSurvivesAnOlderRemote() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            span: span(1990), modified: ["span": stamp(30)])
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   span: span(1998, 2001), modified: ["span": stamp(20)],
+                                   deviceID: deviceHigh)
+
+        let merged = JournalMerge.merge(local: local, remote: remote,
+                                        localDeviceID: deviceLow, remoteDeviceID: deviceHigh)
+
+        XCTAssertEqual(merged.span, span(1990), "local's span stamp is newer")
+        XCTAssertEqual(merged.modified?["span"], stamp(30))
+    }
+
+    /// Deletion has to propagate exactly like the cover's: a newer-stamped `nil` span must
+    /// beat an older non-nil one, or a span deleted on one device would keep coming back from
+    /// every peer that has not yet heard about the deletion.
+    func testANewerStampedNilSpanDefeatsAnOlderNonNilSpan() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            span: span(1990), modified: ["span": stamp(10)])
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   span: nil, modified: ["span": stamp(20)],
+                                   deviceID: deviceHigh)
+
+        let merged = JournalMerge.merge(local: local, remote: remote,
+                                        localDeviceID: deviceLow, remoteDeviceID: deviceHigh)
+
+        XCTAssertNil(merged.span, "the remote's deletion is newer and must win")
+        XCTAssertEqual(merged.modified?["span"], stamp(20))
+    }
+
+    /// A remote that has never touched span leaves the local value untouched, same as the
+    /// unstamped-field rule for every other field.
+    func testAFieldTheRemoteNeverStampedSpanIsNotTakenOverALocalEdit() {
+        let local = Journal(id: journalID, name: "J", createdAt: stamp(0),
+                            span: span(1990), modified: ["span": stamp(10)])
+        let remote = RemoteJournal(id: journalID, name: "J", createdAt: stamp(0),
+                                   span: nil, modified: [:], deviceID: deviceHigh)
+
+        let merged = JournalMerge.merge(local: local, remote: remote,
+                                        localDeviceID: deviceLow, remoteDeviceID: deviceHigh)
+
+        XCTAssertEqual(merged.span, span(1990))
+    }
+
+    /// `adopted(remote:)` must carry span through, same as every other field on a
+    /// never-before-seen journal.
+    func testAnAdoptedRemoteJournalCarriesItsSpan() {
+        let remote = RemoteJournal(id: journalID, name: "1987 Journal", createdAt: stamp(0),
+                                   span: span(1998, 2001), modified: ["span": stamp(10)],
+                                   deviceID: deviceHigh)
+
+        let adopted = JournalMerge.adopted(remote: remote)
+
+        XCTAssertEqual(adopted.span, span(1998, 2001))
+        XCTAssertEqual(adopted.modified, ["span": stamp(10)])
+    }
+
     func testMergeNeverRewritesIdentityFields() {
         let local = Journal(id: journalID, name: "Local name", createdAt: stamp(0))
         let remote = RemoteJournal(id: journalID, name: "Remote name", createdAt: stamp(9_999),

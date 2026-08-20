@@ -8,6 +8,8 @@ import SwiftUI
 /// directly rather than as a push nested under the library screen.
 enum LibraryDestination: Hashable {
     case entry(String)
+    /// The journal editor (Task 6), pushed from `JournalHeaderCard.onEdit`. Journal id.
+    case journalEditor(String)
 }
 
 /// The library screen (M3 T4, phone mockup; nav T5 dropped the journal filter chips and
@@ -18,6 +20,12 @@ struct LibraryView: View {
     /// From the PLACE that routed here (`ContentView.libraryTitle`) — "All Entries" for
     /// the cross-journal scope, a journal's own name for a scoped one.
     let title: String
+    /// The journal itself, when this place is a single journal — `nil` for All Entries,
+    /// which is not a journal and shows no header (spec ruling 5).
+    let journal: Journal?
+    /// Pushes `.journalEditor(id)` onto `router.detailPath` (wired in `ContentView`).
+    /// A no-op default keeps `#Preview`/tests that never tap the header working.
+    var onEditJournal: (String) -> Void = { _ in }
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
     /// trash or move, if any. Held here rather than per-row `@State` because the
@@ -34,6 +42,13 @@ struct LibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             if model.journalsUnreadable { registryBanner }
+            // Above `content`, not inside the List's non-empty branch: a freshly
+            // created journal has zero entries and would otherwise show `emptyState`
+            // with no header at all — an owner-created journal with nothing recorded
+            // yet must still be reachable for editing (spec ruling 5 doesn't carve out
+            // an exception for an empty one).
+            journalHeader
+                .padding(.horizontal, 16)
             content
             #if DEBUG
             skippedNote
@@ -135,6 +150,19 @@ struct LibraryView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .accessibilityIdentifier("library.sweepNote")
+        }
+    }
+
+    /// The journal itself, above its entries (spec ruling 5) — `nil` (renders nothing)
+    /// for All Entries, which is not a journal.
+    @ViewBuilder
+    private var journalHeader: some View {
+        if let journal {
+            JournalHeaderCard(name: journal.name,
+                              cover: model.journalCovers[journal.id],
+                              dateLine: model.dateLine(forJournal: journal.id),
+                              entryCount: model.items.count,
+                              onEdit: { onEditJournal(journal.id) })
         }
     }
 

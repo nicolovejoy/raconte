@@ -167,9 +167,21 @@ actor JournalStore {
     /// exactly like every other local-edit setter (`rename`, `setVoiceLabels`) — without
     /// it a span edit would sit stamped-but-unpushed until the next launch's
     /// reconciliation scan happened to notice the digest moved.
+    ///
+    /// Value-changed guard (gate F1, for #70): a no-op call — e.g. a journal editor
+    /// opened and closed without touching the span — must NOT re-stamp `modified["span"]`
+    /// or fire the sync hook. Without this, re-stamping a value that did not change can
+    /// beat a genuinely older but real edit from an offline peer in a later LWW merge,
+    /// silently discarding it. `rename`/`setVoiceLabels` rely on their *caller* (the
+    /// editor view) to skip a no-op call instead; `setSpan` guards here too, as a second
+    /// chokepoint any future caller inherits for free.
     @discardableResult
     func setSpan(id: String, span: JournalSpan?) async throws -> Journal {
         var registry = try load()
+        guard let current = registry.journal(id: id) else {
+            throw JournalError.unknownJournal(id)
+        }
+        guard current.span != span else { return current }
         let updated = try registry.setSpan(id: id, span: span, now: now())
         try save(registry)
         await syncHooks?.noteLocalChange(.journal(id: id))

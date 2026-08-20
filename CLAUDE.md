@@ -1,5 +1,95 @@
 # CLAUDE.md
 
+## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 open; #69 dead, #67 fixed incidentally; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
+
+Ran `docs/plans/2026-08-18-journal-editing-implementation-plan.md` to completion,
+subagent-driven, in one sitting. Branch `feat/journal-editing`, 13 commits
+`5f188ac7..7584afa1`, pushed. **PR #72 open — merge is Nico's.** Owner ruling honoured:
+Sonnet implementers AND Sonnet task reviews, Opus for the gate only.
+
+- **#69 is dead structurally, in the first commit.** The capture picker is selection-only
+  (journals + New Journal); the cover thumbnail left the macOS `Menu` label, which is the
+  whole fix. Also folded in **#65** (the picker's AX identifier was being swallowed by its
+  container). Pinned by a source scan — the honest pin available, since the bug is
+  macOS-only and this project cannot run macOS UI tests.
+- **Journals gained a stored `JournalSpan`** of two `PartialDate`s, persisted in
+  `journals.json`, outranking the derived `JournalDateRange` everywhere. A
+  `JournalHeaderCard` above a journal's entries pushes `JournalEditorView` (name, cover,
+  span, voice labels + a read-only derived line); the sidebar `+` creates and opens it.
+- **#67 FIXED HERE, ahead of the `m4/sync` merge that was supposed to fix it.**
+  `ContentView`'s `.onChange(of: journals)` called `router.select` unconditionally, so any
+  journals mutation cleared `detailPath` — which pops the detail column post-nav. Now
+  guarded (`resolved != router.place`), pinned by
+  `testRenamingFromTheOpenEditorDoesNotPopTheEditorItself`, mutation-verified in both
+  directions by two independent reviewers. Gate judges it a FULL structural fix:
+  `PlaceRouting.resolve` is the identity for every `Place` case except a `.journal(id)`
+  whose id has left the registry, so the only surviving `select` is genuine deletion.
+  **Deliberately left open** for a human to close. **Two caveats for whoever merges
+  `m4/sync ← main`:** read the comment at `ContentView.swift:92-107` rather than
+  re-deriving the guard from the design doc's stale deferred-work list, and the pin is an
+  iOS UI test that must survive the merge intact.
+- **The reviews are what earned the session.** Every substantive defect came from a
+  reviewer, not an implementer: `JournalSpan.upperBound` subtracted a whole second so a
+  span ending "1998" stopped at 23:59:59.000 (and twelve passing tests missed it because
+  every fixture was noon-anchored — the same-author-mutation gap again); the plan's own
+  placement would have put the journal header inside the entry list's non-empty branch,
+  making a **zero-entry journal permanently uneditable** since the header is its only
+  route to the editor; and the #67 guard shipped **completely unpinned** — deleting it
+  left every test green, caught only because a reviewer reverted it and re-ran.
+- **Two new SwiftUI/XCUITest traps, in the conventions section with honest confidence:**
+  a `.sheet` attached to a `Form`'s **`Section`** silently NEVER PRESENTS on iOS 26 —
+  mechanism unconfirmed, and the plan's own code sketch would have shipped a cover button
+  that did nothing; and `.tap()` on a `Toggle` inside a `Form` hits the merged
+  label+switch AX frame's centre (the label), so the tap never registers — worked around
+  with a trailing-edge coordinate tap validated on iPhone 17 sim only.
+- **Branch is sync-free by construction** — zero hits across all 13 commits for
+  `modified` / `Raconte/Sync` / LWW / `CKRecord` / `RemoteJournal` / `JournalMerge`, so
+  the `m4/sync` tripwire still fires on `span` at that merge, as designed.
+- **Gate re-ran both suites itself** on the committed tree: `Executed 1368 tests, with 0
+  failures` / `Executed 43 tests, with 0 failures`. Neither known intermittent fired.
+- **Owner-accepted regression now live:** since the capture route is gone, **macOS cannot
+  set a journal cover at all** until **#68** is fixed — the editor is the only cover path
+  and that sheet renders empty on macOS. Documented at the mount site, pinned by a test.
+- **Issues filed from gate findings: #73** (dead `JournalVoiceLabelsSheet`, doc comments
+  describing an unreachable screen), **#74** (four orphaned `CaptureScreenModel` methods,
+  two still covered by green tests = false coverage signal), **#75** (header card and
+  editor compute entry count by two different rules), **#76** (unconfirmed
+  `JournalSpanEditor.populate()` reseed hazard), **#77** (no test composes the full
+  `PartialDate → picker Date → JournalSpan` round trip), **#78** (single-journal UI corpus:
+  stale header after switching journals uncovered).
+- **Mac build handed over: `~/Desktop/Raconte-journaledit.app`**, debug dylib UUID
+  `A17446C8`, verified against the build product; `journalEditor.name` and
+  `journal.header` present, "Cover Photo" absent. **No sync in this build** (it is off
+  main). Quit `Raconte-m4sync.app` first — one instance at a time, shared container.
+- **Process, now settled after 8 instances: the background-suite stall cannot be
+  prevented by wording.** Three more implementers stalled after backgrounding a UI suite
+  to "wait for a notification" subagents never receive — including the last three, which
+  carried the mechanism spelled out and a running count of prior victims. Budget one
+  controller nudge per long-UI-suite task; recovery is a single SendMessage, nothing lost.
+  Memory updated.
+
+**Next steps:**
+1. **Owner smoke on `~/Desktop/Raconte-journaledit.app`** (quit `Raconte-m4sync.app`
+   first). The route to the editor: click a journal in the **nav sidebar** → its entries
+   screen shows a **journal header card** at the top → click that card. Or the sidebar
+   `+`. The must-test item no automated test can reach: **on the Mac, type a new name in
+   the editor and press ⌘2 without clicking away, then reopen** — write-through exists
+   for exactly that, and macOS UI tests are impossible here. Also: iPhone cover-pick then
+   navigate away instantly; confirm the macOS cover gap; the now-**pinned** (non-scrolling)
+   header's vertical cost on iPhone; the open-ended span rendering as `1998 –` with a
+   dangling en-dash; and the header entry count right after switching from All Entries.
+2. **Nico: merge PR #72.** Then close **#69** and **#65** by hand, and **#67** after
+   reading its caveats above.
+3. **`m4/sync` takes main** — now 40+ commits behind and the gap grows. `ContentView.swift`
+   + `CLAUDE.md` conflict (accepted, nav design §10). The `Journal` sync tripwire lands on
+   that branch, and `span` must be wired through all six sync sites.
+4. **m4 Gate A** — unblocked on the #69 front once PR #72 merges and a fresh m4sync build
+   exists; the amended smoke (cover phone→laptop, rename laptop→phone) has still never
+   been completed.
+5. **#68** (macOS cover picker sheet empty) — now the only cover path on the Mac.
+6. Backlog: #73-78 (this branch's follow-ups), #71, #70, #66, #63 final smoke,
+   unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
 ## Session 2026-08-18 (laptop — #69 ROOT-CAUSED AND PROVEN; PR #64 MERGED; journal-editing IA designed + planned; issues #69-#71)
 
 The cover full-bleed bug that defeated the last session is solved, and the fix is a

@@ -1,6 +1,75 @@
 # CLAUDE.md
 
-## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 open; #69 dead, #67 fixed incidentally; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
+## Session 2026-08-20 (laptop — PR #72 SMOKED AND MERGED; #69/#65 closed, #67 mis-closed then corrected; m4/sync merge DRY-RUN: 3 files, 7 hunks)
+
+Short close-out session. Main at `8799ccf0`, tree clean.
+
+- **Owner smoked `~/Desktop/Raconte-journaledit.app` and passed** ("pass! looks good"),
+  read the PR, **merged #72**. Recorded on the PR.
+- **#69 CLOSED** (dead structurally — no `Image` left in the macOS `Menu` label) and
+  **#65 CLOSED** (picker AX identifier survives via `.combine`).
+- **#67 was CLOSED IN ERROR, then reopened with a correction.** #67 is the
+  **consolidated 11-item** nav follow-up issue, not the onChange guard alone — PR #72
+  fixed exactly **item 2**. The correcting comment states that plainly so the earlier
+  close comment cannot be misread as resolving all eleven. **Lesson: check whether an
+  issue is consolidated before closing it on one item's evidence.**
+  Also flagged there: **item 1 got worse.** It already said ⌘N from a non-capture place
+  silently switches the capture screen's selected journal; PR #72 additionally made ⌘N
+  push the new journal's editor (shared Create button with the sidebar `+`), so that one
+  shortcut now changes the capture target *and* navigates.
+- **`m4/sync ← main` DRY-RUN, in a throwaway worktree, then torn down.** 46 behind,
+  8 ahead. **Only 3 conflicted files, 7 hunks:**
+  - `Raconte/Library/Journal.swift` — **5 hunks, all mechanical additive unions.** Both
+    branches added a field at the same five sites (init signature, init body, decoder,
+    encoder, `CodingKeys`); every one resolves by keeping BOTH `modified` and `span`.
+    Both sides independently wrote the same lenient-decode reasoning citing `voiceLabels`.
+  - `RaconteTests/JournalStoreTests.swift` — 1 hunk, adjacent test blocks, keep both.
+    **Main's `Mirror` tripwire pins `Journal` at 5 fields; `modified` makes it 6, so it
+    fires on the merge — which is what it is for.** Bump to 6.
+  - `Raconte/App/ContentView.swift` — 1 hunk, **the only one needing judgment.** Two
+    different files: `m4/sync` has an `init()` building library/model/`SyncCoordinator`;
+    main's nav version has `let services: AppServices` + sidebar state. Take main's
+    structure, re-home `SyncCoordinator` into `AppServices`.
+- **CORRECTION to a claim this file has carried for weeks: `CLAUDE.md` does NOT conflict
+  at that merge.** `m4/sync` never touched it, so main's version wins cleanly. Only
+  `ContentView.swift` conflicts, as nav design §10 anticipated.
+- **#67 needs NOTHING at that merge** — the guard is already on main and pinned. Just
+  don't let the hand-resolved `ContentView.swift` drop it; re-run `RaconteUITests` after.
+- **The real post-merge work is `span` reaching the sync layer** — the ~9-site /
+  ~3-compiler-enforced problem #70 documents, but it is only **two files**:
+  `SyncRecordBuilders.swift` (the `SyncJournalField` constant + `journalRecord`) and
+  `SyncIngest.swift` (`RemoteJournal`'s property, `init?(record:)`, memberwise init,
+  `JournalMerge.merge`'s `resolve("span")`, `adopted(remote:)`). Follow `voiceLabels`
+  verbatim — identical shape at every site. Plus `JournalStore.setSpan` must stamp
+  `modified["span"]`, impossible on main where the field does not exist.
+- **⚠️ The sync round-trip tripwire was NEVER WRITTEN.** The plan called for a `Mirror`
+  field-count pin over `Journal`'s **sync** round trip, red-first. It does not exist, so
+  today nothing fails if you miss `JournalMerge.adopted(remote:)` — exactly the site #70
+  warns silently never syncs while everything compiles and the suite passes.
+  **Recommended sequencing: write that tripwire RED on `m4/sync` BEFORE merging.** The
+  merge then turns it green by force and the suite stays red until all six sites carry
+  `span`. Writing it after the merge loses the red.
+- **`Raconte/Sync/SyncCoordinator.swift` is still uncommitted in
+  `/Users/nico/src/raconte-m4`** (the fetch-on-launch fix dispatched but never landed,
+  2026-08-17). It will tangle with the merge — commit or discard before starting.
+
+**Next steps:**
+1. **`m4/sync` takes main.** Order: (a) decide the uncommitted `SyncCoordinator.swift`;
+   (b) write the `Journal` sync round-trip tripwire RED on `m4/sync`; (c) merge main
+   (3 files, 7 hunks, detail above); (d) wire `span` through the six sync sites + the
+   `modified["span"]` stamp until green; (e) bump the `Mirror` pin 5 → 6; (f) re-run
+   `RaconteUITests` to confirm the #67 guard survived the hand-resolved `ContentView`.
+2. **m4 Gate A** — the #69 blocker is gone once a fresh `m4sync` build exists. The
+   amended smoke (cover phone→laptop, rename laptop→phone) has still never been run.
+3. **#68** (macOS cover picker sheet empty) — still the only cover path on the Mac, so
+   macOS cannot set a cover at all until it is fixed.
+4. **Owner smoke item never run:** on the Mac, type a new name in the journal editor and
+   press ⌘2 **without** clicking away, then reopen. The write-through discipline exists
+   for exactly that, and macOS UI tests are impossible here. Proven on iOS only.
+5. Backlog: #67 (10 items remain), #73-78, #71, #70, #66, #63 final smoke, unified-editor
+   #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
+## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 merged as `8799ccf0`; #69 dead, #67 item 2 fixed; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
 
 Ran `docs/plans/2026-08-18-journal-editing-implementation-plan.md` to completion,
 subagent-driven, in one sitting. Branch `feat/journal-editing`, 13 commits

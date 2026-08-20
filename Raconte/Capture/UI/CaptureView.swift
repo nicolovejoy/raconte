@@ -388,16 +388,14 @@ struct CaptureView: View {
 }
 
 /// "Recording into: <journal>" (M3 T3, phone mockup). A `Menu` doubles as the switcher
-/// — tap to pick any existing journal — plus "Rename…" and "New Journal…", both taken
-/// through an `.alert` text field so this stays a menu-and-alert screen, no navigation
-/// push, matching M1/M2's quiet-chrome style.
+/// — tap to pick any existing journal — plus "New Journal…", taken through an `.alert`
+/// text field so this stays a menu-and-alert screen, no navigation push, matching
+/// M1/M2's quiet-chrome style. Selection and creation only (spec ruling 6, #69) —
+/// renaming, cover photo, and voice labels moved to the journal editor.
 struct JournalHeaderView: View {
     let model: CaptureScreenModel
 
     @State private var showingNewJournalPrompt = false
-    @State private var showingRenamePrompt = false
-    @State private var showingCoverPicker = false
-    @State private var showingVoiceLabels = false
     @State private var draftName = ""
 
     var body: some View {
@@ -418,31 +416,12 @@ struct JournalHeaderView: View {
                     }
                 }
                 Divider()
-                Button("Rename “\(model.selectedJournalName)”…") {
-                    draftName = model.selectedJournalName
-                    showingRenamePrompt = true
-                }
                 Button("New Journal…") {
                     draftName = ""
                     showingNewJournalPrompt = true
                 }
-                if model.selectedJournalID != nil {
-                    Button("Cover Photo…") { showingCoverPicker = true }
-                        .accessibilityIdentifier("capture.coverPhotoMenuItem")
-                    Button("Voice Labels…") { showingVoiceLabels = true }
-                        .accessibilityIdentifier("capture.voiceLabelsMenuItem")
-                }
             } label: {
                 HStack(spacing: 6) {
-                    JournalCoverThumbnail(data: model.selectedJournalCover, size: 34)
-                        .accessibilityIdentifier("capture.journalCoverThumbnail")
-                    // `captureLabel`, not a raw `.font(.title3…)`. The raw style rendered
-                    // this at 15 pt on the Mac — below the 16 pt floor — on the very
-                    // platform the "font too small" report came from, while
-                    // `CaptureLabel.journalName` sat in the model declaring 22 pt and
-                    // passing every check in `CaptureLabelTests`. The model said one thing
-                    // and the screen did another; `testEveryLabelCaseIsActuallyAppliedToAView`
-                    // is what now makes that disagreement impossible.
                     Text(model.selectedJournalName)
                         .captureLabel(.journalName)
                         .fontWeight(.semibold)
@@ -451,6 +430,12 @@ struct JournalHeaderView: View {
                 }
                 .foregroundStyle(.white)
             }
+            // #65: the container identifier was overwriting its descendants', which made
+            // `capture.journalPicker` invisible to XCUITest (confirmed in a live AX dump).
+            // `.combine` flattens the label into ONE element that keeps both an explicit
+            // label and this identifier, instead of the identifier being swallowed.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Recording into \(model.selectedJournalName)")
             .accessibilityIdentifier("capture.journalPicker")
             // This control had NO color-scheme pin at all before (issue #58) — its
             // label was already explicit `.white`/gray, but nothing pinned the menu's
@@ -461,12 +446,11 @@ struct JournalHeaderView: View {
             // whole window — forcing Library/Detail/Trash dark for every macOS
             // light-mode user, not just this menu (fix-round-1 finding). Scoped to the
             // `Menu` only, not the enclosing `VStack` below, which also anchors this
-            // view's `.sheet`/`.alert` presentations (cover picker, voice labels,
-            // rename/new journal prompts) — those must keep following the system's
-            // normal appearance. The menu's own dropdown *content* (journal list,
-            // Rename/New Journal/Cover Photo/Voice Labels items) is a transient popup
-            // and out of scope for #58 — it renders on its own material background,
-            // not the near-black screen.
+            // view's `.alert` presentation (new journal prompt) — that must keep
+            // following the system's normal appearance. The menu's own dropdown
+            // *content* (journal list, New Journal item) is a transient popup and out
+            // of scope for #58 — it renders on its own material background, not the
+            // near-black screen.
             .environment(\.colorScheme, .dark)
 
             // The one honest case where nothing is selected. Says what it costs — the
@@ -480,13 +464,13 @@ struct JournalHeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("capture.journalHeader")
-        // `.foregroundStyle(Color.primary)` on both fields, for the same reason the
-        // `.sheet` below resets it: an alert draws on the SYSTEM's own light material,
-        // but its content is a SwiftUI builder nested inside `CaptureView`, which sets
-        // `.foregroundStyle(.white)` for the near-black capture surface. That white is
-        // inherited straight into the text field — owner smoke, 2026-08-15: "the 'new
-        // folder' text field is white on white, can't read what I type. but it does
-        // work." Exactly that: the binding was fine, the text was invisible.
+        // `.foregroundStyle(Color.primary)` on the field: an alert draws on the
+        // SYSTEM's own light material, but its content is a SwiftUI builder nested
+        // inside `CaptureView`, which sets `.foregroundStyle(.white)` for the
+        // near-black capture surface. That white is inherited straight into the text
+        // field — owner smoke, 2026-08-15: "the 'new folder' text field is white on
+        // white, can't read what I type. but it does work." Exactly that: the binding
+        // was fine, the text was invisible.
         .alert("New Journal", isPresented: $showingNewJournalPrompt) {
             TextField("Journal name", text: $draftName)
                 .foregroundStyle(Color.primary)
@@ -494,43 +478,18 @@ struct JournalHeaderView: View {
             Button("Create") { Task { await model.createJournal(name: draftName) } }
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Rename Journal", isPresented: $showingRenamePrompt) {
-            TextField("Journal name", text: $draftName)
-                .foregroundStyle(Color.primary)
-                .accessibilityIdentifier("capture.renameJournalNameField")
-            Button("Rename") { Task { await model.renameCurrentJournal(to: draftName) } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showingCoverPicker) {
-            // Reset the capture screen's inherited .white foreground —
-            // it renders invisible on the system sheet background.
-            JournalCoverPickerSheet(
-                journalName: model.selectedJournalName,
-                currentCover: model.selectedJournalCover,
-                onPick: { data in
-                    do { try await model.setCurrentJournalCover(imageData: data); return true }
-                    catch { return false }
-                },
-                onRemove: { await model.removeCurrentJournalCover() })
-            .foregroundStyle(Color.primary)
-        }
-        .sheet(isPresented: $showingVoiceLabels) {
-            // Same foreground reset as the cover sheet above — system sheet background.
-            JournalVoiceLabelsSheet(
-                journalName: model.selectedJournalName,
-                currentLabels: model.journals.first(where: { $0.id == model.selectedJournalID })?
-                    .voiceLabels ?? [:],
-                onSave: { labels in await model.setCurrentJournalVoiceLabels(labels) })
-            .foregroundStyle(Color.primary)
-        }
     }
 
-    /// Journal name plus its derived date range in parentheses (issue #14 part 2), e.g.
-    /// "1987 (1987)" or "Trip to France (March – July 1998)". Omitted for an empty
-    /// journal — appending "()" to a journal nobody has recorded into yet is noise.
+    /// Journal name plus its date line in parentheses (issue #14 part 2; spec ruling 3),
+    /// e.g. "1987 (1987)" or "Trip to France (March – July 1998)". Routed through the
+    /// shared `dateLine(forJournal:)` — never `dateRange(forJournal:)` directly — so this
+    /// menu, the sidebar row and the journal editor cannot disagree about what a journal
+    /// covers (a stored span outranks the range derived from when its entries were
+    /// captured). Omitted for a journal with neither a stored span nor any entries —
+    /// appending "()" to one nobody has recorded into yet is noise.
     private func menuTitle(for journal: Journal) -> String {
-        guard let range = model.library.dateRange(forJournal: journal.id) else { return journal.name }
-        return "\(journal.name) (\(range.formatted()))"
+        guard let line = model.library.dateLine(forJournal: journal.id) else { return journal.name }
+        return "\(journal.name) (\(line))"
     }
 }
 

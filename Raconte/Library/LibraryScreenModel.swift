@@ -213,6 +213,13 @@ final class LibraryScreenModel {
         JournalDateRange.compute(from: allEntries.filter { $0.journalID == journalID })
     }
 
+    /// The one date line for a journal, span-first. `SidebarView` and the journal header
+    /// both read this rather than deciding for themselves.
+    func dateLine(forJournal journalID: String) -> String? {
+        JournalDateLine.text(span: journals.first { $0.id == journalID }?.span,
+                             derived: dateRange(forJournal: journalID))
+    }
+
     /// Durable per-journal multi-voice carry-over (T6 §14, owner decision 5): the
     /// journal's most recently captured non-trashed entry decides. Derived from
     /// `allEntries` — the same collection `dateRange(forJournal:)` reads — so it costs
@@ -300,6 +307,46 @@ final class LibraryScreenModel {
         }
         await rescan()
         return succeeded
+    }
+
+    // MARK: - Journal editing (journal-editing IA, Task 6)
+
+    /// Renames a journal. Returns `false` (sidecar untouched) when the store throws — an
+    /// empty/whitespace-only name or an id no longer in the registry (deleted underneath
+    /// an open editor). Same shape as `moveEntry`: the caller alerts on `false`.
+    @discardableResult
+    func renameJournal(_ journalID: String, to name: String) async -> Bool {
+        guard (try? await journalStore.rename(id: journalID, to: name)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
+    /// Sets this journal's voice labels wholesale (empty dict clears both). Same
+    /// false-on-store-failure shape as `renameJournal`.
+    @discardableResult
+    func setJournalVoiceLabels(_ journalID: String, labels: [String: String]) async -> Bool {
+        guard (try? await journalStore.setVoiceLabels(id: journalID, labels: labels)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
+    /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
+    /// false-on-store-failure shape as `renameJournal`/`setJournalVoiceLabels`. The
+    /// registry's own `setSpan` never rejects the span's shape — an inverted pair is
+    /// refused earlier, by `JournalSpan.init` itself, and `JournalSpanEditor` never
+    /// calls this with one — so the only failure reachable here is an id no longer in
+    /// the registry.
+    @discardableResult
+    func setJournalSpan(_ journalID: String, span: JournalSpan?) async -> Bool {
+        guard (try? await journalStore.setSpan(id: journalID, span: span)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
     }
 
     // MARK: - Journal cover (issue #14 part 3)

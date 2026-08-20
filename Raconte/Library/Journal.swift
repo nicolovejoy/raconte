@@ -18,12 +18,18 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// journal, empty by default. See the house decoder rule below: this field decodes
     /// leniently, unlike `id`/`name`/`createdAt`.
     var voiceLabels: [String: String]
+    /// The span the PAPER journal covers (spec ruling 2). Additive and lenient, exactly
+    /// like `voiceLabels` above: every registry on disk predates this field, and a
+    /// damaged value must cost only the span, never the journal's id/name/createdAt.
+    var span: JournalSpan?
 
-    init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:]) {
+    init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
+         span: JournalSpan? = nil) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.voiceLabels = voiceLabels
+        self.span = span
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -44,6 +50,13 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // take the journal's id/name/createdAt down with it. Absent or garbage -> no
         // labels, which is also what every pre-feature journal actually has.
         voiceLabels = ((try? container.decodeIfPresent([String: String].self, forKey: .voiceLabels)) ?? nil) ?? [:]
+        // Additive and lenient, same reasoning as voiceLabels above. `JournalSpan.init(
+        // from:)` also re-validates its inverted-bounds invariant on every decode (Task
+        // 2) — a structurally valid span whose end < start throws from inside this same
+        // `decodeIfPresent`, and `try?` treats that identically to malformed JSON: both
+        // are "a damaged span", and a damaged span must cost only the span, never the
+        // journal's identity.
+        span = (try? container.decodeIfPresent(JournalSpan.self, forKey: .span)) ?? nil
     }
 
     /// Hand-written per the same rule: the synthesized encoder does not know
@@ -60,10 +73,15 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if !voiceLabels.isEmpty {
             try container.encode(voiceLabels, forKey: .voiceLabels)
         }
+        // Only when set, same "an untouched record's bytes don't change" rule the field
+        // above follows.
+        if let span {
+            try container.encode(span, forKey: .span)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, voiceLabels
+        case id, name, createdAt, voiceLabels, span
     }
 }
 
@@ -73,6 +91,13 @@ enum JournalError: Error, Equatable {
     case emptyName
     case unknownJournal(String)
     case duplicateID(String)
+    // No `invalidSpan` case: `JournalRegistry.setSpan`/`JournalStore.setSpan` both take
+    // an ALREADY-CONSTRUCTED `JournalSpan?`, so an inverted pair is refused earlier, by
+    // `JournalSpan.init` throwing `JournalSpanError.inverted` — a different type, thrown
+    // before a `JournalError` could ever apply. Task 3 added a case here to satisfy the
+    // plan's interface list; Task 7 (the only plausible caller) traced it and found no
+    // path that could ever throw it, so it was deleted rather than left unreachable and
+    // untested.
 }
 
 /// The registry file's body, and the pure operations over it. Every rule about journals
@@ -151,6 +176,19 @@ struct JournalRegistry: Codable, Sendable, Equatable {
             trimmed[voice] = value
         }
         journals[index].voiceLabels = trimmed
+        return journals[index]
+    }
+
+    /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Mirrors
+    /// `setVoiceLabels`'s exact shape: find-by-id-or-throw, mutate in place, hand back
+    /// the stored result. `JournalSpan`'s own initializer already refuses an inverted
+    /// range, so there is nothing further to validate here.
+    @discardableResult
+    mutating func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        journals[index].span = span
         return journals[index]
     }
 }

@@ -50,6 +50,16 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Raconte")
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    services.router.requestNewJournal()
+                } label: {
+                    Label("New Journal", systemImage: "plus")
+                }
+                .accessibilityIdentifier("sidebar.newJournal")
+            }
+        }
         // NO accessibilityIdentifier on the List itself — by convention (design §8.4),
         // matching the flattening hazard already established for `Button`/`NavigationLink`
         // in this repo (Task-6 backdate row, the control bar, `NavigationLink` rows: an
@@ -82,8 +92,8 @@ struct SidebarView: View {
     private var rows: [PlaceRow] {
         var ranges: [String: String] = [:]
         for journal in services.library.journals {
-            if let range = services.library.dateRange(forJournal: journal.id) {
-                ranges[journal.id] = range.formatted()
+            if let line = services.library.dateLine(forJournal: journal.id) {
+                ranges[journal.id] = line
             }
         }
         #if DEBUG

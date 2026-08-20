@@ -21,13 +21,14 @@ final class SyncJournalRoundTripTests: XCTestCase {
         name: "Round Trip",
         createdAt: Date(timeIntervalSince1970: 1_700_000_000),
         voiceLabels: ["bn": "Big Nico", "ln": "Little Nico"],
+        span: try! JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001)),
         modified: ["name": Date(timeIntervalSince1970: 1_700_000_100),
                    "voiceLabels": Date(timeIntervalSince1970: 1_700_000_200)]
     )
 
     func testJournalFieldCountMatchesTheSyncFixture() {
         XCTAssertEqual(
-            Mirror(reflecting: Self.fullyPopulatedJournal).children.count, 5,
+            Mirror(reflecting: Self.fullyPopulatedJournal).children.count, 6,
             "Journal gained or lost a field. Bump this count, add a NON-DEFAULT value for the field to fullyPopulatedJournal, then wire the field through SyncRecordBuilders.journalRecord, RemoteJournal, JournalMerge.merge, and JournalMerge.adopted until testEveryJournalFieldSurvivesTheSyncRoundTrip passes."
         )
     }

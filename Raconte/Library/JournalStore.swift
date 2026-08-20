@@ -160,6 +160,17 @@ actor JournalStore {
         return updated
     }
 
+    /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
+    /// load -> mutate -> save shape as `setVoiceLabels`; the pure rule lives on
+    /// `JournalRegistry.setSpan`.
+    @discardableResult
+    func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+        var registry = try load()
+        let updated = try registry.setSpan(id: id, span: span)
+        try save(registry)
+        return updated
+    }
+
     // Deletion is deliberately absent: a journal with entries has no defined disposal
     // for them yet (M3 T5 owns trash). Adding `delete` before that is how orphans happen.
 

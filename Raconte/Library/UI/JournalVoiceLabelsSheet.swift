@@ -1,5 +1,49 @@
 import SwiftUI
 
+/// The two label fields themselves (T7 Mark Voices, issue #56), with no save/write
+/// discipline of its own — `JournalVoiceLabelsSheet` batches them behind Save/Cancel,
+/// `JournalEditorView` (Task 6) writes each field through on focus loss. Extracted so
+/// the two callers share one body rather than two copies drifting apart (standing rule:
+/// call shared primitives, never copy them).
+struct JournalVoiceLabelsSection: View {
+    /// Current labels, keyed "bn" (main voice) / "ln" (alternative voice).
+    @Binding var mainLabel: String
+    @Binding var alternativeLabel: String
+    /// Fires when either field loses focus. No-op default: `JournalVoiceLabelsSheet`
+    /// batches both fields behind its own Save button and has no use for a per-field
+    /// signal. `JournalEditorView` (Task 6) uses this to write through immediately —
+    /// focus state stays fully inside this view (two fields, one shared enum) so the
+    /// parent never has to know which of the two just lost it.
+    var onFieldCommit: () -> Void = {}
+
+    private enum Field: Hashable { case main, alternative }
+    @FocusState private var focusedField: Field?
+
+    var body: some View {
+        Group {
+            Section {
+                TextField("No label", text: $mainLabel)
+                    .focused($focusedField, equals: .main)
+                    .accessibilityIdentifier("journalVoiceLabels.mainField")
+            } header: {
+                Text("Main voice label (italic)")
+            }
+            Section {
+                TextField("No label", text: $alternativeLabel)
+                    .focused($focusedField, equals: .alternative)
+                    .accessibilityIdentifier("journalVoiceLabels.alternativeField")
+            } header: {
+                Text("Alternative voice label")
+            } footer: {
+                Text("Leave empty to distinguish voices by style alone.")
+            }
+        }
+        .onChange(of: focusedField) { oldField, _ in
+            if oldField != nil { onFieldCommit() }
+        }
+    }
+}
+
 /// Per-journal voice-label settings (T7 Mark Voices, issue #56). Default is NO labels —
 /// main voice renders italic, alternative regular, with no prefix at all (`VoiceDisplay`).
 /// Labels are opt-in per journal: filling either field turns on the `"BN: …"`-style
@@ -8,6 +52,8 @@ import SwiftUI
 ///
 /// Mirrors `JournalCoverPickerSheet`'s closure shape: dumb and store-free, it hands the
 /// trimmed dictionary up to `onSave` and lets the caller own persistence and failure.
+/// No production caller remains after Task 6 (the editor replaced the capture-screen
+/// route Task 1 removed), kept for the shape's own sake and any future re-mount.
 struct JournalVoiceLabelsSheet: View {
     let journalName: String
     /// Current labels, keyed "bn" (main voice) / "ln" (alternative voice).
@@ -25,20 +71,7 @@ struct JournalVoiceLabelsSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("No label", text: $mainLabel)
-                        .accessibilityIdentifier("journalVoiceLabels.mainField")
-                } header: {
-                    Text("Main voice label (italic)")
-                }
-                Section {
-                    TextField("No label", text: $alternativeLabel)
-                        .accessibilityIdentifier("journalVoiceLabels.alternativeField")
-                } header: {
-                    Text("Alternative voice label")
-                } footer: {
-                    Text("Leave empty to distinguish voices by style alone.")
-                }
+                JournalVoiceLabelsSection(mainLabel: $mainLabel, alternativeLabel: $alternativeLabel)
             }
             .navigationTitle("Voice Labels for “\(journalName)”")
             .toolbar {

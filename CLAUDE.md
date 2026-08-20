@@ -1,5 +1,571 @@
 # CLAUDE.md
 
+## Session 2026-08-20 (laptop — PR #72 SMOKED AND MERGED; #69/#65 closed, #67 mis-closed then corrected; m4/sync merge DRY-RUN: 3 files, 7 hunks)
+
+Short close-out session. Main at `8799ccf0`, tree clean.
+
+- **Owner smoked `~/Desktop/Raconte-journaledit.app` and passed** ("pass! looks good"),
+  read the PR, **merged #72**. Recorded on the PR.
+- **#69 CLOSED** (dead structurally — no `Image` left in the macOS `Menu` label) and
+  **#65 CLOSED** (picker AX identifier survives via `.combine`).
+- **#67 was CLOSED IN ERROR, then reopened with a correction.** #67 is the
+  **consolidated 11-item** nav follow-up issue, not the onChange guard alone — PR #72
+  fixed exactly **item 2**. The correcting comment states that plainly so the earlier
+  close comment cannot be misread as resolving all eleven. **Lesson: check whether an
+  issue is consolidated before closing it on one item's evidence.**
+  Also flagged there: **item 1 got worse.** It already said ⌘N from a non-capture place
+  silently switches the capture screen's selected journal; PR #72 additionally made ⌘N
+  push the new journal's editor (shared Create button with the sidebar `+`), so that one
+  shortcut now changes the capture target *and* navigates.
+- **`m4/sync ← main` DRY-RUN, in a throwaway worktree, then torn down.** 46 behind,
+  8 ahead. **Only 3 conflicted files, 7 hunks:**
+  - `Raconte/Library/Journal.swift` — **5 hunks, all mechanical additive unions.** Both
+    branches added a field at the same five sites (init signature, init body, decoder,
+    encoder, `CodingKeys`); every one resolves by keeping BOTH `modified` and `span`.
+    Both sides independently wrote the same lenient-decode reasoning citing `voiceLabels`.
+  - `RaconteTests/JournalStoreTests.swift` — 1 hunk, adjacent test blocks, keep both.
+    **Main's `Mirror` tripwire pins `Journal` at 5 fields; `modified` makes it 6, so it
+    fires on the merge — which is what it is for.** Bump to 6.
+  - `Raconte/App/ContentView.swift` — 1 hunk, **the only one needing judgment.** Two
+    different files: `m4/sync` has an `init()` building library/model/`SyncCoordinator`;
+    main's nav version has `let services: AppServices` + sidebar state. Take main's
+    structure, re-home `SyncCoordinator` into `AppServices`.
+- **CORRECTION to a claim this file has carried for weeks: `CLAUDE.md` does NOT conflict
+  at that merge.** `m4/sync` never touched it, so main's version wins cleanly. Only
+  `ContentView.swift` conflicts, as nav design §10 anticipated.
+- **#67 needs NOTHING at that merge** — the guard is already on main and pinned. Just
+  don't let the hand-resolved `ContentView.swift` drop it; re-run `RaconteUITests` after.
+- **The real post-merge work is `span` reaching the sync layer** — the ~9-site /
+  ~3-compiler-enforced problem #70 documents, but it is only **two files**:
+  `SyncRecordBuilders.swift` (the `SyncJournalField` constant + `journalRecord`) and
+  `SyncIngest.swift` (`RemoteJournal`'s property, `init?(record:)`, memberwise init,
+  `JournalMerge.merge`'s `resolve("span")`, `adopted(remote:)`). Follow `voiceLabels`
+  verbatim — identical shape at every site. Plus `JournalStore.setSpan` must stamp
+  `modified["span"]`, impossible on main where the field does not exist.
+- **⚠️ The sync round-trip tripwire was NEVER WRITTEN.** The plan called for a `Mirror`
+  field-count pin over `Journal`'s **sync** round trip, red-first. It does not exist, so
+  today nothing fails if you miss `JournalMerge.adopted(remote:)` — exactly the site #70
+  warns silently never syncs while everything compiles and the suite passes.
+  **Recommended sequencing: write that tripwire RED on `m4/sync` BEFORE merging.** The
+  merge then turns it green by force and the suite stays red until all six sites carry
+  `span`. Writing it after the merge loses the red.
+- **`Raconte/Sync/SyncCoordinator.swift` is still uncommitted in
+  `/Users/nico/src/raconte-m4`** (the fetch-on-launch fix dispatched but never landed,
+  2026-08-17). It will tangle with the merge — commit or discard before starting.
+
+**Next steps:**
+1. **`m4/sync` takes main.** Order: (a) decide the uncommitted `SyncCoordinator.swift`;
+   (b) write the `Journal` sync round-trip tripwire RED on `m4/sync`; (c) merge main
+   (3 files, 7 hunks, detail above); (d) wire `span` through the six sync sites + the
+   `modified["span"]` stamp until green; (e) bump the `Mirror` pin 5 → 6; (f) re-run
+   `RaconteUITests` to confirm the #67 guard survived the hand-resolved `ContentView`.
+2. **m4 Gate A** — the #69 blocker is gone once a fresh `m4sync` build exists. The
+   amended smoke (cover phone→laptop, rename laptop→phone) has still never been run.
+3. **#68** (macOS cover picker sheet empty) — still the only cover path on the Mac, so
+   macOS cannot set a cover at all until it is fixed.
+4. **Owner smoke item never run:** on the Mac, type a new name in the journal editor and
+   press ⌘2 **without** clicking away, then reopen. The write-through discipline exists
+   for exactly that, and macOS UI tests are impossible here. Proven on iOS only.
+5. Backlog: #67 (10 items remain), #73-78, #71, #70, #66, #63 final smoke, unified-editor
+   #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
+## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 merged as `8799ccf0`; #69 dead, #67 item 2 fixed; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
+
+Ran `docs/plans/2026-08-18-journal-editing-implementation-plan.md` to completion,
+subagent-driven, in one sitting. Branch `feat/journal-editing`, 13 commits
+`5f188ac7..7584afa1`, pushed. **PR #72 open — merge is Nico's.** Owner ruling honoured:
+Sonnet implementers AND Sonnet task reviews, Opus for the gate only.
+
+- **#69 is dead structurally, in the first commit.** The capture picker is selection-only
+  (journals + New Journal); the cover thumbnail left the macOS `Menu` label, which is the
+  whole fix. Also folded in **#65** (the picker's AX identifier was being swallowed by its
+  container). Pinned by a source scan — the honest pin available, since the bug is
+  macOS-only and this project cannot run macOS UI tests.
+- **Journals gained a stored `JournalSpan`** of two `PartialDate`s, persisted in
+  `journals.json`, outranking the derived `JournalDateRange` everywhere. A
+  `JournalHeaderCard` above a journal's entries pushes `JournalEditorView` (name, cover,
+  span, voice labels + a read-only derived line); the sidebar `+` creates and opens it.
+- **#67 FIXED HERE, ahead of the `m4/sync` merge that was supposed to fix it.**
+  `ContentView`'s `.onChange(of: journals)` called `router.select` unconditionally, so any
+  journals mutation cleared `detailPath` — which pops the detail column post-nav. Now
+  guarded (`resolved != router.place`), pinned by
+  `testRenamingFromTheOpenEditorDoesNotPopTheEditorItself`, mutation-verified in both
+  directions by two independent reviewers. Gate judges it a FULL structural fix:
+  `PlaceRouting.resolve` is the identity for every `Place` case except a `.journal(id)`
+  whose id has left the registry, so the only surviving `select` is genuine deletion.
+  **Deliberately left open** for a human to close. **Two caveats for whoever merges
+  `m4/sync ← main`:** read the comment at `ContentView.swift:92-107` rather than
+  re-deriving the guard from the design doc's stale deferred-work list, and the pin is an
+  iOS UI test that must survive the merge intact.
+- **The reviews are what earned the session.** Every substantive defect came from a
+  reviewer, not an implementer: `JournalSpan.upperBound` subtracted a whole second so a
+  span ending "1998" stopped at 23:59:59.000 (and twelve passing tests missed it because
+  every fixture was noon-anchored — the same-author-mutation gap again); the plan's own
+  placement would have put the journal header inside the entry list's non-empty branch,
+  making a **zero-entry journal permanently uneditable** since the header is its only
+  route to the editor; and the #67 guard shipped **completely unpinned** — deleting it
+  left every test green, caught only because a reviewer reverted it and re-ran.
+- **Two new SwiftUI/XCUITest traps, in the conventions section with honest confidence:**
+  a `.sheet` attached to a `Form`'s **`Section`** silently NEVER PRESENTS on iOS 26 —
+  mechanism unconfirmed, and the plan's own code sketch would have shipped a cover button
+  that did nothing; and `.tap()` on a `Toggle` inside a `Form` hits the merged
+  label+switch AX frame's centre (the label), so the tap never registers — worked around
+  with a trailing-edge coordinate tap validated on iPhone 17 sim only.
+- **Branch is sync-free by construction** — zero hits across all 13 commits for
+  `modified` / `Raconte/Sync` / LWW / `CKRecord` / `RemoteJournal` / `JournalMerge`, so
+  the `m4/sync` tripwire still fires on `span` at that merge, as designed.
+- **Gate re-ran both suites itself** on the committed tree: `Executed 1368 tests, with 0
+  failures` / `Executed 43 tests, with 0 failures`. Neither known intermittent fired.
+- **Owner-accepted regression now live:** since the capture route is gone, **macOS cannot
+  set a journal cover at all** until **#68** is fixed — the editor is the only cover path
+  and that sheet renders empty on macOS. Documented at the mount site, pinned by a test.
+- **Issues filed from gate findings: #73** (dead `JournalVoiceLabelsSheet`, doc comments
+  describing an unreachable screen), **#74** (four orphaned `CaptureScreenModel` methods,
+  two still covered by green tests = false coverage signal), **#75** (header card and
+  editor compute entry count by two different rules), **#76** (unconfirmed
+  `JournalSpanEditor.populate()` reseed hazard), **#77** (no test composes the full
+  `PartialDate → picker Date → JournalSpan` round trip), **#78** (single-journal UI corpus:
+  stale header after switching journals uncovered).
+- **Mac build handed over: `~/Desktop/Raconte-journaledit.app`**, debug dylib UUID
+  `A17446C8`, verified against the build product; `journalEditor.name` and
+  `journal.header` present, "Cover Photo" absent. **No sync in this build** (it is off
+  main). Quit `Raconte-m4sync.app` first — one instance at a time, shared container.
+- **Process, now settled after 8 instances: the background-suite stall cannot be
+  prevented by wording.** Three more implementers stalled after backgrounding a UI suite
+  to "wait for a notification" subagents never receive — including the last three, which
+  carried the mechanism spelled out and a running count of prior victims. Budget one
+  controller nudge per long-UI-suite task; recovery is a single SendMessage, nothing lost.
+  Memory updated.
+
+**Next steps:**
+1. **Owner smoke on `~/Desktop/Raconte-journaledit.app`** (quit `Raconte-m4sync.app`
+   first). The route to the editor: click a journal in the **nav sidebar** → its entries
+   screen shows a **journal header card** at the top → click that card. Or the sidebar
+   `+`. The must-test item no automated test can reach: **on the Mac, type a new name in
+   the editor and press ⌘2 without clicking away, then reopen** — write-through exists
+   for exactly that, and macOS UI tests are impossible here. Also: iPhone cover-pick then
+   navigate away instantly; confirm the macOS cover gap; the now-**pinned** (non-scrolling)
+   header's vertical cost on iPhone; the open-ended span rendering as `1998 –` with a
+   dangling en-dash; and the header entry count right after switching from All Entries.
+2. **Nico: merge PR #72.** Then close **#69** and **#65** by hand, and **#67** after
+   reading its caveats above.
+3. **`m4/sync` takes main** — now 40+ commits behind and the gap grows. `ContentView.swift`
+   + `CLAUDE.md` conflict (accepted, nav design §10). The `Journal` sync tripwire lands on
+   that branch, and `span` must be wired through all six sync sites.
+4. **m4 Gate A** — unblocked on the #69 front once PR #72 merges and a fresh m4sync build
+   exists; the amended smoke (cover phone→laptop, rename laptop→phone) has still never
+   been completed.
+5. **#68** (macOS cover picker sheet empty) — now the only cover path on the Mac.
+6. Backlog: #73-78 (this branch's follow-ups), #71, #70, #66, #63 final smoke,
+   unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
+## Session 2026-08-18 (laptop — #69 ROOT-CAUSED AND PROVEN; PR #64 MERGED; journal-editing IA designed + planned; issues #69-#71)
+
+The cover full-bleed bug that defeated the last session is solved, and the fix is a
+proven empirical result rather than another theory. Main at `3de886d2`, tree clean,
+everything pushed. No code shipped — this session was diagnosis + design + plan.
+
+- **#69 ROOT CAUSE: on macOS a `Menu`'s label discards SwiftUI's sizing of a resizable
+  `Image` and paints it at intrinsic size.** `CaptureView.swift:1280` had
+  `JournalCoverThumbnail(size: 34)` inside the picker's `Menu` label; the covers on this
+  device are 768×1024, so the label laid out at **768×1024 points** — covering the whole
+  setup region AND pushing the journal name + chevron out past the right edge of the
+  window, which is the "can't even select a different journal" half the owner reported.
+  Same class as the `DatePicker(.compact)` popover this project hit twice: the system
+  draws the control and our modifiers don't reach inside it.
+- **How it was settled: a throwaway six-variant harness**, not more code reading. A
+  standalone macOS SwiftUI app in the same near-black `ScrollView`/`VStack(spacing:28)`/
+  `.padding(24)` shell as `setupRegion`, using the owner's real peaches JPEG pulled from
+  the container. **A** (thumbnail in `Menu` label) BROKEN; **B** (same HStack, no Menu)
+  fine; **C** (thumbnail outside the Menu) fine; **D** (`Button` label — the
+  `LibraryView` chip and nav sidebar row shape) fine; **E** (thumbnail rebuilt to report
+  no intrinsic size upward via `Color.clear` + `.overlay`) **STILL BROKEN**; **F**
+  (`.menuStyle(.button)`) **STILL BROKEN**. E and F are the load-bearing results: **no
+  in-place clamp and no menu style fixes it — the image must leave the label.**
+  The last session's negative findings were all correct; it just read the frame
+  modifiers as dispositive, which they are not inside a macOS `Menu` label.
+- **Lesson worth repeating:** the previous session died chaining unfalsifiable theories
+  (accessibility zoom, window vibrancy). What broke the deadlock was picking the
+  cheapest **falsifiable** probe and building it — ten minutes, one screenshot, done.
+- **PR #64 (nav) MERGED** by Nico (`20beecc7`). Worktree `/Users/nico/src/raconte-nav`
+  removed, branch deleted local + remote. Only `m4/sync` remains as a worktree.
+  **Baseline measured on the merged tree: 1319 unit tests, 1 failure** — the known
+  laptop-local `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage`.
+- **Journal-editing IA designed and owner-approved**
+  (`docs/plans/2026-08-18-journal-editing-ia-design.md`, nine numbered rulings). Owner's
+  complaint, verbatim: *"editing the name and image and so forth for journals doesn't
+  necessarily belong naturally in the journal picker for the capture screen… there should
+  be an interface where we edit a journal… right off of the list of journals page."*
+  Capture picker becomes selection-only (journals + New Journal), which removes the
+  broken construct as a side effect; journal editing moves to a pushed editor reached by
+  tapping a new journal header above that journal's entries; the sidebar gets a `+` that
+  creates then opens the editor. **Journals gain a STORED `JournalSpan`** of two
+  `PartialDate`s — a half-transcribed 1998 journal must not advertise itself as an Aug
+  2026 journal. Stored wins, derived is the fallback; an entry dated outside its journal's
+  span is **flagged, never blocked**.
+- **Plan** (`docs/plans/2026-08-18-journal-editing-implementation-plan.md`): 10 tasks +
+  adversarial gate, on main. **Task 1 is the capture picker, so #69 dies in the first
+  commit** rather than riding to the end of the branch.
+- **Branch-split discovery that reshaped the plan: `main` has no `Raconte/Sync/` at all,
+  and `Journal` on main has no `modified` field.** The whole sync layer lives only on
+  `m4/sync`. ~90% of the design needs only nav (now on main), so `span` lands on main
+  **without** a stamp, and the sync wiring becomes a **tripwire-enforced task on
+  `m4/sync`**: a `Mirror` field-count tripwire written red-first, so picking up `span` at
+  that merge fails the suite until it is wired through all six sync sites. Turns the
+  two-branch split from #70's hazard into a caught error.
+- **Trap the design missed, now a named plan requirement:** `PartialDate` is `Comparable`
+  by `anchorDate`, which fills absent components with the FIRST — so "2001" anchors to
+  1 Jan 2001, and a naive `contains` would flag everything after that date as outside a
+  "1998 – 2001" journal. **Span endpoints expand to their precision's unit**: start to
+  the earliest instant, end to the LATEST. Mutation check named in the plan.
+- **Issues filed: #69** (the cover bug, with full root cause and harness table), **#70**
+  (`Journal`'s decoder drops unknown keys — silent lost-update under M4 sync across build
+  versions), **#71** (out-of-span flag, deferred out of the build branch by the owner to
+  keep it shorter; ruling 4 unchanged, only its delivery moved).
+- **#70 probe, run rather than argued:** `CKRecord.encodeSystemFields` carries **no data
+  fields** — a record rebuilt via `CKRecord(coder:)` has `allKeys() == []`, so an older
+  build's push neither carries an unknown field nor marks it changed. Severity is lower
+  than first written: an older build also cannot *overwrite* a field it doesn't know
+  during merge (it isn't in `RemoteJournal`), so a field-aware device never loses its
+  local copy to an older peer. Permanent loss needs **every** device to lapse at once.
+  The more actionable finding is in the issue: **adding one journal field is a ~9-site
+  change with only ~3 compiler-enforced** — miss `JournalMerge.adopted(remote:)` and the
+  field silently never syncs while everything compiles and the suite passes.
+- **#68 becomes load-bearing:** once Task 1 removes the capture-screen route, the editor
+  is the ONLY cover path, and that sheet renders empty on macOS. **Owner accepted losing
+  cover-setting for the duration** ("only a couple dozen entries so far, no images I'm
+  concerned about; waiting on a working system before ingesting the paper journals"), so
+  #68 sequences after rather than blocking.
+
+**Next steps:**
+1. **Execute `docs/plans/2026-08-18-journal-editing-implementation-plan.md`** on a branch
+   off main, subagent-driven. **Owner ruling: Sonnet implementers AND Sonnet task
+   reviews; Opus for the gate only.** Tell every implementer to run suites in the
+   FOREGROUND. Read the design doc first — it carries the nine rulings the plan argues
+   from. Baseline to beat: 1319 unit / 1 known laptop-local failure.
+2. **`m4/sync` takes main** — 27 commits behind as of this session. `ContentView.swift` +
+   `CLAUDE.md` conflict (accepted, nav design §10), and `ContentView`'s
+   `.onChange(of: journals)` must be guarded at that merge or a background CKSyncEngine
+   journals pull pops the reader out of an entry (#67). The `Journal` sync tripwire lands
+   on this branch too. **The longer the journal-editing branch stays open, the worse this
+   merge gets.**
+3. **m4 Gate A is still open** and still blocked by #69 on `Raconte-m4sync.app` until
+   Task 1 lands. The amended smoke (cover phone→laptop, rename laptop→phone) has never
+   been completed.
+4. **#68** (macOS cover picker sheet empty) — after the editor lands, it is the only
+   cover path on the Mac.
+5. Backlog unchanged: #71, #70, #65-67 (nav follow-ups), #63 final smoke, unified-editor
+   #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
+## Session 2026-08-17 late night (laptop — m4 amended cover-sync smoke run: NEW UNEXPLAINED BUG, no code found; Gate A still open)
+
+Readup was clean (no drift, CI green, branch correct). Owner ran the amended m4 Gate A
+smoke from the last handoff (cover phone→laptop, rename laptop→phone). Cover step
+surfaced a new, reproducible, UNFILED bug: after setting a "peaches" cover photo on the
+phone (journal "Sync Testing") and letting it sync, `~/Desktop/Raconte-m4sync.app`'s
+capture screen renders that cover photo full-bleed as a background behind the ENTIRE
+setup region (backdate toggle, two-voices, last-entry card, Library door, build stamp),
+nearly illegible. **Survives force-quit + clean relaunch** (not a stale window snapshot —
+`ps aux` showed zero Raconte process before relaunch) and **reflows live when the window
+is resized** (ruling out a cached/stale compositor frame). A stray "Debug" tap also
+reproduced the KNOWN pre-existing modal-sheet freeze (root-caused 2026-08-17, fixed on
+`nav/split-view` but not yet merged to `m4/sync`) — that part is expected, not new.
+
+**Extensive investigation found NO code path that explains the full-bleed image, and
+that conclusion is now solid, not just unfinished:** every usage of a journal's cover
+bytes across the whole app is exactly 3 call sites (`CaptureView.swift:1280` header
+thumbnail at `size: 34`, `LibraryView.swift:185` chip at `size: 30`,
+`JournalCoverPickerSheet.swift:40` preview at fixed `height: 180`), all explicitly
+frame-constrained — `JournalCoverThumbnail` is
+`.resizable().scaledToFill().frame(width:size,height:size).clipShape(...)`, standard and
+correct. `ContentView.swift` (the actual app root, checked for the first time this
+session) has no cover rendering either — just a plain `books.vertical` SF Symbol toolbar
+button. The installed binary's identity was verified against the source:
+`dwarfdump --uuid` on `Raconte-m4sync.app`'s debug dylib gives `4317692D…`, which matches
+exactly what the m4 ledger recorded for the Gate A build at commit `63651ac3` — so the
+running app is provably the reviewed, committed code, not a stale build carrying a
+discarded local experiment. Reflog showed no evidence of one either.
+
+**Owner called out that the reasoning had stopped converging** (accessibility-zoom and
+window-vibrancy theories were both weakly evidenced and not resolving anything) — fair:
+this needed live debugging tooling (Xcode attached to the process, or the macOS
+Accessibility Inspector / view-debugger) that this session didn't have, not more static
+code reading or remote-screenshot guessing. **Nothing was filed as a GitHub issue and no
+code was changed.** Next session should either get live-debug access to the running
+process, or narrow the repro with the owner's hands (does a DIFFERENT journal without a
+cover show the same bleed? does a freshly-created journal with a cover set FROM THE MAC
+— once #68 is worked around some other way — also bleed? is it tied to this SPECIFIC
+peaches photo, e.g. a HEIC/orientation edge case, or does any photo do it?) before
+touching the SwiftUI code again — there's a solid chance the current theory space is
+simply wrong.
+
+**m4 Gate A verdict: still open, and now MORE uncertain, not less.** Bytes clearly moved
+phone→laptop (a cover appeared at all), which is evidence sync itself works, but the
+rendering defect makes it impossible to visually confirm "the cover matches" the way the
+smoke checklist wants. The laptop→phone rename direction was never reached this session.
+
+**Next steps:**
+1. **File the cover full-bleed bug as a GitHub issue** (never filed this session) with
+   the repro (set any journal's cover, open its capture screen on `Raconte-m4sync.app`
+   on macOS) and the negative findings above, so the next session doesn't re-walk the
+   same dead ends.
+2. **Get live debugging on it** — attach Xcode to the running process, or use the
+   Accessibility Inspector / macOS view debugger — rather than more remote-screenshot
+   code reading. Also worth the owner's hands: try a second journal/photo to see if it's
+   cover-content-specific (e.g. this exact HEIC) or universal.
+3. Once diagnosed and fixed (or worked around), re-run the amended m4 Gate A smoke
+   (cover phone→laptop visually confirmed + rename laptop→phone, both from the last two
+   handoffs) before closing Gate A / resuming the m4 SDD loop at Task 6.
+4. PR #64 (nav) merge is still Nico's; m4 worktree carries one pre-existing uncommitted
+   file (`Raconte/Sync/SyncCoordinator.swift` — the fetch-on-launch fix dispatched but
+   never landed per the m4 ledger's "Task 4 fix round 2" note) — not from this session,
+   still needs a decision (commit it or discard and re-dispatch).
+5. Backlog unchanged: #68 (macOS cover picker sheet empty), #65-67 (nav follow-ups), nav
+   Gate B/phone smoke, unified-editor #60/#59, rest of the numbered backlog below.
+
+## Session 2026-08-17 night (laptop — NAV BRANCH FINISHED: T7-T9 + Gate B + fix wave; PR #64 OPEN; issues #65-67; 1313 → 1319 unit + 35 UI)
+
+Ran the nav SDD loop to completion unattended (Sonnet implementers, Opus adversarial
+reviews, owner directive). Branch `nav/split-view` final at `cb0ed9f7`, pushed. **PR #64
+open — merge is Nico's.** Every task review caught something real; the SDD workspace
+ledger (kept until merge) has the full record.
+
+- **T7 Debug place** (`e993c1b2`+`658d8559`): build info first, harness fenced below,
+  build stamp genuinely async. Review Important: the brief's own off-main test was
+  vacuous (a future `@MainActor` annotation would still pass) — fixed with a
+  `pthread_main_np()` hook recorded inside the call path, counterfactual-verified
+  (`Thread.isMainThread` is unavailable from async contexts; SDK constraint).
+- **T8 Mac menu bar** (`9503f0f3`): Go menu ⌘1-4 (⌘4 DEBUG-gated matching the sidebar
+  row), ⌘[ Back, ⌘N root-level alert. Approved clean — first zero-Important task review
+  on the branch. Implementer extracted the shared `strippingComments` helper
+  (`RaconteTests/SourceScanning.swift`) from two byte-identical private copies; the Esc
+  source-scan is self-adversarial (the doc comment contains `.cancelAction`, so stripper
+  regression FAILS the test). Note: `CommandGroup(replacing: .newItem)` removes
+  File ▸ New Window — deliberate.
+- **T9 docs** (`d7334b95`+`c4f19bab`): overview nav section + design §11 as-built +
+  CLAUDE.md conventions (on the branch). Review caught two factual errors — docs claimed
+  ⌘[ saves from inside the editor (it only pops `detailPath`; the editor is a
+  `navigationDestination(isPresented:)` push ABOVE it), and a fallback citation pointed
+  at the wrong doc. Both fixed; the ⌘[ substance became a Gate B probe.
+- **GATE B (Opus, independent): everything re-verified** — 1318 unit + 35/35 UI on a
+  fresh sim, both builds, probes 1-6 SAFE. Two empirical wins: **an open editor's draft
+  SURVIVES its entry being popped from underneath** (`onDisappear` + unstructured Task
+  finishes the write; iPad probe, typed inside the debounce window), and
+  clear-on-place-switch proven on iPad landscape. One Important, fixed same session
+  (`cb0ed9f7`): **re-selecting the current place was a dead click with an entry pushed
+  under it — on Mac that's ⌘1-4** (the keep-the-path rule was iPhone-era, where the path
+  is provably always empty). Now pops to root; old pin restated, RED+mutation verified.
+  Also fixed: the `sidebar.toggle` helper branch was dead code that silently POPPED on
+  iPad portrait (SwiftUI's reveal button has an empty identifier; query
+  `app.buttons["Show Sidebar"]` by label).
+- **Issues filed at branch finish:** #65 (AX: `capture.journalPicker` invisible —
+  container identifier overwrites it, confirmed in a live AX dump), #66 (AX: alert
+  TextField identifiers don't bridge onto UIAlertController — includes the branch's own
+  new `root.newJournalNameField` instance), #67 (consolidated deferred follow-ups from
+  all nine reviews + Gate B triage, 11 items).
+- **⚠️ For whoever merges `m4/sync` second** (also in #67 and the PR body):
+  `ContentView`'s `.onChange(of: journals)` calls `router.select` unconditionally, and
+  re-select now POPS the detail column — a background CKSyncEngine journals pull while
+  the user is mid-read would pop them to the list. Unreachable today; guard the onChange
+  when the merge happens.
+- **m4 sync smoke, partial:** rename phone → laptop **PASSED** (owner). Cover
+  laptop → phone NOT yet run (checklist re-sent in chat; also task-5-report §6 in the
+  m4 ledger). m4 Gate A stays open until it passes.
+- **Process notes:** 3 implementer stalls, all the same shape — agent backgrounds a UI
+  suite then stops to "wait for a notification" that never reaches subagents; one firm
+  nudge recovers every time (memory updated: tell dispatches to run suites in the
+  foreground). Gate B sim lore: after `simctl shutdown all`, boot explicitly and wait on
+  `bootstatus` — an immediate launch fails preflight. One Opus dispatch died to the
+  monthly spend limit; owner raised it, SendMessage-resume continued cleanly.
+
+**Post-handoff addendum (same night): macOS cover picker BROKEN — #68 filed; m4 smoke
+AMENDED, results pending.** Owner tried the cover step on the laptop: the cover sheet
+renders EMPTY on macOS — title + Cancel only, the `PhotosPicker` row absent
+(`JournalCoverPickerSheet.swift:56`). Discriminator run: clicking the blank area does
+nothing ⇒ control absent, not invisible (NOT the #58 white-on-white class).
+Pre-existing since #14 (file byte-identical main↔m4/sync); owner is simply the first
+person ever to open that sheet on a Mac. Issue #68 has three leads + the workaround.
+The m4 Gate A smoke was AMENDED to route around it — both directions still proven:
+(a) cover set on the PHONE → appears on the laptop (assets sync), (b) rename on the
+LAPTOP → appears on the phone (laptop-side push), (c) nothing else moved. Owner had
+not yet reported results at handoff. Also: owner briefly trashed Raconte-nav.app
+(restored) — the two-apps split (m4sync = sync + old nav; nav = sidebar, no sync)
+confused him twice; explain it up front next session.
+
+**Next steps — written for a Sonnet-driven session; follow literally, in order:**
+1. **Ask the owner for the amended m4 smoke results** (cover phone→laptop, rename
+   laptop→phone, nothing-else-moved). If not yet run, re-send the checklist from issue
+   #68's workaround section + this addendum. On PASS: open
+   `/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`
+   and append `GATE A: CLOSED — owner smoke passed (amended route, see main CLAUDE.md
+   2026-08-17 night addendum + #68)`. On FAIL: run the sync log command (issue #68 /
+   task-5-report §6) and debug before anything else.
+2. **Resume the m4/sync SDD loop at Task 6** (entry + finalize artifacts push). Read
+   the m4 ledger FIRST — it is authoritative (rulings, deferred minors, what T6 must
+   not do: no native CKRecord Date fields — reuse encodeJSON stamp resolution; no
+   per-record whole-registry digest). Worktree `/Users/nico/src/raconte-m4`, branch
+   `m4/sync`, plan `docs/plans/2026-08-17-m4-sync-implementation-plan.md`, skill
+   superpowers:subagent-driven-development. **Models (owner cost ruling 2026-08-17):
+   Sonnet implementers AND Sonnet task reviews; Opus only for Gates.** Tell every
+   implementer: run test suites in the FOREGROUND, never background a build you intend
+   to wait on (3 stalls last session, all that shape).
+3. **Nico: merge PR #64** (nav). At merge: delete worktree `/Users/nico/src/raconte-nav`
+   + its SDD workspace. `ContentView.swift` + `CLAUDE.md` conflict with `m4/sync` at
+   second merge (accepted, design §10) — and see the ⚠️ above: guard ContentView's
+   `.onChange(of: journals)` at that merge or background sync pops the detail column.
+4. **Owner smokes, whenever convenient:** (a) nav Gate B steps — Mac keyboard (⌘1/2/3;
+   ⌘[ tri-state root-disabled→push-enabled→pop-disabled; ⌘1 from a pushed entry now
+   returns to capture), ⌘N from All Entries (it also selects that journal for capture,
+   #67), Esc only in the editor, Debug + ⌘Q, iPhone full walk. File ▸ New Window gone
+   by design. (b) nav phone half AFTER step 1's smoke passes (install replaces the
+   m4sync build): wireless devicectl install; launches into capture, back-chevron
+   reveals places, screen does NOT sleep while recording+navigating, receipt doesn't
+   hide the sidebar. Pass ⇒ append nav Gate A phone-half CLOSED to the nav ledger.
+5. Backlog unchanged: #68 (macOS cover picker), #65-67 (nav follow-ups), #63 final
+   smoke, unified-editor #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
+## Session 2026-08-17 (laptop — Debug "freeze" root-caused; NAV REDESIGN designed + planned + SDD Tasks 1-5 BUILT on `nav/split-view`, Task 6 in flight; 1310 → 1311 unit + 33 UI on branch)
+
+Owner hit a hard "freeze" opening the Debug screen, then ordered a navigation-paradigm
+rethink; the session ran brainstorm → design → plan → SDD in one sitting. **Resume
+point: the SDD ledger at
+`/Users/nico/src/raconte-nav/.superpowers/sdd/2026-08-17-navigation-redesign-implementation-plan/progress.md`
+— authoritative (pre-flight rulings R1-R6, per-task reviews, deferred minors, issues to
+file). Task 6 was mid-flight at handoff; resume there.** Worktree
+`/Users/nico/src/raconte-nav`, branch `nav/split-view` at `6825f724`, pushed through T5.
+Main carries `0286a4f8` (design) + `a26a4c45` (plan).
+
+- **The Debug "freeze" was never a hang — log-proven.** The Debug sheet has NO dismiss
+  affordance, and macOS refuses ⌘Q while a modal sheet is up ("App termination blocked
+  by modal sheet" ×4 in the unified log; main thread alive throughout). Esc works only
+  via SwiftUI's default sheet cancel action. **The frozen app was `Raconte-latest.app`
+  — the OLD Aug-16 build with NO iCloud entitlement** (it never syncs, silently).
+  Owner deleted it; only `Raconte-m4sync.app` remains on the Desktop. **Never run two
+  Raconte instances** — they share one container; two CKSyncEngines clobber
+  `sync/engine-state.bin`, `journals.json` lost-updates, same DeviceIdentity. Owner
+  ruling saved to memory: laptop .app copies are disposable; **iPhone holds all real
+  data — never touch its app/container.**
+- **Nav redesign owner-approved** (`docs/plans/2026-08-17-navigation-redesign-design.md`):
+  NavigationSplitView on BOTH platforms, sidebar of places (Capture / journal rows /
+  All Entries / Trash / Debug-in-DEBUG), **Capture pre-selected at launch so the phone
+  still opens straight into capture** (verified: collapse preserves pre-selection, no
+  fallback needed). All three view-mount hacks REMOVED not relocated (#62 reconcile →
+  model-to-model observer; idle timer → model seam; **finalize/phase dispatch → 
+  withObservationTracking in CaptureScreenModel** — a third hack the planner found:
+  view-mounted finalize would have silently never encoded a capture finished while
+  browsing). Library door + toolbar button + Debug sheet deleted; Debug is a real
+  place (fixes the modal trap structurally). No global Esc (⌘[ only); ⌘1-4 fixed
+  places; ⌘N root-level.
+- **Plan** (`docs/plans/2026-08-17-navigation-redesign-implementation-plan.md`): 9
+  tasks + Gate A (after T6, owner smoke) + Gate B. **Tasks 1-5 complete**, every task
+  through Sonnet implementer + Opus adversarial review; every review caught real
+  defects: T1 AppRouter.select entirely unpinned; T4 the brief's bound
+  `NavigationStack(path:)` breaks heterogeneous pushes (typed-path contract, settled
+  empirically, binding landed in T5 once RootDestination died); **T5 Critical: the
+  sidebar row you just left was DEAD** (nil-as-no-op selection binding hid the List's
+  system-cleared selection — fixed with honest @State two-way synced), plus journals
+  created/renamed on the capture screen were missing/stale in the sidebar (rescan now
+  triggered). `CaptureView.swift` shed `CaptureScreenModel` into its own file (T2,
+  byte-verified mechanical).
+- 1311 unit + 33 UI green at `6825f724`. Baseline red: only the laptop-local
+  `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` (intermittent).
+  Two pre-existing production AX bugs queued to file as issues at branch finish
+  (journalPicker container-flattening; alert TextField identifier not bridging) —
+  details in the ledger.
+
+**Post-handoff, same day: Task 6 DONE, GATE A OPEN, Mac smoke PASSED.** Task 6 landed
+(`d1d447d1`, 1313 unit + 34 UI; two implementer stalls recovered by nudge; review
+approved with a CONFIRMED new AX trap variant, now in memory:
+container-identifier-overwrites-descendants). Gate A adversarial review: GATE OPEN —
+probe 1 proved the finalize-with-no-view-mounted path end-to-end in the simulator
+(breakpoint-armed `.captured`, released with capture unmounted, receipt built; the
+counterfactual fails). **Ledgered lesson: a library row is NOT evidence of
+finalization — pin via the receipt or final m4a.** Owner smoked the Mac half
+(steps 1-4, `~/Desktop/Raconte-nav.app`, dylib `6AD4095C`): **"pass all around"** —
+sidebar in all three capture states, recording survives navigation, ⌘Q with Debug up.
+**Bonus: owner saw his phone's journal names in the nav sidebar — first real-data
+evidence the m4/sync engine works** (nav has no sync code; the m4sync app had synced
+journals into the shared container). Entries absent on the laptop is CORRECT
+(sync T6-T10 unbuilt). Branch pushed through `d1d447d1`.
+
+**Next steps:**
+1. **M4 sync smoke, remaining steps (do FIRST, while the m4sync build is still on the
+   phone):** rename a journal on the phone → see it in `~/Desktop/Raconte-m4sync.app`
+   (quit Raconte-nav.app first; ONE instance); set a cover on the laptop m4sync app →
+   see it on the phone; other journals unchanged. Pass ⇒ close m4 Gate A in the m4
+   ledger, unblocks m4/sync Tasks 6-12.
+2. **Nav Gate A phone half:** install the nav build on the phone (wireless devicectl;
+   replaces the m4sync build — do AFTER step 1), then smoke: launches into capture,
+   back-chevron reveals places, screen does NOT sleep while recording + navigating
+   (zero automated coverage exists for the real idle-timer hold), receipt doesn't
+   hide the sidebar. Pass ⇒ close nav Gate A in the nav ledger.
+3. **Resume the nav SDD loop at Task 7** (Debug place reshape) → T8 (Mac Commands +
+   ⌘-shortcuts; note deferred minor: `sidebar.toggle` identifier is produced nowhere —
+   openPlace's regular-width branch has never executed) → T9 docs → Gate B → PR.
+   Ledger: `/Users/nico/src/raconte-nav/.superpowers/sdd/2026-08-17-navigation-redesign-implementation-plan/progress.md`.
+4. At nav-branch finish: file the two AX issues from the ledger; `ContentView.swift`
+   conflicts with `m4/sync` at second merge (accepted, design §10).
+5. Backlog unchanged: #63 final smoke, unified-editor design pass (#60/#59),
+   #29/#50/#51/#54/#55/#18/#35/#47/#46/#44.
+
+## Session 2026-08-16 night → 08-17 (laptop — M4 SYNC: design + plan committed, SDD Tasks 1-5 BUILT on `m4/sync`; 1288 → 1457 tests; Gate A smoke PENDING)
+
+The owner-ordered sync pivot ran: full brainstorm → design → plan → SDD loop in one
+session. **Resume point for the next session: the SDD ledger at
+`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`
+— it is authoritative (rulings, deferred minors, Gate A state), not this summary.**
+Worktree `/Users/nico/src/raconte-m4`, branch `m4/sync` at `63651ac3`, pushed. Main
+carries the two docs commits (`d5f23061` design, `5e8f268e` plan). Both trees clean.
+
+- **Design owner-approved live** (`docs/plans/2026-08-17-m4-sync-design.md`): full
+  replica + restore (delete-app-reinstall-reconstructs is the acceptance test);
+  record-per-artifact on CKSyncEngine (zone `RaconteZone`, private DB); per-field LWW
+  via additive `modified` stamp maps; marker log becomes per-device streams merged on
+  read (`at` timestamp added); revisions/audio/live.jsonl as immutable CKAssets;
+  entries sync only once finalized; sync-in deletes route through StagedRemover; ingest
+  is assemble-then-commit via rename. **Pause ruling recorded:** #26 pause yes
+  (interruption machinery, one m4a, independent of M4); mid-capture editing NO;
+  multi-recording door left open structurally (AudioAsset is its own 1..n record).
+- **Plan** (`docs/plans/2026-08-17-m4-sync-implementation-plan.md`): 12 tasks + Gate A
+  (after T5, journals slice + owner smoke) + Gate B (acceptance). Tasks 1-5 complete,
+  each through implementer + adversarial review; every review round caught real bugs
+  (T3: unreadable entry.json digested as absent — the documented un-delete hazard; T5:
+  ingest lost-update across actor hops, cover deletion never propagating + poisoning
+  the LWW stamp). 1288 → 1457 unit tests, iOS builds green throughout.
+- **Two traps discovered, both now encoded in the Commands section on the branch:**
+  (1) the iCloud entitlements CANNOT be ad-hoc signed — the macOS TEST command needs
+  `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` and NEVER
+  `CODE_SIGNING_ALLOWED=NO` (unsandboxes the app-hosted test runner onto the real
+  archive); (2) owner-smoke Mac builds need real signing:
+  `-allowProvisioningUpdates -allowProvisioningDeviceRegistration` (the MacBook wasn't
+  device-registered; owner had to re-sign into Xcode → Settings → Accounts first).
+  `SyncCoordinator.live()` refuses to sync in unentitled binaries — a nocloud-built
+  app runs normally but silently never syncs.
+- **Gate A: probes CLEAN** (no-echo, garbage-sync/-dir launch, all five journal hook
+  paths), signed builds verified carrying iCloud entitlements and installed — phone
+  (wireless, after the known tunnel-open retry) and `~/Desktop/Raconte-m4sync.app`
+  (dylib `4317692D`). **Owner smoke NOT yet run** — 5 steps, journal name + cover both
+  directions, checklist in task-5-report §6 (also pasted in chat 2026-08-17). Laptop
+  substitutes for the mini as the Mac device (mini needs the branch built if preferred).
+- Known open items for later tasks (ledger has the full list): no `aps-environment`
+  visible on the signed macOS binary (macOS key spelling — resolve before TestFlight);
+  T6/T8 must reuse encodeJSON stamp resolution (never native CKRecord Date fields);
+  T6 must not copy the per-record whole-registry digest shape; engine conflict routing
+  (.serverRecordChanged) is a known untested surface (CKSyncEngineDelegate unfakeable).
+
+**Next steps:**
+1. **Owner smoke Gate A** (5-step journal sync checklist, phone ↔ laptop Mac app). If
+   pass: close Gate A in the ledger, dispatch Task 6 (Entry + finalize artifacts push).
+   If fail: `log show --predicate 'subsystem == "org.pianohouseproject.raconte" AND
+   category == "sync"' --last 30m --info` on the Mac and chase.
+2. **Tasks 6-12** per the plan (entry push → assemble-then-commit ingest → field merge
+   → revisions → marker streams → trash/purge → debug status), then final review +
+   Gate B acceptance (delete app from a device, reinstall, archive reconstructs).
+3. At merge: CLAUDE.md Commands section from the branch supersedes main's (Task 4
+   rewrote it); `aps-environment` flip to production before TestFlight.
+4. Backlog unchanged: #63 final smoke (two-wink flash, build `97503477`), library door
+   visual pass, unified-editor design pass (#60/#59), #29/#50/#51/#54/#55/#18/#35/#47/#46/#44.
+
 ## Session 2026-08-16 evening (laptop — deep resync (zero drift); #62 CLOSED; error banner + #63 flash + "Library" shipped; editor rulings recorded; 1276 → 1289 tests)
 
 Live owner-in-the-loop session: deep resync, then four builds each ruled → built → smoked
@@ -2009,6 +2575,11 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
 - iOS simulator: `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names). Simulator builds need **no** entitlements override — they don't validate restricted entitlements against a profile.
 - UI tests (simulator only — macOS needs interactive automation permission):
   `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' test`
+- **When `m4/sync` merges**, the macOS `test` command above will need
+  `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` added, and must NEVER
+  gain `CODE_SIGNING_ALLOWED=NO` — that flag unsandboxes the app-hosted test runner
+  onto the real iCloud-entitled data path rather than a stripped test one. Until that
+  merge, the plain commands above work as written on `main`.
 
 ## Working style
 
@@ -2021,6 +2592,51 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
   enrollment: TestFlight, CloudKit containers, push and Live Activities are all available
   now. (Verified 2026-07-31 from the on-disk profiles: App Store distribution profiles and
   year-long expiries, neither of which a free personal team can produce.)
+- **UI tests reach places through `openPlace(app, "sidebar.…")` in
+  `RaconteUITests/UITestNavigation.swift`.** Never hard-code a navigation tap in a test
+  class — `openPlace` already handles the iPhone-collapsed-vs-Mac/iPad-both-columns
+  difference (back-button vs. straight tap) in one place.
+- **Nothing that must happen while a capture is running may hang off a view's
+  lifecycle.** `CaptureView` is no longer permanently mounted (nav redesign) — it can
+  be navigated away from at any time. Anything that must keep working regardless
+  (phase dispatch, the idle-timer hold, receipt reconciliation) lives on
+  `CaptureScreenModel` itself, driven by the model's own observation of its state,
+  never by `.onAppear`/`.onDisappear`/`.onChange` on a view.
+- **`ContentView.swift` is rewritten by both `nav/split-view` and `m4/sync`** and the
+  two will conflict on merge — expected and accepted (nav design §10); whichever
+  branch merges second resolves the conflict by hand.
+- **Never put an `Image` in a macOS `Menu` label.** On macOS a `Menu`'s label discards
+  SwiftUI's sizing of a resizable `Image` and paints it at intrinsic size — a 768×1024
+  cover photo laid out at 768×1024 *points*, covering the whole screen and pushing the
+  rest of the label off-window (#69). Proven by a six-variant harness: no in-place
+  clamp and no `.menuStyle` fixes it — the image has to leave the label entirely. A
+  `Button` label is fine; the image only breaks inside a `Menu`.
+- **A `JournalSpan`/date-range endpoint is a unit, not an instant.** `PartialDate` is
+  `Comparable` by `anchorDate`, which fills absent components with the FIRST — "2001"
+  anchors to 1 Jan 2001. A naive `start <= d && d <= end` comparison against raw
+  `PartialDate`s therefore excludes most of the range it claims to cover. Expand each
+  endpoint to its precision's unit before comparing: `start` to the earliest instant of
+  its unit, `end` to an EXCLUSIVE upper bound (the first instant of the unit right after
+  `end`'s), and test `date >= lowerBound && date < exclusiveUpperBound`. Subtracting a
+  fixed second to fake an inclusive bound under-covers the final second of the unit —
+  build the exclusive bound from `calendar.dateInterval(of:for:).end` untouched instead.
+- **A `.sheet` attached to a `Form`'s `Section` silently never presents, on iOS 26** —
+  observed, mechanism unconfirmed. Attach `.sheet`/`.fullScreenCover` to the screen's
+  outer view (the `Form` itself, or above it), never to a `Section` or other child.
+- **`.tap()` on a `Toggle` inside a `Form`/`List` hits the row's merged label+switch
+  accessibility frame at its CENTRE, which for a full-width row is the label, not the
+  switch — the tap silently never flips it.** Real finger taps work fine; this is an
+  XCUITest-harness gap. Tap near the trailing edge instead, e.g.
+  `coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5))` — re-tune the offset
+  per row width if a wider layout (iPad) is ever covered.
+- **A pushed screen that can be popped without warning must write through on commit,
+  never hold a Done-button-shaped batch of unsaved edits.**
+  `PlaceRouting.detailPath(afterSelecting:from:path:)` always returns `[]`, so any
+  sidebar click (and on the Mac, ⌘1-4) pops the top of `detailPath` with zero chance for
+  that screen to intervene. The pattern (`JournalEditorView`, matching `BackdateField`):
+  commit each field twice, redundantly — on losing focus (the ordinary case), and again
+  in `onDisappear` via an **unstructured `Task {}`, never `.task`** (SwiftUI cancels
+  `.task` on disappear, defeating the whole point of the safety net).
 
 <!-- SHARED-CONVENTIONS:BEGIN v=e5fb79b2ef4d — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions

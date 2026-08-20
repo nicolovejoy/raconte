@@ -1,5 +1,15 @@
 import Foundation
 
+/// Model-to-model rescan notification (#62, nav redesign §5.1). `CaptureScreenModel`
+/// conforms so `LibraryScreenModel.rescan()` can tell it directly that the world may
+/// have changed — no view, no `.onChange`, in the loop. "A receipt whose entry left the
+/// library is cleared" becomes a model invariant that holds regardless of what is
+/// mounted, rather than a fact only true while `CaptureView` happens to be on screen.
+@MainActor
+protocol LibraryRescanObserver: AnyObject {
+    func libraryDidRescan()
+}
+
 /// Composition + orchestration for the library and entry-detail screens (M3 T4).
 ///
 /// Constraints this shape exists to hold:
@@ -77,6 +87,12 @@ final class LibraryScreenModel {
     private(set) var lastSweep: TrashSweepResult?
 
     var journalScope: JournalScope = .all
+
+    /// WEAK. `CaptureScreenModel` holds `library` strongly; a strong back-reference here
+    /// would be a retain cycle — and although both live for the app's lifetime in the
+    /// running app, every test that builds a `CaptureScreenModel`/`LibraryScreenModel`
+    /// pair (there are many) would leak one for the length of the test process.
+    weak var rescanObserver: (any LibraryRescanObserver)?
 
     /// Bumped on entry to `rescan()` and checked before results are assigned. Three UI
     /// paths (`selectJournalScope`, `moveEntry`, `setBackdate`) each fire their own Task,
@@ -184,12 +200,24 @@ final class LibraryScreenModel {
         allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
         recent = Self.mostRecentlyCaptured(allEntries, limit: 3)
         isLoading = false
+        // Model-to-model, no view in the loop (#62, nav redesign §5.1). Placed after
+        // every published assignment and after the superseded-scan guard above: the
+        // observer's whole job is to compare a receipt against `allEntries`, so it must
+        // never see a half-applied scan or one this model has already abandoned.
+        rescanObserver?.libraryDidRescan()
     }
 
     /// Derived, not stored — see `JournalDateRange`. `nil` for a journal with no
     /// (non-trashed) entries, including one that does not exist.
     func dateRange(forJournal journalID: String) -> JournalDateRange? {
         JournalDateRange.compute(from: allEntries.filter { $0.journalID == journalID })
+    }
+
+    /// The one date line for a journal, span-first. `SidebarView` and the journal header
+    /// both read this rather than deciding for themselves.
+    func dateLine(forJournal journalID: String) -> String? {
+        JournalDateLine.text(span: journals.first { $0.id == journalID }?.span,
+                             derived: dateRange(forJournal: journalID))
     }
 
     /// Durable per-journal multi-voice carry-over (T6 §14, owner decision 5): the
@@ -279,6 +307,46 @@ final class LibraryScreenModel {
         }
         await rescan()
         return succeeded
+    }
+
+    // MARK: - Journal editing (journal-editing IA, Task 6)
+
+    /// Renames a journal. Returns `false` (sidecar untouched) when the store throws — an
+    /// empty/whitespace-only name or an id no longer in the registry (deleted underneath
+    /// an open editor). Same shape as `moveEntry`: the caller alerts on `false`.
+    @discardableResult
+    func renameJournal(_ journalID: String, to name: String) async -> Bool {
+        guard (try? await journalStore.rename(id: journalID, to: name)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
+    /// Sets this journal's voice labels wholesale (empty dict clears both). Same
+    /// false-on-store-failure shape as `renameJournal`.
+    @discardableResult
+    func setJournalVoiceLabels(_ journalID: String, labels: [String: String]) async -> Bool {
+        guard (try? await journalStore.setVoiceLabels(id: journalID, labels: labels)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
+    }
+
+    /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
+    /// false-on-store-failure shape as `renameJournal`/`setJournalVoiceLabels`. The
+    /// registry's own `setSpan` never rejects the span's shape — an inverted pair is
+    /// refused earlier, by `JournalSpan.init` itself, and `JournalSpanEditor` never
+    /// calls this with one — so the only failure reachable here is an id no longer in
+    /// the registry.
+    @discardableResult
+    func setJournalSpan(_ journalID: String, span: JournalSpan?) async -> Bool {
+        guard (try? await journalStore.setSpan(id: journalID, span: span)) != nil else {
+            return false
+        }
+        await rescan()
+        return true
     }
 
     // MARK: - Journal cover (issue #14 part 3)

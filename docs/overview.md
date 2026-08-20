@@ -228,6 +228,86 @@ T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
 [T6 build plan](plans/archive/2026-08-08-revision-chain-implementation-plan.md),
 [T7 build plan](plans/archive/2026-08-09-t7-editor-ui-plan.md)
 
+## 6. Journals: their own screen, not a capture-time menu
+
+A journal is a name plus an optional **stored span** — the actual date range the paper
+journal covers ("1998 – 2001"), set by you, not inferred. It's independent of how much
+has been transcribed so far: a journal you've only read the first few pages of should not
+advertise itself as "Aug 2026" just because that's when you happened to record it. When a
+span is set, it's the one date line shown wherever a journal's dates appear (its sidebar
+row, its header); with no span, the app falls back to what the recorded entries
+themselves imply, exactly as before.
+
+Two screens now split what used to be crammed into one capture-time menu:
+
+- **The capture picker is selection-only** — pick a journal, or start a new one. That's
+  the whole job: "which journal am I recording into right now."
+- **Selecting a journal in the sidebar** shows that journal's own header above its entry
+  list — cover, name, date line, entry count — and tapping the header pushes the
+  **journal editor**: rename, set/replace/remove the cover, edit the span, set per-voice
+  labels (§4), and a read-only line showing what's actually in the journal (entry count +
+  derived range) beside the span you typed. The sidebar's own `+` creates a journal and
+  lands you straight in this editor, since that's the one moment you have the metadata to
+  hand.
+
+Splitting these apart also fixed a real bug: the old picker put the cover photo inside a
+macOS `Menu`'s label, and on macOS an `Image` inside a `Menu` label renders at its full
+intrinsic size rather than the frame SwiftUI gave it — a full-resolution cover photo
+covered the whole capture screen and pushed the picker itself off the window. Moving the
+cover out of any `Menu` label removes the failure mode outright, not just the symptom.
+
+Entries dated outside their journal's span are meant to get a visible flag — cut from
+this build to keep it shorter, tracked separately. The span type and its containment
+check already ship; only the two display sites (`LibraryEntryRow`, `EntryDetailView`)
+don't yet.
+
+Details: [journal-editing IA design](plans/2026-08-18-journal-editing-ia-design.md).
+
+## 7. Navigation: a sidebar of places (nav — built, on `nav/split-view`, pending Gate B + PR)
+
+The app is one `NavigationSplitView` on both platforms. The sidebar lists **places** —
+Capture, one row per journal, All Entries, Trash, and (debug builds only) Debug — and
+selecting one shows that place in the detail column. **Capture is selected the moment
+the app launches.** On iPhone the split view collapses to a stack whose root is the
+places list, so the phone still opens straight into the capture screen exactly as
+before; the only visible change is a back chevron that reveals the sidebar. On Mac and
+iPad both columns show at once, Mail-style.
+
+While a recording is running, the Capture row in the sidebar shows a live indicator
+(red dot + elapsed time) — so a recording started, then navigated away from, is never
+invisible. That's deliberate: the coordinator lives at the app root, not inside the
+capture screen, so leaving the screen no longer risks the capture.
+
+Inside the detail column, the existing pushes are unchanged in kind: an entry list
+pushes to an entry's detail, which pushes to its transcript editor, Mark voices, or
+revision history. Back-is-Done still applies to all three — pressing back saves before
+leaving (on Mac, ⌘[ walks the list→detail hop).
+
+```mermaid
+flowchart LR
+    S["Sidebar\n(places)"] -->|"select"| P1["Capture"]
+    S -->|"select"| P2["Journal row"]
+    S -->|"select"| P3["All Entries"]
+    S -->|"select"| P4["Trash"]
+    S -->|"select, DEBUG only"| P5["Debug"]
+    P2 --> L["Entry list\n(detail column)"]
+    P3 --> L
+    L -->|"push"| ED["Entry detail"]
+    ED -->|"push"| EE["Transcript editor /\nMark voices /\nrevision history"]
+```
+
+Two things this replaced, both load-bearing hacks tied to the capture screen's view
+lifecycle: the receipt-reconcile rule (clearing a stale "Saved" receipt when its entry
+is trashed) and the screen-stays-awake-while-recording rule now both live on the
+capture model itself, driven by state, not by a view happening to be on screen. A
+third one surfaced only once the screen could be pushed off-mounted: the model's own
+dispatch of finished-transcription/finalize-queue work had been running off a
+view-mounted hook too, and needed the same fix, or a capture finished while you were
+browsing elsewhere would silently never get encoded.
+
+Details: [navigation redesign design](plans/2026-08-17-navigation-redesign-design.md)
+(§11 = as-built rulings the design doc didn't anticipate).
+
 ## Where the project is
 
 ```mermaid

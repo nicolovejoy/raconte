@@ -388,6 +388,45 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertNil(persisted.originalDate)
     }
 
+    // MARK: - Journal editing (journal-editing IA, Task 6)
+
+    func testRenameJournalRewritesTheRegistryAndRescans() async throws {
+        try writeJournals([journal("J1", "Old Name")])
+
+        let model = model()
+        await model.rescan()
+        let renamed = await model.renameJournal("J1", to: "New Name")
+
+        XCTAssertTrue(renamed)
+        XCTAssertEqual(model.journals.first { $0.id == "J1" }?.name, "New Name")
+        let persisted = try await JournalStore(containerRoot: containerRoot).list()
+        XCTAssertEqual(persisted.first { $0.id == "J1" }?.name, "New Name")
+    }
+
+    /// The editor's "deleted underneath us" case (design ruling): renaming an id no
+    /// longer in the registry returns `false` rather than silently inserting nothing.
+    func testRenameJournalReturnsFalseForAnUnknownID() async throws {
+        try writeJournals([journal("J1", "Real")])
+
+        let model = model()
+        await model.rescan()
+        let renamed = await model.renameJournal("does-not-exist", to: "New Name")
+
+        XCTAssertFalse(renamed)
+        XCTAssertEqual(model.journals.first { $0.id == "J1" }?.name, "Real")
+    }
+
+    func testSetJournalVoiceLabelsRewritesTheRegistryAndRescans() async throws {
+        try writeJournals([journal("J1", "Two Voices")])
+
+        let model = model()
+        await model.rescan()
+        let saved = await model.setJournalVoiceLabels("J1", labels: [VoiceDisplay.mainVoice: "Grandpa"])
+
+        XCTAssertTrue(saved)
+        XCTAssertEqual(model.journals.first { $0.id == "J1" }?.voiceLabels[VoiceDisplay.mainVoice], "Grandpa")
+    }
+
     // MARK: - T6c: promoteIfNeeded / transcript(for:) ordering (review finding 3)
 
     /// `EntryDetailView.refresh()` now reads `transcript(for:)` FIRST, and only

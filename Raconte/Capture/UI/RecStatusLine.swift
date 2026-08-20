@@ -59,7 +59,19 @@ struct RecStatusLine: View {
                 // in the topmost row. An identifier on a `Text` is safe; one on a
                 // CONTAINER flattens its children out of the accessibility tree, which is
                 // the trap this file has now hit three times.
-                .accessibilityIdentifier("capture.clock")
+                //
+                // Renamed from `capture.clock` (nav T6): a SwiftUI element carries exactly
+                // ONE accessibility identifier — chaining a second `.accessibilityIdentifier`
+                // call on this same `Text` would silently replace the first, not add a
+                // second address — so this is a rename, not an addition. It is still the
+                // topmost element of the topmost row (`CaptureControlsUITests
+                // .assertBarFitsWithinAThird` uses it purely as a position anchor and is
+                // updated to the new name); it is also nav T6's fallback address for the
+                // elapsed reading on iPhone, where the split view is collapsed and the
+                // sidebar's own `sidebar.capture.live` element does not exist while the
+                // capture screen itself is on screen. Identifier only — no size/spacing/
+                // geometry change (invariant 8).
+                .accessibilityIdentifier("capture.elapsed")
 
             if phase == .recording || phase == .interrupted {
                 Circle()

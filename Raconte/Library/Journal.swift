@@ -25,12 +25,13 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
 
     /// M4 T1: per-field last-writer-wins substrate for CloudKit sync, the same
     /// convention as `EntryMetadata.modified`. Keys are `"name"`, `"voiceLabels"`,
-    /// `"cover"` — the three journal attributes an owner can actually edit after
+    /// `"cover"`, `"span"` — the four journal attributes an owner can actually edit after
     /// creation (`id`/`createdAt` are immutable, so they need no stamp). `"cover"` is
     /// declared here ahead of any writer stamping it (the cover image itself lives
     /// outside this registry, at `journals/<id>/cover.jpg` via `JournalCoverStore`) —
     /// same "the field lands now so the format doesn't churn later" precedent as
-    /// `EntryMetadata.trashedAt` before M3 T5 shipped trash.
+    /// `EntryMetadata.trashedAt` before M3 T5 shipped trash. `"span"` is stamped by
+    /// `JournalRegistry.setSpan` (#70).
     var modified: [String: Date]?
 
     init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],

@@ -2575,11 +2575,6 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
 - iOS simulator: `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names). Simulator builds need **no** entitlements override — they don't validate restricted entitlements against a profile.
 - UI tests (simulator only — macOS needs interactive automation permission):
   `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' test`
-- **When `m4/sync` merges**, the macOS `test` command above will need
-  `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` added, and must NEVER
-  gain `CODE_SIGNING_ALLOWED=NO` — that flag unsandboxes the app-hosted test runner
-  onto the real iCloud-entitled data path rather than a stripped test one. Until that
-  merge, the plain commands above work as written on `main`.
 
 ## Working style
 

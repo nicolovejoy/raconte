@@ -163,12 +163,16 @@ actor JournalStore {
     /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
     /// load -> mutate -> save shape as `setVoiceLabels`; the pure rule lives on
     /// `JournalRegistry.setSpan`. M4 sync (#70): passes the store's clock through so the
-    /// `modified["span"]` stamp lands, on both a set and a clear.
+    /// `modified["span"]` stamp lands, on both a set and a clear, and fires the sync hook
+    /// exactly like every other local-edit setter (`rename`, `setVoiceLabels`) — without
+    /// it a span edit would sit stamped-but-unpushed until the next launch's
+    /// reconciliation scan happened to notice the digest moved.
     @discardableResult
-    func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+    func setSpan(id: String, span: JournalSpan?) async throws -> Journal {
         var registry = try load()
         let updated = try registry.setSpan(id: id, span: span, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return updated
     }
 

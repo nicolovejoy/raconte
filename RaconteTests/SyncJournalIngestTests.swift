@@ -305,10 +305,17 @@ final class SyncJournalIngestTests: XCTestCase {
         let created = try await store.create(name: "1987 Journal")
         _ = try await store.rename(id: created.id, to: "1987 Journal, renamed")
         _ = try await store.setVoiceLabels(id: created.id, labels: ["bn": "Grandpa"])
+        // M4 sync (#70): `setSpan` is a new sync writer on this branch (it came from main,
+        // where no sync layer existed) and must fire the hook exactly like its siblings —
+        // otherwise a span edit sits stamped-but-unpushed until the next launch's
+        // reconciliation scan happens to notice the digest moved.
+        _ = try await store.setSpan(id: created.id,
+                                    span: try JournalSpan(start: PartialDate(year: 1998), end: nil))
 
         let seen = await hooks.names
-        XCTAssertEqual(seen, [.journal(id: created.id), .journal(id: created.id), .journal(id: created.id)],
-                       "create, rename and setVoiceLabels each change the record's content")
+        XCTAssertEqual(seen, [.journal(id: created.id), .journal(id: created.id),
+                              .journal(id: created.id), .journal(id: created.id)],
+                       "create, rename, setVoiceLabels and setSpan each change the record's content")
     }
 
     /// Carry-forward finding 2: `modified["cover"]` was declared in T1 and stamped by

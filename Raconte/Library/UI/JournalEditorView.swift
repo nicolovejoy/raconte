@@ -176,8 +176,17 @@ struct JournalEditorView: View {
     /// one) — the only failure reachable here is the store rejecting an unknown journal
     /// id, i.e. this journal was deleted out from under an open editor. No draft to reset
     /// on failure: the span editor owns its own field state, not this view.
+    ///
+    /// Value-changed guard mirrors `commitName`/`commitVoiceLabels` above (gate F1, for
+    /// #70): `JournalSpanEditor.commit()` fires unconditionally from `onDisappear`, so
+    /// simply opening a journal's editor and navigating away — for an unrelated reason,
+    /// e.g. a rename — would otherwise re-stamp `modified["span"]` with `now()` for a
+    /// value that never changed. That stamp can then beat a genuinely older but real span
+    /// edit from an offline peer in the LWW merge, discarding it. `JournalStore.setSpan`
+    /// carries the same guard as a second, store-layer chokepoint (any caller, not just
+    /// this view).
     private func commitSpan(_ span: JournalSpan?) {
-        guard journal != nil else { return }
+        guard let journal, journal.span != span else { return }
         Task {
             if await model.setJournalSpan(journalID, span: span) == false {
                 spanFailed = true

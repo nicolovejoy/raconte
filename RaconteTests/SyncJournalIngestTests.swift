@@ -318,6 +318,41 @@ final class SyncJournalIngestTests: XCTestCase {
                        "create, rename, setVoiceLabels and setSpan each change the record's content")
     }
 
+    /// Gate F1 (for #70): a no-op `setSpan` — the shape `JournalEditorView.commitSpan`
+    /// used to produce on every editor visit, since `JournalSpanEditor.commit()` fires
+    /// unconditionally from `onDisappear` — must neither advance `modified["span"]` nor
+    /// fire the sync hook. Without this, simply opening a journal's editor and leaving
+    /// re-stamps the span with `now()`, which can then beat a genuinely older but real
+    /// span edit from an offline peer in a later LWW merge and silently discard it.
+    /// A genuinely CHANGED span must still stamp and fire — the guard must discriminate,
+    /// not just always refuse.
+    func testSettingAnUnchangedSpanDoesNotRestampOrFireTheHookAgain() async throws {
+        let clock = AdvancingClock(start: stamp(0))
+        let hooks = RecordingSyncHooks()
+        let store = JournalStore(containerRoot: containerRoot, now: clock.next, syncHooks: hooks)
+        let created = try await store.create(name: "1998 Journal")
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001))
+        let first = try await store.setSpan(id: created.id, span: span)
+        let firstStamp = try XCTUnwrap(first.modified?["span"])
+        await hooks.reset()
+
+        // Same value again — the no-op case.
+        let second = try await store.setSpan(id: created.id, span: span)
+        XCTAssertEqual(second.modified?["span"], firstStamp,
+                       "an unchanged span must not advance its own stamp")
+        let seenAfterNoOp = await hooks.names
+        XCTAssertEqual(seenAfterNoOp, [], "an unchanged span must not fire the sync hook")
+
+        // A genuinely different value — the guard must not refuse everything.
+        let changed = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2002))
+        let third = try await store.setSpan(id: created.id, span: changed)
+        let thirdStamp = try XCTUnwrap(third.modified?["span"])
+        XCTAssertGreaterThan(thirdStamp, firstStamp, "a real change must still stamp")
+        let seenAfterRealChange = await hooks.names
+        XCTAssertEqual(seenAfterRealChange, [.journal(id: created.id)],
+                       "a real change must still fire the sync hook")
+    }
+
     /// Carry-forward finding 2: `modified["cover"]` was declared in T1 and stamped by
     /// nothing, so cover LWW could never resolve. The stamp has to be written through
     /// `JournalStore` (single writer for `journals.json`) rather than by the cover store.

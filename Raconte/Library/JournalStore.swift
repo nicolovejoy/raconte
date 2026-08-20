@@ -162,11 +162,12 @@ actor JournalStore {
 
     /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
     /// load -> mutate -> save shape as `setVoiceLabels`; the pure rule lives on
-    /// `JournalRegistry.setSpan`.
+    /// `JournalRegistry.setSpan`. M4 sync (#70): passes the store's clock through so the
+    /// `modified["span"]` stamp lands, on both a set and a clear.
     @discardableResult
     func setSpan(id: String, span: JournalSpan?) throws -> Journal {
         var registry = try load()
-        let updated = try registry.setSpan(id: id, span: span)
+        let updated = try registry.setSpan(id: id, span: span, now: now())
         try save(registry)
         return updated
     }

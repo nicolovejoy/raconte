@@ -17,6 +17,9 @@ enum SyncJournalField {
     static let createdAt = "createdAt"
     static let voiceLabels = "voiceLabels"
     static let cover = "cover"
+    /// The journal's stored span (spec ruling 2, #70), additive like `voiceLabels`/`cover`
+    /// above — a record built by a build that predates this field simply has no such key.
+    static let span = "span"
     /// As-built: the per-field LWW stamps themselves. Design §2 says name/voiceLabels are
     /// "LWW per field" and §2 note 5 says `journals.json` grows a `modified` map — but the
     /// table never says how the stamps reach the other device. They have to: a receiver
@@ -78,6 +81,11 @@ enum SyncRecordBuilders {
         // synced. Assigning nil removes the key, so an absent cover still produces a
         // record with no `cover` in `allKeys()`.
         record[SyncJournalField.cover] = coverFileURL.map { CKAsset(fileURL: $0) }
+        // Same "assigned in both directions" rule as `cover` immediately above: a journal
+        // with no span produces no `span` key at all, and clearing a span on a `base:`
+        // record that had one removes the key — otherwise "I cleared the span" would be
+        // the one journal edit that never syncs.
+        record[SyncJournalField.span] = journal.span.map(encodeJSON)
         return record
     }
 
@@ -101,6 +109,31 @@ enum SyncRecordBuilders {
         guard let string, let data = string.data(using: .utf8),
               let value = try? CaptureCoding.decoder().decode([String: Value].self, from: data) else {
             return [:]
+        }
+        return value
+    }
+
+    /// The single-value sibling of `encodeJSON<Value>(_ value: [String: Value])` above, for
+    /// fields that are not dictionaries — `span` is the first (#70). Same rule, same
+    /// encoder: a value's wire representation must be byte-identical to its on-disk one, or
+    /// a value that merely round-tripped through the cloud could compare as newer than
+    /// itself.
+    static func encodeJSON<Value: Encodable>(_ value: Value) -> String {
+        guard let data = try? CaptureCoding.lineEncoder().encode(value),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
+    }
+
+    /// The single-value sibling of `decodeJSON<Value>(_ string: String?) -> [String: Value]`
+    /// above. Returns `nil` rather than degrading to some default, because there is no safe
+    /// default for an arbitrary value the way `[:]` is for a dictionary — the caller decides
+    /// what an absent/damaged value means (for `span`, both read as "no span").
+    static func decodeJSON<Value: Decodable>(_ string: String?) -> Value? {
+        guard let string, let data = string.data(using: .utf8),
+              let value = try? CaptureCoding.decoder().decode(Value.self, from: data) else {
+            return nil
         }
         return value
     }

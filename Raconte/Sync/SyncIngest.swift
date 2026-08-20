@@ -11,6 +11,10 @@ struct RemoteJournal: Equatable, Sendable {
     var name: String
     var createdAt: Date
     var voiceLabels: [String: String]
+    /// The journal's stored span (spec ruling 2, #70). Optional both because the field is
+    /// additive (a record built by an older device never has it) and because the value
+    /// itself is nilable — an open journal, or one whose span was cleared.
+    var span: JournalSpan?
     var modified: [String: Date]
     /// The fetched `CKAsset`'s local file URL, when the record carries a cover. CloudKit
     /// has already downloaded the bytes to this path by the time the record is handed
@@ -41,6 +45,10 @@ struct RemoteJournal: Equatable, Sendable {
         self.name = JournalRegistry.normalized(name)
         self.createdAt = createdAt
         self.voiceLabels = SyncRecordBuilders.decodeJSON(record[SyncJournalField.voiceLabels] as? String)
+        // Absent (older build's record) and unparseable both read as nil — the same
+        // leniency `voiceLabels`/`modified` get, and the same rule `Journal.init(from:)`
+        // already applies to `span` on disk. Absence must never fail this init.
+        self.span = SyncRecordBuilders.decodeJSON(record[SyncJournalField.span] as? String)
         self.modified = SyncRecordBuilders.decodeJSON(record[SyncJournalField.modified] as? String)
         self.coverAsset = (record[SyncJournalField.cover] as? CKAsset)?.fileURL
         self.deviceID = record[SyncJournalField.deviceID] as? String
@@ -49,11 +57,13 @@ struct RemoteJournal: Equatable, Sendable {
     /// Direct construction, for tests and for anything that already has the decoded
     /// values.
     init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
-         modified: [String: Date] = [:], coverAsset: URL? = nil, deviceID: String? = nil) {
+         span: JournalSpan? = nil, modified: [String: Date] = [:], coverAsset: URL? = nil,
+         deviceID: String? = nil) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.voiceLabels = voiceLabels
+        self.span = span
         self.modified = modified
         self.coverAsset = coverAsset
         self.deviceID = deviceID
@@ -134,6 +144,7 @@ enum JournalMerge {
 
         if resolve("name") == .remote { merged.name = remote.name }
         if resolve("voiceLabels") == .remote { merged.voiceLabels = remote.voiceLabels }
+        if resolve("span") == .remote { merged.span = remote.span }
         // The cover's bytes are not a field of this type — only its stamp is, and it moves
         // by the same rule whether or not the remote actually carries an image.
         // `coverAction` answers the bytes half, including the deletion case that a bare
@@ -153,7 +164,7 @@ enum JournalMerge {
     /// win again.
     static func adopted(remote: RemoteJournal) -> Journal {
         Journal(id: remote.id, name: remote.name, createdAt: remote.createdAt,
-                voiceLabels: remote.voiceLabels,
+                voiceLabels: remote.voiceLabels, span: remote.span,
                 modified: remote.modified.isEmpty ? nil : remote.modified)
     }
 

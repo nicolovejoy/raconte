@@ -340,6 +340,45 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertNotNil(labelled.modified?["voiceLabels"])
     }
 
+    /// M4 sync (for #70): `setSpan` must stamp `modified["span"]`, mirroring
+    /// `setVoiceLabels`'s own stamp exactly — without it span can never take part in LWW at
+    /// all, and every span edit silently loses every cross-device race.
+    func testSetSpanStampsModifiedSpanAndLeavesNameStampUntouched() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let s = store(ids: ["J1"], now: { clock.next() })
+        let created = try await s.create(name: "1998 Journal")
+        let nameStamp = try XCTUnwrap(created.modified?["name"])
+        XCTAssertNil(created.modified?["span"], "no span set yet — no stamp for it")
+
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001))
+        let stamped = try await s.setSpan(id: created.id, span: span)
+        XCTAssertEqual(stamped.modified?["name"], nameStamp,
+                       "setting the span must not touch name's own stamp")
+        XCTAssertNotNil(stamped.modified?["span"])
+
+        // Reaches disk, not just the in-memory return value.
+        let reread = try await JournalStore(containerRoot: containerRoot).list()
+        XCTAssertEqual(reread.first?.modified, stamped.modified)
+    }
+
+    /// The exact bug class the cover work hit on this branch: a CLEAR must also stamp, or
+    /// the deletion loses every LWW race against a peer that has not yet heard about it.
+    func testClearingASpanAlsoStampsModifiedSpan() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let s = store(ids: ["J1"], now: { clock.next() })
+        let created = try await s.create(name: "1998 Journal")
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: nil)
+        let withSpan = try await s.setSpan(id: created.id, span: span)
+        let setStamp = try XCTUnwrap(withSpan.modified?["span"])
+
+        let cleared = try await s.setSpan(id: created.id, span: nil)
+        let clearStamp = try XCTUnwrap(cleared.modified?["span"],
+                                       "clearing a span must stamp it too, or the deletion "
+                                       + "cannot win a later LWW comparison")
+        XCTAssertGreaterThan(clearStamp, setStamp, "sanity: the clock genuinely advanced")
+        XCTAssertNil(cleared.span)
+    }
+
     /// Byte-pin, the `Journal` counterpart to `EntryMetadata`'s: a journal nobody has
     /// touched through `create`/`rename`/`setVoiceLabels` (built directly, as every
     /// pre-M4 registry on disk was) carries no `modified` key at all — extends
@@ -460,8 +499,14 @@ final class JournalStoreTests: XCTestCase {
         _ = try await s.setSpan(id: created.id, span: nil)
         let reloaded = try await s.journal(id: created.id)
         XCTAssertNil(reloaded?.span)
+        // "span" alone is no longer a safe discriminator: clearing now stamps
+        // `modified["span"]` (M4 sync, #70), which legitimately contains the substring
+        // "span" as a STRING-valued key (`"span":"2026-..."`). The actual `Journal.span`
+        // field, when present, is OBJECT-valued (`"span":{"start":...}`) — `"span":{` is
+        // therefore still an honest test for "the span field itself is gone".
         XCTAssertFalse(String(decoding: try Data(contentsOf: registryURL), as: UTF8.self)
-                        .contains("span"))
+                        .contains(#""span":{"#),
+                       "the span field itself must be gone, even though its modified stamp remains")
     }
 
     /// A tripwire, not a style check. `Journal.encode(to:)` enumerates fields by hand, so a

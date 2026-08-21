@@ -1,5 +1,81 @@
 # CLAUDE.md
 
+## Session 2026-08-20→21 (laptop — M4/SYNC TOOK MAIN, span synced, GATE A CLOSED; issues #79/#80 + next-session plan; 1555 unit / 43 UI)
+
+Planned AND executed the merge in one sitting, subagent-driven (Sonnet implementers +
+Sonnet task reviews, Opus gate — owner ruling honoured). Plan `6a406542`, branch
+`m4/sync` at `082e30e9`, pushed. Main at `762e672a`. Both trees clean.
+
+- **The red-first tripwire design worked exactly as intended.** `35e56229` landed
+  `SyncJournalRoundTripTests` BEFORE the merge (Mirror 5-field pin + whole-value
+  equality through journalRecord → RemoteJournal → adopted, mutation-verified both
+  directions); the merge turned it red on exactly that one test; the wiring turned it
+  green. A `Journal` field skipped by sync can no longer pass silently (#70 comment
+  posted — its decoder half stays open; **do not close #70 on the tripwire alone**).
+- **Merge `558809a4`: exactly the dry-run's 3 files / 7 hunks.** All five
+  `Journal.swift` unions kept both `span` and `modified`; both Mirror pins bumped to 6;
+  `ContentView` took main's structure with `SyncCoordinator` re-homed into
+  `AppServices` (+ one `.task` launch kick — the ONLY delta vs main's file); **the #67
+  guard survived byte-for-byte**, pinned green by
+  `testRenamingFromTheOpenEditorDoesNotPopTheEditorItself`. One dry-run correction:
+  CLAUDE.md did NOT take main's version — it auto-merged as a union; the dangling
+  "when m4/sync merges…" note was trimmed in the gate fix wave.
+- **span wired through all six sync sites + `modified["span"]` stamp** (`48366403`),
+  following voiceLabels verbatim; deletion propagates (nil clears the record field,
+  newer-stamped nil wins LWW, pinned both directions). **Controller ruling mid-task:**
+  `setSpan` must also fire `syncHooks?.noteLocalChange` like its sibling setters
+  (`50648361`) — without it a span edit waits for a reconciliation scan.
+- **The Opus gate earned its seat** (independent suite re-runs; 5 probes; a
+  voiceLabels-sibling sweep across all of `Raconte/`): **F1 — opening a journal's
+  editor and leaving re-stamped `span` with `now` unconditionally**
+  (`JournalEditorView.commitSpan` + `JournalSpanEditor` teardown had no value-changed
+  guard), so a no-op visit could clobber an offline peer's genuine edit via LWW. Fixed
+  at BOTH layers (view guard + `JournalStore.setSpan` early-returns on unchanged span,
+  no stamp/no hook) `8f1f56f1`, pinned. F2: tripwire now also routes through
+  `JournalMerge.merge` (a field wired in `adopted` but forgotten in `merge` used to
+  pass). Scoped re-review: all addressed. **1555 unit / 43 UI green.**
+- **m4 GATE A CLOSED** (recorded in the m4 ledger): owner smoked the merged builds —
+  cover phone→laptop, rename laptop→phone, nothing else moved, all pass. Builds:
+  `~/Desktop/Raconte-m4sync.app` dylib `937826C9`; phone (wireless devicectl, the
+  usual tunnel-open retry) dylib `2318AFEB`. Both carry nav + journal editor + sync.
+- **Two new owner findings from that smoke, root-caused and filed:** **#79** journal
+  list order is nondeterministic — TWO causes: no surface ever sorts (the registry's
+  "sorting is a presentation decision" was never implemented anywhere) while array
+  order is per-device history (local creates + CloudKit arrival appends), AND the
+  capture picker's `journals` is a bootstrap-once copy sync never refreshes (adopted
+  journals invisible there until relaunch). **#80** journal deletion absent at every
+  layer (store deliberately, no UI, no sync tombstone — `enqueueDeletes` has zero
+  callers, inbound deletions ignored pending T11); resurrection hazard mapped in the
+  issue.
+- **Next session is pre-planned for Sonnet:**
+  `docs/plans/2026-08-21-journal-order-and-delete-plan.md` (`762e672a`) — Phase A
+  (ordering + picker refresh, no rulings needed) and Phase B (empty-journal delete +
+  sync propagation) with **3 owner rulings pre-recommended at the top: confirm by
+  number before dispatching Phase B.**
+- **Corrected claim:** the uncommitted `SyncCoordinator.swift` on the m4 worktree was
+  NOT a fetch-on-launch fix — verified inert scaffolding (unused clock/logger/debounce
+  members, `launch()` untouched). Now `stash@{0}` on `/Users/nico/src/raconte-m4`
+  ("inert fetch-debounce scaffolding") — drop or pop at m4 Task 12.
+- Process: two background-suite stalls (count now 10) + one machine-sleep kill, each
+  recovered by a single nudge/resume with verified state; `caffeinate -ims -w <pid>
+  -t 14400` ran for the rest of the session. Review-package note: for a MERGE commit,
+  hand the reviewer `git show --cc` + a diff-vs-main-parent of the key files, not
+  BASE..HEAD (which drags in everything the merge brought).
+
+**Next steps:**
+1. **Run `docs/plans/2026-08-21-journal-order-and-delete-plan.md`** on `m4/sync`
+   (worktree `/Users/nico/src/raconte-m4`): confirm its 3 numbered Phase-B rulings with
+   Nico, then Sonnet implementers/reviews + Opus gate, per the plan's constraints.
+2. **Resume the m4 SDD loop at Task 6** (entry + finalize artifacts push) — read the m4
+   ledger first (`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`);
+   Gate A is closed there. Decide the Task-0 stash at Task 12.
+3. **#68** (macOS cover picker sheet empty) — still the only cover path on the Mac.
+4. **Owner smoke item never run:** Mac — type a new journal name in the editor, ⌘2
+   without clicking away, reopen (write-through discipline; macOS UI tests impossible).
+5. Nico's calls: delete merged remote branch `feat/journal-editing`; backlog #67
+   (10 items), #73-78, #71, #70 (decoder half), #66, #63, unified-editor #60/#59,
+   #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
 ## Session 2026-08-20 (laptop — PR #72 SMOKED AND MERGED; #69/#65 closed, #67 mis-closed then corrected; m4/sync merge DRY-RUN: 3 files, 7 hunks)
 
 Short close-out session. Main at `8799ccf0`, tree clean.

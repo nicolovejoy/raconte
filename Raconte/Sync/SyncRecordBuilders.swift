@@ -304,12 +304,25 @@ enum FinalizeArtifactPush {
     /// started) → Entry + AudioAsset only. A degraded capture's *recording* is exactly
     /// as safe and as real as any other, so it must not be held back from syncing
     /// merely because nothing derived from it exists yet.
+    ///
+    /// The LiveLog check is a **readability** probe (`try? Data(contentsOf:)`), not a
+    /// bare `fileExists`, and deliberately the identical technique
+    /// `SyncTreeScanner.liveLogArtifact` uses — not a second, independently-invented
+    /// check that happens to agree today. `fileExists` alone would read an
+    /// EXISTING-BUT-UNREADABLE `live.jsonl` (a directory somehow at that path, a
+    /// permissions problem, a torn write mid-`open()`) as "has a log," and queue
+    /// `.liveLog` for push here while the reconciliation scanner — which actually reads
+    /// the bytes to hash them — silently produces no LiveLog artifact for the same
+    /// capture. That is exactly the "unreadable read as present" conflation this
+    /// codebase has hit repeatedly (§11 of the M2 design; issue #11), and here it would
+    /// also mis-scope Task 7/8's future `recordToPush` wiring, which has to read this
+    /// same file to hash it and would find nothing to push.
     static func namesToPush(capturesRoot: URL, captureID: String) -> [SyncRecordName] {
         guard isFinalized(capturesRoot: capturesRoot, captureID: captureID) else { return [] }
         var names: [SyncRecordName] = [.entry(captureID: captureID), .audio(captureID: captureID)]
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         let liveLogURL = SegmentLayout.liveTranscriptURL(captureDirectory: dir)
-        if FileManager.default.fileExists(atPath: liveLogURL.path) {
+        if (try? Data(contentsOf: liveLogURL, options: .mappedIfSafe)) != nil {
             names.append(.liveLog(captureID: captureID))
         }
         return names

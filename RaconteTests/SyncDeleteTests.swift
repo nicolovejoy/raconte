@@ -239,6 +239,12 @@ final class SyncDeleteIngestTests: XCTestCase {
         XCTAssertTrue(dropped.contains(.revision(id: revisionID)),
                      "a queued revision upload for the deleted capture must be dropped, not sent")
         XCTAssertTrue(dropped.contains(.audio(captureID: captureID)))
+        // Fix round (review Important): the Entry's own queued save must be dropped
+        // too, explicitly at this layer — never left to an undocumented assumption
+        // about how the real engine internally races a save against a delete for the
+        // same record.
+        XCTAssertTrue(dropped.contains(.entry(captureID: captureID)),
+                     "the Entry's own queued save must be withdrawn, not left to engine internals")
         let deleted = await engine.deletedNames
         XCTAssertTrue(deleted.isEmpty, "children never get an explicit CK delete — they cascade with the Entry")
     }
@@ -370,6 +376,12 @@ final class LibraryScreenModelDeleteSyncTests: XCTestCase {
         let dropped = await engine.droppedNameSet
         XCTAssertTrue(dropped.contains(.audio(captureID: idA)))
         XCTAssertTrue(dropped.contains(.revision(id: revisionID)))
+        // Fix round (review Important): the Entry's own queued save must be dropped
+        // too, explicitly — never left to an undocumented assumption that the real
+        // engine internally dedupes a queued save against a queued delete for the
+        // same record.
+        XCTAssertTrue(dropped.contains(.entry(captureID: idA)),
+                     "the Entry's own queued save must be withdrawn, not left to engine internals")
     }
 
     /// Layer-1 no-op: an entry that is not (or no longer) trashed must fire no sync

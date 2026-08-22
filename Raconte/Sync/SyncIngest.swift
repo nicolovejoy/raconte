@@ -2185,8 +2185,12 @@ actor SyncRecordExchange: CloudRecordExchange {
     ///
     /// Before staging — the only point they are still enumerable — gathers the
     /// capture's own child record family (`SyncRecordFamily`: audio/liveLog/revisions/
-    /// marker streams) and, after a successful stage, retires their bookkeeping and
-    /// drops any not-yet-sent local SAVE for them (design §5, "the delete wins").
+    /// marker streams) plus the Entry's own name, and, after a successful stage,
+    /// retires their bookkeeping and drops any not-yet-sent local SAVE for all of them
+    /// (design §5, "the delete wins"). **Fix round (review Important): the Entry's own
+    /// name rides along in that drop too** — `enqueueDeletes`'s real CK delete is not
+    /// left alone to withdraw a queued save at the engine layer; this is the explicit,
+    /// app-level guarantee, matching every other name in the family.
     /// Also discards any PARKED sync state left under `sync/staging/<captureID>/` for
     /// this captureID — parked revisions/marker streams/partial assembly describe
     /// content whose parent is now gone, and nothing after this may ever revive them.
@@ -2201,17 +2205,25 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
+        // Every name whose queued SAVE must never reach the server once this deletion
+        // is being processed: the Entry itself, always present, plus whatever child
+        // family exists.
+        let namesToRetire = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
+            + [.entry(captureID: captureID)]
 
         let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
         do {
             _ = try remover.stage(captureID: captureID)
         } catch StagedRemovalError.captureDirectoryMissing {
-            // Nothing local to remove. Still worth retiring bookkeeping/parked state
-            // below — a leftover from an earlier local delete or a stale park can
-            // still be sitting here even though the capture directory itself is gone.
+            // Nothing local to remove. Still worth retiring bookkeeping/dropping any
+            // queued save and discarding parked state below — a leftover from an
+            // earlier local delete or a stale park can still be sitting here even
+            // though the capture directory itself is gone.
             discardParkedState(captureID: captureID, containerRoot: containerRoot)
-            await forgetServerState(for: .entry(captureID: captureID))
+            await engine?.dropPendingSaves(namesToRetire)
+            for name in namesToRetire {
+                await forgetServerState(for: name)
+            }
             return
         } catch {
             log.error("""
@@ -2224,12 +2236,9 @@ actor SyncRecordExchange: CloudRecordExchange {
 
         discardParkedState(captureID: captureID, containerRoot: containerRoot)
 
-        await forgetServerState(for: .entry(captureID: captureID))
-        if !family.isEmpty {
-            await engine?.dropPendingSaves(family)
-            for name in family {
-                await forgetServerState(for: name)
-            }
+        await engine?.dropPendingSaves(namesToRetire)
+        for name in namesToRetire {
+            await forgetServerState(for: name)
         }
 
         await localStoreDidChange?()

@@ -776,9 +776,17 @@ final class LibraryScreenModel {
     /// real CK delete; children cascade server-side via `.deleteSelf`) and withdraws/
     /// retires its child family (design §5, "the delete wins") — `family` must already
     /// have been gathered before the stage ran.
+    ///
+    /// **Fix round (review Important): the Entry's own name rides along in the family
+    /// drop too**, not just the real CK delete. `enqueueDeletes` alone leaves an
+    /// undocumented, untested assumption that the engine internally dedupes a queued
+    /// save against a queued delete for the same record — a local edit that queued a
+    /// save moments before this permanent deletion must be withdrawn explicitly at
+    /// this layer, never left to engine internals.
     private func noteSyncDelete(captureID: String, family: [SyncRecordName]) async {
-        await syncHooks?.noteLocalDelete(.entry(captureID: captureID))
-        await syncHooks?.noteLocalDeleteFamily(family)
+        let entryName = SyncRecordName.entry(captureID: captureID)
+        await syncHooks?.noteLocalDelete(entryName)
+        await syncHooks?.noteLocalDeleteFamily(family + [entryName])
     }
 
     /// The result of `emptyTrash()`: how many trashed entries were actually removed vs.
@@ -846,8 +854,11 @@ final class LibraryScreenModel {
         // safe; reading `self.syncHooks` itself must happen here, on this actor.
         let syncHooks = self.syncHooks
         let result = await sweeper.run(onDeleted: { captureID, family in
-            await syncHooks?.noteLocalDelete(.entry(captureID: captureID))
-            await syncHooks?.noteLocalDeleteFamily(family)
+            // Fix round: the Entry's own name rides along in the family drop too —
+            // see `noteSyncDelete`'s doc comment.
+            let entryName = SyncRecordName.entry(captureID: captureID)
+            await syncHooks?.noteLocalDelete(entryName)
+            await syncHooks?.noteLocalDeleteFamily(family + [entryName])
         })
         lastSweep = result
         // Only rescan when the disk actually changed — a launch with nothing expired is

@@ -76,7 +76,14 @@ struct PendingEngineChanges: Equatable, Sendable {
         changes.append(contentsOf: names.map(Change.save))
     }
 
+    /// M4 T11 fix round (review Important): strips any already-buffered SAVE for the
+    /// same names before appending the deletes. Without this, a save buffered moments
+    /// before its record's deletion (both still pre-engine-start) would replay
+    /// alongside the delete in arrival order once the engine finally starts — the
+    /// buffered-before-start mirror of `dropPendingSaves` needing this same "the
+    /// delete wins" guarantee, not just the post-start path.
     mutating func bufferDeletes(_ names: [SyncRecordName]) {
+        removeSaves(names)
         changes.append(contentsOf: names.map(Change.delete))
     }
 

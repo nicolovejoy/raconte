@@ -427,6 +427,79 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(model.journals.first { $0.id == "J1" }?.voiceLabels[VoiceDisplay.mainVoice], "Grandpa")
     }
 
+    // MARK: - Journal deletion (#80, v1: empty journals only)
+
+    func testDeleteJournalRemovesAnEmptyJournalAndRescans() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+
+        let model = model()
+        await model.rescan()
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertTrue(deleted)
+        XCTAssertNil(model.journals.first { $0.id == "J2" })
+        let persisted = try await JournalStore(containerRoot: containerRoot).list()
+        XCTAssertNil(persisted.first { $0.id == "J2" }, "the delete must have reached disk")
+    }
+
+    /// v1 scope (#80 owner ruling 1): a journal with a live entry is refused, full stop
+    /// — there is no "move the entries out first" flow yet.
+    func testDeleteJournalRefusesWhenTheJournalHasALiveEntry() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Has an entry")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+
+        let model = model()
+        await model.rescan()
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted)
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" }, "the journal must survive")
+    }
+
+    /// The orphan-on-restore case (#80 owner ruling 1, the load-bearing guard): a journal
+    /// holding only a TRASHED entry is NOT empty. If this journal were deleted anyway,
+    /// restoring that entry later would file it into a journal that no longer exists.
+    func testDeleteJournalRefusesWhenTheJournalHasOnlyATrashedEntry() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Trashed entry only")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+
+        let model = model()
+        await model.rescan()
+        let trashed = await model.trashEntry(idA)
+        XCTAssertTrue(trashed, "fixture sanity: the trash write succeeded")
+        XCTAssertTrue(model.trashed.contains { $0.captureID == idA },
+                     "fixture sanity: the entry is really in the trash list")
+        XCTAssertFalse(model.allEntries.contains { $0.captureID == idA },
+                      "fixture sanity: a trashed entry is not also a live one")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "a journal with a trashed entry is not empty")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" }, "the journal must survive")
+    }
+
+    func testDeleteJournalReturnsFalseForAnUnknownID() async throws {
+        try writeJournals([journal("J1", "Real")])
+
+        let model = model()
+        await model.rescan()
+        let deleted = await model.deleteJournal("does-not-exist")
+
+        XCTAssertFalse(deleted)
+    }
+
+    func testDeleteJournalRefusesTheLastRemainingJournal() async throws {
+        try writeJournals([journal("J1", "Only one")])
+
+        let model = model()
+        await model.rescan()
+        let deleted = await model.deleteJournal("J1")
+
+        XCTAssertFalse(deleted)
+        XCTAssertNotNil(model.journals.first { $0.id == "J1" })
+    }
+
     // MARK: - T6c: promoteIfNeeded / transcript(for:) ordering (review finding 3)
 
     /// `EntryDetailView.refresh()` now reads `transcript(for:)` FIRST, and only

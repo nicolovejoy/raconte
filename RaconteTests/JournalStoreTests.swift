@@ -1,4 +1,7 @@
 import XCTest
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 @testable import Raconte
 
 /// M3 T1: the journals registry round-trips, refuses to read an empty registry out of a
@@ -523,5 +526,141 @@ final class JournalStoreTests: XCTestCase {
         let journal = Journal(id: "J1", name: "N", createdAt: Date())
         XCTAssertEqual(Mirror(reflecting: journal).children.count, 6,
                        "Journal gained or lost a field — see Journal.encode(to:)")
+    }
+
+    // MARK: Delete (#80, v1: empty journals only — emptiness itself is enforced one
+    // layer up, by `LibraryScreenModel.deleteJournal`; see `LibraryScreenModelTests`)
+
+    func testDeleteJournalRemovesFromRegistryAndDiskBytes() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+
+        try await s.deleteJournal(id: toDelete.id)
+
+        let remaining = try await s.list()
+        XCTAssertEqual(remaining.map(\.id), ["J1"])
+        let bytes = String(decoding: try Data(contentsOf: registryURL), as: UTF8.self)
+        XCTAssertFalse(bytes.contains(toDelete.id),
+                       "the deleted journal's id must not survive on disk")
+    }
+
+    func testDeleteJournalUnknownIDThrowsAndLeavesTheFileAlone() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "Keep me")
+        _ = try await s.create(name: "Also keep me")
+        let before = try Data(contentsOf: registryURL)
+
+        do {
+            try await s.deleteJournal(id: "missing")
+            XCTFail("expected unknownJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .unknownJournal("missing"))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    /// Every device always needs somewhere for capture to point — deleting the only
+    /// journal left would leave nothing to file into and no UI for the resulting state.
+    func testDeleteJournalRefusesTheLastRemainingJournalAndLeavesTheFileAlone() async throws {
+        let s = store(ids: ["J1"])
+        let only = try await s.create(name: "The only one")
+        let before = try Data(contentsOf: registryURL)
+
+        do {
+            try await s.deleteJournal(id: only.id)
+            XCTFail("expected lastRemainingJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .lastRemainingJournal(only.id))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    /// The last-remaining guard must still let deletion through once a second journal
+    /// exists — the count check has to discriminate, not just always refuse.
+    func testDeleteJournalSucceedsOnceASecondJournalExists() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "First")
+        let second = try await s.create(name: "Second")
+
+        try await s.deleteJournal(id: second.id)
+
+        let remaining = try await s.list()
+        XCTAssertEqual(remaining.map(\.id), ["J1"])
+    }
+
+    func testDeleteJournalRemovesItsCoverDirectory() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: s)
+        try await covers.write(imageData: Self.makePNG(), journalID: toDelete.id)
+        let coverDir = AppContainer.journalCoverURL(containerRoot: containerRoot, journalID: toDelete.id)
+            .deletingLastPathComponent()
+        let beforeDelete = await covers.read(journalID: toDelete.id)
+        XCTAssertNotNil(beforeDelete, "fixture sanity: the cover really wrote")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: coverDir.path),
+                     "fixture sanity: the cover directory really exists")
+
+        try await s.deleteJournal(id: toDelete.id)
+
+        let afterDelete = await covers.read(journalID: toDelete.id)
+        XCTAssertNil(afterDelete)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: coverDir.path),
+                      "the whole journals/<id>/ directory must be gone, not just cover.jpg")
+    }
+
+    func testDeleteJournalFiresTheSyncDeleteHook() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        _ = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+        await hooks.reset()
+
+        try await s.deleteJournal(id: toDelete.id)
+
+        let deletes = await hooks.deletedNames
+        XCTAssertEqual(deletes, [.journal(id: toDelete.id)])
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [], "a delete is not also a change")
+    }
+
+    // MARK: Test helpers — pure CoreGraphics/ImageIO, no UIKit/AppKit (mirrors
+    // JournalCoverStoreTests' own copy; this file needs only one trivial fixture image)
+
+    private static func makePNG() -> Data {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let context = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8,
+                                bytesPerRow: 0, space: colorSpace,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        let image = context.makeImage()!
+        let output = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        return output as Data
+    }
+}
+
+/// Records both verbs `SyncHooks` offers, so a delete test can assert it fired
+/// `noteLocalDelete` and NOT `noteLocalChange` — unlike `RecordingSyncHooks`
+/// (`SyncJournalIngestTests.swift`), which predates #80 and only records changes.
+actor DeletionRecordingSyncHooks: SyncHooks {
+    private(set) var changedNames: [SyncRecordName] = []
+    private(set) var deletedNames: [SyncRecordName] = []
+
+    func noteLocalChange(_ name: SyncRecordName) async {
+        changedNames.append(name)
+    }
+
+    func noteLocalDelete(_ name: SyncRecordName) async {
+        deletedNames.append(name)
+    }
+
+    func reset() {
+        changedNames = []
+        deletedNames = []
     }
 }

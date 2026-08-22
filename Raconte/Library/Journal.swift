@@ -105,6 +105,31 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     }
 }
 
+/// The ONE place journal display order is decided (issue #79: no surface ever sorted,
+/// so the list read a different order on every device — local creates append locally,
+/// CloudKit-adopted journals append in arrival order, and those two histories diverge
+/// per device). `JournalRegistry.journals` itself stays insertion-ordered on purpose
+/// (see its own doc comment) — this is presentation-only, applied by every surface that
+/// lists journals: `SidebarModel.rows`, `CaptureScreenModel.journals`,
+/// `LibraryScreenModel.journals`.
+///
+/// Sorted by `createdAt` ascending, ties broken by `id` ascending. `createdAt` alone
+/// converges two devices with interleaved local-create/sync-adopt histories onto the
+/// same order (the underlying record — id and createdAt — is the same regardless of
+/// which device minted it locally and which received it over sync); the id tie-break
+/// exists for the case two journals share a `createdAt` exactly (e.g. adopted from the
+/// same sync batch) and gives a deterministic order that does not depend on incoming
+/// array order. A ULID's own prefix is creation-time-ordered, so tie-breaking by id is
+/// consistent with breaking by finer-grained creation time, not an arbitrary fallback.
+extension Array where Element == Journal {
+    var displayOrdered: [Journal] {
+        sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            return lhs.id < rhs.id
+        }
+    }
+}
+
 enum JournalError: Error, Equatable {
     /// A name that is empty or only whitespace. Rejected at the model layer so the
     /// registry can never hold an unnameable journal.

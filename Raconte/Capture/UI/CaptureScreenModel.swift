@@ -429,7 +429,8 @@ final class CaptureScreenModel {
     @discardableResult
     func createJournal(name: String) async -> Journal? {
         guard let created = try? await journalStore.create(name: name) else { return nil }
-        journals.append(created)
+        // Re-sort, not append-and-trust: display order, not insertion order (#79).
+        journals = (journals + [created]).displayOrdered
         selectedJournalID = created.id
         currentJournal.select(created.id)
         resolveBackdateForJournalChange()
@@ -443,7 +444,13 @@ final class CaptureScreenModel {
     func renameCurrentJournal(to name: String) async {
         guard let id = selectedJournalID,
               let renamed = try? await journalStore.rename(id: id, to: name) else { return }
-        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
+        // A rename never changes createdAt, so this patch cannot itself change display
+        // order — re-sorting here is defensive symmetry with every other assignment
+        // site, not a behavior fix on its own (#79).
+        if let index = journals.firstIndex(where: { $0.id == id }) {
+            journals[index] = renamed
+            journals = journals.displayOrdered
+        }
         await library.rescan()
     }
 
@@ -460,7 +467,12 @@ final class CaptureScreenModel {
         guard let id = selectedJournalID,
               let updated = try? await journalStore.setVoiceLabels(id: id, labels: labels)
         else { return false }
-        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = updated }
+        // Voice labels never change createdAt either — same defensive symmetry as
+        // `renameCurrentJournal` above (#79).
+        if let index = journals.firstIndex(where: { $0.id == id }) {
+            journals[index] = updated
+            journals = journals.displayOrdered
+        }
         return true
     }
 
@@ -736,7 +748,8 @@ final class CaptureScreenModel {
         }
         switch JournalSelection.resolve(registry: registry, storedID: currentJournal.storedID) {
         case .existing(let id):
-            journals = registry.journals
+            // Display order, not registry (insertion) order — issue #79.
+            journals = registry.journals.displayOrdered
             selectedJournalID = id
             currentJournal.select(id)
         case .needsDefault:
@@ -747,7 +760,7 @@ final class CaptureScreenModel {
             } else {
                 // Best-effort: the registry stays empty and the header falls back to the
                 // "Journal" literal in `selectedJournalName` until the next bootstrap.
-                journals = registry.journals
+                journals = registry.journals.displayOrdered
             }
         }
     }

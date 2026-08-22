@@ -545,10 +545,20 @@ final class SyncJournalIngestTests: XCTestCase {
     /// The load-bearing rule (#80's own wording, and this task's mutation-checked test):
     /// an inbound deletion for a journal that is NOT empty locally must be IGNORED, and
     /// the journal RE-PUSHED — never orphan local entries to a remote delete.
+    ///
+    /// **The second journal is what makes the first assertion mean anything** (gate
+    /// finding, Important 1). With a single-journal fixture, deleting the not-empty guard
+    /// left `JournalRegistry.remove` refusing the delete anyway as the LAST REMAINING
+    /// journal, so `stillThere` stayed non-nil and the headline assertion — the one that
+    /// names the data-loss rule — passed under the mutation. It was pinned by the wrong
+    /// guard. Same reason `testInboundDeletionOfAnEmptyJournalRemovesItFromTheRegistry`
+    /// below seeds two.
     func testInboundDeletionOfANonEmptyJournalIsIgnoredAndRePushed() async throws {
         let store = JournalStore(containerRoot: containerRoot)
         let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
         try await store.applySyncMerge(Journal(id: journalID, name: "Has entries locally",
+                                               createdAt: stamp(0)))
+        try await store.applySyncMerge(Journal(id: ULID.make(), name: "Another journal entirely",
                                                createdAt: stamp(0)))
         let engine = FakeCloudEngine()
         let ex = exchange(store, covers, deviceID: deviceLow,
@@ -564,6 +574,89 @@ final class SyncJournalIngestTests: XCTestCase {
                        "the deleting device's server copy must be restored, or the two devices "
                        + "drift until the next full reconciliation scan — which would not even "
                        + "notice, since local content (and therefore its digest) never changed")
+    }
+
+    /// Gate finding (Important 4): the corrective re-push after a refused deletion is
+    /// built on `archivedRecord(for:)` — this device's archived system fields for a record
+    /// the server has just DELETED, carrying a change tag that cannot match anything. That
+    /// save is expected to fail, and nothing retries it: `SyncPlanner.reconcile` enqueues
+    /// new-or-digest-changed artifacts only, and this device's content never changed, so
+    /// the two devices would diverge permanently and silently.
+    ///
+    /// Asserted end-to-end through the real planner rather than by inspecting a flag: the
+    /// claim is "the next launch's reconciliation scan will send this journal", and the
+    /// reconciliation scan is what has to agree.
+    func testARefusedInboundDeletionRetiresTheServerStateSoTheRePushCanLandAndRetry() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let created = try await store.create(name: "Has entries locally")
+        _ = try await store.create(name: "Another journal entirely")
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let scanner = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceLow)
+        let engine = FakeCloudEngine()
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow,
+                                    journalIsEmptyAfterRescan: { _ in false })
+        await ex.attach(engine: engine)
+
+        // This journal has been pushed once already: ledgered, system fields archived.
+        let built = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        let record = try XCTUnwrap(built)
+        await ex.noteSaved(record)
+        let ledgerBefore = await bookkeeping.ledger()
+        let planBefore = SyncPlanner.reconcile(scan: scanner.scan().artifacts, ledger: ledgerBefore)
+        let fieldsBefore = await bookkeeping.systemFields(for: "j.\(created.id)")
+        XCTAssertFalse(planBefore.contains(.journal(id: created.id)),
+                       "fixture sanity: with the ledger intact, reconciliation sends nothing — "
+                       + "which is exactly why the re-push has no retry without this fix")
+        XCTAssertNotNil(fieldsBefore,
+                        "fixture sanity: archived system fields for the now-deleted record")
+
+        await ex.acceptRemoteJournalDeletion(id: created.id)
+
+        let fieldsAfter = await bookkeeping.systemFields(for: "j.\(created.id)")
+        let ledgerAfter = await bookkeeping.ledger()
+        let planAfter = SyncPlanner.reconcile(scan: scanner.scan().artifacts, ledger: ledgerAfter)
+        let rePushed = await engine.savedNames
+        let survivor = try await store.journal(id: created.id)
+        XCTAssertNil(fieldsAfter,
+                     "the next push must be a create, not an update against a change tag for a "
+                     + "record the server no longer has")
+        XCTAssertTrue(planAfter.contains(.journal(id: created.id)),
+                      "with the ledger entry cleared the journal reads as never-uploaded, so a "
+                      + "re-push that fails is retried by the next reconciliation scan")
+        XCTAssertEqual(rePushed, [[.journal(id: created.id)]],
+                       "and the immediate re-push still happens")
+        XCTAssertNotNil(survivor, "the journal itself must survive")
+    }
+
+    /// The mirror on the applied side (gate finding, Minor 3): once the deletion really
+    /// is applied, this device's memory of the server's copy describes a record that no
+    /// longer exists anywhere. Retiring it cannot cost an upload — `SyncPlanner.reconcile`
+    /// iterates the DISK scan, which no longer contains the journal.
+    func testAnAppliedInboundDeletionRetiresThatRecordsBookkeeping() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let created = try await store.create(name: "Empty everywhere")
+        _ = try await store.create(name: "Survives")
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let ex = SyncRecordExchange(journalStore: store, coverStore: covers,
+                                    bookkeeping: bookkeeping, deviceID: deviceLow,
+                                    journalIsEmptyAfterRescan: { _ in true })
+        let built = await ex.recordToPush(for: .journal(id: created.id), zoneID: zoneID)
+        let record = try XCTUnwrap(built)
+        await ex.noteSaved(record)
+        let ledgerBefore = await bookkeeping.ledger()
+        XCTAssertNotNil(ledgerBefore["j.\(created.id)"], "fixture sanity")
+
+        await ex.acceptRemoteJournalDeletion(id: created.id)
+
+        let gone = try await store.journal(id: created.id)
+        let fieldsAfter = await bookkeeping.systemFields(for: "j.\(created.id)")
+        let ledgerAfter = await bookkeeping.ledger()
+        XCTAssertNil(gone, "fixture sanity: really deleted")
+        XCTAssertNil(fieldsAfter)
+        XCTAssertNil(ledgerAfter["j.\(created.id)"])
     }
 
     /// The other half: a genuinely empty journal really is removed.

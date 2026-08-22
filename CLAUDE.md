@@ -1,5 +1,106 @@
 # CLAUDE.md
 
+## Session 2026-08-21→22 (laptop — #79 + #80 BUILT on `m4/sync`; OPUS GATE BLOCKED on a reproduced data-loss defect, fixed; 1555 → 1606 unit / 43 → 45 UI)
+
+Ran `docs/plans/2026-08-21-journal-order-and-delete-plan.md` to completion in one sitting,
+subagent-driven (Sonnet implementers + Sonnet task reviews, Opus gate + Opus fix wave).
+Branch `m4/sync` `082e30e9..c592752c`, **12 commits, PUSHED**. Both trees clean;
+`stash@{0}` (inert fetch-debounce scaffolding) untouched. **Not merged to main — and the
+owner smoke has not been run.**
+
+- **Owner ruled all three Phase-B questions as recommended:** delete EMPTY journals only
+  (zero entries **including trashed** — a trashed entry restored into a deleted journal is
+  the orphan hazard); the affordance is a destructive editor row behind a confirmation
+  dialog, **visible-but-disabled with an explanatory footnote** when refused, not a swipe;
+  and the offline-peer resurrection race is **accepted and documented, not fixed** (no
+  deletion tombstones).
+- **Phase A (#79) — clean at the gate, first time on this branch.** New
+  `Array<Journal>.displayOrdered` (createdAt asc, id tiebreak) applied at every listing
+  surface; `Place.swift`'s "registry order (locked)" doc comment superseded. Registry
+  storage stays insertion-ordered on purpose — **presentation sorts, storage does not**;
+  `journals.json` is never sorted. The capture picker's bootstrap-once copy became a
+  model-side `libraryDidRescan()` observer (never a view hook, per the nav redesign).
+- **A2's review caught the #67 guard shipping UNPINNED**, and the mechanism is worth
+  keeping: `JournalSelection.resolve` returns `.existing(storedID)` whenever the id is
+  still in the registry, so neither headline test (neither deletes the selected journal)
+  could tell the guard from its absence. The guard's real job is suppressing
+  `resolveBackdateForJournalChange()` — which unconditionally sets `backdateDate = Date()`
+  — on irrelevant background rescans. Same no-op-visit-clobbers-live-state shape as the
+  m4/sync merge gate's F1. Now pinned by a backdate-unchanged test, mutation-verified.
+- **Phase B (#80) in three layers.** `JournalStore.deleteJournal` (registry remove, cover
+  cleanup, guards for unknown-id and last-remaining-journal) with the **emptiness rule in
+  `LibraryScreenModel`, because the store cannot see entries**; sync propagation both ways
+  (`noteLocalDelete` → the previously zero-caller `enqueueDeletes`; inbound deletion ingest
+  handling **journal record names ONLY**, entry/artifact deletions still ignored under m4
+  Task 11); and the editor row + dialog.
+- **THE GATE EARNED ITS SEAT AGAIN — verdict BLOCKED, 1 Critical + 4 Important.**
+  **Critical, reproduced on the committed tree at every delay from `Task.yield()` to 3 ms:
+  `LibraryScreenModel.rescan()`'s superseded-scan guard made a DISCARDED scan
+  indistinguishable from a published one**, so the destructive callers read stale
+  `allEntries` and a journal holding a 48,000-frame capture was deleted both locally and by
+  inbound sync. This was the **second** failure of the same rule — B1 had already been sent
+  back in review for reading a stale scan, and this defeated that very fix. Fixed properly:
+  `rescan()` now returns whether it published, `rescanUntilFresh(attempts:)` requires a won
+  scan, and **both destructive callers REFUSE when freshness cannot be proven**. The
+  refusal surfaces honestly ("Couldn't delete this journal"); it cannot read as success.
+- **The other four, all Phase B:** the headline "must never orphan entries" test was
+  **vacuous** (single-journal fixture let the last-journal guard mask the mutation — the
+  SIXTH vacuous fixture on this plan); an entry with an **unreadable `entry.json` scanned
+  as `journalID == nil`** and so could not block deletion of its own journal (the recurring
+  three-answers mistake, on a destructive path — now any `.metadataUnreadable` row blocks);
+  a **filed-but-not-yet-durable capture** did not block deletion (traced and confirmed
+  reachable — `.recording` is published before `beginRecording`, and `EntryMetadataStore.write`
+  creates its own directory, so `entry.json` names the journal before any frames exist);
+  and a refused inbound deletion's **corrective re-push silently failed** against archived
+  system fields for a server-deleted record, with `SyncPlanner.reconcile` never retrying.
+- **The re-review invented its own mutations and both were caught** — `rescanUntilFresh`
+  falling through to `true` after exhausting attempts ("the bounded retry wearing a hat"),
+  and disabling only the ledger-clearing half of the re-push fix. It also traced every
+  destructive caller: none reaches a decision without a proven-fresh scan.
+- **`continueAfterFailure` defaults to `true`** — settled by measurement twice. One report
+  explained a missing mutation failure by claiming the opposite; a plausible
+  framework-sounding excuse for absent failures is itself a finding. (In memory.)
+- **The background-suite stall hit its 11th victim**, in a dispatch that carried both the
+  warning and the mechanism. **Wording cannot prevent it — budget one controller nudge per
+  long-suite task.** Root cause is now understood: the `RaconteUI` suite exceeds the Bash
+  tool's **hard 10-minute cap** (600000 ms is the maximum the tool accepts), so a single
+  invocation is killed mid-run; the fix is splitting with `-only-testing`, not
+  backgrounding. (In memory.)
+- Tooling: superpowers' `task-brief` script only matches `Task <number>` headings, so this
+  plan's `Task A1`/`B2` style needed briefs awk'd out by hand; `review-package` is fine.
+  The plan file lives on `main` and is **absent from the m4 worktree** — pass subagents the
+  main-checkout absolute path.
+- **Two owner-facing consequences of the fail-safe design:** one corrupt `entry.json` now
+  blocks **all** journal deletion with no in-app repair route, and a mis-tapped zero-frame
+  capture blocks its journal until the next launch's recovery pass. Narrower than it
+  sounds — `EntryMetadataStore.read` returns `.defaults` for an *absent* sidecar and throws
+  only for a corrupt one — but it is a real usability cost the owner has not yet seen.
+- A gate-fix agent **posted a comment to issue #80** documenting the accepted resurrection
+  race (owner ruling 3). Outward-facing; flagged and accepted after the fact.
+
+**Next steps:**
+1. **Owner smoke — nothing has been run on a device.** Build both (macOS via ditto to
+   `~/Desktop/Raconte-m4sync.app` + dylib-UUID check; iPhone via wireless `devicectl`, the
+   usual tunnel-open retry). Test: delete an empty test journal on one device and watch it
+   vanish on the other; confirm the journal lists now match everywhere; confirm a journal
+   holding an entry shows the disabled row + footnote. **Nothing CloudKit-side has been
+   verified by any test** — owner smoke is the only evidence a delete lands on a peer.
+2. **Decide the two fail-safe costs above** — whether a corrupt sidecar blocking all
+   deletion needs a repair route before this ships.
+3. **`m4/sync` → main** is now 12 further commits ahead; also **resume the m4 SDD loop at
+   Task 6** (entry + finalize artifacts push) — read the m4 ledger first
+   (`/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`).
+   Decide the Task-0 stash at Task 12.
+4. **#68** (macOS cover picker sheet empty) — still the only cover path on the Mac.
+5. **Owner smoke item never run:** Mac — type a new journal name in the editor, ⌘2 without
+   clicking away, reopen (write-through discipline; macOS UI tests impossible here).
+6. **Repo visibility raised by the owner and left open:** the audit's finding (no secrets,
+   no journal content ever committed) still holds, but CLAUDE.md is now a detailed public
+   narrative. Flip with `gh repo edit nicolovejoy/raconte --visibility private` if wanted.
+7. Nico's calls: delete merged remote branch `feat/journal-editing`; backlog #67 (10 items),
+   #73-78, #71, #70 (decoder half), #66, #63, unified-editor #60/#59,
+   #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
+
 ## Session 2026-08-20→21 (laptop — M4/SYNC TOOK MAIN, span synced, GATE A CLOSED; issues #79/#80 + next-session plan; 1555 unit / 43 UI)
 
 Planned AND executed the merge in one sitting, subagent-driven (Sonnet implementers +
@@ -2659,6 +2760,17 @@ delta passes, 32 tests total).
   `end`'s), and test `date >= lowerBound && date < exclusiveUpperBound`. Subtracting a
   fixed second to fake an inclusive bound under-covers the final second of the unit —
   build the exclusive bound from `calendar.dateInterval(of:for:).end` untouched instead.
+- **An offscreen `Form` `Section` FOOTER is absent from the accessibility tree until it is
+  scrolled into view** — so a UI test asserting on an explanatory footnote below the fold
+  finds nothing and fails for the wrong reason. Reveal it with a directional `swipeUp()`
+  before querying (a directional scroll, not a fixed distance, so it survives other device
+  sizes). Discovered 2026-08-21 on the journal editor's disabled-delete footnote.
+- **The `RaconteUI` suite exceeds the Bash tool's HARD 10-minute cap** (600000 ms is the
+  maximum the tool accepts), so a single whole-suite invocation is killed mid-run and reads
+  exactly like a hang. Split it into two or more FOREGROUND `-only-testing:` invocations by
+  test class and reconcile the counts against the baseline. Do **not** background it — a
+  subagent never receives the completion notification, which is the single most common
+  stall on this project (11 instances). The unit suite still fits inside the cap.
 - **A `.sheet` attached to a `Form`'s `Section` silently never presents, on iOS 26** —
   observed, mechanism unconfirmed. Attach `.sheet`/`.fullScreenCover` to the screen's
   outer view (the `Form` itself, or above it), never to a `Section` or other child.

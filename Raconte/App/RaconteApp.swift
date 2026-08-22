@@ -30,6 +30,12 @@ final class AppServices {
         // exists, for the same construction-order reason `SyncCoordinator.live`
         // attaches the library's stores after building the coordinator.
         if let sync { capture.attach(syncHooks: sync) }
+        // #82: `deleteJournal`'s on-demand resolution of a worthless zero-frame blocker
+        // must never resolve out from under a capture that is actively recording — this
+        // is the only way it can tell. Weak: `capture` already holds `library` strongly
+        // (see that property's own doc comment), so a strong capture here would be
+        // library -> closure -> capture -> library, a retain cycle.
+        library.attachActiveCaptureProbe { [weak capture = self.capture] in capture?.coordinator.activeCaptureID }
         // Invariant 3 (design §8): one `LibraryScreenModel` app-wide. `CaptureScreenModel`
         // resolves its own `library` internally (accepting an already-built instance or
         // minting one), so an assert here — not a unit test, which would have to stand up

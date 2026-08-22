@@ -638,11 +638,19 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertNotNil(model.journals.first { $0.id == "J2" })
     }
 
+    // MARK: - #82: resolve worthless zero-frame blockers on demand
+
     /// A capture filed into the journal that has no durable content yet — reachable in
     /// production between `CaptureScreenModel.handlePhase` writing `entry.json` at
     /// `.recording` and the first audio frames reaching disk. The scan skips it (no row),
     /// so the ordinary emptiness test cannot see it.
-    func testDeleteJournalRefusesWhenACaptureIsFiledIntoItButHasNoDurableContentYet() async throws {
+    ///
+    /// Owner ruling 2026-08-22: a mis-tapped, abandoned capture like this one must NOT
+    /// block its journal's deletion until the next launch's recovery pass. With the
+    /// probe attached and honestly reporting no active capture, `deleteJournal` now runs
+    /// the SAME recovery machinery `recoverAtLaunch()` runs — scoped to exactly this one
+    /// directory — and the worthless capture is gone, on this call, not at next launch.
+    func testDeleteJournalResolvesAnInactiveWorthlessBlockerAndSucceeds() async throws {
         try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
         try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
         try EntryMetadataStore.write(
@@ -650,15 +658,163 @@ final class LibraryScreenModelTests: XCTestCase {
             url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
 
         let model = model()
+        model.attachActiveCaptureProbe { nil }
         await model.rescan()
-        XCTAssertTrue(model.allEntries.isEmpty, "fixture sanity: nothing durable, so no row")
         XCTAssertEqual(model.skipped.map(\.captureID), [idA],
                        "fixture sanity: the scan skipped it as having no durable content")
 
         let deleted = await model.deleteJournal("J2")
 
-        XCTAssertFalse(deleted, "an in-flight capture is already filed here — refuse")
+        XCTAssertTrue(deleted, "an inactive worthless blocker must not wait for relaunch")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                       "the worthless capture directory was resolved away")
+        XCTAssertNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// The probe is the only thing standing between "worthless" and "currently being
+    /// recorded into". When it reports THIS exact capture as active, on-demand
+    /// resolution must refuse to touch it — the fail-safe half of the same rule.
+    func testDeleteJournalRefusesWhenTheOnlyBlockerIsTheActiveCapture() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        model.attachActiveCaptureProbe { self.idA }
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA], "fixture sanity")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "the only blocker is the capture in progress — refuse")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                      "an active capture's directory must never be touched")
         XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// Fail-safe default (#82): a probe that was never attached must mean "unknown",
+    /// never "safe to resolve". A missing probe (a test, or a future composition root
+    /// that forgets to wire it) may never make deletion MORE aggressive than today.
+    func testDeleteJournalRefusesWhenTheActiveCaptureProbeIsUnattached() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        // No attachActiveCaptureProbe call — the fail-safe default under test.
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA], "fixture sanity")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "an unattached probe must refuse, never resolve")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// A blocker that gains real content between the fixture's own scan and the
+    /// `deleteJournal` call must not be destroyed. In THIS codebase the protection is
+    /// even earlier and stronger than the on-demand resolution step itself:
+    /// `LibraryScanner`'s "holds something to show" rule and `RecoveryPlanner`'s "keep
+    /// or quarantine, don't delete" rule key off the same predicate
+    /// (`holdsIrreplaceableArtifacts` / raw frame count — see `DirectorySnapshot
+    /// .holdsIrreplaceableArtifacts` and `RecoveryPlanner.decide`), so content written
+    /// before `deleteJournal` is called is already caught by ITS OWN leading
+    /// `rescanUntilFresh`: the fresh scan reclassifies the capture as a real, filed
+    /// entry, `emptinessVerdict` reads `.blockedHard` before ever reaching
+    /// `.blockedResolvable`, and `resolveWorthlessBlockers` (the method carrying the
+    /// planner call) is never invoked at all for this fixture — verified directly: a
+    /// mutation of `resolveWorthlessBlockers` that bypasses the planner entirely (a
+    /// hand-rolled `removeItem`) does NOT break this test, because that method never
+    /// runs here. That gap is not a hole — the deeper coupling above means no sequential
+    /// (non-racing) test can reach `resolveWorthlessBlockers` with content the outer
+    /// scan did not already see; see that method's own doc comment for the honest
+    /// account of the narrower, genuinely-racy TOCTOU window it still closes as tightly
+    /// as cooperative scheduling allows, and the task report for the full investigation.
+    func testDeleteJournalRefusesWhenABlockerGainsRealContentBetweenScanAndDelete() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        model.attachActiveCaptureProbe { nil }
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA],
+                       "fixture sanity: worthless as of this scan")
+
+        // Lands on disk WITHOUT a rescan — a finalize (or a sync ingest) landing while
+        // the delete confirmation dialog sits open, same shape as the sibling freshness
+        // tests above.
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: captureDir(idA)),
+            withIntermediateDirectories: true)
+        try Data([0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)))
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "the fresh rescan must see the content that just landed — refuse")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                      "the capture directory must survive")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)).path),
+            "and its m4a must survive")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// The UI-facing signal (`JournalEditorView`'s disabled delete row, via
+    /// `hasIndeterminateContent`) must NOT hard-block on a blocker the on-demand
+    /// resolution inside `deleteJournal` can clear itself — running destructive recovery
+    /// machinery from a state READ would be backwards (the brief's own constraint). Only
+    /// when the probe says the blocker IS the active capture does the row stay disabled.
+    func testUIFacingIndeterminateContentTreatsAnInactiveWorthlessBlockerAsDeletable() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        model.attachActiveCaptureProbe { nil }
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA], "fixture sanity")
+
+        XCTAssertFalse(model.hasIndeterminateContent(forJournal: "J2"),
+                       "an inactive worthless blocker enables the row — resolution happens on tap")
+
+        model.attachActiveCaptureProbe { self.idA }
+        XCTAssertTrue(model.hasIndeterminateContent(forJournal: "J2"),
+                      "the active capture keeps the row disabled")
+    }
+
+    /// Fail-safe default at the VERDICT level, not just `deleteJournal`'s own redundant
+    /// re-check inside `resolveWorthlessBlockers`: an unattached probe must read as
+    /// `.blockedHard` (row disabled) directly through `emptinessVerdict`, never as
+    /// `.blockedResolvable`. Without this specific pin, `deleteJournal`'s own defensive
+    /// re-check inside `resolveWorthlessBlockers` was catching an unattached probe on
+    /// its own, and a mutation of `emptinessVerdict`'s fail-safe branch alone passed
+    /// every other test in this file undetected — this is the test that catches it.
+    func testUIFacingIndeterminateContentTreatsAnUnattachedProbeAsHardBlocked() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        // No attachActiveCaptureProbe call — the fail-safe default under test.
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA], "fixture sanity")
+
+        XCTAssertTrue(model.hasIndeterminateContent(forJournal: "J2"),
+                      "an unattached probe is unknown, not safe — the row must stay disabled")
+        XCTAssertEqual(model.emptinessVerdict(forJournal: "J2"), .blockedHard)
     }
 
     /// The other side of the same rule, so it is a rule and not a blanket refusal: a

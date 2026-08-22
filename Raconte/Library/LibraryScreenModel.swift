@@ -10,6 +10,24 @@ protocol LibraryRescanObserver: AnyObject {
     func libraryDidRescan()
 }
 
+/// Whether a journal can be deleted, as of the last scan (#82). Replaces a plain boolean
+/// for this purpose: some blockers are worthless captures `deleteJournal` can resolve on
+/// its own demand, and lumping them in with genuinely hard blockers is exactly the
+/// "worthless capture blocks deletion until next launch" defect this type exists to fix.
+/// See `LibraryScreenModel.emptinessVerdict(forJournal:)` for the full decision.
+enum JournalEmptinessVerdict: Equatable {
+    /// Nothing here — deletable, no resolution needed.
+    case empty
+    /// Blocked, and `deleteJournal` must not attempt to clear it itself: a real entry, an
+    /// unreadable sidecar somewhere in the corpus, or a skipped capture that might be the
+    /// one actively recording (including "might be" because the probe is unattached).
+    case blockedHard
+    /// Blocked only by worthless-looking `SkippedCapture`s, each PROVABLY not the active
+    /// capture (probe attached, ids differ). `deleteJournal` may resolve these through
+    /// the real recovery machinery and re-check; nothing else may act on this case.
+    case blockedResolvable(captureIDs: [String])
+}
+
 /// Composition + orchestration for the library and entry-detail screens (M3 T4).
 ///
 /// Constraints this shape exists to hold:
@@ -94,6 +112,14 @@ final class LibraryScreenModel {
     /// pair (there are many) would leak one for the length of the test process.
     weak var rescanObserver: (any LibraryRescanObserver)?
 
+    /// #82: whichever capture id `CaptureCoordinator.activeCaptureID` currently names,
+    /// or `nil` when unattached. `@MainActor`, not `@Sendable` — honest about
+    /// `activeCaptureID`'s real isolation rather than claiming this can be called from
+    /// any thread; every caller below already runs on THIS actor, which is itself
+    /// `@MainActor`, so no hop is needed. See `attachActiveCaptureProbe` for the
+    /// fail-safe contract an absent probe carries.
+    private var activeCaptureProbe: (@MainActor () -> String?)?
+
     /// Bumped on entry to `rescan()` and checked before results are assigned. Three UI
     /// paths (`selectJournalScope`, `moveEntry`, `setBackdate`) each fire their own Task,
     /// so scans overlap and, unguarded, the *later-finishing* one wins rather than the
@@ -150,6 +176,20 @@ final class LibraryScreenModel {
         }
         #endif
         return LibraryScreenModel(capturesRoot: CaptureScreenModel.defaultCapturesRoot())
+    }
+
+    /// Wires visibility into whichever capture is currently active, matching the
+    /// `attach(syncHooks:)` idiom (`EntryMetadataStore`/`JournalStore`/`CaptureScreenModel`)
+    /// — set once, after construction, from `AppServices.init`, the one place `library`
+    /// and `capture.coordinator` coexist.
+    ///
+    /// **FAIL-SAFE DEFAULT (#82):** never calling this — a test, or a future composition
+    /// root that forgets to wire it — must never make on-demand blocker resolution MORE
+    /// aggressive than refusing outright. `emptinessVerdict(forJournal:)` treats an
+    /// unattached probe as "the active capture is unknown" and refuses to resolve
+    /// anything while a `SkippedCapture` blocks the journal — see that method.
+    func attachActiveCaptureProbe(_ probe: @escaping @MainActor () -> String?) {
+        activeCaptureProbe = probe
     }
 
     var yearGroups: [EntryYearGroup] { EntryListItem.groupedByYear(items) }
@@ -411,9 +451,8 @@ final class LibraryScreenModel {
     /// exact question from the sync side without re-implementing scanning inside
     /// `SyncIngest`. The freshness obligation travels with the exposure.
     func isJournalEmpty(_ journalID: String) -> Bool {
-        !allEntries.contains { $0.journalID == journalID }
-            && !trashed.contains { $0.journalID == journalID }
-            && !hasIndeterminateContent(forJournal: journalID)
+        if case .empty = emptinessVerdict(forJournal: journalID) { return true }
+        return false
     }
 
     /// Something on disk that this scan cannot rule out of `journalID`, so "empty" is not
@@ -422,29 +461,55 @@ final class LibraryScreenModel {
     /// path: absent, unreadable and present are three different answers, and collapsing
     /// "I cannot tell" into "absent" orphans a real recording.
     ///
-    /// Two sources, both fail-safe:
-    ///
-    /// 1. **An entry whose `entry.json` did not decode** (`.metadataUnreadable`). Its row
-    ///    carries `EntryMetadata.defaults`, i.e. `journalID == nil`, so it matches no
-    ///    journal and would protect none — while the capture itself may hold hours of
-    ///    audio genuinely filed here. It blocks EVERY journal's deletion, not just this
-    ///    one, because the whole point is that we cannot read which journal it names.
-    /// 2. **A capture filed into this journal that the scan skipped** for having no
-    ///    durable content yet (`SkippedCapture`). Reachable: `CaptureScreenModel
-    ///    .handlePhase` enqueues the `entry.json` write the moment the coordinator
-    ///    publishes `.recording`, and that write can land before the first audio frames
-    ///    do — so a capture armed into this journal exists on disk, naming it, with
-    ///    nothing durable in it yet. Deleting the journal in that window leaves the
-    ///    in-flight recording pointing at a journal that is gone
-    ///    (`refreshJournalsFromLibrary`'s repair only fires for `.recording`/`.interrupted`).
-    ///
-    /// A skipped capture whose sidecar is ALSO unreadable does not block: it names no
-    /// journal we can read AND holds nothing durable — which is precisely why it was
-    /// skipped — so there is nothing there to orphan.
+    /// **#82 revision — this is now the UI-FACING half of `emptinessVerdict(forJournal:)`,
+    /// not a second computation.** `.blockedResolvable` reads as `false` here (the
+    /// journal-editor row enables) because `deleteJournal` can clear a purely worthless
+    /// blocker on its own, on demand — running that recovery machinery from a state READ
+    /// like this one would be exactly backwards. Only `.blockedHard` reads as `true`;
+    /// `isJournalEmpty` above uses the same verdict but only accepts `.empty`, so a
+    /// resolvable blocker still refuses a delete that has not actually resolved it yet.
     func hasIndeterminateContent(forJournal journalID: String) -> Bool {
-        if allEntries.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return true }
-        if trashed.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return true }
-        return skipped.contains { $0.journalID == journalID }
+        if case .blockedHard = emptinessVerdict(forJournal: journalID) { return true }
+        return false
+    }
+
+    /// The three-way answer to "can this journal be deleted?" (#82), replacing a plain
+    /// boolean for this purpose. Gate findings (Important 2 and 3) established that
+    /// absent/unreadable/present are three different answers for a `SkippedCapture`'s
+    /// sidecar; this extends the same reasoning one step further — among the "present but
+    /// unreadable" captures, some are genuinely worthless (a mis-tap that never got any
+    /// frames) and some might still be recording, and only the active-capture probe can
+    /// tell them apart.
+    ///
+    /// - `.empty`: zero live entries, zero trashed entries, zero skipped blockers for this
+    ///   journal, and no `.metadataUnreadable` degradation anywhere (that degradation
+    ///   blocks every journal, not just this one — see the two-source reasoning this
+    ///   replaced, still true: an unreadable sidecar's row carries `journalID == nil`
+    ///   and so protects nothing, while the capture itself may hold real audio filed
+    ///   somewhere we cannot read).
+    /// - `.blockedHard`: a real entry (live or trashed) in this journal, ANY
+    ///   `.metadataUnreadable` degradation anywhere, a skipped blocker that IS the active
+    ///   capture, or a skipped blocker while the probe is unattached (fail-safe: unknown
+    ///   reads as "could be the active capture", never as "safe").
+    /// - `.blockedResolvable(captureIDs:)`: every blocker for this journal is a
+    ///   `SkippedCapture`, and the probe (attached) provably reports none of them as the
+    ///   active capture. `deleteJournal` is the only caller entitled to act on this —
+    ///   it resolves each id through the real recovery machinery, never a plain read.
+    func emptinessVerdict(forJournal journalID: String) -> JournalEmptinessVerdict {
+        if allEntries.contains(where: { $0.journalID == journalID }) { return .blockedHard }
+        if trashed.contains(where: { $0.journalID == journalID }) { return .blockedHard }
+        if allEntries.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return .blockedHard }
+        if trashed.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return .blockedHard }
+
+        let blockers = skipped.filter { $0.journalID == journalID }
+        guard !blockers.isEmpty else { return .empty }
+
+        // Fail-safe default (#82): an unattached probe means "unknown", never "safe".
+        guard let probe = activeCaptureProbe else { return .blockedHard }
+        if let activeID = probe(), blockers.contains(where: { $0.captureID == activeID }) {
+            return .blockedHard
+        }
+        return .blockedResolvable(captureIDs: blockers.map(\.captureID))
     }
 
     /// Rescan-then-check as ONE `LibraryScreenModel`-isolated call (#80, B2) — the ONE
@@ -493,12 +558,80 @@ final class LibraryScreenModel {
     /// This narrows, rather than closes, the race: there is still a synchronous
     /// check-then-await gap between the fresh scan and the store write below, the same gap
     /// every other mutator in this file already accepts.
+    ///
+    /// **#82 addition:** a `.blockedResolvable` verdict is not an immediate refusal. It is
+    /// the ONE place in this model allowed to run real recovery machinery on a "worthless"
+    /// blocker, because it is the only place that can also re-check freshness and re-check
+    /// the verdict afterward, on this same actor, before the destructive registry write.
+    /// A UI-state read (`hasIndeterminateContent`) must never do this — see that method.
     @discardableResult
     func deleteJournal(_ journalID: String, freshScanAttempts: Int = 3) async -> Bool {
         guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
-        guard isJournalEmpty(journalID) else { return false }
+
+        switch emptinessVerdict(forJournal: journalID) {
+        case .empty:
+            break
+        case .blockedHard:
+            return false
+        case .blockedResolvable(let captureIDs):
+            guard await resolveWorthlessBlockers(captureIDs) else { return false }
+            guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
+            guard case .empty = emptinessVerdict(forJournal: journalID) else { return false }
+        }
+
         guard (try? await journalStore.deleteJournal(id: journalID)) != nil else { return false }
         await rescan()
+        return true
+    }
+
+    /// On-demand resolution for #82: runs the SAME recovery machinery `recoverAtLaunch()`
+    /// runs at every launch (`DirectorySnapshot` gather → `RecoveryPlanner.plan(for:)` →
+    /// `RecoveryExecutor.apply`), scoped to exactly the capture directories a
+    /// `.blockedResolvable` verdict named — never the whole corpus, and never a
+    /// hand-rolled `removeItem`.
+    ///
+    /// Re-checks each id against the active-capture probe immediately before touching its
+    /// directory: `emptinessVerdict` computed "provably not active" against the last scan,
+    /// and time has passed (at minimum, the `await` into this method) since. Returns
+    /// `false` without touching anything the moment that re-check fails, or when the probe
+    /// has gone missing since the caller's own check (defensive; `deleteJournal` already
+    /// verified it was attached).
+    ///
+    /// The planner's own decision is the actual safety valve, not this method: if frames
+    /// or artifacts landed in a capture since the scan that judged it worthless, the
+    /// planner's `plan(for:)` routes to `.quarantineCaptureDirectory` (issue #8's guard),
+    /// not `.deleteCaptureDirectory` — a no-op on disk. This method cannot make that
+    /// outcome worse; it can only ever be as safe as the planner it defers to.
+    ///
+    /// The `Task.yield()` before each gather is deliberate, not decorative: without it
+    /// there is no suspension point between the verdict this method was handed and the
+    /// disk read it is about to act on, so a competing MainActor-hopping writer (a
+    /// background finalize completion, most concretely) has no chance to run in between —
+    /// the same synchronous check-then-act gap `deleteJournal`'s own doc comment already
+    /// accepts as inherent for its registry write, closed here as tightly as cooperative
+    /// scheduling allows.
+    ///
+    /// **Untestable by construction, and that is recorded rather than hidden (task
+    /// report has the full analysis):** in this codebase `LibraryScanner`'s
+    /// "holds something to show" rule and `RecoveryPlanner`'s "keep or quarantine, don't
+    /// delete" rule are the same predicate (both key off `holdsIrreplaceableArtifacts` /
+    /// raw frame count), so any content a sequential test can write BEFORE calling
+    /// `deleteJournal` is already caught by ITS OWN leading `rescanUntilFresh` — this
+    /// method is never even reached. The only window where deferring to the real planner
+    /// differs from a hard delete is a genuine cross-thread TOCTOU race (a background
+    /// finalize write landing in the gap above), which a same-process cooperative
+    /// `Task.yield()` race could not be made to land here reliably. This mirrors
+    /// `deleteJournal`'s own accepted, undefended check-then-await gap one comment block
+    /// down — narrowed, not closed, same as that one.
+    private func resolveWorthlessBlockers(_ captureIDs: [String]) async -> Bool {
+        guard let probe = activeCaptureProbe else { return false }
+        let executor = RecoveryExecutor(capturesRoot: capturesRoot)
+        for captureID in captureIDs {
+            guard probe() != captureID else { return false }
+            await Task.yield()
+            let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot, captureID: captureID)
+            executor.apply([RecoveryPlanner.plan(for: snapshot)])
+        }
         return true
     }
 

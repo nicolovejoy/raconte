@@ -171,6 +171,18 @@ extension DirectorySnapshot {
         return DirectorySnapshot(capturesRoot: capturesRoot, captures: captures)
     }
 
+    /// The same stat-level walk as `gather(capturesRoot:)`, scoped to exactly one
+    /// capture directory (#82: on-demand recovery resolution). Never lists
+    /// `capturesRoot` itself — a destructive on-demand caller must not pay for, or
+    /// be affected by, a whole-corpus walk to resolve one named blocker. Returns a
+    /// snapshot even when the directory does not exist (an already-vanished
+    /// capture): every stat degrades to "absent", which the planner already reads
+    /// as "nothing here" — see `RecoveryPlanner.decide`'s no-manifest/no-segments row.
+    static func gather(capturesRoot: URL, captureID: String) -> CaptureSnapshot {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        return gatherCapture(captureID: captureID, directory: dir)
+    }
+
     private static func gatherCapture(captureID: String, directory: URL) -> CaptureSnapshot {
         let fm = FileManager.default
 

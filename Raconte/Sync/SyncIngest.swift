@@ -230,6 +230,17 @@ private struct PendingEntryRecord: Codable {
     var metadata: RemoteEntryFields
 }
 
+/// One durably-parked foreign revision, awaiting a captureID this device has not
+/// committed yet (M4 T9) — see `AppContainer.syncStagingPendingRevisionsURL`'s doc
+/// comment for the full "why a sibling file, not folded into `PendingEntryRecord`"
+/// reasoning. `body` is the exact bytes fetched and sha256-verified at arrival —
+/// never re-encoded, so `TranscriptRevisionStore.ingestForeignRevision`'s "verbatim"
+/// contract survives the parking round trip.
+private struct PendingRevision: Codable, Equatable {
+    var id: String
+    var body: Data
+}
+
 /// New-entry ingest, IO half (design §6, T7): commits an already-durably-staged capture
 /// directory with one `rename(2)` into `captures/<captureID>/` — mirroring the `.part` →
 /// rename convention every other atomic write in this codebase uses (`AtomicFile`). By
@@ -343,7 +354,15 @@ enum EntryAssembler {
     private static func pruneUnexpectedStagingContents(stagingDir: URL, hasLiveLog: Bool) {
         let fm = FileManager.default
         var allowedTop: Set<String> = [SegmentLayout.manifestFileName, SegmentLayout.entryMetadataFileName,
-                                       SegmentLayout.finalDirName]
+                                       SegmentLayout.finalDirName,
+                                       // M4 T9: `pending-revisions.json` — see its own
+                                       // doc comment on `AppContainer` for why it must
+                                       // survive this prune and the rename that follows
+                                       // it. Allowed unconditionally (not gated by a
+                                       // flag the way `hasLiveLog` gates `transcript/`
+                                       // below): an absent file costs this Set nothing,
+                                       // and a present one must never be swept.
+                                       AppContainer.syncStagingPendingRevisionsFileName]
         if hasLiveLog { allowedTop.insert(SegmentLayout.transcriptDirName) }
         if let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) {
             for name in names where !allowedTop.contains(name) {
@@ -610,6 +629,16 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// writing (the identical reasoning `SyncCoordinator.live()`'s doc comment gives for
     /// reusing `library.journalStore` rather than building a fresh `JournalStore`).
     private let entryMetadataStore: EntryMetadataStore?
+    /// Where an inbound revision for an ALREADY-LOCAL capture writes (M4 T9), and
+    /// where the caller-side "does this device already have any bytes to push"
+    /// question routes on the way OUT — see `ingestRevision`/`revisionRecordToPush`.
+    /// Optional for the same reason `entryMetadataStore` is: every existing test/call
+    /// site that never exercises revision sync keeps compiling unchanged, and
+    /// `SyncCoordinator.live()` is the one production caller and always supplies the
+    /// library's own single shared instance (`library.revisionStore`) — never a
+    /// throwaway one built here, which would be a second, uncoordinated writer over
+    /// the same `transcript/` files a local draft close or revert can also be writing.
+    private let transcriptRevisionStore: TranscriptRevisionStore?
     /// Where `captures/` and `sync/staging/` live (T7). Optional so every existing
     /// test/call site that never exercises entry ingest keeps compiling unchanged — a
     /// nil root degrades exactly like the pre-T7 "no builder/ingest yet" cases did,
@@ -663,6 +692,7 @@ actor SyncRecordExchange: CloudRecordExchange {
          deviceID: String,
          containerRoot: URL? = nil,
          entryMetadataStore: EntryMetadataStore? = nil,
+         transcriptRevisionStore: TranscriptRevisionStore? = nil,
          localStoreDidChange: (@Sendable () async -> Void)? = nil,
          journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)? = nil,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
@@ -672,6 +702,7 @@ actor SyncRecordExchange: CloudRecordExchange {
         self.deviceID = deviceID
         self.containerRoot = containerRoot
         self.entryMetadataStore = entryMetadataStore
+        self.transcriptRevisionStore = transcriptRevisionStore
         self.localStoreDidChange = localStoreDidChange
         self.journalIsEmptyAfterRescan = journalIsEmptyAfterRescan
         self.log = log
@@ -689,13 +720,59 @@ actor SyncRecordExchange: CloudRecordExchange {
         switch name {
         case .journal(let id):
             return await journalRecordToPush(id: id, name: name, zoneID: zoneID)
-        case .entry, .audio, .revision, .liveLog, .markerStream:
-            // T6/T9/T10 build these. Nil drops the pending change; the next launch's
+        case .revision(let id):
+            return await revisionRecordToPush(id: id, name: name, zoneID: zoneID)
+        case .entry, .audio, .liveLog, .markerStream:
+            // T6/T10 build these. Nil drops the pending change; the next launch's
             // reconciliation scan re-enqueues it, because nothing was written to the
             // ledger.
             log.debug("sync: no builder yet for \(name.rawValue, privacy: .public)")
             return nil
         }
+    }
+
+    /// M4 T9's push half: find where THIS device currently has `id`'s bytes
+    /// (`TranscriptRevisionStore.locateRevision` — the reverse lookup
+    /// `SyncRecordName.revision(id:)`'s deliberately name-only-the-ULID shape
+    /// requires), hash them fresh, and build the record. `nil` — CKSyncEngine's
+    /// documented "drop this pending change" answer — when this device no longer has
+    /// the revision at all (its capture was purged before the push landed; T11's
+    /// delete path leaves no ledger entry to re-derive this from) or the file
+    /// vanished/became unreadable between being located and being read.
+    ///
+    /// `note(build:)` is called here for the identical reason `journalRecordToPush`
+    /// calls it: without an in-flight record, `noteSaved` has nothing to credit to the
+    /// upload ledger, and `SyncPlanner.reconcile` — which only ever compares against
+    /// that ledger — would then re-enqueue this same immutable revision on every
+    /// future launch forever, never able to tell "already uploaded" from "never
+    /// uploaded".
+    private func revisionRecordToPush(id: String, name: SyncRecordName,
+                                      zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — revision push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard let located = TranscriptRevisionStore.locateRevision(capturesRoot: capturesRoot,
+                                                                    revisionID: id) else {
+            log.notice("sync: revision \(id, privacy: .public) not found locally to push")
+            return nil
+        }
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                        captureID: located.captureID)
+        let fileURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: directory,
+                                                            revision: located.fileNumber)
+        guard let bytes = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+            log.notice("sync: revision \(id, privacy: .public) file unreadable at push time")
+            return nil
+        }
+        let digest = UploadedDigest(sha256: SyncTreeScanner.sha256Hex(bytes), bytes: bytes.count)
+        note(build: digest, for: name)
+
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: located.captureID), zoneID: zoneID)
+        return SyncRecordBuilders.revisionRecord(revisionID: id, fileURL: fileURL,
+                                                 sha256: digest.sha256, bytes: digest.bytes,
+                                                 entryID: entryID, zoneID: zoneID)
     }
 
     private func journalRecordToPush(id: String, name: SyncRecordName,
@@ -798,8 +875,10 @@ actor SyncRecordExchange: CloudRecordExchange {
             await ingestAudio(record, captureID: captureID)
         case .liveLog(let captureID):
             await ingestLiveLog(record, captureID: captureID)
-        case .revision, .markerStream:
-            // T9/T10 own these.
+        case .revision(let id):
+            await ingestRevision(record, revisionID: id)
+        case .markerStream:
+            // T10 owns this.
             log.debug("sync: no ingest yet for \(name.rawValue, privacy: .public)")
         }
     }
@@ -919,6 +998,139 @@ actor SyncRecordExchange: CloudRecordExchange {
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 
+    // MARK: Ingest — revisions (M4 T9, design §6)
+
+    /// An inbound Revision record. Two shapes, mirroring `TranscriptRevisionStore
+    /// .ingestForeignRevision`'s own two halves but decided HERE, since only this
+    /// layer knows whether the owning capture exists locally yet:
+    ///
+    /// - **The capture already exists** (the ordinary, expected case for the *second*
+    ///   and later revision of an entry): write straight through the store's
+    ///   create-once ingest primitive — never a raw file write (standing branch rule)
+    ///   — which allocates the next free local `n`, verbatim bytes, no hook fired.
+    /// - **The capture does not exist yet**: ordering between fetched record types is
+    ///   NOT guaranteed (design §6) — this revision's Entry/Audio may simply not have
+    ///   landed. Park the bytes durably (never in-memory only — the identical
+    ///   crash/relaunch reasoning `PendingEntryRecord`'s doc comment gives) and prod
+    ///   the ordinary assembly-attempt path; `ingestParkedRevisions` applies it once
+    ///   the commit actually lands, whenever that turns out to be.
+    ///
+    /// `captureID` and the revision's bytes both come from the record itself — see
+    /// `SyncRevisionField`'s doc comment for why `entryRef` is what supplies the
+    /// captureID a fetched Revision has no other way to say.
+    private func ingestRevision(_ record: CKRecord, revisionID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — revision ingest skipped")
+            return
+        }
+        guard let asset = record[SyncRevisionField.body] as? CKAsset, let url = asset.fileURL,
+              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String,
+              let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference,
+              case .entry(let captureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID) else {
+            log.notice("sync: fetched Revision record missing body/sha256/entryRef — ignored")
+            return
+        }
+        guard let bytes = try? Data(contentsOf: url) else {
+            log.error("sync: could not read the fetched Revision bytes for \(revisionID, privacy: .public)")
+            return
+        }
+        // Verified BEFORE anything is persisted — same discipline as
+        // `ingestAudio`/`ingestLiveLog`: a mismatched piece must never sit on disk
+        // waiting to be discovered later.
+        guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
+            log.error("""
+                sync: Revision sha256 mismatch for \(revisionID, privacy: .public) — refused, \
+                never persisted
+                """)
+            return
+        }
+
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let captureExists = FileManager.default.fileExists(
+            atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
+
+        guard captureExists else {
+            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes, containerRoot: containerRoot)
+            await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
+            return
+        }
+
+        guard let transcriptRevisionStore else {
+            log.debug("sync: no revision store wired — revision ingest skipped")
+            return
+        }
+        do {
+            try await transcriptRevisionStore.ingestForeignRevision(
+                captureID: captureID, revisionID: revisionID, body: bytes)
+        } catch {
+            log.error("""
+                sync: revision \(revisionID, privacy: .public) ingest failed for \
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await localStoreDidChange?()
+    }
+
+    /// Durably parks one foreign revision for a captureID this device has not
+    /// committed yet — read-modify-write over `pending-revisions.json`, idempotent by
+    /// id (a redelivered record, e.g. after a full resync's change-token reset, is not
+    /// appended a second time). See `AppContainer.syncStagingPendingRevisionsURL`'s
+    /// doc comment for the full "why a sibling file, why it must be allow-listed in
+    /// `EntryAssembler`'s prune step" reasoning.
+    private func parkRevision(captureID: String, revisionID: String, body: Data, containerRoot: URL) {
+        let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot, captureID: captureID)
+        var pending: [PendingRevision] = (try? Data(contentsOf: url)).flatMap {
+            try? CaptureCoding.decoder().decode([PendingRevision].self, from: $0)
+        } ?? []
+        guard !pending.contains(where: { $0.id == revisionID }) else { return }
+        pending.append(PendingRevision(id: revisionID, body: body))
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            let data = try CaptureCoding.encoder().encode(pending)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not park revision \(revisionID, privacy: .public) for \
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                """)
+        }
+    }
+
+    /// Applies every revision parked for `captureID` — called ONLY right after
+    /// `EntryAssembler.assemble` has just committed that capture into `captures/`
+    /// (`attemptEntryAssembly`'s `.assembleNew` branch): `ingestForeignRevision`
+    /// itself refuses (`.captureMissing`) against a capture that does not exist yet,
+    /// so this can never run any earlier. `pending-revisions.json` rode the commit
+    /// rename (allow-listed in `EntryAssembler.pruneUnexpectedStagingContents`) and is
+    /// read from its post-commit location, `captures/<captureID>/pending-revisions
+    /// .json`, then deleted — a committed capture directory does not keep this
+    /// internal staging artifact around once it has done its job.
+    private func ingestParkedRevisions(captureID: String, containerRoot: URL) async {
+        guard let transcriptRevisionStore else { return }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let url = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            .appendingPathComponent(AppContainer.syncStagingPendingRevisionsFileName)
+        guard let data = try? Data(contentsOf: url),
+              let parked = try? CaptureCoding.decoder().decode([PendingRevision].self, from: data) else {
+            return
+        }
+        for revision in parked {
+            do {
+                try await transcriptRevisionStore.ingestForeignRevision(
+                    captureID: captureID, revisionID: revision.id, body: revision.body)
+            } catch {
+                log.error("""
+                    sync: parked revision \(revision.id, privacy: .public) for \
+                    \(captureID, privacy: .public) failed to ingest: \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this
     /// IS the rehydration (fix round): there is no in-memory cache to be stale, because
     /// there is no in-memory cache at all. `nil` means no Entry piece is durably staged:
@@ -999,6 +1211,10 @@ actor SyncRecordExchange: CloudRecordExchange {
                 log.error("sync: entry \(captureID, privacy: .public) assembly failed — will retry")
                 return
             }
+            // M4 T9: any revision that arrived and parked BEFORE this capture existed
+            // now has somewhere to land — apply it the instant the commit that just
+            // happened makes that possible.
+            await ingestParkedRevisions(captureID: captureID, containerRoot: containerRoot)
             await localStoreDidChange?()
         case .applyToExisting:
             // Unreachable in practice — the `guard !captureExists` above already

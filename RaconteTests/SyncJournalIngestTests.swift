@@ -399,10 +399,14 @@ final class SyncJournalIngestTests: XCTestCase {
     // MARK: Ingest through the exchange
 
     private func exchange(_ store: JournalStore, _ covers: JournalCoverStore,
-                          deviceID: String) -> SyncRecordExchange {
+                          deviceID: String,
+                          localStoreDidChange: (@Sendable () async -> Void)? = nil,
+                          journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)? = nil) -> SyncRecordExchange {
         SyncRecordExchange(journalStore: store, coverStore: covers,
                            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
-                           deviceID: deviceID)
+                           deviceID: deviceID,
+                           localStoreDidChange: localStoreDidChange,
+                           journalIsEmptyAfterRescan: journalIsEmptyAfterRescan)
     }
 
     private func remoteRecord(_ remote: RemoteJournal, deviceID: String,
@@ -526,6 +530,158 @@ final class SyncJournalIngestTests: XCTestCase {
 
         let unchanged = await covers.read(journalID: journalID)
         XCTAssertEqual(unchanged, fetchedBytes)
+    }
+
+    // MARK: Ingest — inbound deletion (#80, B2)
+    //
+    // `acceptRemoteJournalDeletion(id:)` takes a bare journal id, not a `SyncRecordName`
+    // — the type itself is why a deletion for any other record kind can never reach this
+    // method at all; the filter lives in `CloudKitEngineControl.handleEvent`'s switch
+    // over `SyncCloudIdentifiers.name(of:)`, which is exhaustive over `SyncRecordName`'s
+    // cases and untestable directly (`CKSyncEngine.Event...Deletion` has no public
+    // initializer — the same unfakeable-`CKSyncEngineDelegate` surface this plan already
+    // accepts as untested).
+
+    /// The load-bearing rule (#80's own wording, and this task's mutation-checked test):
+    /// an inbound deletion for a journal that is NOT empty locally must be IGNORED, and
+    /// the journal RE-PUSHED — never orphan local entries to a remote delete.
+    func testInboundDeletionOfANonEmptyJournalIsIgnoredAndRePushed() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "Has entries locally",
+                                               createdAt: stamp(0)))
+        let engine = FakeCloudEngine()
+        let ex = exchange(store, covers, deviceID: deviceLow,
+                          journalIsEmptyAfterRescan: { _ in false })
+        await ex.attach(engine: engine)
+
+        await ex.acceptRemoteJournalDeletion(id: journalID)
+
+        let stillThere = try await store.journal(id: journalID)
+        XCTAssertNotNil(stillThere, "must never orphan entries to a remote delete")
+        let rePushed = await engine.savedNames
+        XCTAssertEqual(rePushed, [[.journal(id: journalID)]],
+                       "the deleting device's server copy must be restored, or the two devices "
+                       + "drift until the next full reconciliation scan — which would not even "
+                       + "notice, since local content (and therefore its digest) never changed")
+    }
+
+    /// The other half: a genuinely empty journal really is removed.
+    func testInboundDeletionOfAnEmptyJournalRemovesItFromTheRegistry() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "Empty everywhere",
+                                               createdAt: stamp(0)))
+        // A second journal, so this is not also refused as the last remaining one.
+        try await store.applySyncMerge(Journal(id: ULID.make(), name: "Survives", createdAt: stamp(0)))
+        let ex = exchange(store, covers, deviceID: deviceLow,
+                          journalIsEmptyAfterRescan: { _ in true })
+
+        await ex.acceptRemoteJournalDeletion(id: journalID)
+
+        let gone = try await store.journal(id: journalID)
+        XCTAssertNil(gone)
+    }
+
+    /// An inbound deletion for a journal this device has never heard of — or has already
+    /// removed itself, independently — is a no-op: no crash, nothing announced.
+    func testInboundDeletionOfAnUnknownJournalIsANoOp() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let known = try await store.create(name: "Untouched")
+        let signals = SignalCounter()
+        let ex = exchange(store, covers, deviceID: deviceLow,
+                          localStoreDidChange: { await signals.increment() },
+                          journalIsEmptyAfterRescan: { _ in true })
+
+        await ex.acceptRemoteJournalDeletion(id: ULID.make())
+
+        let list = try await store.list()
+        XCTAssertEqual(list.map(\.id), [known.id], "the known journal must be untouched")
+        let count = await signals.count
+        XCTAssertEqual(count, 0, "nothing changed locally, so nothing should have been announced")
+    }
+
+    /// With no emptiness check wired at all (sync disabled, or a fake with nothing to
+    /// lose), the safe default is to refuse rather than guess — never delete blind.
+    func testInboundDeletionWithNoEmptinessCheckWiredIsRefused() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "J", createdAt: stamp(0)))
+        let ex = exchange(store, covers, deviceID: deviceLow)   // no journalIsEmptyAfterRescan
+
+        await ex.acceptRemoteJournalDeletion(id: journalID)
+
+        let stillThere = try await store.journal(id: journalID)
+        XCTAssertNotNil(stillThere)
+    }
+
+    /// A successful inbound deletion must signal the library to reload, same as any other
+    /// ingest write — or the deleted journal sits gone on disk but still shown until the
+    /// next launch.
+    func testASuccessfulInboundDeletionSignalsTheLibraryToReload() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        try await store.applySyncMerge(Journal(id: journalID, name: "Empty everywhere",
+                                               createdAt: stamp(0)))
+        try await store.applySyncMerge(Journal(id: ULID.make(), name: "Survives", createdAt: stamp(0)))
+        let signals = SignalCounter()
+        let ex = exchange(store, covers, deviceID: deviceLow,
+                          localStoreDidChange: { await signals.increment() },
+                          journalIsEmptyAfterRescan: { _ in true })
+
+        await ex.acceptRemoteJournalDeletion(id: journalID)
+
+        let count = await signals.count
+        XCTAssertEqual(count, 1)
+    }
+
+    /// A2's fallback path, driven through the REAL wiring end to end — not a direct call
+    /// into the selection helper: `LibraryScreenModel` + `CaptureScreenModel` + a real
+    /// `SyncRecordExchange` wired exactly as `SyncCoordinator.live()` wires it
+    /// (`isJournalEmptyAfterRescan` + `localStoreDidChange` both reaching the same shared
+    /// library). Deleting the capture-selected journal must re-point capture via
+    /// `libraryDidRescan()` → `refreshJournalsFromLibrary()`'s existing #67-class guard,
+    /// the same seam #62 already uses — nothing new to wire for this to work, which is
+    /// exactly what this test is confirming.
+    @MainActor
+    func testInboundDeletionOfTheCaptureSelectedJournalRePointsCaptureThroughTheRealWiring() async throws {
+        try FileManager.default.createDirectory(at: AppContainer.capturesRoot(containerRoot: containerRoot),
+                                                 withIntermediateDirectories: true)
+        try JournalStore.encode(JournalRegistry(journals: [
+            Journal(id: "J1", name: "Selected, about to be deleted", createdAt: stamp(0)),
+            Journal(id: "J2", name: "Survives", createdAt: stamp(1))
+        ])).write(to: AppContainer.journalsURL(containerRoot: containerRoot))
+
+        let library = LibraryScreenModel(capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot),
+                                         journalsContainerRoot: containerRoot)
+        let capture = CaptureScreenModel(
+            capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot),
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder(),
+            journalsContainerRoot: containerRoot,
+            journalPreferenceStore: InMemoryJournalPreferenceStore(),
+            library: library)
+        await capture.bootstrap()
+        XCTAssertEqual(capture.selectedJournalID, "J1",
+                       "fixture sanity: bootstrap selected the registry's first journal")
+
+        let ex = SyncRecordExchange(
+            journalStore: library.journalStore, coverStore: library.journalCoverStore,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: deviceHigh,
+            localStoreDidChange: { [weak library] in await library?.rescan() },
+            journalIsEmptyAfterRescan: { [weak library] id in
+                await library?.isJournalEmptyAfterRescan(id) ?? false
+            })
+
+        await ex.acceptRemoteJournalDeletion(id: "J1")
+
+        XCTAssertEqual(library.journals.map(\.id), ["J2"], "fixture sanity: the delete really landed")
+        XCTAssertEqual(capture.selectedJournalID, "J2",
+                       "the capture-selected journal left the registry — must fall back through "
+                       + "the real libraryDidRescan() wiring")
     }
 
     // MARK: Push

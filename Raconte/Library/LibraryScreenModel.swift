@@ -374,6 +374,26 @@ final class LibraryScreenModel {
             && !trashed.contains { $0.journalID == journalID }
     }
 
+    /// Rescan-then-check as ONE `LibraryScreenModel`-isolated call (#80, B2) — the ONE
+    /// legitimate way to ask `isJournalEmpty` from OFF-MainActor code (the sync ingest
+    /// path, `SyncRecordExchange.acceptRemoteJournalDeletion`) while keeping its
+    /// freshness obligation intact.
+    ///
+    /// Splitting rescan and the read across two separate `await`s from an off-actor
+    /// caller would not give the same guarantee `deleteJournal` gets above: this actor is
+    /// a serial executor, so once `await rescan()` resumes, THIS task runs exclusively —
+    /// with nothing else able to land on `LibraryScreenModel` — until it either awaits
+    /// again or returns. Calling `isJournalEmpty` as the very next statement, inside the
+    /// same method body, is what makes that true; a caller that instead did
+    /// `await library.rescan()` followed by a SEPARATE `await library.isJournalEmpty(id)`
+    /// would release isolation between the two hops (each is its own actor-hop
+    /// suspension), reopening exactly the staleness window `deleteJournal`'s doc comment
+    /// warns about.
+    func isJournalEmptyAfterRescan(_ journalID: String) async -> Bool {
+        await rescan()
+        return isJournalEmpty(journalID)
+    }
+
     /// Deletes an EMPTY journal (#80, v1: non-empty journal deletion is a separate,
     /// later design — see `isJournalEmpty`). Same false-on-failure shape as
     /// `renameJournal`/`trashEntry`: the caller alerts on `false`, and nothing partially

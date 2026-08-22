@@ -125,12 +125,9 @@ protocol SyncHooks: Sendable {
     /// nil is CloudKit's "drop this pending change" answer, not "tell the server to
     /// remove what it has".
     ///
-    /// Default no-op in the extension below: this protocol's only two conformers today
-    /// (`SyncCoordinator`, and test fakes such as `RecordingSyncHooks`) predate journal
-    /// deletion and must keep compiling unchanged. `SyncCoordinator`'s real
-    /// `enqueueDeletes` wiring behind this verb is B2's task, not this one's — until
-    /// that lands, a journal delete simply never reaches the engine, which is no worse
-    /// than today (deletion does not exist at all yet).
+    /// Default no-op in the extension below, kept even though `SyncCoordinator` (B2) now
+    /// gives this verb a real body: test fakes such as `RecordingSyncHooks` predate
+    /// journal deletion and must keep compiling unchanged without overriding it.
     func noteLocalDelete(_ name: SyncRecordName) async
 }
 
@@ -174,6 +171,15 @@ protocol CloudRecordExchange: Sendable {
     /// `recordToPush`, which by then reads merged local state plus the freshly archived
     /// server system fields.
     func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName]
+
+    /// An inbound deletion for a JOURNAL record (#80, B2) — the only kind wired here.
+    /// Entry/audio/revision/liveLog/markerStream deletions never reach this method at
+    /// all: `CloudKitEngineControl.handleEvent`'s `fetchedRecordZoneChanges` switch keeps
+    /// filtering those out before calling down (Task 11 of the m4 sync plan owns them —
+    /// design §5, a sync-in delete there must route through `StagedRemover`, never a raw
+    /// remove). Takes a bare journal id, not a `SyncRecordName`, so a deletion for any
+    /// other kind is structurally unable to reach the wrong handler.
+    func acceptRemoteJournalDeletion(id: String) async
 }
 
 /// The production `CloudEngineControl`: a thin wrapper around `CKSyncEngine` plus its
@@ -311,11 +317,22 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             for modification in fetched.modifications {
                 await exchange.acceptRemote(modification.record)
             }
-            if !fetched.deletions.isEmpty {
-                // Task 11 owns delete ingest (design §5 — a sync-in delete must route
-                // through `StagedRemover`, never a raw remove). Ignoring one is safe:
-                // nothing local changes, and journals have no delete at all.
-                log.debug("sync: \(fetched.deletions.count, privacy: .public) deletion(s) ignored (T11)")
+            for deletion in fetched.deletions {
+                guard let name = SyncCloudIdentifiers.name(of: deletion.recordID) else {
+                    log.notice("sync: a deleted record's name does not parse — ignored")
+                    continue
+                }
+                switch name {
+                case .journal(let id):
+                    await exchange.acceptRemoteJournalDeletion(id: id)
+                case .entry, .audio, .revision, .liveLog, .markerStream:
+                    // Task 11 owns delete ingest for every OTHER kind (design §5 — a
+                    // sync-in delete must route through `StagedRemover`, never a raw
+                    // remove). Journals are the only kind wired here (#80, B2); ignoring
+                    // the rest is safe — nothing local changes, and this app never asked
+                    // for the deletion in the first place.
+                    log.debug("sync: \(name.rawValue, privacy: .public) deletion ignored (T11)")
+                }
             }
         case .fetchedDatabaseChanges:
             // Zone-level changes. Nothing to do while this app has exactly one zone that

@@ -236,6 +236,26 @@ final class SyncCoordinatorTests: XCTestCase {
         let enqueued = await engine.savedNames
         XCTAssertEqual(enqueued, [[.entry(captureID: idOne)], [.audio(captureID: idOne)]])
     }
+
+    // MARK: noteLocalDelete (#80, B2)
+
+    /// A local delete must reach `enqueueDeletes`, never `enqueueSaves` — a record that
+    /// is gone is not the same event as one whose content changed (`SyncHooks
+    /// .noteLocalDelete`'s own doc comment). `JournalStore.deleteJournal` already fires
+    /// this hook (B1); this pins the coordinator's half of the wire.
+    func testNoteLocalDeleteEnqueuesExactlyThatRecordAsADelete() async throws {
+        let engine = FakeCloudEngine()
+        let coordinator = coordinator(bookkeeping(), engine)
+
+        await coordinator.noteLocalDelete(.journal(id: journalID))
+
+        let deleted = await engine.deletedNames
+        let saved = await engine.savedNames
+        let startCalls = await engine.startCallCount
+        XCTAssertEqual(deleted, [[.journal(id: journalID)]])
+        XCTAssertEqual(saved, [], "a delete must never also enqueue a save")
+        XCTAssertEqual(startCalls, 0, "a delete hook must not boot the engine")
+    }
 }
 
 /// A `CloudEngineControl` that records what it was asked to do. An actor because the

@@ -529,6 +529,43 @@ final class LibraryScreenModelTests: XCTestCase {
                      "deleteJournal's own rescan must have picked up the new entry")
     }
 
+    // MARK: - isJournalEmptyAfterRescan (#80, B2 — the sync-ingest seam)
+
+    /// The exact seam `SyncRecordExchange`'s inbound-deletion guard calls off-MainActor
+    /// (R3/B2): rescan-then-check as ONE method, so nothing can land between the two the
+    /// way it could if a caller split them across two separate awaits into this actor.
+    /// Same freshness shape as `deleteJournal`'s own rescan-first pin above, exercised
+    /// through the public seam sync actually uses instead of `deleteJournal` itself.
+    func testIsJournalEmptyAfterRescanSeesAnEntryThatArrivedAfterTheLastScan() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty as of the last scan")])
+
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.isJournalEmpty("J2"), "fixture sanity: empty as of this scan")
+
+        // Lands on disk WITHOUT a rescan, exactly like the sibling pin above.
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+        XCTAssertFalse(model.allEntries.contains { $0.captureID == idA },
+                      "fixture sanity: the cached scan predates this entry")
+
+        let stillEmpty = await model.isJournalEmptyAfterRescan("J2")
+
+        XCTAssertFalse(stillEmpty, "the method's own rescan must see the entry that just arrived")
+        XCTAssertTrue(model.allEntries.contains { $0.captureID == idA },
+                     "isJournalEmptyAfterRescan must actually have rescanned, not just read the cache")
+    }
+
+    func testIsJournalEmptyAfterRescanIsTrueForAGenuinelyEmptyJournal() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+
+        let model = model()
+        // Deliberately no `rescan()` here — the method must do its own.
+        let empty = await model.isJournalEmptyAfterRescan("J2")
+
+        XCTAssertTrue(empty)
+    }
+
     // MARK: - T6c: promoteIfNeeded / transcript(for:) ordering (review finding 3)
 
     /// `EntryDetailView.refresh()` now reads `transcript(for:)` FIRST, and only

@@ -51,6 +51,14 @@ actor SyncCoordinator: SyncHooks {
         await engine.enqueueSaves([name])
     }
 
+    /// The delete half of the hook (#80, B2): the record is gone, not merely changed, so
+    /// it routes to `enqueueDeletes`, never `enqueueSaves` — see `SyncHooks
+    /// .noteLocalDelete`'s doc comment for why a delete cannot be expressed as a save
+    /// whose content degraded to nothing.
+    func noteLocalDelete(_ name: SyncRecordName) async {
+        await engine.enqueueDeletes([name])
+    }
+
     // MARK: Reconciliation
 
     private func reconcile() async {
@@ -117,7 +125,14 @@ extension SyncCoordinator {
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old
             // journal names until the next launch.
-            localStoreDidChange: { [weak library] in await library?.rescan() })
+            localStoreDidChange: { [weak library] in await library?.rescan() },
+            // The load-bearing not-empty-locally guard for #80's inbound deletion (B2,
+            // R3): the ONE legitimate way to ask this off-MainActor, and the reason it is
+            // a method on `LibraryScreenModel` rather than reimplemented here — see that
+            // method's doc comment for why rescan-then-check has to be one call, not two.
+            journalIsEmptyAfterRescan: { [weak library] journalID in
+                await library?.isJournalEmptyAfterRescan(journalID) ?? false
+            })
         // The engine writes its own state blob, because it is constructed before the
         // coordinator that would otherwise own that write.
         let engine = CloudKitEngineControl(exchange: exchange, persistState: { [bookkeeping] data in
@@ -126,8 +141,13 @@ extension SyncCoordinator {
         let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine)
         // Wired last, and in this order, because each half needs the other: the stores
         // notify the coordinator, and the coordinator's exchange writes through the
-        // stores. See `JournalStore.attach(syncHooks:)`.
+        // stores. See `JournalStore.attach(syncHooks:)`. `exchange.attach(engine:)`
+        // belongs in the same wave for the same reason: `exchange` is built before
+        // `engine` exists (the engine's own init takes `exchange`), so the reference the
+        // not-empty-locally guard needs to re-push a refused deletion can only be handed
+        // over after the fact.
         Task { [journalStore = library.journalStore, coverStore = library.journalCoverStore] in
+            await exchange.attach(engine: engine)
             await journalStore.attach(syncHooks: coordinator)
             await coverStore.attach(journalStore: journalStore)
         }

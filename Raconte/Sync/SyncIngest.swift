@@ -244,6 +244,20 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// showing yesterday's journal names until the next launch. Optional — nothing about
     /// correctness depends on it.
     private let localStoreDidChange: (@Sendable () async -> Void)?
+    /// The not-empty-locally guard for #80's inbound journal deletion (B2, R3) —
+    /// `LibraryScreenModel.isJournalEmptyAfterRescan`, injected rather than
+    /// reimplemented here: the rule that decides emptiness lives once, at the library,
+    /// against a FRESH scan (its own doc comment states the freshness obligation
+    /// travels with the exposure). Optional so every existing test/call site that never
+    /// exercises deletion keeps compiling unchanged; `ingestJournalDeletion` treats a nil
+    /// closure as "refuse" — see there.
+    private let journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)?
+    /// The engine, wired after construction (`attach(engine:)`) because
+    /// `SyncCoordinator.live()` builds this exchange before the engine that needs it
+    /// exists — the engine's own init takes the exchange. Needed for exactly one thing:
+    /// re-pushing a journal whose inbound deletion was refused (not empty locally), so
+    /// the deleting device's server copy is restored rather than left to drift.
+    private var engine: (any CloudEngineControl)?
 
     /// What each in-flight push was built from, keyed by record name.
     ///
@@ -271,13 +285,21 @@ actor SyncRecordExchange: CloudRecordExchange {
          bookkeeping: SyncBookkeepingStore,
          deviceID: String,
          localStoreDidChange: (@Sendable () async -> Void)? = nil,
+         journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)? = nil,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
         self.journalStore = journalStore
         self.coverStore = coverStore
         self.bookkeeping = bookkeeping
         self.deviceID = deviceID
         self.localStoreDidChange = localStoreDidChange
+        self.journalIsEmptyAfterRescan = journalIsEmptyAfterRescan
         self.log = log
+    }
+
+    /// See `engine`'s doc comment for why this cannot be an init parameter in production
+    /// — tests that need it (the not-empty-locally re-push) call this directly instead.
+    func attach(engine: any CloudEngineControl) {
+        self.engine = engine
     }
 
     // MARK: Push
@@ -447,6 +469,62 @@ actor SyncRecordExchange: CloudRecordExchange {
         // in the same window be silently overwritten by the fetched one, which is a real
         // loss rather than a stale thumbnail.
         await applyCover(coverAction, for: remote)
+        await localStoreDidChange?()
+    }
+
+    // MARK: Ingest — deletion (#80, B2)
+
+    /// An inbound JOURNAL deletion. See `CloudEngineControl.acceptRemoteJournalDeletion`'s
+    /// doc comment for why every other record kind never reaches this file at all.
+    ///
+    /// **Accepted, documented, not fixed (#80 owner ruling 3):** an offline peer that
+    /// edits this journal AFTER the deleting device's delete lands here will still
+    /// re-push it once that peer reconnects — last-writer-wins on the record's very
+    /// existence, no delete tombstone. To THIS app, that later save looks exactly like a
+    /// legitimate edit of a journal that still exists everywhere else it can see. v1
+    /// accepts that a delete can be undone by a late edit; a real tombstone is out of
+    /// scope.
+    func acceptRemoteJournalDeletion(id: String) async {
+        // The load-bearing rule (#80): a journal that is NOT empty locally must never be
+        // removed by an inbound deletion — that would orphan its entries into a journal
+        // no longer in the registry, with no UI route back to them.
+        //
+        // A nil closure (sync disabled in this build, or a fake with nothing to lose)
+        // refuses rather than guesses: deleting blind with no way to check for local
+        // entries is exactly the hazard this guard exists to close, so "cannot ask"
+        // must read the same as "the answer might be no".
+        guard let journalIsEmptyAfterRescan else {
+            log.notice("""
+                sync: inbound deletion for journal \(id, privacy: .public) refused — no \
+                emptiness check wired
+                """)
+            return
+        }
+        guard await journalIsEmptyAfterRescan(id) else {
+            // Refused. Re-push so the deleting device's server copy is restored rather
+            // than left to drift until the next full reconciliation scan — which would
+            // not even notice: this device's local content, and therefore its digest,
+            // never changed, so the scan sees nothing to send.
+            log.notice("""
+                sync: inbound deletion for journal \(id, privacy: .public) refused — not \
+                empty locally; re-pushing
+                """)
+            await engine?.enqueueSaves([.journal(id: id)])
+            return
+        }
+        do {
+            try await journalStore.applySyncDelete(id: id)
+        } catch {
+            // Unknown here too (already gone independently — a genuine no-op) or the
+            // last-remaining-journal guard (this device's only journal — refused, the
+            // same UI-story reason a LOCAL delete is refused for it). Neither is an
+            // error worth logging above debug.
+            log.debug("""
+                sync: inbound deletion for journal \(id, privacy: .public) not applied: \
+                \(String(describing: error), privacy: .public)
+                """)
+            return
+        }
         await localStoreDidChange?()
     }
 

@@ -586,6 +586,54 @@ final class LibraryScreenModel {
         return staged
     }
 
+    /// The result of `emptyTrash()`: how many trashed entries were actually removed vs.
+    /// skipped because the disk no longer agreed they were trashed or a stage failed.
+    struct EmptyTrashResult: Equatable {
+        var deleted: Int
+        var failed: Int
+    }
+
+    /// Owner-initiated bulk permanent delete (2026-08-22): everything in the trash, gone
+    /// in one action, independent of the 30-day retention sweep (`sweepTrash`/`sweeper`
+    /// are never touched here — that is a different tool for a different trigger).
+    ///
+    /// Re-reads each candidate's sidecar and skips it (counted as `failed`) unless the
+    /// disk still says it is trashed — the identical per-item guard `deleteEntryPermanently`
+    /// uses, never trusting the `trashed` row snapshot the button was drawn from. That is
+    /// also why this needs no `rescanUntilFresh`: a stale list can only over-include (the
+    /// guard refuses) or under-include (harmless — the button deletes what it knows).
+    ///
+    /// One bad entry — an unreadable sidecar, a staging failure — must not abort the rest
+    /// of the batch. `purge()` runs once after the loop, not per item, matching
+    /// `deleteEntryPermanently`'s one-way-door semantics: the rename is the deletion, so an
+    /// item whose stage succeeded counts as `deleted` even if the purge that follows fails
+    /// (it retries at the next launch).
+    @discardableResult
+    func emptyTrash() async -> EmptyTrashResult {
+        let candidates = trashed
+        guard !candidates.isEmpty else { return EmptyTrashResult(deleted: 0, failed: 0) }
+
+        var deleted = 0
+        var failed = 0
+        let remover = self.remover
+        for item in candidates {
+            let captureID = item.captureID
+            guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
+                  metadata.isTrashed else {
+                failed += 1
+                continue
+            }
+            let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
+                do { _ = try remover.stage(captureID: captureID) } catch { return false }
+                return true
+            }.value
+            if staged { deleted += 1 } else { failed += 1 }
+        }
+        _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
+        await rescan()
+        return EmptyTrashResult(deleted: deleted, failed: failed)
+    }
+
     /// The 30-day sweep. Called once per launch, after the first scan has published, so
     /// it never sits between the owner and his library.
     func sweepTrash() async {

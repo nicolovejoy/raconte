@@ -270,6 +270,27 @@ private struct ParkedRevisions: Codable {
     var revisions: [PendingRevision]
 }
 
+/// M4 T10: a sibling of `PendingRevision`/`ParkedRevisions`, same shape and reasoning,
+/// with ONE structural difference — a marker stream is not immutable content addressed
+/// by its own id (many revisions can exist per capture, each written once forever); it
+/// is ONE mutable, monotonically-growing file per (captureID, deviceID). So the parked
+/// queue is keyed by `deviceID`, not by a content id, and a later delivery for the SAME
+/// deviceID REPLACES the earlier one rather than accumulating — see
+/// `mergeIntoParkedMarkerStreams`'s "latest wins" doc comment.
+private struct PendingMarkerStream: Codable, Equatable {
+    var deviceID: String
+    var content: Data
+}
+
+/// The whole contents of `sync/staging/<captureID>/pending-marker-streams.json` — mirrors
+/// `ParkedRevisions`' own doc comment for why `knownToHaveExisted` is recorded rather
+/// than inferred later from a directory check alone (the identical case-A/case-B
+/// disambiguation `rehydrateParkedMarkerStreams` needs).
+private struct ParkedMarkerStreams: Codable {
+    var knownToHaveExisted: Bool
+    var streams: [PendingMarkerStream]
+}
+
 /// New-entry ingest, IO half (design §6, T7): commits an already-durably-staged capture
 /// directory with one `rename(2)` into `captures/<captureID>/` — mirroring the `.part` →
 /// rename convention every other atomic write in this codebase uses (`AtomicFile`). By
@@ -391,7 +412,12 @@ enum EntryAssembler {
                                        // flag the way `hasLiveLog` gates `transcript/`
                                        // below): an absent file costs this Set nothing,
                                        // and a present one must never be swept.
-                                       AppContainer.syncStagingPendingRevisionsFileName]
+                                       AppContainer.syncStagingPendingRevisionsFileName,
+                                       // M4 T10: `pending-marker-streams.json` — same
+                                       // survive-the-prune requirement as
+                                       // `pending-revisions.json` immediately above, see
+                                       // that constant's doc comment on `AppContainer`.
+                                       AppContainer.syncStagingPendingMarkerStreamsFileName]
         if hasLiveLog { allowedTop.insert(SegmentLayout.transcriptDirName) }
         if let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) {
             for name in names where !allowedTop.contains(name) {
@@ -757,12 +783,9 @@ actor SyncRecordExchange: CloudRecordExchange {
             return await audioRecordToPush(captureID: captureID, name: name, zoneID: zoneID)
         case .liveLog(let captureID):
             return await liveLogRecordToPush(captureID: captureID, name: name, zoneID: zoneID)
-        case .markerStream:
-            // T10 builds this. Nil drops the pending change; the next launch's
-            // reconciliation scan re-enqueues it, because nothing was written to the
-            // ledger.
-            log.debug("sync: no builder yet for \(name.rawValue, privacy: .public)")
-            return nil
+        case .markerStream(let captureID, let streamDeviceID):
+            return await markerStreamRecordToPush(captureID: captureID, streamDeviceID: streamDeviceID,
+                                                  name: name, zoneID: zoneID)
         }
     }
 
@@ -997,6 +1020,65 @@ actor SyncRecordExchange: CloudRecordExchange {
                                                 entryID: entryID, zoneID: zoneID)
     }
 
+    /// M4 T10's push half: this device's own `markers.jsonl` bytes, read fresh and
+    /// hashed the SAME way `SyncTreeScanner.markerStreamArtifact` does — one digest
+    /// formula, called from both scan and push, so the two can never silently disagree
+    /// (the identical reasoning every sibling `*RecordToPush` doc comment gives).
+    ///
+    /// Refuses (nil) for a `streamDeviceID` that is not THIS device's own — the scanner
+    /// only ever produces `.markerStream(captureID:, deviceID: self.deviceID)` artifacts
+    /// (own stream only, by construction: "design §4, one writer per record"), so a
+    /// mismatched deviceID reaching here would mean something asked this device to push
+    /// a stream it does not own; refusing is the fail-safe answer, matching `revisionRecordToPush`'s
+    /// nil-for-"not found locally" shape.
+    ///
+    /// Gated on the same finalized-eligibility predicate every other push is
+    /// (`FinalizeArtifactPush.isFinalized`) — `SyncTreeScanner.scanCapture` gates
+    /// `markerStreamArtifact` behind the identical `manifest.final.verifiedAt != nil`
+    /// check, so a capture that is not yet sync-eligible is refused here too, never
+    /// pushed early off a capture-time tap.
+    ///
+    /// `base:` rebuilds onto this device's archived system fields, like `entryRecordToPush`/
+    /// `journalRecordToPush` — a marker stream's content grows over time (unlike
+    /// AudioAsset/LiveLog/Revision, which are write-once), so a later re-push must carry
+    /// the server's change tag.
+    private func markerStreamRecordToPush(captureID: String, streamDeviceID: String, name: SyncRecordName,
+                                          zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard streamDeviceID == deviceID else {
+            log.notice("""
+                sync: asked to push a marker stream for \(streamDeviceID, privacy: .public), \
+                which is not this device (\(self.deviceID, privacy: .public)) — refused
+                """)
+            return nil
+        }
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — marker stream push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: marker stream \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let markerURL = SegmentLayout.markerLogURL(captureDirectory: directory)
+        guard let bytes = try? Data(contentsOf: markerURL, options: .mappedIfSafe),
+              let content = String(data: bytes, encoding: .utf8) else {
+            log.notice("sync: markers.jsonl for \(captureID, privacy: .public) unreadable/absent at push time")
+            return nil
+        }
+
+        let digest = SyncTreeScanner.rawDigest(bytes)
+        note(build: digest, for: name)
+
+        let base = await archivedRecord(for: name)
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
+        return SyncRecordBuilders.markerStreamRecord(captureID: captureID, deviceID: streamDeviceID,
+                                                      content: content, entryID: entryID, zoneID: zoneID,
+                                                      base: base)
+    }
+
     private func journalRecordToPush(id: String, name: SyncRecordName,
                                      zoneID: CKRecordZone.ID) async -> CKRecord? {
         guard let journal = try? await journalStore.journal(id: id) else {
@@ -1099,9 +1181,8 @@ actor SyncRecordExchange: CloudRecordExchange {
             await ingestLiveLog(record, captureID: captureID)
         case .revision(let id):
             await ingestRevision(record, revisionID: id)
-        case .markerStream:
-            // T10 owns this.
-            log.debug("sync: no ingest yet for \(name.rawValue, privacy: .public)")
+        case .markerStream(let captureID, let streamDeviceID):
+            await ingestMarkerStream(record, captureID: captureID, streamDeviceID: streamDeviceID)
         }
     }
 
@@ -1542,6 +1623,264 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
     }
 
+    // MARK: Ingest — marker streams (M4 T10, design §6/§7.4)
+
+    /// An inbound MarkerStream record — a foreign device's own `markers.jsonl` bytes,
+    /// arriving as one whole-file snapshot (design §2: "single-writer by construction →
+    /// grows monotonically; whole-field replace is safe"). Three shapes, mirroring
+    /// `ingestRevision`'s own three-way split for the identical reasons:
+    ///
+    /// - **THIS device's own stream, echoed back.** `SyncRecordName.markerStream`
+    ///   uniquely names one (captureID, deviceID) pair; a fetched record naming this
+    ///   device's own `deviceID` can only ever be its own content coming back (there is
+    ///   no other legitimate writer). Materializing it as a "foreign" sibling would be
+    ///   pointless at best and, worse, could shadow this device's own `markers.jsonl`
+    ///   with a stale copy of itself — refused outright, never parked either.
+    /// - **The capture does not exist yet.** Ordering between fetched record types is
+    ///   not guaranteed (design §6) — park durably (never in-memory only) and prod the
+    ///   ordinary assembly-attempt path, exactly like `ingestRevision`.
+    /// - **The capture exists.** If it is currently soft-trashed, park it (Task 9's
+    ///   ruling extended here) rather than writing into `transcript/` for a capture that
+    ///   might be purged before the next launch — `rehydrateParkedMarkerStreams` is the
+    ///   retry route, same as revisions. Otherwise, materialize straight through
+    ///   `AtomicFile.replace` to `transcript/markers-<deviceID>.jsonl` — no store
+    ///   primitive exists for this (unlike revisions' `TranscriptRevisionStore
+    ///   .ingestForeignRevision`) because there is nothing to merge or allocate: the
+    ///   whole file simply replaces whatever was there.
+    ///
+    /// `captureID` comes from the record NAME (`SyncRecordName.markerStream`), not from
+    /// `entryRef` the way `ingestRevision` has to (`.markerStream`'s name already embeds
+    /// it, unlike `.revision`'s bare-ULID name) — `entryRef` is still read and checked
+    /// for internal consistency (defense in depth: a record whose reference disagrees
+    /// with its own name is refused, never silently trusted on the name alone).
+    private func ingestMarkerStream(_ record: CKRecord, captureID: String, streamDeviceID: String) async {
+        guard streamDeviceID != deviceID else {
+            // Our own stream, echoed back by a fetch. Never materialized as a foreign
+            // sibling and never parked — there is nothing to recover here.
+            return
+        }
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — marker stream ingest skipped")
+            return
+        }
+        guard let content = record[SyncMarkerStreamField.content] as? String,
+              let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference,
+              case .entry(let refCaptureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID),
+              refCaptureID == captureID else {
+            log.notice("""
+                sync: fetched MarkerStream record missing content/entryRef, or entryRef \
+                disagrees with the record name — ignored
+                """)
+            return
+        }
+        let bytes = Data(content.utf8)
+
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let captureExists = FileManager.default.fileExists(atPath: directory.path)
+
+        guard captureExists else {
+            parkMarkerStream(captureID: captureID, streamDeviceID: streamDeviceID, content: bytes,
+                             knownToExist: false, containerRoot: containerRoot)
+            await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
+            return
+        }
+
+        guard !isTrashedOrUnreadable(captureDirectory: directory) else {
+            parkMarkerStream(captureID: captureID, streamDeviceID: streamDeviceID, content: bytes,
+                             knownToExist: true, containerRoot: containerRoot)
+            return
+        }
+
+        do {
+            try materializeMarkerStream(captureDirectory: directory, streamDeviceID: streamDeviceID, content: bytes)
+        } catch {
+            log.error("""
+                sync: could not materialize marker stream \(streamDeviceID, privacy: .public) for \
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await localStoreDidChange?()
+    }
+
+    /// The trashed-capture guard `TranscriptRevisionStore.guardWritable` applies to
+    /// every draft-lifecycle write (design §5: "trashed entries refuse edits anyway"),
+    /// restated here since marker-stream materialization has no store primitive of its
+    /// own to inherit it from. An UNREADABLE sidecar is treated the same as trashed —
+    /// the fail-safe answer (this codebase's recurring rule: refuse rather than guess)
+    /// — never as "presumably not trashed."
+    private func isTrashedOrUnreadable(captureDirectory: URL) -> Bool {
+        let sidecarURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        guard let metadata = try? EntryMetadataStore.read(url: sidecarURL) else { return true }
+        return metadata.isTrashed
+    }
+
+    /// The actual whole-file write (design §2: "whole-field replace is safe" — single
+    /// remote writer, monotonic growth, so there is never a merge to perform). Creates
+    /// `transcript/` if needed — the identical "any file here flips
+    /// `holdsIrreplaceableArtifacts`" territory `MarkerLogWriter.open()`'s own doc
+    /// comment describes, which is exactly why a foreign stream belongs there (design
+    /// §7.4: "they are precious voice attribution and *should* trip" that guard).
+    private func materializeMarkerStream(captureDirectory: URL, streamDeviceID: String, content: Data) throws {
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        let url = SegmentLayout.foreignMarkerLogURL(captureDirectory: captureDirectory, deviceID: streamDeviceID)
+        try AtomicFile.replace(at: url, writing: content)
+    }
+
+    /// Durably parks one foreign marker stream — mirrors `parkRevision` exactly, see
+    /// its doc comment for the full "why a sibling file, why `knownToExist`" reasoning.
+    /// `mergeIntoParkedMarkerStreams` is "latest wins" rather than "append if absent":
+    /// a marker stream is not addressed by an immutable content id the way a revision
+    /// is, so a SECOND delivery for the same deviceID (this device marked more, or a
+    /// redelivered fetch after a change-token reset) must replace, not accumulate.
+    private func parkMarkerStream(captureID: String, streamDeviceID: String, content: Data,
+                                  knownToExist: Bool, containerRoot: URL) {
+        let url = AppContainer.syncStagingPendingMarkerStreamsURL(containerRoot: containerRoot, captureID: captureID)
+        mergeIntoParkedMarkerStreams([PendingMarkerStream(deviceID: streamDeviceID, content: content)],
+                                     url: url, knownToHaveExisted: knownToExist)
+    }
+
+    private func readParkedMarkerStreams(url: URL) -> ParkedMarkerStreams? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(ParkedMarkerStreams.self, from: data)
+    }
+
+    private func writeParkedMarkerStreams(_ parked: ParkedMarkerStreams, url: URL) {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            let data = try CaptureCoding.encoder().encode(parked)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not persist parked marker streams for \(url.path, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
+    }
+
+    /// The ADD-side reconciliation primitive, mirroring `mergeIntoParked`: reads `url`
+    /// FRESH at call time (never a pre-await snapshot — the identical fix-round-2
+    /// reasoning `mergeIntoParked`'s own doc comment gives, since this is called both
+    /// from `parkMarkerStream`'s single synchronous path and from a leftover re-park
+    /// that follows an `await`), merges `additions` in, and writes back. "Latest wins"
+    /// by `deviceID`: an addition REPLACES any existing entry for the same deviceID
+    /// rather than being skipped or appended alongside it — see this type's own doc
+    /// comment on `PendingMarkerStream`/`ParkedMarkerStreams`.
+    private func mergeIntoParkedMarkerStreams(_ additions: [PendingMarkerStream], url: URL,
+                                              knownToHaveExisted: Bool) {
+        var parked = readParkedMarkerStreams(url: url) ?? ParkedMarkerStreams(knownToHaveExisted: false, streams: [])
+        parked.knownToHaveExisted = parked.knownToHaveExisted || knownToHaveExisted
+        for addition in additions {
+            parked.streams.removeAll { $0.deviceID == addition.deviceID }
+            parked.streams.append(addition)
+        }
+        writeParkedMarkerStreams(parked, url: url)
+    }
+
+    /// The REMOVE-side reconciliation primitive, mirroring `reconcileParkedWriteback`:
+    /// re-reads `url` fresh, removes exactly the deviceIDs this pass resolved, and
+    /// writes back whatever remains (or removes the file entirely once nothing does) —
+    /// never a write computed from a pre-await snapshot, which could silently discard a
+    /// concurrent park for a DIFFERENT deviceID that arrived during the same suspension.
+    private func reconcileParkedMarkerStreamsWriteback(url: URL, handledDeviceIDs: Set<String>) {
+        guard let fresh = readParkedMarkerStreams(url: url) else { return }
+        let remaining = fresh.streams.filter { !handledDeviceIDs.contains($0.deviceID) }
+        guard remaining.count != fresh.streams.count else { return }
+        if remaining.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            writeParkedMarkerStreams(ParkedMarkerStreams(knownToHaveExisted: fresh.knownToHaveExisted,
+                                                         streams: remaining), url: url)
+        }
+    }
+
+    /// Applies every parked stream against `materializeMarkerStream`, returning whatever
+    /// still could NOT be applied because the capture is (still) trashed or unreadable —
+    /// mirrors `applyParked`'s "never drop a trashed leftover on the floor" contract.
+    /// The trashed/unreadable check is made ONCE per call (every stream in `streams`
+    /// shares the same captureID/captureDirectory, so its trashed status cannot differ
+    /// stream-to-stream) rather than once per stream.
+    private func applyParkedMarkerStreams(_ streams: [PendingMarkerStream],
+                                          captureDirectory: URL) -> [PendingMarkerStream] {
+        guard !isTrashedOrUnreadable(captureDirectory: captureDirectory) else { return streams }
+        for stream in streams {
+            do {
+                try materializeMarkerStream(captureDirectory: captureDirectory, streamDeviceID: stream.deviceID,
+                                            content: stream.content)
+            } catch {
+                log.error("""
+                    sync: could not materialize parked marker stream \(stream.deviceID, privacy: .public): \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
+        return []
+    }
+
+    /// Applies every marker stream parked for `captureID` — called ONLY right after
+    /// `EntryAssembler.assemble` has just committed that capture into `captures/`
+    /// (`attemptEntryAssembly`'s `.assembleNew` branch), mirroring
+    /// `ingestParkedRevisions` exactly, including the "arrived already trashed"
+    /// re-park case.
+    private func ingestParkedMarkerStreams(captureID: String, containerRoot: URL) async {
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let postCommitURL = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            .appendingPathComponent(AppContainer.syncStagingPendingMarkerStreamsFileName)
+        guard let parked = readParkedMarkerStreams(url: postCommitURL) else { return }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let leftover = applyParkedMarkerStreams(parked.streams, captureDirectory: directory)
+        try? FileManager.default.removeItem(at: postCommitURL)
+        if !leftover.isEmpty {
+            let restagedURL = AppContainer.syncStagingPendingMarkerStreamsURL(containerRoot: containerRoot,
+                                                                              captureID: captureID)
+            mergeIntoParkedMarkerStreams(leftover, url: restagedURL, knownToHaveExisted: true)
+        }
+    }
+
+    /// The recovery half of the trashed-capture park, mirroring `rehydrateParkedRevisions`
+    /// exactly — see that function's doc comment for the full three-outcome reasoning
+    /// (`knownToHaveExisted`'s case-A/case-B disambiguation). Called at coordinator
+    /// launch (`SyncCoordinator.live()`), alongside `rehydrateParkedRevisions`.
+    func rehydrateParkedMarkerStreams() async {
+        guard let containerRoot else { return }
+        let stagingRoot = AppContainer.syncStagingRoot(containerRoot: containerRoot)
+        guard let captureIDs = try? FileManager.default.contentsOfDirectory(atPath: stagingRoot.path) else {
+            return
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+
+        for captureID in captureIDs.sorted() {
+            let url = AppContainer.syncStagingPendingMarkerStreamsURL(containerRoot: containerRoot,
+                                                                      captureID: captureID)
+            guard let parked = readParkedMarkerStreams(url: url) else { continue }
+
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let captureExists = FileManager.default.fileExists(atPath: directory.path)
+
+            guard captureExists else {
+                if parked.knownToHaveExisted {
+                    log.notice("""
+                        sync: capture \(captureID, privacy: .public) was purged while a marker stream \
+                        was parked for it — discarding the parking (design §5 delete-wins)
+                        """)
+                    try? FileManager.default.removeItem(at: url)
+                }
+                continue
+            }
+
+            let leftover = applyParkedMarkerStreams(parked.streams, captureDirectory: directory)
+            let handledDeviceIDs = Set(parked.streams.map(\.deviceID)).subtracting(leftover.map(\.deviceID))
+            guard !handledDeviceIDs.isEmpty else { continue }
+            reconcileParkedMarkerStreamsWriteback(url: url, handledDeviceIDs: handledDeviceIDs)
+            await localStoreDidChange?()
+        }
+    }
+
     /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this
     /// IS the rehydration (fix round): there is no in-memory cache to be stale, because
     /// there is no in-memory cache at all. `nil` means no Entry piece is durably staged:
@@ -1626,6 +1965,8 @@ actor SyncRecordExchange: CloudRecordExchange {
             // now has somewhere to land — apply it the instant the commit that just
             // happened makes that possible.
             await ingestParkedRevisions(captureID: captureID, containerRoot: containerRoot)
+            // M4 T10: same idea for marker streams.
+            await ingestParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot)
             await localStoreDidChange?()
         case .applyToExisting:
             // Unreachable in practice — the `guard !captureExists` above already

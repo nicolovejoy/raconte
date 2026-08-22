@@ -11,6 +11,14 @@ enum SegmentLayout {
     static let transcriptDirName = "transcript"
     static let liveTranscriptFileName = "live.jsonl"
     static let markerLogFileName = "markers.jsonl"
+    /// M4 T10: a foreign device's marker stream, materialized by ingest as a sibling of
+    /// `markers.jsonl` — never written by this device's own `MarkerLogWriter`/
+    /// `MarkerCorrectionWriter`, which only ever append to the bare `markers.jsonl`
+    /// name above. `foreignMarkerLogURL`/`foreignStreamDeviceID(fromFileName:)` below
+    /// are the inverse pair (build/parse), matching `canonicalTranscriptURL`/
+    /// `canonicalRevision(fromFileName:)`'s convention for `canonical-<n>.json`.
+    static let foreignMarkerLogPrefix = "markers-"
+    static let foreignMarkerLogSuffix = ".jsonl"
     static let canonicalTranscriptPrefix = "canonical-"
     static let transcriptHeadFileName = "head.json"
     static let transcriptDraftFileName = "draft.json"
@@ -119,6 +127,28 @@ enum SegmentLayout {
     static func markerLogURL(captureDirectory: URL) -> URL {
         transcriptDirectory(captureDirectory: captureDirectory)
             .appendingPathComponent(markerLogFileName)
+    }
+
+    /// `transcript/markers-<deviceID>.jsonl` (M4 T10, design §7.4) — deliberately under
+    /// `transcript/` so issue #8's guard already covers it: any file there flips
+    /// `holdsIrreplaceableArtifacts`, and a foreign device's voice attribution is exactly
+    /// as precious as this device's own.
+    static func foreignMarkerLogURL(captureDirectory: URL, deviceID: String) -> URL {
+        transcriptDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent("\(foreignMarkerLogPrefix)\(deviceID)\(foreignMarkerLogSuffix)")
+    }
+
+    /// Inverse of `foreignMarkerLogURL`'s file name — nil for `markers.jsonl` itself
+    /// (this device's own log, never a foreign one) and for anything that doesn't match
+    /// the `markers-<deviceID>.jsonl` shape.
+    static func foreignStreamDeviceID(fromFileName fileName: String) -> String? {
+        guard fileName != markerLogFileName,
+              fileName.hasPrefix(foreignMarkerLogPrefix), fileName.hasSuffix(foreignMarkerLogSuffix)
+        else { return nil }
+        let start = fileName.index(fileName.startIndex, offsetBy: foreignMarkerLogPrefix.count)
+        let end = fileName.index(fileName.endIndex, offsetBy: -foreignMarkerLogSuffix.count)
+        guard start < end else { return nil }
+        return String(fileName[start..<end])
     }
 
     /// `canonical-<n>.json`. Revisions are addressable and never rewritten — a

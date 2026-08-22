@@ -751,8 +751,14 @@ actor SyncRecordExchange: CloudRecordExchange {
             return await journalRecordToPush(id: id, name: name, zoneID: zoneID)
         case .revision(let id):
             return await revisionRecordToPush(id: id, name: name, zoneID: zoneID)
-        case .entry, .audio, .liveLog, .markerStream:
-            // T6/T10 build these. Nil drops the pending change; the next launch's
+        case .entry(let captureID):
+            return await entryRecordToPush(captureID: captureID, name: name, zoneID: zoneID)
+        case .audio(let captureID):
+            return await audioRecordToPush(captureID: captureID, name: name, zoneID: zoneID)
+        case .liveLog(let captureID):
+            return await liveLogRecordToPush(captureID: captureID, name: name, zoneID: zoneID)
+        case .markerStream:
+            // T10 builds this. Nil drops the pending change; the next launch's
             // reconciliation scan re-enqueues it, because nothing was written to the
             // ledger.
             log.debug("sync: no builder yet for \(name.rawValue, privacy: .public)")
@@ -802,6 +808,170 @@ actor SyncRecordExchange: CloudRecordExchange {
         return SyncRecordBuilders.revisionRecord(revisionID: id, fileURL: fileURL,
                                                  sha256: digest.sha256, bytes: digest.bytes,
                                                  entryID: entryID, zoneID: zoneID)
+    }
+
+    /// Reads and decodes one capture's manifest, refusing (nil) unless it reports a
+    /// verified final m4a (`FinalizeArtifactPush.isFinalized`'s own predicate, applied
+    /// to the SAME read — see that type's doc comment for why `manifest.final
+    /// .verifiedAt != nil` is the eligibility fact, not a judgment call this method
+    /// makes independently). A stray or premature enqueue for an in-flight capture
+    /// therefore returns nil here before any field of it is ever read, which is the
+    /// fail-safe half of the eligibility requirement: an unfinalized capture cannot
+    /// reach a record builder no matter how it got enqueued.
+    ///
+    /// Also the caller's ONE read of `manifest.json` — `entryRecordToPush` needs
+    /// `manifest.createdAt` (the Entry's `capturedAt`) and the raw bytes
+    /// (`manifestSnapshot` + the entry digest source); `audioRecordToPush` needs
+    /// `manifest.final.durationFrames`/`manifest.format.sampleRate`. Sharing this read
+    /// keeps each push at O(one capture's own small files), never a second decode of
+    /// the same manifest to re-derive eligibility.
+    private func loadFinalizedManifest(capturesRoot: URL, captureID: String) -> (data: Data, manifest: Manifest)? {
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        guard let data = try? Data(contentsOf: SegmentLayout.manifestURL(captureDirectory: directory)),
+              let manifest = try? CaptureCoding.decoder().decode(Manifest.self, from: data),
+              manifest.final.verifiedAt != nil
+        else { return nil }
+        return (data, manifest)
+    }
+
+    /// M4 T6/T9-defect-fix: the Entry push. `metadata`/`capturedAt`/`manifestJSON` all
+    /// come from THIS capture's own two small on-disk files — no registry decode, no
+    /// corpus scan — matching the "O(one entry)" cost `FinalizeArtifactPush.namesToPush`
+    /// already keeps for the eligibility question this reuses.
+    ///
+    /// The digest fed to `note(build:)` is `SyncTreeScanner.entryDigest`, the SAME
+    /// static formula `SyncTreeScanner.entryArtifact` calls during reconciliation — not
+    /// a second, independently-written formula that merely agrees today. If the two
+    /// ever disagreed, `SyncPlanner.reconcile` would see ledger != scan forever and
+    /// re-enqueue this capture on every future launch (the T9 lesson this task's brief
+    /// names).
+    ///
+    /// `base:` rebuilds onto this device's archived system fields exactly like
+    /// `journalRecordToPush` does — an Entry is mutable, unlike its Audio/LiveLog
+    /// siblings, so a later edit's re-push must carry the server's change tag.
+    private func entryRecordToPush(captureID: String, name: SyncRecordName,
+                                   zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — entry push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard let (manifestData, manifest) = loadFinalizedManifest(capturesRoot: capturesRoot,
+                                                                    captureID: captureID) else {
+            log.notice("sync: entry \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let entryURL = SegmentLayout.entryMetadataURL(captureDirectory: directory)
+        let fm = FileManager.default
+        let entryData: Data
+        if fm.fileExists(atPath: entryURL.path) {
+            guard let data = try? Data(contentsOf: entryURL) else {
+                log.notice("sync: entry.json for \(captureID, privacy: .public) unreadable at push time")
+                return nil
+            }
+            entryData = data
+        } else {
+            entryData = Data()
+        }
+        let metadata: EntryMetadata
+        do {
+            metadata = try EntryMetadataStore.read(url: entryURL)
+        } catch {
+            log.notice("sync: entry.json for \(captureID, privacy: .public) undecodable at push time")
+            return nil
+        }
+
+        let digest = SyncTreeScanner.entryDigest(entryData: entryData, manifestData: manifestData)
+        note(build: digest, for: name)
+
+        let base = await archivedRecord(for: name)
+        return SyncRecordBuilders.entryRecord(captureID: captureID, metadata: metadata,
+                                              manifestJSON: manifestData, capturedAt: manifest.createdAt,
+                                              deviceID: deviceID, zoneID: zoneID, base: base)
+    }
+
+    /// M4 T6/T9-defect-fix: the AudioAsset push — the verified final m4a's bytes,
+    /// hashed once here and reused for both the ledger digest and the record's own
+    /// `sha256` field (the same "hash once, use twice" shape `revisionRecordToPush`
+    /// already follows). `frameCount`/`sampleRate` come from the SAME manifest read
+    /// eligibility used, never a second decode.
+    ///
+    /// `durationFrames` is set atomically WITH `verifiedAt` at the one call site that
+    /// ever sets either (`FinalizerWorker.finalize`), so a manifest that passes the
+    /// eligibility gate above always carries one too — the nil guard below is
+    /// defensive (refuse rather than push a record with a fabricated frame count),
+    /// never expected to fire on a real capture.
+    private func audioRecordToPush(captureID: String, name: SyncRecordName,
+                                   zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — audio push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard let (_, manifest) = loadFinalizedManifest(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: audio \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+        guard let durationFrames = manifest.final.durationFrames else {
+            log.error("""
+                sync: audio \(captureID, privacy: .public) verified with no durationFrames — \
+                refusing rather than pushing a fabricated frame count
+                """)
+            return nil
+        }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: directory)
+        guard let bytes = try? Data(contentsOf: m4aURL, options: .mappedIfSafe) else {
+            log.notice("sync: final m4a for \(captureID, privacy: .public) unreadable at push time")
+            return nil
+        }
+
+        let digest = SyncTreeScanner.rawDigest(bytes)
+        note(build: digest, for: name)
+
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
+        return SyncRecordBuilders.audioRecord(captureID: captureID, m4aURL: m4aURL,
+                                              sha256: digest.sha256, bytes: digest.bytes,
+                                              frameCount: Int64(durationFrames),
+                                              sampleRate: Double(manifest.format.sampleRate),
+                                              entryID: entryID, zoneID: zoneID)
+    }
+
+    /// M4 T6/T9-defect-fix: the LiveLog push. Readability, not `fileExists` — the
+    /// identical technique `SyncTreeScanner.liveLogArtifact` and
+    /// `FinalizeArtifactPush.namesToPush` both already use, so an enqueued `.liveLog`
+    /// name whose log went bad (or was never there) between enqueue and push time
+    /// returns nil here rather than pushing garbage or an empty stand-in — matching
+    /// requirement 4's "aligned readability predicate" exactly.
+    private func liveLogRecordToPush(captureID: String, name: SyncRecordName,
+                                     zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — live log push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: live log \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let liveLogURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
+        guard let bytes = try? Data(contentsOf: liveLogURL, options: .mappedIfSafe) else {
+            log.notice("sync: live.jsonl for \(captureID, privacy: .public) unreadable/absent at push time")
+            return nil
+        }
+
+        let digest = SyncTreeScanner.rawDigest(bytes)
+        note(build: digest, for: name)
+
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
+        return SyncRecordBuilders.liveLogRecord(captureID: captureID, fileURL: liveLogURL,
+                                                sha256: digest.sha256, bytes: digest.bytes,
+                                                entryID: entryID, zoneID: zoneID)
     }
 
     private func journalRecordToPush(id: String, name: SyncRecordName,

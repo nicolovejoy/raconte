@@ -181,9 +181,20 @@ struct SyncTreeScanner {
         } else {
             entryData = Data()
         }
-        let source = entryData + manifestData
+        let digest = Self.entryDigest(entryData: entryData, manifestData: manifestData)
         return SyncArtifactState(name: .entry(captureID: captureID),
-                                  sha256: Self.sha256Hex(source), bytes: source.count)
+                                  sha256: digest.sha256, bytes: digest.bytes)
+    }
+
+    /// Digest definition (locked): sha256 of `entry.json` bytes + `manifest.json` bytes,
+    /// concatenated in that order — shared with the push path
+    /// (`SyncRecordExchange.entryRecordToPush`) for the identical reason
+    /// `journalDigest` above is shared with `journalRecordToPush`: computing the formula
+    /// once and calling it from both scan and push guarantees they agree, rather than
+    /// hoping two inline formulas never drift apart.
+    static func entryDigest(entryData: Data, manifestData: Data) -> UploadedDigest {
+        let source = entryData + manifestData
+        return UploadedDigest(sha256: sha256Hex(source), bytes: source.count)
     }
 
     /// Digest definition (locked): sha256 of the verified final m4a's bytes, verbatim.
@@ -193,7 +204,8 @@ struct SyncTreeScanner {
     private func audioArtifact(captureID: String, directory: URL) -> SyncArtifactState? {
         let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: directory)
         guard let data = try? Data(contentsOf: m4aURL, options: .mappedIfSafe) else { return nil }
-        return SyncArtifactState(name: .audio(captureID: captureID), sha256: Self.sha256Hex(data), bytes: data.count)
+        let digest = Self.rawDigest(data)
+        return SyncArtifactState(name: .audio(captureID: captureID), sha256: digest.sha256, bytes: digest.bytes)
     }
 
     /// Digest definition (locked): sha256 of `live.jsonl` bytes, verbatim. Only when
@@ -203,7 +215,17 @@ struct SyncTreeScanner {
     private func liveLogArtifact(captureID: String, directory: URL) -> SyncArtifactState? {
         let liveURL = SegmentLayout.liveTranscriptURL(captureDirectory: directory)
         guard let data = try? Data(contentsOf: liveURL, options: .mappedIfSafe) else { return nil }
-        return SyncArtifactState(name: .liveLog(captureID: captureID), sha256: Self.sha256Hex(data), bytes: data.count)
+        let digest = Self.rawDigest(data)
+        return SyncArtifactState(name: .liveLog(captureID: captureID), sha256: digest.sha256, bytes: digest.bytes)
+    }
+
+    /// The single-file digest formula (locked): sha256 of the bytes, verbatim, `bytes`
+    /// = their count. Shared by `audioArtifact`/`liveLogArtifact` here and by the push
+    /// path's `audioRecordToPush`/`liveLogRecordToPush` — same reasoning as
+    /// `entryDigest` above: one definition, called from both sides, so a scanned
+    /// digest and a pushed record's digest cannot silently diverge.
+    static func rawDigest(_ data: Data) -> UploadedDigest {
+        UploadedDigest(sha256: sha256Hex(data), bytes: data.count)
     }
 
     /// Digest definition (locked): sha256 of THIS device's own `markers.jsonl` bytes

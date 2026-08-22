@@ -322,4 +322,175 @@ final class SyncEntryRecordTests: XCTestCase {
         let names = await hooks.names
         XCTAssertEqual(names, [], "re-setting the same value changed nothing — no notification")
     }
+
+    // MARK: recordToPush — wiring the T6 builders into the real push path
+
+    /// Fixture defect this task exists to fix: Task 6 built the builders and the
+    /// finalize-completion `noteLocalChange` hooks; Task 7-9 built ingest/merge/revision
+    /// push, but nothing ever wired `.entry`/`.audio`/`.liveLog` into
+    /// `SyncRecordExchange.recordToPush` itself — every enqueued Entry-family name
+    /// silently dropped at push time (`recordToPush` returned nil, logging "no builder
+    /// yet"). These tests exercise the real orchestrator, not just the pure builders
+    /// `SyncRecordBuilders`/`FinalizeArtifactPush` above already cover.
+    private func exchange() -> SyncRecordExchange {
+        let journalStore = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: journalStore)
+        return SyncRecordExchange(
+            journalStore: journalStore, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: "device-low", containerRoot: containerRoot)
+    }
+
+    private func writeEntryMetadata(_ metadata: EntryMetadata) throws {
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        try EntryMetadataStore.write(metadata, url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+    }
+
+    @discardableResult
+    private func writeFinalM4a(_ bytes: Data = Data("m4a-bytes".utf8)) throws -> URL {
+        let url = SegmentLayout.finalRecordingURL(captureDirectory: captureDirectory)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try bytes.write(to: url)
+        return url
+    }
+
+    /// (a) A finalized capture with all three artifacts present: `recordToPush` builds
+    /// real records for all three names, carrying the fields/assets a fresh read of
+    /// this capture's own files should produce.
+    func testRecordToPushBuildsAllThreeRecordsForAFinalizedCapture() async throws {
+        try writeManifest(verified: true)
+        try writeEntryMetadata(EntryMetadata(journalID: journalID, multiVoice: true))
+        let m4aBytes = Data("real-m4a-bytes".utf8)
+        try writeFinalM4a(m4aBytes)
+        try writeLiveLog()
+
+        let ex = exchange()
+
+        let entryAnswer = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)
+        let entryRecord = try XCTUnwrap(entryAnswer)
+        XCTAssertEqual(entryRecord.recordType, "Entry")
+        XCTAssertEqual(entryRecord["journalID"] as? String, journalID)
+        XCTAssertEqual(entryRecord["multiVoice"] as? Bool, true)
+        XCTAssertEqual(entryRecord["capturedAt"] as? Date, stamp(0),
+                       "capturedAt is the manifest's own createdAt, per entryRecord's contract")
+        XCTAssertEqual(entryRecord["deviceID"] as? String, "device-low")
+
+        let audioAnswer = await ex.recordToPush(for: .audio(captureID: captureID), zoneID: zoneID)
+        let audioRecord = try XCTUnwrap(audioAnswer)
+        XCTAssertEqual(audioRecord.recordType, "AudioAsset")
+        let audioAsset = try XCTUnwrap(audioRecord["file"] as? CKAsset)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(audioAsset.fileURL)), m4aBytes)
+        XCTAssertEqual(audioRecord["frameCount"] as? Int64, 480_000)
+        XCTAssertEqual(audioRecord["sampleRate"] as? Double, 48_000)
+        let audioRef = try XCTUnwrap(audioRecord["entryRef"] as? CKRecord.Reference)
+        XCTAssertEqual(audioRef.recordID, entryRecordID)
+
+        let liveLogAnswer = await ex.recordToPush(for: .liveLog(captureID: captureID), zoneID: zoneID)
+        let liveLogRecord = try XCTUnwrap(liveLogAnswer)
+        XCTAssertEqual(liveLogRecord.recordType, "LiveLog")
+        let logAsset = try XCTUnwrap(liveLogRecord["file"] as? CKAsset)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(logAsset.fileURL)), Data("{}\n".utf8))
+        let logRef = try XCTUnwrap(liveLogRecord["entryRef"] as? CKRecord.Reference)
+        XCTAssertEqual(logRef.recordID, entryRecordID)
+    }
+
+    /// (b) Eligibility refusal, the fail-safe half of this task: a capture that is not
+    /// finalized returns nil for ALL THREE record types, even when every underlying
+    /// file happens to already be sitting on disk (a stray or premature enqueue must
+    /// never push an in-flight capture).
+    ///
+    /// Mutation check (run by hand, reported): removing the
+    /// `loadFinalizedManifest`/`isFinalized` guard from `entryRecordToPush` (and its
+    /// audio/liveLog siblings) makes this test fail — all three calls start returning
+    /// real records instead of nil, because nothing else in the method stops them.
+    func testRecordToPushRefusesAllThreeForANonFinalizedCaptureEvenWithFilesPresent() async throws {
+        try writeManifest(verified: false)
+        try writeEntryMetadata(EntryMetadata(journalID: journalID))
+        try writeFinalM4a()
+        try writeLiveLog()
+
+        let ex = exchange()
+
+        let entryRecord = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)
+        let audioRecord = await ex.recordToPush(for: .audio(captureID: captureID), zoneID: zoneID)
+        let liveLogRecord = await ex.recordToPush(for: .liveLog(captureID: captureID), zoneID: zoneID)
+
+        XCTAssertNil(entryRecord, "a not-yet-finalized capture must never push an Entry record")
+        XCTAssertNil(audioRecord, "…nor an AudioAsset record")
+        XCTAssertNil(liveLogRecord, "…nor a LiveLog record")
+    }
+
+    /// (c) An unreadable `live.jsonl` (Task 6's own directory-at-that-path technique)
+    /// refuses `.liveLog` specifically, while `.entry`/`.audio` still push normally —
+    /// the same readability predicate `FinalizeArtifactPush.namesToPush` and
+    /// `SyncTreeScanner.liveLogArtifact` already share.
+    func testRecordToPushRefusesLiveLogAloneWhenUnreadableButStillPushesEntryAndAudio() async throws {
+        try writeManifest(verified: true)
+        try writeEntryMetadata(EntryMetadata(journalID: journalID))
+        try writeFinalM4a()
+        try writeLiveLogAsUnreadableDirectory()
+
+        let ex = exchange()
+
+        let entryRecord = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)
+        let audioRecord = await ex.recordToPush(for: .audio(captureID: captureID), zoneID: zoneID)
+        let liveLogRecord = await ex.recordToPush(for: .liveLog(captureID: captureID), zoneID: zoneID)
+
+        XCTAssertNotNil(entryRecord, "entry.json/manifest are untouched by the bad live.jsonl")
+        XCTAssertNotNil(audioRecord, "the m4a is untouched by the bad live.jsonl")
+        XCTAssertNil(liveLogRecord, "a name that was enqueued before the log went bad must not push garbage")
+    }
+
+    /// (d) Digest agreement, the drift tripwire this task's brief names: the pushed
+    /// AudioAsset record's `sha256` must equal `SyncTreeScanner`'s OWN digest for the
+    /// same fixture — not a value this test recomputes independently, but the real
+    /// scanner's real answer, so the two can never silently diverge (which would make
+    /// `SyncPlanner.reconcile` re-enqueue this capture on every future launch, per T9's
+    /// lesson).
+    func testAudioRecordDigestAgreesWithSyncTreeScannersOwnDigestForTheSameFixture() async throws {
+        try writeManifest(verified: true)
+        try writeEntryMetadata(EntryMetadata(journalID: journalID))
+        try writeFinalM4a(Data("agree-on-this-please".utf8))
+        try writeLiveLog()
+
+        let ex = exchange()
+        let audioAnswer = await ex.recordToPush(for: .audio(captureID: captureID), zoneID: zoneID)
+        let audioRecord = try XCTUnwrap(audioAnswer)
+        let pushedSHA = try XCTUnwrap(audioRecord["sha256"] as? String)
+
+        let scan = SyncTreeScanner(containerRoot: containerRoot, deviceID: "device-low").scan()
+        let scannedAudio = try XCTUnwrap(
+            scan.artifacts.first { $0.name == .audio(captureID: captureID) },
+            "the scanner must find the same m4a this fixture just wrote")
+
+        XCTAssertEqual(pushedSHA, scannedAudio.sha256,
+                       "the push path and the reconciliation scan must agree on this capture's digest, " +
+                       "or the planner will re-enqueue it forever")
+        XCTAssertEqual(audioRecord["bytes"] as? Int, scannedAudio.bytes)
+    }
+
+    /// (e) A trashed-but-not-purged entry still pushes — trash is a synced field, not a
+    /// removal (`SyncTreeScanner`'s own doc comment: "A trashed-but-not-purged entry…
+    /// IS eligible — trash is a synced field, not a removal"). Eligibility here is
+    /// purely `FinalizeArtifactPush.isFinalized` (the manifest's verified-m4a check),
+    /// which knows nothing about trash at all — so a trashed entry is not a special
+    /// case the push path has to carve out, only one it must not accidentally refuse.
+    func testRecordToPushStillPushesATrashedButNotPurgedEntry() async throws {
+        try writeManifest(verified: true)
+        try writeEntryMetadata(EntryMetadata(journalID: journalID, trashedAt: stamp(30)))
+        try writeFinalM4a()
+        try writeLiveLog()
+
+        let ex = exchange()
+
+        let entryAnswer = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)
+        let entryRecord = try XCTUnwrap(entryAnswer)
+        XCTAssertEqual(entryRecord["trashedAt"] as? Date, stamp(30))
+
+        let audioRecord = await ex.recordToPush(for: .audio(captureID: captureID), zoneID: zoneID)
+        let liveLogRecord = await ex.recordToPush(for: .liveLog(captureID: captureID), zoneID: zoneID)
+        XCTAssertNotNil(audioRecord, "trash does not gate the audio push — only finalization does")
+        XCTAssertNotNil(liveLogRecord, "trash does not gate the live-log push either")
+    }
 }

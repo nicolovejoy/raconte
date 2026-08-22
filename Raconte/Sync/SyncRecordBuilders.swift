@@ -163,9 +163,14 @@ enum SyncRecordBuilders {
     /// record — `journalID`/`originalDate`/`trashedAt`/`detectedDate` simply read `nil`,
     /// `multiVoice`/`detectionRan` read `false`, and `modified` reads `"{}"`.
     ///
-    /// No `base:` parameter (unlike `journalRecord`): T6 builds the record's *shape*;
-    /// rebuilding it onto archived system fields for a real push is wherever
-    /// `SyncRecordExchange.recordToPush` grows an `.entry` case, in a later task.
+    /// `base:` (wired at `SyncRecordExchange.entryRecordToPush`, the later task T6's own
+    /// comment above pointed at): same role as `journalRecord`'s — an Entry is mutable
+    /// (a later backdate/journal-move/trash edit re-pushes it), so a real push rebuilds
+    /// onto this device's archived system fields when it has seen a server copy before,
+    /// carrying the server's change tag so CloudKit can detect a conflict instead of
+    /// blindly clobbering. `AudioAsset`/`LiveLog`/`Revision` have no such parameter —
+    /// they are immutable, write-once children that are never rebuilt onto an older
+    /// system-fields archive.
     ///
     /// `originalDate`/`detectedDate` travel as `PartialDate.isoString` — the same
     /// on-disk string `entry.json` itself stores them as (never a `Date`, which cannot
@@ -182,9 +187,9 @@ enum SyncRecordBuilders {
     /// "field was never set" state for it to preserve, unlike `cover`/`span`.
     static func entryRecord(captureID: String, metadata: EntryMetadata,
                             manifestJSON: Data, capturedAt: Date, deviceID: String,
-                            zoneID: CKRecordZone.ID) -> CKRecord {
+                            zoneID: CKRecordZone.ID, base: CKRecord? = nil) -> CKRecord {
         let recordID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
-        let record = CKRecord(recordType: SyncRecordType.entry, recordID: recordID)
+        let record = base ?? CKRecord(recordType: SyncRecordType.entry, recordID: recordID)
 
         record[SyncEntryField.journalID] = metadata.journalID
         record[SyncEntryField.originalDate] = metadata.originalDate?.isoString

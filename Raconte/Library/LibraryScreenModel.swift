@@ -165,7 +165,19 @@ final class LibraryScreenModel {
     /// so scanning the superset once and filtering it three ways is both cheaper and
     /// strictly more consistent: the list, the recents strip and the trash count now
     /// always describe the same instant on disk.
-    func rescan() async {
+    ///
+    /// **Returns whether THIS scan published.** `false` means it was superseded — another
+    /// `rescan()` started while this one was in flight, so this one assigned nothing and
+    /// every published list still describes whatever the *winning* scan last left there,
+    /// which may predate both. Every ordinary caller ignores the answer (hence
+    /// `@discardableResult`): for a refresh, "someone else's newer scan won" is a better
+    /// outcome, not a failure. A **destructive** caller must not ignore it — see
+    /// `rescanUntilFresh(attempts:)`. Gate finding (Critical 1): without this, a scan whose
+    /// result was discarded returned indistinguishably from one that published, so
+    /// `deleteJournal`/`isJournalEmptyAfterRescan` evaluated emptiness against pre-scan
+    /// state and orphaned real recordings.
+    @discardableResult
+    func rescan() async -> Bool {
         scanGeneration &+= 1
         let generation = scanGeneration
         isLoading = true
@@ -189,7 +201,7 @@ final class LibraryScreenModel {
 
         // A superseded scan publishes nothing, and leaves `isLoading` set — the scan
         // that overtook it is still running and owns clearing it.
-        guard generation == scanGeneration else { return }
+        guard generation == scanGeneration else { return false }
 
         // Display order, not registry (insertion) order — issue #79.
         journals = (loadedJournals ?? []).displayOrdered
@@ -206,6 +218,31 @@ final class LibraryScreenModel {
         // observer's whole job is to compare a receipt against `allEntries`, so it must
         // never see a half-applied scan or one this model has already abandoned.
         rescanObserver?.libraryDidRescan()
+        return true
+    }
+
+    /// Rescan until one of OUR scans actually publishes, or give up. `true` means the
+    /// published state is this call's own scan and nothing has landed on this actor since
+    /// — the caller's very next statement, with no `await` between, reads state it can
+    /// trust. `false` means every attempt was superseded, and the caller must **refuse**
+    /// rather than read whatever is currently published: a destructive decision on
+    /// unproven-fresh state is exactly how entries get orphaned.
+    ///
+    /// Bounded rather than unbounded: a livelock (something rescanning continuously) must
+    /// end in a refusal, never in a spin. Three attempts is arbitrary but generous — each
+    /// attempt loses only if another rescan *starts* inside its window, and the app's own
+    /// rescans are event-driven, not periodic.
+    ///
+    /// `attempts` is a parameter solely so the give-up branch is directly testable
+    /// (`attempts: 0` = "no fresh scan is obtainable"); production always takes the
+    /// default via the two callers below.
+    private func rescanUntilFresh(attempts: Int) async -> Bool {
+        var remaining = attempts
+        while remaining > 0 {
+            remaining -= 1
+            if await rescan() { return true }
+        }
+        return false
     }
 
     /// Derived, not stored — see `JournalDateRange`. `nil` for a journal with no
@@ -372,6 +409,38 @@ final class LibraryScreenModel {
     func isJournalEmpty(_ journalID: String) -> Bool {
         !allEntries.contains { $0.journalID == journalID }
             && !trashed.contains { $0.journalID == journalID }
+            && !hasIndeterminateContent(forJournal: journalID)
+    }
+
+    /// Something on disk that this scan cannot rule out of `journalID`, so "empty" is not
+    /// an answer this model is entitled to give. Gate findings (Important 2 and 3) — both
+    /// are the project's recurring three-answers mistake (#11) landing on a destructive
+    /// path: absent, unreadable and present are three different answers, and collapsing
+    /// "I cannot tell" into "absent" orphans a real recording.
+    ///
+    /// Two sources, both fail-safe:
+    ///
+    /// 1. **An entry whose `entry.json` did not decode** (`.metadataUnreadable`). Its row
+    ///    carries `EntryMetadata.defaults`, i.e. `journalID == nil`, so it matches no
+    ///    journal and would protect none — while the capture itself may hold hours of
+    ///    audio genuinely filed here. It blocks EVERY journal's deletion, not just this
+    ///    one, because the whole point is that we cannot read which journal it names.
+    /// 2. **A capture filed into this journal that the scan skipped** for having no
+    ///    durable content yet (`SkippedCapture`). Reachable: `CaptureScreenModel
+    ///    .handlePhase` enqueues the `entry.json` write the moment the coordinator
+    ///    publishes `.recording`, and that write can land before the first audio frames
+    ///    do — so a capture armed into this journal exists on disk, naming it, with
+    ///    nothing durable in it yet. Deleting the journal in that window leaves the
+    ///    in-flight recording pointing at a journal that is gone
+    ///    (`refreshJournalsFromLibrary`'s repair only fires for `.recording`/`.interrupted`).
+    ///
+    /// A skipped capture whose sidecar is ALSO unreadable does not block: it names no
+    /// journal we can read AND holds nothing durable — which is precisely why it was
+    /// skipped — so there is nothing there to orphan.
+    func hasIndeterminateContent(forJournal journalID: String) -> Bool {
+        if allEntries.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return true }
+        if trashed.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return true }
+        return skipped.contains { $0.journalID == journalID }
     }
 
     /// Rescan-then-check as ONE `LibraryScreenModel`-isolated call (#80, B2) — the ONE
@@ -389,8 +458,15 @@ final class LibraryScreenModel {
     /// would release isolation between the two hops (each is its own actor-hop
     /// suspension), reopening exactly the staleness window `deleteJournal`'s doc comment
     /// warns about.
-    func isJournalEmptyAfterRescan(_ journalID: String) async -> Bool {
-        await rescan()
+    ///
+    /// **The rescan must be one WE won** (gate finding, Critical 1). A superseded scan
+    /// publishes nothing, so `await rescan()` alone guarantees only that *a* scan ran, not
+    /// that the state read afterwards is fresh — one level below the hazard the reasoning
+    /// above addresses. `rescanUntilFresh` closes it, and its `false` is
+    /// answered with `false` here: "I could not prove this journal is empty" must read as
+    /// "not empty" on a path whose only consumer deletes.
+    func isJournalEmptyAfterRescan(_ journalID: String, freshScanAttempts: Int = 3) async -> Bool {
+        guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
         return isJournalEmpty(journalID)
     }
 
@@ -404,12 +480,18 @@ final class LibraryScreenModel {
     /// obligation. Without this, an entry that arrived after the last scan (a background
     /// sync ingest landing while a confirmation dialog is open, most concretely) would
     /// read as belonging to an empty journal and be orphaned by the delete that follows.
+    /// And not merely "rescan": a rescan **we won** (gate finding, Critical 1) — a
+    /// superseded scan publishes nothing, so a plain `await rescan()` would leave this
+    /// reading pre-scan state whenever anything else (a capture finalizing, an ingest, a
+    /// trash write) started its own scan inside ours. Refuses when it cannot get one:
+    /// a delete that cannot prove freshness must not proceed.
+    ///
     /// This narrows, rather than closes, the race: there is still a synchronous
-    /// check-then-await gap between this rescan and the store write below, the same gap
+    /// check-then-await gap between the fresh scan and the store write below, the same gap
     /// every other mutator in this file already accepts.
     @discardableResult
-    func deleteJournal(_ journalID: String) async -> Bool {
-        await rescan()
+    func deleteJournal(_ journalID: String, freshScanAttempts: Int = 3) async -> Bool {
+        guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
         guard isJournalEmpty(journalID) else { return false }
         guard (try? await journalStore.deleteJournal(id: journalID)) != nil else { return false }
         await rescan()

@@ -16,6 +16,9 @@ final class JournalDeleteEligibilityTests: XCTestCase {
     private let hasContentReason =
         "Delete every entry in this journal — including anything still in "
         + "Trash — before you can delete the journal itself."
+    private let indeterminateReason =
+        "A recording on this device hasn’t settled yet, or its details can’t be "
+        + "read, so Raconte can’t tell whether it belongs here. Try again in a moment."
 
     func testLastRemainingJournalIsBlockedEvenWhenEmpty() {
         XCTAssertEqual(
@@ -49,6 +52,34 @@ final class JournalDeleteEligibilityTests: XCTestCase {
     }
 
     func testNonLastEmptyJournalIsDeletable() {
+        XCTAssertNil(
+            JournalDeleteEligibility.blockedReason(journalCount: 2, entryCount: 0, trashedCount: 0))
+    }
+
+    // MARK: Indeterminate content (gate findings, Important 2 and 3)
+
+    /// A journal with no rows against it can still be un-deletable: something on disk
+    /// that the scan could not attribute (an unreadable `entry.json`, or a capture filed
+    /// here that has no durable content yet). `LibraryScreenModel.isJournalEmpty` refuses
+    /// in exactly that case, so the button must not offer a delete that will be refused.
+    func testIndeterminateContentBlocksAnOtherwiseEmptyJournal() {
+        XCTAssertEqual(
+            JournalDeleteEligibility.blockedReason(journalCount: 2, entryCount: 0, trashedCount: 0,
+                                                   hasIndeterminateContent: true),
+            indeterminateReason)
+    }
+
+    /// Precedence, pinned the same way `testBothReasonsTrueReturnsTheLastJournalReason`
+    /// pins the other pair: when the journal plainly holds entries, say so — that is
+    /// actionable, where "something can't be read" is not.
+    func testCountedEntriesOutrankIndeterminateContent() {
+        XCTAssertEqual(
+            JournalDeleteEligibility.blockedReason(journalCount: 2, entryCount: 1, trashedCount: 0,
+                                                   hasIndeterminateContent: true),
+            hasContentReason)
+    }
+
+    func testIndeterminateContentIsFalseByDefault() {
         XCTAssertNil(
             JournalDeleteEligibility.blockedReason(journalCount: 2, entryCount: 0, trashedCount: 0))
     }

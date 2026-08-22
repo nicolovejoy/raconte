@@ -529,6 +529,160 @@ final class LibraryScreenModelTests: XCTestCase {
                      "deleteJournal's own rescan must have picked up the new entry")
     }
 
+    // MARK: - Freshness: a scan that published nothing must never answer a destructive
+    // question (gate finding, Critical 1)
+
+    /// The primitive the whole fix rests on: `rescan()` reports whether THIS call
+    /// published. Deterministic — once the second scan has bumped the generation, the
+    /// first can never match it again, whatever order they finish in.
+    func testRescanReportsWhetherItPublishedOrWasSuperseded() async throws {
+        try writeJournals([journal("J1", "1987")])
+        let model = model()
+
+        let first = Task { await model.rescan() }
+        await Task.yield()          // `first` is now inside its own scan, suspended
+        let secondWon = await model.rescan()
+        let firstWon = await first.value
+
+        XCTAssertFalse(firstWon, "a superseded scan publishes nothing and must say so")
+        XCTAssertTrue(secondWon, "the scan that actually published must say so")
+    }
+
+    /// Gate finding, Critical 1, reproduced verbatim before the fix
+    /// (`PROBE deleteJournal=true survives=false` — a journal holding a 48,000-frame
+    /// capture deleted). A rescan that merely STARTS while `deleteJournal`'s own scan is
+    /// in flight supersedes it; the superseded scan publishes nothing and used to return
+    /// indistinguishably from one that had, so the emptiness check read pre-scan state.
+    func testDeleteJournalRefusesWhenItsOwnRescanWasSupersededByAConcurrentOne() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty as of the last scan")])
+
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.isJournalEmpty("J2"), "fixture sanity: empty as of this scan")
+
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+
+        let delete = Task { await model.deleteJournal("J2") }
+        await Task.yield()
+        let competing = Task { await model.rescan() }
+        let deleted = await delete.value
+        await competing.value
+
+        XCTAssertFalse(deleted, "a delete whose own scan was superseded must not proceed")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" },
+                        "must never orphan a real recording into a deleted journal")
+    }
+
+    /// The same hole on the sync-ingest seam — the load-bearing one, since an inbound
+    /// deletion for a journal that is empty on the DELETING device is the normal case
+    /// (entries do not sync yet), so this check is all that stands between a peer's
+    /// delete and 47 local entries.
+    func testIsJournalEmptyAfterRescanRefusesWhenItsOwnRescanWasSuperseded() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty as of the last scan")])
+
+        let model = model()
+        await model.rescan()
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+
+        let ask = Task { await model.isJournalEmptyAfterRescan("J2") }
+        await Task.yield()
+        let competing = Task { await model.rescan() }
+        let empty = await ask.value
+        await competing.value
+
+        XCTAssertFalse(empty, "a superseded scan must never answer a destructive question")
+    }
+
+    /// The give-up branch, exercised directly: with no fresh scan obtainable at all, both
+    /// destructive paths must REFUSE rather than fall back on whatever is published.
+    /// `freshScanAttempts: 0` is the honest way to reach it — a livelock is otherwise only
+    /// reachable by timing, and "refuses when it cannot prove freshness" is a structural
+    /// claim that should not be pinned by a race.
+    func testBothDestructivePathsRefuseWhenNoFreshScanIsObtainable() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Genuinely empty")])
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.isJournalEmpty("J2"), "fixture sanity: this journal really is empty")
+
+        let empty = await model.isJournalEmptyAfterRescan("J2", freshScanAttempts: 0)
+        let deleted = await model.deleteJournal("J2", freshScanAttempts: 0)
+
+        XCTAssertFalse(empty, "unproven-fresh must read as not-empty, never as empty")
+        XCTAssertFalse(deleted, "a delete that cannot prove freshness must not proceed")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" }, "the journal must survive")
+    }
+
+    // MARK: - Emptiness is three answers, not two (gate findings, Important 2 and 3)
+
+    /// An entry whose `entry.json` did not decode scans with `journalID == nil`, so it
+    /// protects no journal at all — while the capture itself holds real audio that IS
+    /// filed somewhere. "I cannot read which journal this belongs to" must not read as
+    /// "it belongs to no journal".
+    func testDeleteJournalRefusesWhileAnyEntrysSidecarIsUnreadable() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Looks empty")])
+        try writeCapture(idA, capturedAt: 1_000)     // real frames, no sidecar yet
+        try Data("{ not json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.allEntries.contains {
+            $0.captureID == idA && $0.degradations.contains(.metadataUnreadable)
+        }, "fixture sanity: the entry scanned as metadata-unreadable, with a row of its own")
+        XCTAssertNil(model.allEntries.first { $0.captureID == idA }?.journalID,
+                     "fixture sanity: and it therefore names no journal — the whole hazard")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "an unreadable sidecar might name this journal — refuse")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// A capture filed into the journal that has no durable content yet — reachable in
+    /// production between `CaptureScreenModel.handlePhase` writing `entry.json` at
+    /// `.recording` and the first audio frames reaching disk. The scan skips it (no row),
+    /// so the ordinary emptiness test cannot see it.
+    func testDeleteJournalRefusesWhenACaptureIsFiledIntoItButHasNoDurableContentYet() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.allEntries.isEmpty, "fixture sanity: nothing durable, so no row")
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA],
+                       "fixture sanity: the scan skipped it as having no durable content")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "an in-flight capture is already filed here — refuse")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// The other side of the same rule, so it is a rule and not a blanket refusal: a
+    /// skipped capture filed into a DIFFERENT journal does not block this one, and neither
+    /// does one whose sidecar is unreadable (it names no journal AND holds nothing durable
+    /// — which is exactly why it was skipped, so there is nothing there to orphan).
+    func testASkippedCaptureBlocksOnlyTheJournalItNames() async throws {
+        try writeJournals([journal("J1", "Holds the skipped capture"), journal("J2", "Empty")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J1"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+        try FileManager.default.createDirectory(at: captureDir(idB), withIntermediateDirectories: true)
+        try Data("{ not json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idB)))
+
+        let model = model()
+        await model.rescan()
+        XCTAssertEqual(Set(model.skipped.map(\.captureID)), [idA, idB], "fixture sanity")
+
+        XCTAssertTrue(model.isJournalEmpty("J2"))
+        XCTAssertFalse(model.isJournalEmpty("J1"))
+    }
+
     // MARK: - isJournalEmptyAfterRescan (#80, B2 — the sync-ingest seam)
 
     /// The exact seam `SyncRecordExchange`'s inbound-deletion guard calls off-MainActor

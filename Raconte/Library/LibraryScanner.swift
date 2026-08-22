@@ -13,6 +13,14 @@ struct SkippedCapture: Sendable, Equatable {
 
     var captureID: String
     var reason: Reason
+    /// The journal this capture's `entry.json` names, when it has one that decoded.
+    /// Carried so a destructive caller can see it: a capture skipped for having no
+    /// durable content YET is still filed somewhere, and `LibraryScreenModel
+    /// .hasIndeterminateContent(forJournal:)` refuses to call that journal empty (gate
+    /// finding, Important 3). `nil` covers both "unfiled" and "the sidecar did not
+    /// decode" — neither names a journal to protect, and neither holds anything durable
+    /// to orphan, which is why they read the same here.
+    var journalID: String? = nil
 }
 
 struct LibraryScanResult: Sendable, Equatable {
@@ -96,7 +104,8 @@ struct LibraryScanner: Sendable {
             // `SidecarState`'s three answers exist to prevent.
             guard metadata.isTrashed || holdsSomethingToShow(capture) else {
                 result.skipped.append(SkippedCapture(captureID: capture.captureID,
-                                                    reason: .noDurableContent))
+                                                    reason: .noDurableContent,
+                                                    journalID: metadata.journalID))
                 continue
             }
             items.append(item(for: capture, metadata: metadata,

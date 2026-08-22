@@ -71,6 +71,17 @@ final class CaptureScreenModel {
     /// Live transcription, or nil when the build has none wired (the UI-test harness).
     let transcription: LiveTranscriptionCoordinator?
 
+    /// M4 T6. Nil everywhere sync is off — unit tests, the UI-test harness, and any
+    /// build whose composition root refused to construct an engine. Wired by
+    /// `AppServices.init()` once `sync` exists, mirroring `JournalStore.attach
+    /// (syncHooks:)`/`EntryMetadataStore.attach(syncHooks:)`: construction order means
+    /// the coordinator does not exist yet when this model is built.
+    private var syncHooks: (any SyncHooks)?
+
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
+    }
+
     // MARK: Journal context (M3 T3)
     //
     // ONE `JournalStore` and ONE `EntryMetadataStore` instance for the whole **app** —
@@ -646,6 +657,22 @@ final class CaptureScreenModel {
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
         for id in transcribed { await recordTranscriptRef(for: id) }
+        // M4 T6 choke point (design §3: "finalize completion (m4a verified +
+        // promotion) → enqueue Entry + AudioAsset + LiveLog"). Placed strictly after
+        // the `recordTranscriptRef` loop above: that is the first point at which BOTH
+        // halves of "m4a verified AND transcript ref recorded" are true for this id —
+        // `runFinalizer` already ran (so `FinalizeArtifactPush.isFinalized` can only
+        // read true for a capture whose `.m4a` really was verified/promoted), and
+        // whatever transcript ref exists has already been written into `manifest.json`
+        // by `recordTranscriptRef`, so the entry that gets pushed today never needs a
+        // second push just to pick up a ref that landed moments after the first one.
+        // This is the ONE place capture-side code fires `.entry`/`.audio`/`.liveLog`;
+        // every later edit to `entry.json` re-fires `.entry` on its own, from
+        // `EntryMetadataStore.update`'s own hook (same eligibility gate) — see that
+        // method's doc comment.
+        for id in transcribed {
+            await FinalizeArtifactPush.push(capturesRoot: capturesRoot, captureID: id, syncHooks: syncHooks)
+        }
         // Between the ref write and spoken-date detection: promotion reads
         // `manifest.transcript` for `coverageFrames`/`skippedRanges` provenance, so it
         // must run AFTER the ref lands, not before.

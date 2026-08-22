@@ -36,9 +36,25 @@ actor EntryMetadataStore {
     /// default), the sibling registry actor.
     private let now: @Sendable () -> Date
 
-    init(capturesRoot: URL, now: @escaping @Sendable () -> Date = { Date() }) {
+    /// M4 T6. Nil everywhere sync is off — unit tests, the UI-test harness, and any
+    /// build whose composition root refused to construct an engine. A store with no
+    /// hook behaves exactly as it did before M4, matching `JournalStore`'s identical
+    /// seam (Task 5).
+    private var syncHooks: (any SyncHooks)?
+
+    init(capturesRoot: URL, now: @escaping @Sendable () -> Date = { Date() },
+         syncHooks: (any SyncHooks)? = nil) {
         self.capturesRoot = capturesRoot
         self.now = now
+        self.syncHooks = syncHooks
+    }
+
+    /// Wired after construction (M4 T6), for the same reason `JournalStore.attach
+    /// (syncHooks:)` is: the composition root builds this store (inside
+    /// `LibraryScreenModel`) before it can build the `SyncCoordinator` that conforms to
+    /// `SyncHooks`.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     nonisolated func url(captureID: String) -> URL {
@@ -89,10 +105,24 @@ actor EntryMetadataStore {
     /// durable sidecar itself. A field the mutate closure didn't actually change (its
     /// before/after values are equal) gets no stamp; a mutation that changes nothing at
     /// all leaves `modified` untouched entirely.
+    ///
+    /// M4 T6: also the one place a LOCAL entry edit reaches sync (design §3:
+    /// "`EntryMetadataStore.update` → enqueue Entry"). Fires only when both are true —
+    /// something actually changed (`!changes.isEmpty`, the same condition that gates
+    /// the audit-log append above) AND the capture is already sync-eligible
+    /// (`FinalizeArtifactPush.isFinalized`, the same "m4a verified" predicate the
+    /// finalize-completion choke point uses). That second half is the eligibility pin:
+    /// without it, a mid-recording backdate/journal write — `CaptureScreenModel
+    /// .enqueueEntryMetadataWrite` runs on an ACTIVE capture, before any `.m4a` exists —
+    /// would push an Entry record with no AudioAsset behind it yet, which design §2
+    /// rule 6 ("entries sync only once finalized") forbids. Once a capture IS
+    /// finalized, every later edit (a real backdate correction, trash, restore,
+    /// `SpokenDateDetection`) re-fires this on its own; the finalize choke point never
+    /// needs to re-push `.entry` itself for that reason.
     @discardableResult
     func update<T>(captureID: String,
                    cause: EntryLogCause = .userEdit,
-                   _ mutate: @Sendable (inout EntryMetadata) -> T) throws -> (EntryMetadata, T) {
+                   _ mutate: @Sendable (inout EntryMetadata) -> T) async throws -> (EntryMetadata, T) {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
@@ -127,6 +157,11 @@ actor EntryMetadataStore {
                 #endif
             }
         }
+
+        if !changes.isEmpty, FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) {
+            await syncHooks?.noteLocalChange(.entry(captureID: captureID))
+        }
+
         return (metadata, result)
     }
 
@@ -144,8 +179,8 @@ actor EntryMetadataStore {
     /// construction, no matter how many rejection reasons `setOriginalDate` grows.
     @discardableResult
     func setOriginalDate(_ date: PartialDate?, captureID: String, now: Date = Date(),
-                          calendar: Calendar = .gregorianCurrent) throws -> Bool {
-        let (metadata, accepted) = try update(captureID: captureID) { md in
+                          calendar: Calendar = .gregorianCurrent) async throws -> Bool {
+        let (metadata, accepted) = try await update(captureID: captureID) { md in
             md.setOriginalDate(date, now: now, calendar: calendar)
         }
         guard !accepted else { return true }

@@ -1127,12 +1127,7 @@ actor SyncRecordExchange: CloudRecordExchange {
     private func parkRevision(captureID: String, revisionID: String, body: Data,
                               knownToExist: Bool, containerRoot: URL) {
         let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot, captureID: captureID)
-        var parked = readParked(url: url) ?? ParkedRevisions(knownToHaveExisted: false, revisions: [])
-        parked.knownToHaveExisted = parked.knownToHaveExisted || knownToExist
-        if !parked.revisions.contains(where: { $0.id == revisionID }) {
-            parked.revisions.append(PendingRevision(id: revisionID, body: body))
-        }
-        writeParked(parked, url: url)
+        mergeIntoParked([PendingRevision(id: revisionID, body: body)], url: url, knownToHaveExisted: knownToExist)
     }
 
     /// Best-effort decode of a `pending-revisions.json`-shaped file at `url` — `nil` for
@@ -1157,6 +1152,46 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
     }
 
+    /// The ADD-side reconciliation primitive (M4 T9 fix round 2, gate finding): reads
+    /// `url` FRESH at call time, merges `additions` into whatever is there right now
+    /// (deduplicated by id), ORs in `knownToHaveExisted`, and writes the result back.
+    /// Used both by `parkRevision` (a single synchronous read-modify-write with no
+    /// internal `await` — never itself racy) and by `ingestParkedRevisions`'s leftover
+    /// re-park (which DOES follow an `await`, and therefore MUST re-read rather than
+    /// trust anything computed before that suspension — see that call site's own doc
+    /// comment for the reentrancy this closes).
+    private func mergeIntoParked(_ additions: [PendingRevision], url: URL, knownToHaveExisted: Bool) {
+        var parked = readParked(url: url) ?? ParkedRevisions(knownToHaveExisted: false, revisions: [])
+        parked.knownToHaveExisted = parked.knownToHaveExisted || knownToHaveExisted
+        for addition in additions where !parked.revisions.contains(where: { $0.id == addition.id }) {
+            parked.revisions.append(addition)
+        }
+        writeParked(parked, url: url)
+    }
+
+    /// The REMOVE-side reconciliation primitive (M4 T9 fix round 2, gate finding):
+    /// `rehydrateParkedRevisions`'s own doc comment states the bug this closes —
+    /// `applyParked`'s `await` into `transcriptRevisionStore` is a cross-actor
+    /// suspension point, and `SyncRecordExchange` is reentrant during it, so a live
+    /// delivery for the SAME captureID can call `parkRevision`/`mergeIntoParked` on
+    /// this exact file while the caller here is suspended. Writing back a leftover
+    /// list COMPUTED FROM THE PRE-AWAIT SNAPSHOT would silently overwrite or delete
+    /// that concurrent write. This re-reads `url` FRESH, removes exactly `handledIDs`
+    /// (revisions this pass resolved — applied, or intentionally dropped on an
+    /// unrelated error), and writes back whatever remains — or removes the file
+    /// entirely once nothing does. A no-op (no write, no removal) when nothing fresh
+    /// actually matched `handledIDs` — a concurrent write may already have cleared it.
+    private func reconcileParkedWriteback(url: URL, handledIDs: Set<String>) {
+        guard let fresh = readParked(url: url) else { return }
+        let remaining = fresh.revisions.filter { !handledIDs.contains($0.id) }
+        guard remaining.count != fresh.revisions.count else { return }
+        if remaining.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            writeParked(ParkedRevisions(knownToHaveExisted: fresh.knownToHaveExisted, revisions: remaining), url: url)
+        }
+    }
+
     /// Applies every revision (`ParkedRevisions`) that survives against
     /// `transcriptRevisionStore.ingestForeignRevision`, returning whatever still could
     /// NOT be applied because the capture is trashed — never dropping those on the
@@ -1164,13 +1199,17 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// call site that consumes a parked queue, not just `ingestRevision`'s single-entry
     /// path). Any OTHER error is logged and the entry is dropped, unchanged from before
     /// the fix round (ruled: "keep everything else as-is").
+    ///
+    /// `beforeWrite` (fix round 2) is threaded straight through to
+    /// `ingestForeignRevision` — a test-only seam, `nil` in every production call.
     private func applyParked(_ revisions: [PendingRevision], captureID: String,
-                             transcriptRevisionStore: TranscriptRevisionStore) async -> [PendingRevision] {
+                             transcriptRevisionStore: TranscriptRevisionStore,
+                             beforeWrite: (@Sendable () async -> Void)? = nil) async -> [PendingRevision] {
         var leftover: [PendingRevision] = []
         for revision in revisions {
             do {
                 try await transcriptRevisionStore.ingestForeignRevision(
-                    captureID: captureID, revisionID: revision.id, body: revision.body)
+                    captureID: captureID, revisionID: revision.id, body: revision.body, beforeWrite: beforeWrite)
             } catch TranscriptRevisionStoreError.trashedCapture {
                 leftover.append(revision)
             } catch {
@@ -1202,6 +1241,17 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// `rehydrateParkedRevisions` to retry later. Only when nothing is left over is the
     /// post-commit sidecar simply deleted — a committed capture directory does not keep
     /// this internal staging artifact around once it has done its job either way.
+    ///
+    /// **Fix round 2 (gate finding)**: the post-commit sidecar itself (`postCommitURL`)
+    /// is written exactly once, by `EntryAssembler.assemble`'s rename, and nothing else
+    /// ever writes to that exact path again — removing it unconditionally after
+    /// `applyParked` returns is safe with no reconciliation needed. The RESTAGE of any
+    /// leftover is a different story: it writes to the ORDINARY `sync/staging/<captureID>
+    /// /pending-revisions.json` location — the exact file a concurrent trashed-capture
+    /// park for this SAME, now-existing captureID could ALSO write to during the
+    /// `applyParked` suspension above (`SyncRecordExchange` is reentrant across that
+    /// cross-actor await). `mergeIntoParked` re-reads that location fresh rather than
+    /// blindly overwriting it with a snapshot-derived leftover list.
     private func ingestParkedRevisions(captureID: String, containerRoot: URL) async {
         guard let transcriptRevisionStore else { return }
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
@@ -1215,7 +1265,7 @@ actor SyncRecordExchange: CloudRecordExchange {
         if !leftover.isEmpty {
             let restagedURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
                                                                           captureID: captureID)
-            writeParked(ParkedRevisions(knownToHaveExisted: true, revisions: leftover), url: restagedURL)
+            mergeIntoParked(leftover, url: restagedURL, knownToHaveExisted: true)
         }
     }
 
@@ -1229,16 +1279,35 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// and, per `ParkedRevisions.knownToHaveExisted`'s own doc comment, resolves each
     /// to exactly one of three outcomes:
     /// - the capture directory now exists → `applyParked` (ingest whatever the store
-    ///   will now accept; a still-trashed capture keeps its remainder parked, restated
-    ///   to disk unchanged in substance).
+    ///   will now accept), then `reconcileParkedWriteback` — see fix round 2 below.
     /// - the capture directory is absent AND this queue was never confirmed to have
     ///   existed (`knownToHaveExisted == false`) → an ordinary in-flight "unknown
     ///   capture" park, structurally impossible to observe stale (see that field's doc
     ///   comment) — left untouched; the assembly-attempt path owns it.
     /// - the capture directory is absent AND `knownToHaveExisted == true` → purged
     ///   after having existed. Design §5's delete-wins, correctly applied here: the
-    ///   parking is discarded, nothing is written to `captures/`.
-    func rehydrateParkedRevisions() async {
+    ///   parking is discarded, nothing is written to `captures/`. (This branch has no
+    ///   intervening `await` between its `readParked`/`fileExists` read and its
+    ///   `removeItem` — no reconciliation needed, nothing else can interleave.)
+    ///
+    /// **Fix round 2 (gate finding)**: the ONE branch above that DOES `await` —
+    /// `applyParked`'s cross-actor call into `transcriptRevisionStore` — makes this
+    /// actor (`SyncRecordExchange`) reentrant for the duration. A live delivery for the
+    /// SAME captureID arriving during that window (still trashed) parks via
+    /// `parkRevision`/`mergeIntoParked` against the exact file this function is about
+    /// to write back to. The original fix-round-1 code wrote back a leftover list
+    /// computed from the PRE-AWAIT snapshot — either deleting the whole file
+    /// (`leftover.isEmpty`) or overwriting it outright (`writeParked`), silently losing
+    /// whatever had just arrived. `reconcileParkedWriteback` closes this: it re-reads
+    /// `url` fresh and removes only the ids this pass actually resolved, so anything
+    /// that showed up mid-suspension survives.
+    ///
+    /// `beforeApply` is a test-only seam (fix round 2): `nil` in every production call
+    /// (`SyncCoordinator.live()`'s), threaded straight through to `applyParked` →
+    /// `TranscriptRevisionStore.ingestForeignRevision`'s own `beforeWrite` — the only
+    /// way to force a deterministic suspension at the exact reentrancy window this
+    /// fix closes, for `SyncRevisionTests`' probe.
+    func rehydrateParkedRevisions(beforeApply: (@Sendable () async -> Void)? = nil) async {
         guard let containerRoot, let transcriptRevisionStore else { return }
         let stagingRoot = AppContainer.syncStagingRoot(containerRoot: containerRoot)
         guard let captureIDs = try? FileManager.default.contentsOfDirectory(atPath: stagingRoot.path) else {
@@ -1268,15 +1337,15 @@ actor SyncRecordExchange: CloudRecordExchange {
             }
 
             let leftover = await applyParked(parked.revisions, captureID: captureID,
-                                             transcriptRevisionStore: transcriptRevisionStore)
-            if leftover.isEmpty {
-                try? FileManager.default.removeItem(at: url)
-            } else if leftover.count != parked.revisions.count {
-                writeParked(ParkedRevisions(knownToHaveExisted: true, revisions: leftover), url: url)
-            }
-            if leftover.count != parked.revisions.count {
-                await localStoreDidChange?()
-            }
+                                             transcriptRevisionStore: transcriptRevisionStore,
+                                             beforeWrite: beforeApply)
+            let handledIDs = Set(parked.revisions.map(\.id)).subtracting(leftover.map(\.id))
+            guard !handledIDs.isEmpty else { continue }
+            // Re-reads `url` fresh (fix round 2) — never trusts `parked`, the
+            // pre-`applyParked` snapshot captured above, which a concurrent delivery
+            // could have appended to during that `await`.
+            reconcileParkedWriteback(url: url, handledIDs: handledIDs)
+            await localStoreDidChange?()
         }
     }
 

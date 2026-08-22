@@ -295,6 +295,10 @@ actor FakeCloudEngine: CloudEngineControl {
     private(set) var startedWith: [Data?] = []
     private(set) var savedNames: [[SyncRecordName]] = []
     private(set) var deletedNames: [[SyncRecordName]] = []
+    /// M4 T11: every `dropPendingSaves` call, in order — the fake-engine pin for
+    /// design §5's "the delete wins": a not-yet-sent save for a deleted capture's
+    /// child record must be withdrawn, never sent.
+    private(set) var droppedNames: [[SyncRecordName]] = []
     private(set) var fetchCallCount = 0
     private let persistState: SyncEngineStatePersistence?
 
@@ -305,11 +309,14 @@ actor FakeCloudEngine: CloudEngineControl {
     var startCallCount: Int { startedWith.count }
     var saveCallCount: Int { savedNames.count }
     var deleteCallCount: Int { deletedNames.count }
+    var dropCallCount: Int { droppedNames.count }
     var savedNameSet: Set<SyncRecordName> { Set(savedNames.flatMap { $0 }) }
+    var droppedNameSet: Set<SyncRecordName> { Set(droppedNames.flatMap { $0 }) }
 
     func start(stateData: Data?) async { startedWith.append(stateData) }
     func enqueueSaves(_ names: [SyncRecordName]) async { savedNames.append(names) }
     func enqueueDeletes(_ names: [SyncRecordName]) async { deletedNames.append(names) }
+    func dropPendingSaves(_ names: [SyncRecordName]) async { droppedNames.append(names) }
     func fetchNow() async { fetchCallCount += 1 }
 
     func emitStateUpdate(_ data: Data) async { await persistState?(data) }

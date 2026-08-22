@@ -23,6 +23,15 @@ protocol CloudEngineControl: Sendable {
 
     func enqueueDeletes(_ names: [SyncRecordName]) async
 
+    /// M4 T11 (design §5, "the delete wins"): removes not-yet-SENT save changes for
+    /// `names` from the engine's pending queue. Never used for the Entry record's own
+    /// removal — that routes through `enqueueDeletes`, the real CK delete whose
+    /// server-side cascade takes every child record with it. This is for the child
+    /// records themselves (audio/liveLog/revisions/marker streams): once their parent
+    /// is gone, a save that was queued but never went out must simply be withdrawn,
+    /// never sent to attach itself to nothing.
+    func dropPendingSaves(_ names: [SyncRecordName]) async
+
     /// A launch/foreground/push kick. The engine also syncs on its own schedule; this
     /// is for the moments the app knows about and the engine doesn't.
     func fetchNow() async
@@ -69,6 +78,18 @@ struct PendingEngineChanges: Equatable, Sendable {
 
     mutating func bufferDeletes(_ names: [SyncRecordName]) {
         changes.append(contentsOf: names.map(Change.delete))
+    }
+
+    /// M4 T11: the buffered-before-start mirror of `dropPendingSaves` — a save
+    /// buffered here (the engine hasn't produced a `CKSyncEngine` yet) whose capture
+    /// was deleted before the engine even started must never replay. Deletes are left
+    /// untouched; only `.save` entries naming one of `names` are removed.
+    mutating func removeSaves(_ names: [SyncRecordName]) {
+        let toRemove = Set(names)
+        changes.removeAll { change in
+            if case .save(let name) = change { return toRemove.contains(name) }
+            return false
+        }
     }
 
     /// Hands back everything buffered, in arrival order, and empties the buffer — so a
@@ -129,10 +150,23 @@ protocol SyncHooks: Sendable {
     /// gives this verb a real body: test fakes such as `RecordingSyncHooks` predate
     /// journal deletion and must keep compiling unchanged without overriding it.
     func noteLocalDelete(_ name: SyncRecordName) async
+
+    /// M4 T11: a local entry's now-gone CHILD records — audio/liveLog/revisions/
+    /// marker streams, NEVER the Entry record itself (that still routes through
+    /// `noteLocalDelete`, the real CK delete whose server-side cascade takes every
+    /// child with it). Retires each name's ledger + system-fields bookkeeping and
+    /// asks the engine to drop any not-yet-sent SAVE for it — design §5, "the delete
+    /// wins": a revision minted moments before its capture was purged must never be
+    /// pushed to attach itself to an Entry that no longer exists.
+    ///
+    /// Default no-op, same reasoning as `noteLocalDelete`'s: existing test fakes
+    /// predate this verb and must keep compiling unchanged without overriding it.
+    func noteLocalDeleteFamily(_ names: [SyncRecordName]) async
 }
 
 extension SyncHooks {
     func noteLocalDelete(_ name: SyncRecordName) async {}
+    func noteLocalDeleteFamily(_ names: [SyncRecordName]) async {}
 }
 
 /// The CloudKit-side seam, and the mirror of `CloudEngineControl`.
@@ -172,14 +206,20 @@ protocol CloudRecordExchange: Sendable {
     /// server system fields.
     func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName]
 
-    /// An inbound deletion for a JOURNAL record (#80, B2) — the only kind wired here.
-    /// Entry/audio/revision/liveLog/markerStream deletions never reach this method at
-    /// all: `CloudKitEngineControl.handleEvent`'s `fetchedRecordZoneChanges` switch keeps
-    /// filtering those out before calling down (Task 11 of the m4 sync plan owns them —
-    /// design §5, a sync-in delete there must route through `StagedRemover`, never a raw
-    /// remove). Takes a bare journal id, not a `SyncRecordName`, so a deletion for any
-    /// other kind is structurally unable to reach the wrong handler.
+    /// An inbound deletion for a JOURNAL record (#80, B2). Takes a bare journal id, not
+    /// a `SyncRecordName`, so a deletion for any other kind is structurally unable to
+    /// reach the wrong handler.
     func acceptRemoteJournalDeletion(id: String) async
+
+    /// An inbound deletion for an ENTRY record (M4 T11, design §5). Routes through
+    /// `StagedRemover` exclusively — never `RecoveryExecutor`, never a raw
+    /// `FileManager.removeItem` on `captures/` itself. Audio/Revision/LiveLog/
+    /// MarkerStream deletions never reach this method, or any other:
+    /// `CloudKitEngineControl.handleEvent`'s `fetchedRecordZoneChanges` switch keeps
+    /// ignoring those, because they cascade from the SAME Entry deletion this method
+    /// already handles — the whole capture directory (everything they would each
+    /// individually name) goes with one staged rename.
+    func acceptRemoteEntryDeletion(captureID: String) async
 }
 
 /// The production `CloudEngineControl`: a thin wrapper around `CKSyncEngine` plus its
@@ -286,6 +326,23 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         })
     }
 
+    /// M4 T11: `CKSyncEngine.State.remove(pendingRecordZoneChanges:)` is the documented
+    /// inverse of `add` — a change removed here simply never goes out, exactly like one
+    /// that was never enqueued in the first place. Deliberately only ever asked to
+    /// remove SAVE changes (see the protocol doc comment); a delete for the same name
+    /// is left untouched, since a delete is exactly what a purged child's own record
+    /// (were one ever pushed for it) would need.
+    func dropPendingSaves(_ names: [SyncRecordName]) async {
+        guard !names.isEmpty else { return }
+        guard let engine else {
+            pending.removeSaves(names)
+            return
+        }
+        engine.state.remove(pendingRecordZoneChanges: names.map {
+            .saveRecord(SyncCloudIdentifiers.recordID($0))
+        })
+    }
+
     private func apply(_ change: CKSyncEngine.PendingRecordZoneChange, to engine: CKSyncEngine) {
         engine.state.add(pendingRecordZoneChanges: [change])
     }
@@ -325,13 +382,19 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 switch name {
                 case .journal(let id):
                     await exchange.acceptRemoteJournalDeletion(id: id)
-                case .entry, .audio, .revision, .liveLog, .markerStream:
-                    // Task 11 owns delete ingest for every OTHER kind (design §5 — a
-                    // sync-in delete must route through `StagedRemover`, never a raw
-                    // remove). Journals are the only kind wired here (#80, B2); ignoring
-                    // the rest is safe — nothing local changes, and this app never asked
-                    // for the deletion in the first place.
-                    log.debug("sync: \(name.rawValue, privacy: .public) deletion ignored (T11)")
+                case .entry(let captureID):
+                    await exchange.acceptRemoteEntryDeletion(captureID: captureID)
+                case .audio, .revision, .liveLog, .markerStream:
+                    // These cascade from the SAME Entry deletion `.entry` above already
+                    // handles (design §5: children carry `.deleteSelf`, so purging the
+                    // Entry takes them with it server-side) — whatever order their own
+                    // deletion events arrive in, ignoring them individually is safe: the
+                    // whole capture directory is already gone (or never existed here)
+                    // the instant the Entry-level staged removal runs.
+                    log.debug("""
+                        sync: \(name.rawValue, privacy: .public) deletion ignored (cascades \
+                        with its Entry)
+                        """)
                 }
             }
         case .fetchedDatabaseChanges:

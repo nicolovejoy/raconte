@@ -30,11 +30,34 @@ struct JournalEditorView: View {
     @State private var voiceLabelsFailed = false
     @State private var spanFailed = false
     @State private var showingCoverPicker = false
+    @State private var showingDeleteConfirmation = false
+    @State private var deleteFailed = false
     @FocusState private var nameFocused: Bool
 
     private var journal: Journal? { model.journals.first { $0.id == journalID } }
     private var entryCount: Int {
         model.allEntries.filter { $0.journalID == journalID }.count
+    }
+    private var trashedCount: Int {
+        model.trashed.filter { $0.journalID == journalID }.count
+    }
+
+    /// #80, owner ruling 1: "empty" is zero live entries AND zero trashed ones — a
+    /// trashed-only journal is not empty, since restoring later would file into a
+    /// journal that no longer exists (mirrors `LibraryScreenModel.isJournalEmpty`'s own
+    /// rule, re-derived here from the same published state rather than calling that
+    /// MainActor-only method from a computed `View` property). Owner ruling 2: the
+    /// affordance stays VISIBLE even when refused, with the reason spelled out — never
+    /// an invisible control. `nil` means deletable.
+    private var deleteBlockedReason: String? {
+        if model.journals.count <= 1 {
+            return "This is your only journal. Raconte always needs at least one to capture into."
+        }
+        if entryCount > 0 || trashedCount > 0 {
+            return "Delete every entry in this journal — including anything still in "
+                 + "Trash — before you can delete the journal itself."
+        }
+        return nil
     }
 
     var body: some View {
@@ -93,6 +116,24 @@ struct JournalEditorView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("journalEditor.derived")
                 }
+
+                // Owner-ruled shape (#80, ruling 2): a destructive row at the bottom of
+                // the editor behind a confirmation dialog — NOT a sidebar swipe action.
+                // The row itself stays on-screen and queryable even when refused; only
+                // `.disabled` changes, with the footer explaining why. Never absent —
+                // an absent control cannot be discovered, let alone understood.
+                Section {
+                    Button("Delete Journal", role: .destructive) {
+                        showingDeleteConfirmation = true
+                    }
+                    .disabled(deleteBlockedReason != nil)
+                    .accessibilityIdentifier("journalEditor.delete")
+                } footer: {
+                    if let reason = deleteBlockedReason {
+                        Text(reason)
+                            .accessibilityIdentifier("journalEditor.delete.reason")
+                    }
+                }
             }
             .navigationTitle(journal.name)
             .onAppear {
@@ -119,6 +160,30 @@ struct JournalEditorView: View {
                 Button("OK", role: .cancel) {}
             }
             .alert("Couldn’t save this date range", isPresented: $spanFailed) {
+                Button("OK", role: .cancel) {}
+            }
+            // Attached to the Form itself, never to a `Section` — a `.confirmationDialog`
+            // (like `.sheet`, below) attached to a `Section` silently never presents on
+            // iOS 26; this project has already paid for that trap once (#68's cover
+            // sheet class of bug). `journal.name` here reads the live value at the
+            // moment the dialog is shown, since it is still non-nil whenever this
+            // button was reachable to tap.
+            .confirmationDialog("Delete \u{201C}\(journal.name)\u{201D}?",
+                                isPresented: $showingDeleteConfirmation,
+                                titleVisibility: .visible) {
+                Button("Delete Journal", role: .destructive) {
+                    Task {
+                        if await model.deleteJournal(journalID) == false {
+                            deleteFailed = true
+                        }
+                    }
+                }
+                .accessibilityIdentifier("journalEditor.confirmDelete")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can’t be undone.")
+            }
+            .alert("Couldn’t delete this journal", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}
             }
             // #68: this sheet renders EMPTY on macOS — the PhotosPicker row is absent,

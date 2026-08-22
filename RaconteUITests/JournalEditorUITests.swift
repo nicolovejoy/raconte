@@ -37,6 +37,30 @@ final class JournalEditorUITests: XCTestCase {
         #endif
     }
 
+    /// Same shape as `CaptureUITests`' own private copy: XCTest's expectation API can't
+    /// watch a query/label predicate directly, so a simple poll loop keeps these tests
+    /// readable. Duplicated rather than shared, matching this test target's existing
+    /// per-file-helper convention (`press`, `launchApp`, etc.).
+    private func waitUntil(_ timeout: TimeInterval = 20, _ message: String,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ predicate: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate() {
+            if Date() > deadline { XCTFail(message, file: file, line: line); return }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+    }
+
+    /// Wait for the post-stop receipt and dismiss it — mirrors `CaptureUITests`'
+    /// `finishReceipt`, needed here only to get a real entry into a journal for the
+    /// disabled-affordance test below.
+    private func finishReceipt(_ app: XCUIApplication) {
+        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 30),
+                      "the post-stop receipt never appeared")
+        press(dismiss)
+    }
+
     /// `openPlace`/`firstJournalRow` (`UITestNavigation.swift`) each try exactly ONE
     /// reveal tap before searching, which is enough from a place's own root screen. The
     /// editor is a SECOND push on top of that root (sidebar -> journal list ->
@@ -387,5 +411,115 @@ final class JournalEditorUITests: XCTestCase {
                       "creating a journal from the capture screen navigated away from capture")
         XCTAssertFalse(app.textFields["journalEditor.name"].firstMatch.exists,
                        "the capture screen's New Journal must never open the journal editor")
+    }
+
+    // MARK: Task B3 (#80) — delete an empty journal from its editor
+
+    /// A brand-new, empty journal that is NOT the last one in the registry (the sidebar
+    /// `+` flow leaves the pre-existing default journal in place too) must be
+    /// deletable. Confirming the dialog must both remove the sidebar row AND pop the
+    /// editor onto a real screen — never a stale "Journal Unavailable" push, the same
+    /// hazard issue #32 named for a deleted entry, and never a blank detail column.
+    /// Navigation is expected to fall out of the existing `ContentView`
+    /// `.onChange(of: library.journals)` / `PlaceRouting.resolve` machinery (the #67
+    /// guard's own documented id-left-registry case) rather than anything this test
+    /// drives directly.
+    func testDeletingAnEmptyJournalRemovesItAndLandsSomewhereSane() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+
+        revealSidebar(app)
+        let journalRowsBefore = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.journal.'")).count
+
+        let plus = app.buttons["sidebar.newJournal"].firstMatch
+        XCTAssertTrue(plus.waitForExistence(timeout: 15),
+                      "the sidebar has no New Journal button")
+        press(plus)
+
+        let field = app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 15))
+        press(field)
+        field.typeText("Deletable Journal")
+        app.buttons["Create"].firstMatch.tap()
+
+        let nameField = app.textFields["journalEditor.name"].firstMatch
+        XCTAssertTrue(nameField.waitForExistence(timeout: 15),
+                      "creating from the sidebar did not open the new journal's editor")
+
+        let deleteRow = app.buttons["journalEditor.delete"].firstMatch
+        XCTAssertTrue(deleteRow.waitForExistence(timeout: 15),
+                      "the editor has no Delete Journal affordance")
+        XCTAssertTrue(deleteRow.isEnabled,
+                      "a brand-new, non-last journal with no entries must be deletable")
+        press(deleteRow)
+
+        let confirm = app.buttons["journalEditor.confirmDelete"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 15),
+                      "no delete confirmation dialog appeared")
+        press(confirm)
+
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15),
+                      "deleting the open journal did not land on a real screen")
+        XCTAssertFalse(app.textFields["journalEditor.name"].firstMatch.exists,
+                       "the editor should have been popped once its journal was deleted")
+        XCTAssertFalse(app.descendants(matching: .any)
+                        .matching(identifier: "journalEditor.unavailable").firstMatch.exists,
+                       "deletion must not leave a stale editor push showing a blank "
+                       + "Unavailable screen")
+
+        revealSidebar(app)
+        let journalRowsAfter = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.journal.'")).count
+        XCTAssertEqual(journalRowsAfter, journalRowsBefore,
+                      "the deleted journal's sidebar row must be gone")
+    }
+
+    /// Owner ruling 2 (#80): a journal that cannot be deleted still shows the row —
+    /// disabled, with an explanatory footnote — never an invisible affordance. A
+    /// journal holding a real entry is the concrete trigger named in the brief; the
+    /// default journal from a fresh launch is used directly rather than creating a
+    /// second one, since it is also (incidentally) the last-remaining journal, and
+    /// either reason is sufficient to refuse.
+    func testAJournalWithAnEntryShowsTheDisabledDeleteAffordance() {
+        let app = launchApp()
+        let record = app.buttons["capture.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 30),
+                      "the app did not launch into the capture screen")
+
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 2)
+        press(record)
+        finishReceipt(app)
+
+        let journalRow = firstJournalRow(app)
+        XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
+        press(journalRow)
+
+        let header = app.descendants(matching: .any)
+            .matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15))
+        press(header)
+
+        let deleteRow = app.buttons["journalEditor.delete"].firstMatch
+        XCTAssertTrue(deleteRow.waitForExistence(timeout: 15),
+                      "a journal with an entry must still show the Delete Journal row")
+        XCTAssertFalse(deleteRow.isEnabled,
+                       "a journal holding an entry must not be deletable")
+
+        // The delete row is the LAST section, so its footer sits below the fold on
+        // iPhone — the Form's underlying `UICollectionView` does not materialize an
+        // accessibility element for a supplementary view that has never scrolled into
+        // view. Scroll it in before searching, same idiom `CaptureControlsUITests`
+        // already uses for an offscreen scroll view.
+        deleteRow.swipeUp()
+
+        let reason = app.descendants(matching: .any)
+            .matching(identifier: "journalEditor.delete.reason").firstMatch
+        XCTAssertTrue(reason.waitForExistence(timeout: 15),
+                      "a disabled delete affordance must explain why, not just refuse silently")
+        XCTAssertFalse(reason.label.isEmpty)
     }
 }

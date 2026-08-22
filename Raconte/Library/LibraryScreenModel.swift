@@ -191,7 +191,8 @@ final class LibraryScreenModel {
         // that overtook it is still running and owns clearing it.
         guard generation == scanGeneration else { return }
 
-        journals = loadedJournals ?? []
+        // Display order, not registry (insertion) order — issue #79.
+        journals = (loadedJournals ?? []).displayOrdered
         journalCovers = loadedCovers
         journalsUnreadable = loadedJournals == nil || result.journalsUnreadable
         items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)

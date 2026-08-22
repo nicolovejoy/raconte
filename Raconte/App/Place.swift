@@ -31,8 +31,12 @@ struct PlaceRow: Identifiable, Equatable, Sendable {
 }
 
 enum SidebarModel {
-    /// Row order and titles (locked): Capture, then one row per journal in registry
-    /// order, then All Entries, then Trash, then Debug when `includesDebug`.
+    /// Row order and titles (locked): Capture, then one row per journal in DISPLAY
+    /// order (`Array<Journal>.displayOrdered` — createdAt ascending, id tie-break), then
+    /// All Entries, then Trash, then Debug when `includesDebug`. Superseded 2026-08-21
+    /// (owner report, issue #79): this used to say "registry order", but registry order
+    /// is per-device insertion history and differs between devices — the sidebar showed
+    /// a different journal order on every device and surface as a result.
     ///
     /// `dateRanges` is journalID → formatted range (or absent). Caller supplies it from
     /// `LibraryScreenModel.dateRange(forJournal:)` so this stays pure.
@@ -48,7 +52,7 @@ enum SidebarModel {
                      accessibilityIdentifier: "sidebar.capture")
         ]
 
-        for journal in journals {
+        for journal in journals.displayOrdered {
             rows.append(PlaceRow(place: .journal(journal.id),
                                  title: journal.name,
                                  subtitle: dateRanges[journal.id],

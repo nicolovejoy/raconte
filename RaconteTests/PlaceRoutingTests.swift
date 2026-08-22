@@ -4,18 +4,25 @@ import XCTest
 @MainActor
 final class PlaceRoutingTests: XCTestCase {
 
-    private func journal(_ id: String, _ name: String) -> Journal {
-        Journal(id: id, name: name, createdAt: Date(timeIntervalSince1970: 0))
+    private func journal(_ id: String, _ name: String,
+                        createdAt: Date = Date(timeIntervalSince1970: 0)) -> Journal {
+        Journal(id: id, name: name, createdAt: createdAt)
     }
 
     // Cardinality ≥ 2 on purpose: one journal cannot distinguish "a row per journal"
-    // from "a row for the first journal".
-    func testRowsAreCaptureThenEveryJournalThenAllEntriesThenTrash() {
-        let rows = SidebarModel.rows(journals: [journal("j1", "1987"), journal("j2", "France")],
+    // from "a row for the first journal". Journals are fed in REVERSE createdAt order
+    // (#79) — the insertion-order journal array does not already happen to match
+    // display order, so this actually pins `SidebarModel.rows` sorting rather than
+    // passing by coincidence.
+    func testRowsAreCaptureThenEveryJournalInDisplayOrderThenAllEntriesThenTrash() {
+        let older = journal("j1", "1987", createdAt: Date(timeIntervalSince1970: 100))
+        let newer = journal("j2", "France", createdAt: Date(timeIntervalSince1970: 200))
+        let rows = SidebarModel.rows(journals: [newer, older],
                                      dateRanges: ["j1": "1987"],
                                      includesDebug: false)
         XCTAssertEqual(rows.map(\.place),
-                       [.capture, .journal("j1"), .journal("j2"), .allEntries, .trash])
+                       [.capture, .journal("j1"), .journal("j2"), .allEntries, .trash],
+                       "j1 (older) must render before j2 (newer) despite arriving second")
         XCTAssertEqual(rows[1].title, "1987")
         XCTAssertEqual(rows[1].subtitle, "1987")
         XCTAssertNil(rows[2].subtitle, "a journal with no entries shows no range, not an empty one")

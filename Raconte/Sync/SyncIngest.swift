@@ -846,6 +846,20 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// re-enqueue this capture on every future launch (the T9 lesson this task's brief
     /// names).
     ///
+    /// **`entry.json` is read exactly ONCE** — `entryData` below — and BOTH the digest
+    /// and the decoded `metadata` come from those same bytes (`EntryMetadataStore
+    /// .decode(_:)`, the pure seam, not a second `Data(contentsOf:)` call through
+    /// `.read(url:)`). This is the identical rule `journalRecordToPush`'s own comment
+    /// states for `journal`: a second, independent read means an edit landing between
+    /// the two reads desyncs the ledgered digest from the record's actual content — a
+    /// prior version of this method read `entryURL` twice, and that ordering "happened"
+    /// to be the self-healing direction on every fixture tried, which is exactly why it
+    /// was a bug and not a guarantee. The narrower failure: `entry.json` deleted
+    /// *between* the two reads would have made the second read silently produce
+    /// `.defaults` (journalID/trashedAt both nil) while the digest still reflected the
+    /// real prior content, so the pushed record would carry blanked-out metadata under
+    /// a digest that never matched it.
+    ///
     /// `base:` rebuilds onto this device's archived system fields exactly like
     /// `journalRecordToPush` does — an Entry is mutable, unlike its Audio/LiveLog
     /// siblings, so a later edit's re-push must carry the server's change tag.
@@ -865,8 +879,9 @@ actor SyncRecordExchange: CloudRecordExchange {
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         let entryURL = SegmentLayout.entryMetadataURL(captureDirectory: directory)
         let fm = FileManager.default
+        let entryExists = fm.fileExists(atPath: entryURL.path)
         let entryData: Data
-        if fm.fileExists(atPath: entryURL.path) {
+        if entryExists {
             guard let data = try? Data(contentsOf: entryURL) else {
                 log.notice("sync: entry.json for \(captureID, privacy: .public) unreadable at push time")
                 return nil
@@ -875,12 +890,20 @@ actor SyncRecordExchange: CloudRecordExchange {
         } else {
             entryData = Data()
         }
+        // Decoded from `entryData` — the SAME bytes the digest below hashes, never a
+        // second `Data(contentsOf:)`. Absent (`!entryExists`) is `.defaults`, matching
+        // `EntryMetadataStore.read`'s own three-answer rule; present-but-undecodable
+        // still refuses.
         let metadata: EntryMetadata
-        do {
-            metadata = try EntryMetadataStore.read(url: entryURL)
-        } catch {
-            log.notice("sync: entry.json for \(captureID, privacy: .public) undecodable at push time")
-            return nil
+        if !entryExists {
+            metadata = .defaults
+        } else {
+            do {
+                metadata = try EntryMetadataStore.decode(entryData)
+            } catch {
+                log.notice("sync: entry.json for \(captureID, privacy: .public) undecodable at push time")
+                return nil
+            }
         }
 
         let digest = SyncTreeScanner.entryDigest(entryData: entryData, manifestData: manifestData)

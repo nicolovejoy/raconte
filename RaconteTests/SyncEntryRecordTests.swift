@@ -493,4 +493,66 @@ final class SyncEntryRecordTests: XCTestCase {
         XCTAssertNotNil(audioRecord, "trash does not gate the audio push — only finalization does")
         XCTAssertNotNil(liveLogRecord, "trash does not gate the live-log push either")
     }
+
+    // MARK: entryRecordToPush — single-read pin (fix-round review finding)
+
+    /// Source-scan pin for a review finding: `entryRecordToPush` must read `entry.json`
+    /// exactly ONCE and derive both the ledger digest and the decoded `EntryMetadata`
+    /// from those same bytes — never a second, independent `Data(contentsOf:)` (via
+    /// `EntryMetadataStore.read(url:)` or otherwise). A prior version of this method read
+    /// the file twice; the ordering "happened" to be self-healing on every fixture tried,
+    /// which is exactly why it was a bug and not a guarantee (an edit — or a delete —
+    /// landing between the two reads would desync the digest from the record's actual
+    /// content, silently, with no test able to observe it without controlling the OS's
+    /// file-read scheduling). No seam exists to inject a mutation between two reads that
+    /// no longer happen, so this is a structural pin at the source level — the same
+    /// technique `CaptureLabelTests`/`PrecisionDatePickerTests` already use for their own
+    /// "no second, independent path" guarantees — rather than a runtime race test.
+    ///
+    /// Comments are stripped first (`strippingComments`, shared helper) so this cannot be
+    /// satisfied by prose *about* the single read rather than the code doing it — this
+    /// very doc comment mentions `Data(contentsOf:)` and `EntryMetadataStore.read(url:)`
+    /// by name, which would otherwise trivially defeat an unstripped scan.
+    func testEntryRecordToPushReadsEntryJSONExactlyOnce() throws {
+        let body = try entryRecordToPushSource()
+
+        let directReads = body.components(separatedBy: "Data(contentsOf: entryURL)").count - 1
+        XCTAssertEqual(directReads, 1,
+                       "entry.json must be read exactly once — the ledger digest and the " +
+                       "decoded EntryMetadata must come from the SAME bytes")
+
+        XCTAssertFalse(body.contains("EntryMetadataStore.read(url:"),
+                       "must decode the already-read entryData via EntryMetadataStore.decode(_:), " +
+                       "not re-read the file through EntryMetadataStore.read(url:)")
+    }
+
+    /// Isolates `entryRecordToPush`'s body from `Raconte/Sync/SyncIngest.swift`: from its
+    /// `private func entryRecordToPush(` signature to the next sibling `private func` at
+    /// the same indentation, which is where the method ends. Comments stripped.
+    private func entryRecordToPushSource() throws -> String {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()          // RaconteTests
+            .deletingLastPathComponent()          // repo root
+            .appendingPathComponent("Raconte/Sync/SyncIngest.swift")
+        let raw = try String(contentsOf: sourceURL, encoding: .utf8)
+        let stripped = strippingComments(raw)
+
+        guard let start = stripped.range(of: "private func entryRecordToPush(") else {
+            XCTFail("entryRecordToPush not found in SyncIngest.swift — check the source scan path")
+            return ""
+        }
+        let afterSignature = stripped[start.upperBound...]
+        guard let end = afterSignature.range(of: "\n    private func ") else {
+            XCTFail("could not find the end of entryRecordToPush's body")
+            return ""
+        }
+        return String(afterSignature[afterSignature.startIndex..<end.lowerBound])
+    }
+
+    /// Without this, `entryRecordToPushSource()` could quietly stop stripping and the
+    /// pin above would go back to being satisfiable by a comment mentioning the pattern.
+    func testTheStripperActuallyRemovesCommentsFromTheScannedEntrySource() throws {
+        let body = try entryRecordToPushSource()
+        XCTAssertFalse(body.contains("//"), "the scanned source still contains a `//` comment marker")
+    }
 }

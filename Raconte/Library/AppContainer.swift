@@ -109,6 +109,18 @@ enum AppContainer {
         syncStagingRoot(containerRoot: containerRoot).appendingPathComponent(captureID, isDirectory: true)
     }
 
+    /// M4 T7 fix round: the durable sidecar `sync/staging/<captureID>/pending.json`
+    /// recording an arrived Entry record's decoded metadata + manifest snapshot bytes —
+    /// see `PendingEntryRecord` in `SyncIngest.swift`. Written the instant the Entry
+    /// record decodes, so assembly can resume across a relaunch instead of depending on
+    /// an in-memory buffer CKSyncEngine's change-token semantics do not guarantee will
+    /// ever be reconstructable (a record already fetched is not redelivered).
+    static let syncStagingPendingStateFileName = "pending.json"
+    static func syncStagingPendingStateURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingStateFileName)
+    }
+
     /// The container root inferred from a captures root — the inverse of
     /// `capturesRoot(containerRoot:)`. Lets a type that was handed only `capturesRoot`
     /// (everything in M1/M2 was) find the registry without rethreading the composition

@@ -72,4 +72,45 @@ final class PendingEngineChangesTests: XCTestCase {
         var buffer = PendingEngineChanges()
         XCTAssertEqual(buffer.drain(), [])
     }
+
+    // MARK: bufferDeletes drops an already-buffered save for the same name (M4 T11 fix
+    // round, review Important) — the pre-start mirror of `dropPendingSaves`'s own
+    // post-start "the delete wins" guarantee.
+
+    /// A save buffered for a record, then a delete for the SAME record, before the
+    /// engine has even started: the save must not survive to replay. Without this, a
+    /// local edit queuing a save moments before its capture was permanently deleted
+    /// would replay to the real engine in arrival order — save then delete — once the
+    /// engine finally starts, leaving the queued save reaching the server at all an
+    /// undocumented assumption about `CKSyncEngine` internals rather than a guarantee
+    /// this app makes itself.
+    func testBufferingADeleteDropsAnAlreadyBufferedSaveForTheSameName() {
+        var buffer = PendingEngineChanges()
+        buffer.bufferSaves([.entry(captureID: captureID)])
+        buffer.bufferDeletes([.entry(captureID: captureID)])
+
+        XCTAssertEqual(buffer.drain(), [.delete(.entry(captureID: captureID))],
+                       "the save must not survive to replay alongside (or ahead of) the delete")
+    }
+
+    /// A targeted removal, not a wipe: an unrelated buffered save for a DIFFERENT
+    /// record must survive a delete for this one.
+    func testBufferingADeleteLeavesUnrelatedBufferedSavesAlone() {
+        var buffer = PendingEngineChanges()
+        buffer.bufferSaves([.journal(id: journalID), .entry(captureID: captureID)])
+        buffer.bufferDeletes([.entry(captureID: captureID)])
+
+        XCTAssertEqual(buffer.drain(), [
+            .save(.journal(id: journalID)),
+            .delete(.entry(captureID: captureID)),
+        ])
+    }
+
+    /// Mutation evidence (recorded, not just asserted): reverting `bufferDeletes` to
+    /// its pre-fix body — a bare append with no `removeSaves` call — makes
+    /// `testBufferingADeleteDropsAnAlreadyBufferedSaveForTheSameName` fail, since the
+    /// buffered save would then survive to drain alongside the delete. Verified by
+    /// hand during the fix round (see the task's fix report); not re-asserted here as
+    /// a live mutation since this file already tests `bufferDeletes` and `removeSaves`
+    /// as the two real production entry points.
 }

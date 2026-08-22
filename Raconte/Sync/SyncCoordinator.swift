@@ -193,6 +193,14 @@ extension SyncCoordinator {
             // M4 T9: `TranscriptRevisionStore.append` → enqueue Revision (design §3),
             // fires once per minted revision — same wiring, same reason.
             await revisionStore.attach(syncHooks: coordinator)
+            // M4 T9 fix round: a revision fetched for a then-trashed capture parked
+            // rather than vanished (`SyncRecordExchange.ingestRevision`'s
+            // `.trashedCapture` catch) — CKSyncEngine will never redeliver a record it
+            // has already handed over, so this is its only retry path. Run once here,
+            // at composition time (the same "crash backstop, run at launch" philosophy
+            // `reconcile()` already follows), so a capture restored since the last
+            // session picks its parked revisions back up.
+            await exchange.rehydrateParkedRevisions()
         }
         return coordinator
     }

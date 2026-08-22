@@ -48,9 +48,14 @@ struct JournalEditorView: View {
     /// including the trashed-only case this view alone cannot pin. See that type's doc
     /// comment for the drift risk against `LibraryScreenModel.isJournalEmpty`.
     private var deleteBlockedReason: String? {
-        JournalDeleteEligibility.blockedReason(journalCount: model.journals.count,
-                                               entryCount: entryCount,
-                                               trashedCount: trashedCount)
+        JournalDeleteEligibility.blockedReason(
+            journalCount: model.journals.count,
+            entryCount: entryCount,
+            trashedCount: trashedCount,
+            // The model's own rule, not a second copy of it (gate findings Important 2
+            // and 3): without this the row would offer Delete while the authoritative
+            // guard refuses it, which reads as a broken button.
+            hasIndeterminateContent: model.hasIndeterminateContent(forJournal: journalID))
     }
 
     var body: some View {
@@ -174,7 +179,13 @@ struct JournalEditorView: View {
                 .accessibilityIdentifier("journalEditor.confirmDelete")
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This can’t be undone.")
+                // Deliberately NOT "this can't be undone" (gate finding, Minor 2): owner
+                // ruling 3 accepts that another device which edits this journal while
+                // offline will re-push it and bring it back — last-writer-wins on the
+                // record's existence, no delete tombstone (`SyncRecordExchange
+                // .acceptRemoteJournalDeletion`). Promising irreversibility here would be
+                // literally untrue.
+                Text("The journal is removed from this device and your others.")
             }
             .alert("Couldn’t delete this journal", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}

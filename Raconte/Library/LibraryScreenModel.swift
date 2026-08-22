@@ -350,6 +350,32 @@ final class LibraryScreenModel {
         return true
     }
 
+    /// The emptiness rule for journal deletion (#80, owner ruling 1): zero items AND
+    /// zero trashed entries, from the last scan. A journal holding only a TRASHED entry
+    /// is not empty — restoring that entry later would file it into a journal that no
+    /// longer exists, so the guard must count `trashed`, not just `allEntries`.
+    ///
+    /// Exposed rather than buried inside `deleteJournal` below: B2 (sync-ingest delete)
+    /// needs to ask this exact question from the sync side, and is forbidden from
+    /// re-implementing scanning inside `SyncIngest` to do it.
+    func isJournalEmpty(_ journalID: String) -> Bool {
+        !allEntries.contains { $0.journalID == journalID }
+            && !trashed.contains { $0.journalID == journalID }
+    }
+
+    /// Deletes an EMPTY journal (#80, v1: non-empty journal deletion is a separate,
+    /// later design — see `isJournalEmpty`). Same false-on-failure shape as
+    /// `renameJournal`/`trashEntry`: the caller alerts on `false`, and nothing partially
+    /// happens either way — the emptiness guard runs before the store is ever touched,
+    /// and the store's own guards (unknown id, last remaining journal) are honoured too.
+    @discardableResult
+    func deleteJournal(_ journalID: String) async -> Bool {
+        guard isJournalEmpty(journalID) else { return false }
+        guard (try? await journalStore.deleteJournal(id: journalID)) != nil else { return false }
+        await rescan()
+        return true
+    }
+
     // MARK: - Journal cover (issue #14 part 3)
 
     /// Sets or replaces a journal's cover image. `imageData` is any ImageIO-decodable

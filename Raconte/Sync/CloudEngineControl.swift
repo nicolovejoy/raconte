@@ -118,6 +118,24 @@ enum SyncCloudIdentifiers {
 /// no hook behaves exactly as it did before M4.
 protocol SyncHooks: Sendable {
     func noteLocalChange(_ name: SyncRecordName) async
+
+    /// A local DELETE (#80): the record is gone, not merely changed. Declared here as
+    /// its own verb — a delete cannot be expressed as "call `noteLocalChange` and let
+    /// the exchange notice the artifact vanished", because `recordToPush` degrading to
+    /// nil is CloudKit's "drop this pending change" answer, not "tell the server to
+    /// remove what it has".
+    ///
+    /// Default no-op in the extension below: this protocol's only two conformers today
+    /// (`SyncCoordinator`, and test fakes such as `RecordingSyncHooks`) predate journal
+    /// deletion and must keep compiling unchanged. `SyncCoordinator`'s real
+    /// `enqueueDeletes` wiring behind this verb is B2's task, not this one's — until
+    /// that lands, a journal delete simply never reaches the engine, which is no worse
+    /// than today (deletion does not exist at all yet).
+    func noteLocalDelete(_ name: SyncRecordName) async
+}
+
+extension SyncHooks {
+    func noteLocalDelete(_ name: SyncRecordName) async {}
 }
 
 /// The CloudKit-side seam, and the mirror of `CloudEngineControl`.

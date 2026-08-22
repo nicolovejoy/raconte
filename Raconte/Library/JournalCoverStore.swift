@@ -130,6 +130,20 @@ actor JournalCoverStore {
         try? Data(contentsOf: url)
     }
 
+    /// Journal deletion cleanup (#80): removes the whole `journals/<id>/` directory —
+    /// not just `cover.jpg` — since nothing will ever look inside it again once the
+    /// journal itself has left the registry. `static` and synchronous, like `read(url:)`
+    /// above: `JournalStore.deleteJournal` calls this directly rather than reaching
+    /// across to a `JournalCoverStore` instance it does not hold, and no actor
+    /// serialization is needed here — a journal that has just been removed from the
+    /// registry can have nothing concurrently writing into its cover slot. Not an error
+    /// when there is nothing to remove (a journal with no cover is the common case).
+    static func removeDirectory(containerRoot: URL, journalID: String) {
+        let directory = AppContainer.journalCoverURL(containerRoot: containerRoot, journalID: journalID)
+            .deletingLastPathComponent()
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     /// Downscales via `CGImageSourceCreateThumbnailAtIndex`, which decodes directly to
     /// the target size rather than materializing the source image at full resolution
     /// first — the difference matters for a photo-library selection that can be tens of

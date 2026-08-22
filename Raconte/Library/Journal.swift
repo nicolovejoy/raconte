@@ -136,6 +136,11 @@ enum JournalError: Error, Equatable {
     case emptyName
     case unknownJournal(String)
     case duplicateID(String)
+    /// #80: refused because it is the ONLY journal in the registry. Every device always
+    /// needs somewhere for capture to point, and "zero journals" has no UI story
+    /// anywhere in the app — so unlike every other guard in this file, this one is not
+    /// about the argument being malformed, it is about what would be left afterward.
+    case lastRemainingJournal(String)
     // No `invalidSpan` case: `JournalRegistry.setSpan`/`JournalStore.setSpan` both take
     // an ALREADY-CONSTRUCTED `JournalSpan?`, so an inverted pair is refused earlier, by
     // `JournalSpan.init` throwing `JournalSpanError.inverted` — a different type, thrown
@@ -306,5 +311,21 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         modified["span"] = now
         journals[index].modified = modified
         return journals[index]
+    }
+
+    /// Removes a journal from the registry (#80, v1: caller guarantees it holds no
+    /// entries — this type has no way to see one, since entries are filed by reference
+    /// against `captures/`, not stored here). Refuses when the id is unknown, or when
+    /// removing it would leave the registry with zero journals — see
+    /// `JournalError.lastRemainingJournal`'s doc comment for why that case exists at all.
+    @discardableResult
+    mutating func remove(id: String) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        guard journals.count > 1 else {
+            throw JournalError.lastRemainingJournal(id)
+        }
+        return journals.remove(at: index)
     }
 }

@@ -188,8 +188,26 @@ actor JournalStore {
         return updated
     }
 
-    // Deletion is deliberately absent: a journal with entries has no defined disposal
-    // for them yet (M3 T5 owns trash). Adding `delete` before that is how orphans happen.
+    /// Removes an EMPTY journal from the registry (#80, v1: non-empty journal deletion
+    /// is a separate, later design). Refuses (`JournalError`) when the id is unknown, or
+    /// when it is the last remaining journal — every device always needs somewhere for
+    /// capture to point, and "no journals" has no UI story anywhere in the app.
+    ///
+    /// "Empty" (zero items AND zero trashed entries) is NOT checked here — this actor
+    /// cannot see entries at all, only `journals.json`. `LibraryScreenModel.deleteJournal`
+    /// is the only legitimate caller and enforces that rule from the scan before ever
+    /// reaching this method; see its doc comment for why a trashed entry still counts.
+    ///
+    /// Cover cleanup runs only after the registry write lands, and the sync delete hook
+    /// only after that — telling either layer the journal is gone before the registry
+    /// write has actually succeeded on disk would be a lie they could act on.
+    func deleteJournal(id: String) async throws {
+        var registry = try load()
+        try registry.remove(id: id)
+        try save(registry)
+        JournalCoverStore.removeDirectory(containerRoot: url.deletingLastPathComponent(), journalID: id)
+        await syncHooks?.noteLocalDelete(.journal(id: id))
+    }
 
     private func save(_ registry: JournalRegistry) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),

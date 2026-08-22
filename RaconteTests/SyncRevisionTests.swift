@@ -58,6 +58,15 @@ final class SyncRevisionTests: XCTestCase {
         return captureDirectory
     }
 
+    /// Plants (or clears) `entry.json`'s `trashedAt`, straight through the documented
+    /// test-only static write seam (`EntryMetadataStore.write(_:url:)`), never through
+    /// `update`'s diff-and-log machinery — this test doesn't need an audit trail, just
+    /// the sidecar state `guardWritable` reads.
+    private func setTrashed(_ trashed: Bool, at date: Date = Date(timeIntervalSince1970: 1_700_000_100)) throws {
+        try EntryMetadataStore.write(EntryMetadata(trashedAt: trashed ? date : nil),
+                                     url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+    }
+
     // MARK: revisionRecord — field coverage
 
     /// Names every field the design table lists, plus the association addition
@@ -483,5 +492,175 @@ final class SyncRevisionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0).path),
             "the mismatched bytes must never be persisted")
+    }
+
+    // MARK: Fix round — a revision for a TRASHED (not purged) capture parks, not vanishes
+
+    /// (a) The gate finding, pinned directly: a revision fetched for a capture that is
+    /// currently soft-trashed must be parked, never discarded — CKSyncEngine will never
+    /// redeliver a record it has already handed over.
+    func testAcceptRemoteOfARevisionForATrashedCaptureParksRatherThanVanishing() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0).path),
+            "nothing must land in transcript/ while the capture is trashed")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: AppContainer.syncStagingPendingRevisionsURL(
+                containerRoot: containerRoot, captureID: captureID).path),
+            "the revision must be parked, not discarded")
+    }
+
+    /// (b) THE headline recovery pin: restore the capture (flip the sidecar), then
+    /// rehydrate against a brand-new, cold `SyncRecordExchange`/`TranscriptRevisionStore`
+    /// pair over the SAME container root — the identical "simulated relaunch" idiom
+    /// `SyncEntryIngestTests.testPiecesSplitAcrossASimulatedRelaunchStillCommit` uses —
+    /// and the parked revision lands, bytes verbatim.
+    ///
+    /// Mutation check (ruled, run by hand — see the fix report): reverting the
+    /// `.trashedCapture` catch in `SyncRecordExchange.ingestRevision` back to the
+    /// pre-fix "log and discard" behavior makes this test fail — the revision is gone
+    /// before it is ever parked, so rehydration has nothing to find and the assertion
+    /// below fails with "file does not exist" rather than a content mismatch.
+    func testARevisionParkedForATrashedCaptureLandsAfterRestoreAndRehydration() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        // An ordinary restore-from-trash within the 30-day window — a local edit, no
+        // CloudKit round trip needed for it to take effect here.
+        try setTrashed(false)
+
+        // Cold rebuild: neither the store nor the exchange carries any in-memory state
+        // from the first pass — everything the recovery reads comes off disk.
+        let coldStore = makeStore()
+        let coldExchange = exchange(transcriptRevisionStore: coldStore)
+        await coldExchange.rehydrateParkedRevisions()
+
+        let landedURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        XCTAssertEqual(try Data(contentsOf: landedURL), try CaptureCoding.encoder().encode(incoming),
+                       "the parked revision must land, bytes verbatim, once restored")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: AppContainer.syncStagingPendingRevisionsURL(
+                containerRoot: containerRoot, captureID: captureID).path),
+            "the parking must clear once applied")
+    }
+
+    /// (c) The other side of the same coin: a parked revision for a capture that gets
+    /// PURGED (not merely trashed) while parked is correctly discarded on the next
+    /// rehydration — design §5's actual delete-wins rule, applied without error and
+    /// without ever resurrecting the purged directory.
+    func testAParkedRevisionForAPurgedCaptureIsDiscardedOnRehydrationWithoutError() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        // Purge: this test only needs the end state a real 30-day sweep or Delete Now
+        // leaves behind (the capture directory gone), not `StagedRemover`'s own
+        // staged-rename machinery.
+        try FileManager.default.removeItem(at: captureDirectory)
+
+        await ex.rehydrateParkedRevisions()
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: AppContainer.syncStagingPendingRevisionsURL(
+                containerRoot: containerRoot, captureID: captureID).path),
+            "the parking must be discarded once the capture is gone")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
+                       "rehydration must never resurrect a purged capture")
+    }
+
+    /// Regression guard for the disambiguation `ParkedRevisions.knownToHaveExisted`
+    /// exists to make possible: an ordinary in-flight "unknown capture" park (case A —
+    /// a revision arrived before its capture's Entry/Audio ever did) must NEVER be
+    /// discarded by rehydration just because the capture directory happens to be
+    /// absent right now — that state is not "purged", it is "not created yet", and the
+    /// ordinary assembly-attempt path is what owns it.
+    func testRehydrationLeavesAnInFlightUnknownCaptureParkUntouched() async throws {
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .machineLive, createdAt: stamp(0))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        let parkURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                   captureID: captureID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path), "sanity: it parked")
+
+        await ex.rehydrateParkedRevisions()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path),
+                      "an in-flight unknown-capture park must never be discarded by rehydration — "
+                      + "the ordinary assembly-attempt path owns it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path))
+    }
+
+    /// The symmetric edge case the fix round also closed: a brand-new capture can
+    /// itself arrive ALREADY trashed (the remote Entry record's own `trashedAt` was set
+    /// before this device ever saw it) — so a revision parked while the capture was
+    /// still unknown must not be lost at the moment of commit either. It re-parks
+    /// (`ingestParkedRevisions`'s own leftover handling) and is picked up by the same
+    /// rehydration path once restored.
+    func testARevisionParkedForAnUnknownCaptureThatCommitsAlreadyTrashedReParksRatherThanBeingLost() async throws {
+        let when = stamp(0)
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+
+        let revisionID = ULID.make()
+        let parked = revision(revisionID, source: .machineLive, createdAt: when)
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: parked))
+
+        let manifest = Manifest(captureID: captureID, createdAt: when, state: .complete, stateSeq: 1,
+                                stateUpdatedAt: when,
+                                format: AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
+                                                              commonFormat: .pcmFormatFloat32,
+                                                              interleaved: false, bytesPerFrame: 4),
+                                final: FinalRef(verifiedAt: when, durationFrames: 480_000))
+        let manifestJSON = try CaptureCoding.encoder().encode(manifest)
+        let trashedMetadata = EntryMetadata(trashedAt: stamp(5))
+        await ex.acceptRemote(SyncRecordBuilders.entryRecord(captureID: captureID, metadata: trashedMetadata,
+                                                              manifestJSON: manifestJSON, capturedAt: when,
+                                                              deviceID: "device-high", zoneID: zoneID))
+        let audioBytes = Data("m4a-bytes".utf8)
+        let audioURL = containerRoot.appendingPathComponent("audio.m4a")
+        try audioBytes.write(to: audioURL)
+        await ex.acceptRemote(SyncRecordBuilders.audioRecord(
+            captureID: captureID, m4aURL: audioURL, sha256: SyncTreeScanner.sha256Hex(audioBytes),
+            bytes: audioBytes.count, frameCount: 480_000, sampleRate: 48_000,
+            entryID: entryRecordID, zoneID: zoneID))
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDirectory.path), "the capture committed")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0).path),
+            "the revision must not land while the just-committed capture is already trashed")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: AppContainer.syncStagingPendingRevisionsURL(
+                containerRoot: containerRoot, captureID: captureID).path),
+            "it must be re-parked, not lost")
+
+        try setTrashed(false)
+        await ex.rehydrateParkedRevisions()
+
+        XCTAssertEqual(
+            try Data(contentsOf: SegmentLayout.canonicalTranscriptURL(
+                captureDirectory: captureDirectory, revision: 0)),
+            try CaptureCoding.encoder().encode(parked))
     }
 }

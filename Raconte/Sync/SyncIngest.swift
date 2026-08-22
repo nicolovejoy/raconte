@@ -230,15 +230,44 @@ private struct PendingEntryRecord: Codable {
     var metadata: RemoteEntryFields
 }
 
-/// One durably-parked foreign revision, awaiting a captureID this device has not
-/// committed yet (M4 T9) — see `AppContainer.syncStagingPendingRevisionsURL`'s doc
-/// comment for the full "why a sibling file, not folded into `PendingEntryRecord`"
-/// reasoning. `body` is the exact bytes fetched and sha256-verified at arrival —
-/// never re-encoded, so `TranscriptRevisionStore.ingestForeignRevision`'s "verbatim"
-/// contract survives the parking round trip.
+/// One durably-parked foreign revision, awaiting either a captureID this device has not
+/// committed yet, or one whose sidecar reports `trashedAt != nil` (M4 T9, fix round) —
+/// see `AppContainer.syncStagingPendingRevisionsURL`'s doc comment for the full "why a
+/// sibling file, not folded into `PendingEntryRecord`" reasoning. `body` is the exact
+/// bytes fetched and sha256-verified at arrival — never re-encoded, so
+/// `TranscriptRevisionStore.ingestForeignRevision`'s "verbatim" contract survives the
+/// parking round trip.
 private struct PendingRevision: Codable, Equatable {
     var id: String
     var body: Data
+}
+
+/// The whole contents of `sync/staging/<captureID>/pending-revisions.json` (M4 T9 fix
+/// round): the queue of not-yet-applied foreign revisions for one captureID, plus
+/// whether this device has ever confirmed that captureID's directory exists.
+///
+/// `knownToHaveExisted` is what lets `rehydrateParkedRevisions` tell apart the two
+/// reasons a parked file can still be sitting here with no `captures/<captureID>/` to
+/// show for it, without guessing:
+///
+/// - **`false`**: this captureID has never been seen to exist — an ordinary in-flight
+///   "unknown capture" park (`ingestRevision`'s `captureExists == false` branch).
+///   Structurally cannot be observed here with the capture still absent AND parked
+///   revisions left unconsumed forever: the instant that capture DOES commit,
+///   `EntryAssembler.assemble`'s rename carries this file straight into
+///   `captures/<captureID>/`, where `ingestParkedRevisions` reads, applies, and deletes
+///   it as part of that SAME commit — a case-A file can never straddle "capture now
+///   exists" and "still parked at the old sync/staging/ location". Rehydration must
+///   leave a `false`-flagged file alone; the ordinary assembly-attempt path owns it.
+/// - **`true`**: this captureID's directory was confirmed to exist at least once when a
+///   revision was parked against it — the trashed-capture case (`ingestRevision`'s
+///   `.trashedCapture` catch, or `ingestParkedRevisions`/`rehydrateParkedRevisions`
+///   re-parking a still-trashed leftover). If `captures/<captureID>/` is STILL absent
+///   the next time rehydration looks, that can only mean the capture existed, was
+///   trashed, and has since been purged — design §5's delete-wins, correctly applied.
+private struct ParkedRevisions: Codable {
+    var knownToHaveExisted: Bool
+    var revisions: [PendingRevision]
 }
 
 /// New-entry ingest, IO half (design §6, T7): commits an already-durably-staged capture
@@ -1050,7 +1079,8 @@ actor SyncRecordExchange: CloudRecordExchange {
             atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
 
         guard captureExists else {
-            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes, containerRoot: containerRoot)
+            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
+                        knownToExist: false, containerRoot: containerRoot)
             await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
             return
         }
@@ -1062,6 +1092,19 @@ actor SyncRecordExchange: CloudRecordExchange {
         do {
             try await transcriptRevisionStore.ingestForeignRevision(
                 captureID: captureID, revisionID: revisionID, body: bytes)
+        } catch TranscriptRevisionStoreError.trashedCapture {
+            // M4 T9 fix round (gate finding, Important): a revision fetched for a
+            // capture that is currently soft-trashed is NOT lost — the capture is not
+            // gone, only trashed, and an ordinary 30-day-window restore has no other
+            // route back to bytes CKSyncEngine will never redeliver (its change token
+            // has already advanced past this record). Park it through the same durable
+            // mechanism `captureExists == false` uses above, `knownToExist: true` since
+            // this device just confirmed the directory is real — `rehydrateParkedRevisions`
+            // is what retries it, at the next launch or whenever the owner asks sync to
+            // reconcile.
+            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
+                        knownToExist: true, containerRoot: containerRoot)
+            return
         } catch {
             log.error("""
                 sync: revision \(revisionID, privacy: .public) ingest failed for \
@@ -1072,30 +1115,73 @@ actor SyncRecordExchange: CloudRecordExchange {
         await localStoreDidChange?()
     }
 
-    /// Durably parks one foreign revision for a captureID this device has not
-    /// committed yet — read-modify-write over `pending-revisions.json`, idempotent by
-    /// id (a redelivered record, e.g. after a full resync's change-token reset, is not
-    /// appended a second time). See `AppContainer.syncStagingPendingRevisionsURL`'s
-    /// doc comment for the full "why a sibling file, why it must be allow-listed in
-    /// `EntryAssembler`'s prune step" reasoning.
-    private func parkRevision(captureID: String, revisionID: String, body: Data, containerRoot: URL) {
+    /// Durably parks one foreign revision, either for a captureID this device has not
+    /// committed yet (`knownToExist: false`) or one whose sidecar currently reports
+    /// `trashedAt != nil` (`knownToExist: true`, fix round) — read-modify-write over
+    /// `pending-revisions.json`, idempotent by id (a redelivered record, e.g. after a
+    /// full resync's change-token reset, is not appended a second time). See
+    /// `AppContainer.syncStagingPendingRevisionsURL`'s doc comment for the full "why a
+    /// sibling file, why it must be allow-listed in `EntryAssembler`'s prune step"
+    /// reasoning, and `ParkedRevisions`' own doc comment for why `knownToExist` is
+    /// recorded rather than inferred later from a directory check alone.
+    private func parkRevision(captureID: String, revisionID: String, body: Data,
+                              knownToExist: Bool, containerRoot: URL) {
         let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot, captureID: captureID)
-        var pending: [PendingRevision] = (try? Data(contentsOf: url)).flatMap {
-            try? CaptureCoding.decoder().decode([PendingRevision].self, from: $0)
-        } ?? []
-        guard !pending.contains(where: { $0.id == revisionID }) else { return }
-        pending.append(PendingRevision(id: revisionID, body: body))
+        var parked = readParked(url: url) ?? ParkedRevisions(knownToHaveExisted: false, revisions: [])
+        parked.knownToHaveExisted = parked.knownToHaveExisted || knownToExist
+        if !parked.revisions.contains(where: { $0.id == revisionID }) {
+            parked.revisions.append(PendingRevision(id: revisionID, body: body))
+        }
+        writeParked(parked, url: url)
+    }
+
+    /// Best-effort decode of a `pending-revisions.json`-shaped file at `url` — `nil` for
+    /// absent or undecodable, matching this file's other "an unreadable cache costs
+    /// only itself" reads (`readPendingState`).
+    private func readParked(url: URL) -> ParkedRevisions? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(ParkedRevisions.self, from: data)
+    }
+
+    private func writeParked(_ parked: ParkedRevisions, url: URL) {
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                      withIntermediateDirectories: true)
-            let data = try CaptureCoding.encoder().encode(pending)
+            let data = try CaptureCoding.encoder().encode(parked)
             try data.write(to: url, options: .atomic)
         } catch {
             log.error("""
-                sync: could not park revision \(revisionID, privacy: .public) for \
-                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                sync: could not persist parked revisions for \(url.path, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
                 """)
         }
+    }
+
+    /// Applies every revision (`ParkedRevisions`) that survives against
+    /// `transcriptRevisionStore.ingestForeignRevision`, returning whatever still could
+    /// NOT be applied because the capture is trashed — never dropping those on the
+    /// floor (fix round: this is the exact bug the gate caught, now closed at every
+    /// call site that consumes a parked queue, not just `ingestRevision`'s single-entry
+    /// path). Any OTHER error is logged and the entry is dropped, unchanged from before
+    /// the fix round (ruled: "keep everything else as-is").
+    private func applyParked(_ revisions: [PendingRevision], captureID: String,
+                             transcriptRevisionStore: TranscriptRevisionStore) async -> [PendingRevision] {
+        var leftover: [PendingRevision] = []
+        for revision in revisions {
+            do {
+                try await transcriptRevisionStore.ingestForeignRevision(
+                    captureID: captureID, revisionID: revision.id, body: revision.body)
+            } catch TranscriptRevisionStoreError.trashedCapture {
+                leftover.append(revision)
+            } catch {
+                log.error("""
+                    sync: parked revision \(revision.id, privacy: .public) for \
+                    \(captureID, privacy: .public) failed to ingest: \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
+        return leftover
     }
 
     /// Applies every revision parked for `captureID` — called ONLY right after
@@ -1105,30 +1191,93 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// so this can never run any earlier. `pending-revisions.json` rode the commit
     /// rename (allow-listed in `EntryAssembler.pruneUnexpectedStagingContents`) and is
     /// read from its post-commit location, `captures/<captureID>/pending-revisions
-    /// .json`, then deleted — a committed capture directory does not keep this
-    /// internal staging artifact around once it has done its job.
+    /// .json`.
+    ///
+    /// **Fix round**: a brand-new capture can itself arrive ALREADY trashed (the
+    /// remote Entry record's own `trashedAt` was set before this device ever saw it) —
+    /// so `applyParked` can still find leftovers here, not only in the trashed-capture
+    /// ingest path. Any leftover is re-parked at the ordinary `sync/staging/<captureID>
+    /// /pending-revisions.json` location, `knownToHaveExisted: true` (the capture
+    /// unambiguously exists — we are running immediately after its own commit), for
+    /// `rehydrateParkedRevisions` to retry later. Only when nothing is left over is the
+    /// post-commit sidecar simply deleted — a committed capture directory does not keep
+    /// this internal staging artifact around once it has done its job either way.
     private func ingestParkedRevisions(captureID: String, containerRoot: URL) async {
         guard let transcriptRevisionStore else { return }
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
-        let url = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let postCommitURL = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             .appendingPathComponent(AppContainer.syncStagingPendingRevisionsFileName)
-        guard let data = try? Data(contentsOf: url),
-              let parked = try? CaptureCoding.decoder().decode([PendingRevision].self, from: data) else {
+        guard let parked = readParked(url: postCommitURL) else { return }
+
+        let leftover = await applyParked(parked.revisions, captureID: captureID,
+                                         transcriptRevisionStore: transcriptRevisionStore)
+        try? FileManager.default.removeItem(at: postCommitURL)
+        if !leftover.isEmpty {
+            let restagedURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                          captureID: captureID)
+            writeParked(ParkedRevisions(knownToHaveExisted: true, revisions: leftover), url: restagedURL)
+        }
+    }
+
+    /// The recovery half of the trashed-capture park (M4 T9 fix round, gate finding):
+    /// a revision parked because its capture was trashed at arrival has no other retry
+    /// path — CKSyncEngine will never redeliver a record it has already handed to this
+    /// device. Called at coordinator launch (`SyncCoordinator.live()`), the same
+    /// crash-backstop philosophy as the reconciliation scan.
+    ///
+    /// Walks every captureID under `sync/staging/` carrying a `pending-revisions.json`
+    /// and, per `ParkedRevisions.knownToHaveExisted`'s own doc comment, resolves each
+    /// to exactly one of three outcomes:
+    /// - the capture directory now exists → `applyParked` (ingest whatever the store
+    ///   will now accept; a still-trashed capture keeps its remainder parked, restated
+    ///   to disk unchanged in substance).
+    /// - the capture directory is absent AND this queue was never confirmed to have
+    ///   existed (`knownToHaveExisted == false`) → an ordinary in-flight "unknown
+    ///   capture" park, structurally impossible to observe stale (see that field's doc
+    ///   comment) — left untouched; the assembly-attempt path owns it.
+    /// - the capture directory is absent AND `knownToHaveExisted == true` → purged
+    ///   after having existed. Design §5's delete-wins, correctly applied here: the
+    ///   parking is discarded, nothing is written to `captures/`.
+    func rehydrateParkedRevisions() async {
+        guard let containerRoot, let transcriptRevisionStore else { return }
+        let stagingRoot = AppContainer.syncStagingRoot(containerRoot: containerRoot)
+        guard let captureIDs = try? FileManager.default.contentsOfDirectory(atPath: stagingRoot.path) else {
             return
         }
-        for revision in parked {
-            do {
-                try await transcriptRevisionStore.ingestForeignRevision(
-                    captureID: captureID, revisionID: revision.id, body: revision.body)
-            } catch {
-                log.error("""
-                    sync: parked revision \(revision.id, privacy: .public) for \
-                    \(captureID, privacy: .public) failed to ingest: \
-                    \(error.localizedDescription, privacy: .public)
-                    """)
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+
+        for captureID in captureIDs.sorted() {
+            let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                   captureID: captureID)
+            guard let parked = readParked(url: url) else { continue }
+
+            let captureExists = FileManager.default.fileExists(
+                atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
+
+            guard captureExists else {
+                if parked.knownToHaveExisted {
+                    log.notice("""
+                        sync: capture \(captureID, privacy: .public) was purged while a revision \
+                        was parked for it — discarding the parking (design §5 delete-wins)
+                        """)
+                    try? FileManager.default.removeItem(at: url)
+                }
+                // else: an ordinary in-flight "unknown capture" park — leave it for the
+                // assembly-attempt path.
+                continue
+            }
+
+            let leftover = await applyParked(parked.revisions, captureID: captureID,
+                                             transcriptRevisionStore: transcriptRevisionStore)
+            if leftover.isEmpty {
+                try? FileManager.default.removeItem(at: url)
+            } else if leftover.count != parked.revisions.count {
+                writeParked(ParkedRevisions(knownToHaveExisted: true, revisions: leftover), url: url)
+            }
+            if leftover.count != parked.revisions.count {
+                await localStoreDidChange?()
             }
         }
-        try? FileManager.default.removeItem(at: url)
     }
 
     /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this

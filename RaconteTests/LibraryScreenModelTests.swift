@@ -500,6 +500,35 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertNotNil(model.journals.first { $0.id == "J1" })
     }
 
+    /// Gate finding (Important, task B1 review): `isJournalEmpty` reads the LAST scan,
+    /// not disk truth. A destructive caller must rescan before evaluating it, or an entry
+    /// that lands after the last scan — a background sync ingest arriving while a
+    /// confirmation dialog sits open, most concretely — would read as belonging to an
+    /// empty journal and be orphaned by the delete that follows. This is the same shape
+    /// as `testDeleteJournalRefusesWhenTheJournalHasOnlyATrashedEntry` above, reached by a
+    /// different arrival path: an entry written to disk WITHOUT going through a rescan.
+    func testDeleteJournalRescansFirstSoAnEntryThatArrivedAfterTheLastScanStillRefuses() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Empty as of the last scan")])
+
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.isJournalEmpty("J2"), "fixture sanity: empty as of this scan")
+
+        // The entry lands on disk WITHOUT a rescan — the model's cached `allEntries`
+        // still does not know about it. This is the staleness `deleteJournal` must not
+        // trust.
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J2")
+        XCTAssertFalse(model.allEntries.contains { $0.captureID == idA },
+                      "fixture sanity: the cached scan predates this entry")
+
+        let deleted = await model.deleteJournal("J2")
+
+        XCTAssertFalse(deleted, "a fresh scan must see the entry that arrived after the last one")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" }, "the journal must survive")
+        XCTAssertTrue(model.allEntries.contains { $0.captureID == idA },
+                     "deleteJournal's own rescan must have picked up the new entry")
+    }
+
     // MARK: - T6c: promoteIfNeeded / transcript(for:) ordering (review finding 3)
 
     /// `EntryDetailView.refresh()` now reads `transcript(for:)` FIRST, and only

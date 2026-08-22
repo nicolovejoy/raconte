@@ -120,6 +120,19 @@ final class LibraryScreenModel {
     /// fail-safe contract an absent probe carries.
     private var activeCaptureProbe: (@MainActor () -> String?)?
 
+    /// Test-only injection seam (#82 task review fix). Invoked once per capture inside
+    /// `resolveWorthlessBlockers`, between the active-capture recheck and that
+    /// capture's fresh `DirectorySnapshot` gather. `nil` in every production path —
+    /// `AppServices` never sets it, so production behavior is unchanged (the ordinary
+    /// `await Task.yield()` still runs regardless of whether this is set). A test parks
+    /// this on a `CheckedContinuation` (see `RaconteTests/LibraryScreenModelTests
+    /// .ResolutionPark`), lands a competing disk write while parked, then releases —
+    /// landing content deterministically in the window between the verdict and the
+    /// per-capture read, which a same-process `Task.yield()` race could not reliably
+    /// reach (see the #82 task report, "Attempts A and B", for why that was tried
+    /// first and abandoned).
+    var beforeResolutionHook: (@MainActor () async -> Void)?
+
     /// Bumped on entry to `rescan()` and checked before results are assigned. Three UI
     /// paths (`selectJournalScope`, `moveEntry`, `setBackdate`) each fire their own Task,
     /// so scans overlap and, unguarded, the *later-finishing* one wins rather than the
@@ -584,53 +597,68 @@ final class LibraryScreenModel {
         return true
     }
 
-    /// On-demand resolution for #82: runs the SAME recovery machinery `recoverAtLaunch()`
-    /// runs at every launch (`DirectorySnapshot` gather → `RecoveryPlanner.plan(for:)` →
-    /// `RecoveryExecutor.apply`), scoped to exactly the capture directories a
-    /// `.blockedResolvable` verdict named — never the whole corpus, and never a
-    /// hand-rolled `removeItem`.
+    /// On-demand resolution for #82: runs HALF of the recovery machinery
+    /// `recoverAtLaunch()` runs at every launch — `DirectorySnapshot` gather →
+    /// `RecoveryPlanner.plan(for:)`, always; `RecoveryExecutor.apply`, only for the two
+    /// decisions this method is entitled to own outright (below) — scoped to exactly the
+    /// capture directories a `.blockedResolvable` verdict named, never the whole corpus,
+    /// and never a hand-rolled `removeItem`.
     ///
-    /// Re-checks each id against the active-capture probe immediately before touching its
-    /// directory: `emptinessVerdict` computed "provably not active" against the last scan,
-    /// and time has passed (at minimum, the `await` into this method) since. Returns
-    /// `false` without touching anything the moment that re-check fails, or when the probe
-    /// has gone missing since the caller's own check (defensive; `deleteJournal` already
-    /// verified it was attached).
+    /// **Not full parity with `recoverAtLaunch()`, deliberately (task review fix,
+    /// Important 2).** `recoverAtLaunch()` also consumes `RecoveryOutcome.finalizeQueue`/
+    /// `.verifyQueue` and hands them to `CaptureCoordinator`'s finalize pipeline — this
+    /// model has no such queue and no session-lifetime place to put that work. So the
+    /// planner's decision is applied ONLY when it is `.deleteCaptureDirectory` or
+    /// `.quarantineCaptureDirectory` — both complete, no-follow-up-required operations
+    /// entirely within `RecoveryExecutor.apply`'s own disk effects. Every other decision
+    /// (`.normalizeToCaptured`, `.enqueueFinalize`, `.discardFinalPartRequeue`,
+    /// `.verifyFinal`, `.finishRawDelete`) means real content showed up since the scan
+    /// that judged this capture worthless — the directory is left BYTE-UNTOUCHED, this
+    /// method refuses, and the capture waits for the next launch's `recoverAtLaunch()` to
+    /// finish the job it actually owns. A silent partial mutation with no finalize
+    /// follow-up (e.g. `.normalizeToCaptured` renaming `.pcm.part` and writing a
+    /// `captured` manifest, then nobody ever enqueueing it) would leave the capture in
+    /// limbo indefinitely — worse than doing nothing.
     ///
-    /// The planner's own decision is the actual safety valve, not this method: if frames
-    /// or artifacts landed in a capture since the scan that judged it worthless, the
-    /// planner's `plan(for:)` routes to `.quarantineCaptureDirectory` (issue #8's guard),
-    /// not `.deleteCaptureDirectory` — a no-op on disk. This method cannot make that
-    /// outcome worse; it can only ever be as safe as the planner it defers to.
+    /// Re-checks each id against the active-capture probe before touching its directory:
+    /// `emptinessVerdict` computed "provably not active" against the last scan, and time
+    /// has passed since. **This recheck is BEFORE the `await Task.yield()` below, not
+    /// "immediately before" the disk read** — there is a real suspension point between
+    /// the two, so in principle a capture could start recording in that gap. Left
+    /// unclosed on purpose: capture ids are ULIDs, never reused, and nothing in this app
+    /// re-arms `activeCaptureID` to a PAST id — so the only way this recheck could go
+    /// stale is a capture id being reused, which does not happen. Returns `false` without
+    /// touching anything the moment the recheck fails, or when the probe has gone missing
+    /// since the caller's own check (defensive; `deleteJournal` already verified it was
+    /// attached).
     ///
-    /// The `Task.yield()` before each gather is deliberate, not decorative: without it
-    /// there is no suspension point between the verdict this method was handed and the
-    /// disk read it is about to act on, so a competing MainActor-hopping writer (a
-    /// background finalize completion, most concretely) has no chance to run in between —
-    /// the same synchronous check-then-act gap `deleteJournal`'s own doc comment already
-    /// accepts as inherent for its registry write, closed here as tightly as cooperative
-    /// scheduling allows.
-    ///
-    /// **Untestable by construction, and that is recorded rather than hidden (task
-    /// report has the full analysis):** in this codebase `LibraryScanner`'s
-    /// "holds something to show" rule and `RecoveryPlanner`'s "keep or quarantine, don't
-    /// delete" rule are the same predicate (both key off `holdsIrreplaceableArtifacts` /
-    /// raw frame count), so any content a sequential test can write BEFORE calling
-    /// `deleteJournal` is already caught by ITS OWN leading `rescanUntilFresh` — this
-    /// method is never even reached. The only window where deferring to the real planner
-    /// differs from a hard delete is a genuine cross-thread TOCTOU race (a background
-    /// finalize write landing in the gap above), which a same-process cooperative
-    /// `Task.yield()` race could not be made to land here reliably. This mirrors
-    /// `deleteJournal`'s own accepted, undefended check-then-await gap one comment block
-    /// down — narrowed, not closed, same as that one.
+    /// The `Task.yield()` before each gather, and `beforeResolutionHook` right after it,
+    /// are deliberate, not decorative: without a suspension point here, nothing can land
+    /// between the verdict this method was handed and the disk read it is about to act
+    /// on, so a competing MainActor-hopping writer (a background finalize completion,
+    /// most concretely) has no chance to run in between — the same synchronous
+    /// check-then-act gap `deleteJournal`'s own doc comment already accepts as inherent
+    /// for its registry write, closed here as tightly as cooperative scheduling allows.
+    /// `beforeResolutionHook` is the test-controllable version of that same suspension
+    /// point — see its own doc comment.
     private func resolveWorthlessBlockers(_ captureIDs: [String]) async -> Bool {
         guard let probe = activeCaptureProbe else { return false }
         let executor = RecoveryExecutor(capturesRoot: capturesRoot)
         for captureID in captureIDs {
             guard probe() != captureID else { return false }
             await Task.yield()
+            await beforeResolutionHook?()
             let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot, captureID: captureID)
-            executor.apply([RecoveryPlanner.plan(for: snapshot)])
+            let action = RecoveryPlanner.plan(for: snapshot)
+            switch action {
+            case .deleteCaptureDirectory, .quarantineCaptureDirectory:
+                executor.apply([action])
+            case .normalizeToCaptured, .enqueueFinalize, .discardFinalPartRequeue,
+                 .verifyFinal, .finishRawDelete:
+                // Not ours to own — see the doc comment above. Leave the directory
+                // exactly as it is; the next launch's `recoverAtLaunch()` will finish it.
+                return false
+            }
         }
         return true
     }

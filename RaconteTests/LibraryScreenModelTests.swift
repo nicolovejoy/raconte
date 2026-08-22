@@ -727,14 +727,16 @@ final class LibraryScreenModelTests: XCTestCase {
     /// `rescanUntilFresh`: the fresh scan reclassifies the capture as a real, filed
     /// entry, `emptinessVerdict` reads `.blockedHard` before ever reaching
     /// `.blockedResolvable`, and `resolveWorthlessBlockers` (the method carrying the
-    /// planner call) is never invoked at all for this fixture — verified directly: a
-    /// mutation of `resolveWorthlessBlockers` that bypasses the planner entirely (a
-    /// hand-rolled `removeItem`) does NOT break this test, because that method never
-    /// runs here. That gap is not a hole — the deeper coupling above means no sequential
-    /// (non-racing) test can reach `resolveWorthlessBlockers` with content the outer
-    /// scan did not already see; see that method's own doc comment for the honest
-    /// account of the narrower, genuinely-racy TOCTOU window it still closes as tightly
-    /// as cooperative scheduling allows, and the task report for the full investigation.
+    /// planner call) is never invoked at all for THIS fixture — a mutation of
+    /// `resolveWorthlessBlockers` that bypasses the planner entirely does NOT break this
+    /// test, because that method never runs here. This test still stands on its own
+    /// (real, always-active protection, worth pinning), but it is NOT the test that
+    /// discriminates `resolveWorthlessBlockers`'s own planner call — see
+    /// `testDeleteJournalRefusesWhenABlockerGainsRealContentDuringOnDemandResolution`
+    /// immediately below, which uses `beforeResolutionHook` to land content
+    /// deterministically INSIDE that method's own window, and IS mutation-verified
+    /// against it. Task report has the full investigation of why a same-process
+    /// `Task.yield()` race could not do this reliably.
     func testDeleteJournalRefusesWhenABlockerGainsRealContentBetweenScanAndDelete() async throws {
         try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
         try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
@@ -765,6 +767,116 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)).path),
             "and its m4a must survive")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// Task review fix (Important 1): a deterministic breakpoint hook, matching this
+    /// codebase's own precedent (`TransitionBreakpointController`;
+    /// `FakeVoiceMarkingStore.holdWrites`/`isHolding`/`releaseHold()`), lands a
+    /// competing m4a write INSIDE `resolveWorthlessBlockers`'s own window — between the
+    /// verdict `deleteJournal` computed and the fresh per-capture gather that method is
+    /// about to act on — rather than racing via `Task.yield()` counts, which the task
+    /// report shows cannot reach this specific window in a single-process cooperative
+    /// scheduler. `RecoveryPlanner` sees the bare m4a with no manifest, decides
+    /// `.quarantineCaptureDirectory` (issue #8's guard, a no-op on disk — an OWNED
+    /// decision per `resolveWorthlessBlockers`'s Important-2 fix), and `deleteJournal`'s
+    /// own re-verification after resolution then sees this capture as a real, filed
+    /// entry and refuses. Mutation check (evidence in the task report): replace the
+    /// gather→plan→apply resolution with a direct `removeItem` → this test fails.
+    func testDeleteJournalRefusesWhenABlockerGainsRealContentDuringOnDemandResolution() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        model.attachActiveCaptureProbe { nil }
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA],
+                       "fixture sanity: worthless as of this scan")
+
+        let park = ResolutionPark()
+        model.beforeResolutionHook = { await park.hook() }
+
+        async let deleted = model.deleteJournal("J2")
+        while !park.isParked { await Task.yield() }
+
+        // Parked between the verdict and this capture's fresh gather — land a real m4a
+        // now, deterministically, in the exact window the mutation check below proves
+        // is load-bearing.
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: captureDir(idA)),
+            withIntermediateDirectories: true)
+        try Data([0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)))
+
+        park.release()
+        let result = await deleted
+
+        XCTAssertFalse(result, "the planner declined to delete — the journal delete must refuse too")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                      "the capture directory must survive")
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.finalRecordingURL(captureDirectory: captureDir(idA)).path),
+            "and its m4a must survive")
+        XCTAssertNotNil(model.journals.first { $0.id == "J2" })
+    }
+
+    /// Task review fix (Important 2): a planner decision `resolveWorthlessBlockers` does
+    /// NOT own (anything beyond delete/quarantine) must leave the capture directory
+    /// byte-untouched and refuse, rather than silently applying a partial mutation with
+    /// no session-lifetime way to finish it. Real PCM frames with no manifest is the
+    /// shape whose decision is `.normalizeToCaptured` — confirmed as a fixture-sanity
+    /// check against the real planner before releasing the park, so this test fails
+    /// loudly (not silently) if a future change to `RecoveryPlanner` ever changes that.
+    func testDeleteJournalRefusesAndLeavesTheDirectoryUntouchedWhenThePlannerDecidesSomethingOutsideTheOwnedSet() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Armed into, nothing recorded yet")])
+        try FileManager.default.createDirectory(at: captureDir(idA), withIntermediateDirectories: true)
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J2"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let model = model()
+        model.attachActiveCaptureProbe { nil }
+        await model.rescan()
+        XCTAssertEqual(model.skipped.map(\.captureID), [idA],
+                       "fixture sanity: worthless as of this scan")
+
+        let park = ResolutionPark()
+        model.beforeResolutionHook = { await park.hook() }
+
+        async let deleted = model.deleteJournal("J2")
+        while !park.isParked { await Task.yield() }
+
+        // Real PCM frames, no manifest — the planner's own decision for this shape is
+        // `.normalizeToCaptured`, not delete/quarantine: not something this model owns.
+        let segsDir = SegmentLayout.segmentsDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.createDirectory(at: segsDir, withIntermediateDirectories: true)
+        let pcmURL = SegmentLayout.pcmURL(segmentsDirectory: segsDir, index: 0)
+        try Data(count: 48_000 * 4).write(to: pcmURL)  // 1.0s of Float32 mono @ 48kHz
+
+        let expectedAction = RecoveryPlanner.plan(
+            for: DirectorySnapshot.gather(capturesRoot: capturesRoot, captureID: idA))
+        guard case .normalizeToCaptured = expectedAction else {
+            park.release()
+            _ = await deleted
+            return XCTFail("fixture sanity: expected .normalizeToCaptured, got \(expectedAction)")
+        }
+
+        park.release()
+        let result = await deleted
+
+        XCTAssertFalse(result, "a planner decision outside delete/quarantine must not be "
+                       + "applied — refuse")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pcmURL.path),
+                      "the raw segment must be byte-untouched — normalizeToCaptured must NOT "
+                      + "have been applied")
+        XCTAssertEqual((try? Data(contentsOf: pcmURL))?.count, 48_000 * 4,
+                       "byte-untouched means byte-untouched, not just present")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.manifestURL(captureDirectory: captureDir(idA)).path),
+            "no manifest should have been written")
         XCTAssertNotNil(model.journals.first { $0.id == "J2" })
     }
 
@@ -1027,5 +1139,33 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(TranscriptRevisionStore.loadChain(captureDirectory: captureDir(idA))?
             .revisions.map(\.source), [.machineLive, .userEdit],
                        "the draft path does pay the actor cost: it promotes, then closes the draft")
+    }
+}
+
+/// Test-only park/release helper for `LibraryScreenModel.beforeResolutionHook` (#82 task
+/// review fix). Same shape as `FakeVoiceMarkingStore.holdWrites`/`isHolding`/
+/// `releaseHold()` (`VoiceMarkingModelTests.swift`) and
+/// `TransitionBreakpointController.arm`/`gate`/`disarm` (`TransitionBreakpointsTests.swift`)
+/// — this codebase's established precedent for deterministically parking a production
+/// call mid-flight rather than racing it via `Task.yield()` counts. `isParked` is the
+/// observable a test polls with a plain `while !park.isParked { await Task.yield() }`
+/// loop (same idiom `VoiceMarkingModelTests` uses for `isHolding`) before acting and
+/// calling `release()`.
+@MainActor
+private final class ResolutionPark {
+    private(set) var isParked = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func hook() async {
+        isParked = true
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.continuation = continuation
+        }
+        isParked = false
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }

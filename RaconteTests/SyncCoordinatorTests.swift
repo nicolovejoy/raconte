@@ -256,6 +256,32 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(saved, [], "a delete must never also enqueue a save")
         XCTAssertEqual(startCalls, 0, "a delete hook must not boot the engine")
     }
+
+    /// Gate finding (Minor 3): the deleted record's upload-ledger entry and archived
+    /// system fields describe something that is gone from this device. Retiring them
+    /// cannot cost an upload — `SyncPlanner.reconcile` iterates the DISK scan, which no
+    /// longer contains the artifact — and leaving them means a resurrected record would
+    /// be pushed against a change tag from before its own deletion.
+    func testNoteLocalDeleteRetiresThatRecordsBookkeeping() async throws {
+        let store = bookkeeping()
+        let name = SyncRecordName.journal(id: journalID)
+        try await store.recordUpload(UploadedDigest(sha256: "abc", bytes: 12), for: name.rawValue)
+        try await store.saveSystemFields(Data("archived".utf8), for: name.rawValue)
+        // A second record, to pin that this retires ONE name rather than wiping the store.
+        let other = SyncRecordName.journal(id: ULID.make())
+        try await store.recordUpload(UploadedDigest(sha256: "def", bytes: 34), for: other.rawValue)
+        try await store.saveSystemFields(Data("kept".utf8), for: other.rawValue)
+
+        await coordinator(store, FakeCloudEngine()).noteLocalDelete(name)
+
+        let ledger = await store.ledger()
+        let retiredFields = await store.systemFields(for: name.rawValue)
+        let keptFields = await store.systemFields(for: other.rawValue)
+        XCTAssertNil(ledger[name.rawValue])
+        XCTAssertNil(retiredFields)
+        XCTAssertNotNil(ledger[other.rawValue], "an unrelated record is untouched")
+        XCTAssertNotNil(keptFields)
+    }
 }
 
 /// A `CloudEngineControl` that records what it was asked to do. An actor because the

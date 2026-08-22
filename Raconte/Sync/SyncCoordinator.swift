@@ -1,4 +1,5 @@
 import Foundation
+import os
 #if os(macOS)
 import Security
 #endif
@@ -19,11 +20,14 @@ actor SyncCoordinator: SyncHooks {
     private let bookkeeping: SyncBookkeepingStore
     private let scanner: SyncTreeScanner
     private let engine: any CloudEngineControl
+    private let log: Logger
 
-    init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl) {
+    init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl,
+         log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
         self.bookkeeping = bookkeeping
         self.scanner = scanner
         self.engine = engine
+        self.log = log
     }
 
     /// Boot: resume the engine from its last state, then reconcile the tree against the
@@ -57,6 +61,22 @@ actor SyncCoordinator: SyncHooks {
     /// whose content degraded to nothing.
     func noteLocalDelete(_ name: SyncRecordName) async {
         await engine.enqueueDeletes([name])
+        // The record is gone locally, so this device's memory of the server's copy
+        // describes something that no longer exists here (gate finding, Minor 3).
+        // Retiring it cannot cost an upload: `SyncPlanner.reconcile` iterates the DISK
+        // scan, which no longer contains this artifact, so a cleared ledger entry
+        // re-enqueues nothing. Leaving it was benign but it is stale bookkeeping that
+        // grows forever, and a resurrected record would otherwise be pushed against a
+        // change tag from before its deletion.
+        do {
+            try await bookkeeping.deleteSystemFields(for: name.rawValue)
+            try await bookkeeping.clearUpload(for: name.rawValue)
+        } catch {
+            log.error("""
+                sync: could not retire bookkeeping for deleted \(name.rawValue, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
     }
 
     // MARK: Reconciliation

@@ -81,7 +81,7 @@ struct RemoteJournal: Equatable, Sendable {
 /// holds those bytes separately, verbatim, because writing them to `manifest.json` is a
 /// pass-through with no decode step at all — unlike every field here, which becomes part
 /// of `entry.json` through the normal `EntryMetadata` encoder.
-struct RemoteEntryFields: Equatable, Sendable {
+struct RemoteEntryFields: Equatable, Sendable, Codable {
     /// From the record NAME, never a field (T5's `RemoteJournal` rule — there is no
     /// captureID field on the Entry record at all, only its identity in the name).
     var captureID: String
@@ -199,36 +199,70 @@ enum EntryIngest {
     }
 }
 
-/// New-entry ingest, IO half (design §6, T7): materializes a staged capture directory
-/// under `sync/staging/<captureID>/`, verifies every asset's sha256 against what the
-/// record claimed, then commits with one `rename(2)` into `captures/<captureID>/` —
-/// mirroring the `.part` → rename convention every other atomic write in this codebase
-/// uses (`AtomicFile`). The recovery scanner and the library only ever see complete
-/// directories; a partially-arrived entry is invisible to both until the rename succeeds.
+/// The durable record of what the Entry record itself carried — persisted to
+/// `sync/staging/<captureID>/pending.json` the instant the record decodes (T7 fix round,
+/// controller ruling), NOT held only in memory. **Why this exists at all:** CKSyncEngine's
+/// change token advances once a fetched record is handed to the delegate, independent of
+/// whether this app finished doing anything with it — a record already fetched is not
+/// guaranteed to be redelivered absent a full resync. A crash or a background-then-kill
+/// between two fetch batches (realistic on first-enable sync, which enqueues the whole
+/// archive across paginated batches, plausibly across several app sessions) would
+/// otherwise leave an in-memory-only accumulation for a captureID that received Entry +
+/// LiveLog in one batch, awaiting AudioAsset in a later one, permanently orphaned: the
+/// fresh actor after relaunch has no memory of it, the late AudioAsset alone has no
+/// metadata to plan against, and nothing ever revisits it.
 ///
-/// **Never partially commits.** Any failure — a stale prior attempt, a sha256 mismatch, an
+/// Audio/liveLog pieces are deliberately NOT recorded here — they land as real staged
+/// files (`final/recording.m4a`, `transcript/live.jsonl`) beside this sidecar the instant
+/// they arrive (sha256-verified before ever touching disk), and their presence is read
+/// directly off disk rather than duplicated in this struct, so there is exactly one
+/// source of truth for "did this piece arrive" per piece.
+private struct PendingEntryRecord: Codable {
+    var manifestJSON: Data
+    var metadata: RemoteEntryFields
+}
+
+/// New-entry ingest, IO half (design §6, T7): commits an already-durably-staged capture
+/// directory with one `rename(2)` into `captures/<captureID>/` — mirroring the `.part` →
+/// rename convention every other atomic write in this codebase uses (`AtomicFile`). By
+/// the time this runs, every piece it needs (manifest bytes, metadata, the audio, and
+/// optionally the liveLog) has ALREADY been sha256-verified and durably persisted into
+/// `sync/staging/<captureID>/` at arrival — see `PendingEntryRecord` and
+/// `SyncRecordExchange`'s `ingestAudio`/`ingestLiveLog`, the T7 fix round's actual fix.
+/// This type's job is narrower than its original shape: materialize `manifest.json` +
+/// `entry.json` from what was handed to it, make sure nothing unexpected rides along, and
+/// commit. The recovery scanner and the library only ever see complete directories; a
+/// partially-arrived entry is invisible to both until the rename succeeds.
+///
+/// **Never partially commits.** Any failure — a losing sha comparison (defense in depth;
+/// production only ever hands this function an already-self-consistent pair, since
+/// verification now happens at arrival, but a direct caller gets the same protection), an
 /// IO error, a losing `rename` — discards the staging directory (R3: `removeItem` is only
 /// ever used on paths under `sync/staging/`, never on `captures/` itself) and leaves
-/// `captures/` exactly as it was. The next arrival or the next launch's reconciliation
-/// retries from scratch.
+/// `captures/` exactly as it was.
 enum EntryAssembler {
-    /// Stages, verifies, and commits `incoming`. Returns whether the capture now exists
-    /// under `captures/` as a direct result of this call.
+    /// Stages (idempotently — the directory may already hold durably-persisted pieces),
+    /// verifies, and commits `incoming`. Returns whether the capture now exists under
+    /// `captures/` as a direct result of this call.
     ///
     /// Callers are expected to have already confirmed `EntryIngest.plan(...) ==
     /// .assembleNew`; this re-derives nothing about that decision — only about whether the
     /// bytes it is actually handed check out.
+    ///
+    /// **Deliberately does NOT discard the staging directory at entry** — that was the
+    /// fix-round defect: the directory is now the durable accumulation site (audio/liveLog
+    /// bytes may already be sitting there, sha-verified at arrival, from a PREVIOUS launch
+    /// entirely), and wiping it unconditionally would destroy exactly the durability this
+    /// fix exists to provide. Instead, `pruneUnexpectedStagingContents` runs right before
+    /// the rename — active cleanup, not a blanket wipe, so a stray leftover (a crash-
+    /// orphaned atomic-write temp file, garbage a test or a bug left lying around) can
+    /// never ride into `captures/`, while a genuinely valid, durably-staged piece set
+    /// still commits regardless of what unrelated cruft sits beside it.
     @discardableResult
     static func assemble(incoming: EntryIngest.Incoming, containerRoot: URL) -> Bool {
         let fm = FileManager.default
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot,
                                                              captureID: incoming.captureID)
-
-        // Interrupted-assembly recovery: a stale staging directory from a crashed prior
-        // attempt (this device's own, or a half-finished one this launch never finished)
-        // must never be trusted or merged into — staging is cache, never authoritative.
-        // Discard unconditionally before rebuilding from scratch.
-        try? fm.removeItem(at: stagingDir)
 
         guard let audio = incoming.audio else { return false }
 
@@ -266,6 +300,14 @@ enum EntryAssembler {
                     to: SegmentLayout.liveTranscriptURL(captureDirectory: stagingDir), options: .atomic)
             }
 
+            // The durable pending sidecar (`PendingEntryRecord`) is now fully materialized
+            // into manifest.json + entry.json above and must not ride into `captures/` — a
+            // committed capture directory never has one.
+            try? fm.removeItem(at: AppContainer.syncStagingPendingStateURL(
+                containerRoot: containerRoot, captureID: incoming.captureID))
+
+            pruneUnexpectedStagingContents(stagingDir: stagingDir, hasLiveLog: incoming.liveLog != nil)
+
             let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
             try fm.createDirectory(at: capturesRoot, withIntermediateDirectories: true)
             let destination = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
@@ -282,6 +324,43 @@ enum EntryAssembler {
         } catch {
             try? fm.removeItem(at: stagingDir)
             return false
+        }
+    }
+
+    /// Removes anything under `stagingDir` that is not part of the canonical committed
+    /// shape (`manifest.json`, `entry.json`, `final/recording.m4a`, and — only when a
+    /// liveLog rider is present — `transcript/live.jsonl`), so nothing else can ride the
+    /// rename into `captures/`. All removals are strictly scoped to paths under
+    /// `stagingDir` itself (R3).
+    private static func pruneUnexpectedStagingContents(stagingDir: URL, hasLiveLog: Bool) {
+        let fm = FileManager.default
+        var allowedTop: Set<String> = [SegmentLayout.manifestFileName, SegmentLayout.entryMetadataFileName,
+                                       SegmentLayout.finalDirName]
+        if hasLiveLog { allowedTop.insert(SegmentLayout.transcriptDirName) }
+        if let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) {
+            for name in names where !allowedTop.contains(name) {
+                try? fm.removeItem(at: stagingDir.appendingPathComponent(name))
+            }
+        }
+
+        let finalDir = SegmentLayout.finalDirectory(captureDirectory: stagingDir)
+        if let names = try? fm.contentsOfDirectory(atPath: finalDir.path) {
+            for name in names where name != SegmentLayout.finalRecordingName {
+                try? fm.removeItem(at: finalDir.appendingPathComponent(name))
+            }
+        }
+
+        let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: stagingDir)
+        if hasLiveLog {
+            if let names = try? fm.contentsOfDirectory(atPath: transcriptDir.path) {
+                for name in names where name != SegmentLayout.liveTranscriptFileName {
+                    try? fm.removeItem(at: transcriptDir.appendingPathComponent(name))
+                }
+            }
+        } else {
+            // No liveLog rider at all this commit: `transcript/`, if present, is entirely
+            // unexpected — a leftover directory must not ride along looking like a real one.
+            try? fm.removeItem(at: transcriptDir)
         }
     }
 }
@@ -463,17 +542,6 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// supplies the real container root; without it entry ingest would silently never
     /// run in a shipped build, so that wiring is load-bearing, not decorative.
     private let containerRoot: URL?
-    /// Partial pieces of a new entry gathered from the server (T7): the Entry,
-    /// AudioAsset and LiveLog records for one capture can arrive from `CKSyncEngine` in
-    /// any order and across separate fetch batches, so each piece is cached here, keyed
-    /// by captureID, until `EntryIngest.plan` can be asked at all (an Entry record must
-    /// have landed — see `attemptEntryAssembly`) and until it says `.assembleNew`.
-    ///
-    /// In-memory only, cleared once assembly commits. A piece that never arrives (a
-    /// dropped AudioAsset push, a peer offline forever) leaves that entry pending for
-    /// the life of this launch — an accepted gap matching design §8's "eventual"
-    /// freshness ruling; Task 12's debug status is where such a stall would surface.
-    private var pendingEntries: [String: PendingEntryAssembly] = [:]
     /// Called after ingest actually writes something, so the library reloads instead of
     /// showing yesterday's journal names until the next launch. Optional — nothing about
     /// correctness depends on it.
@@ -659,17 +727,20 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
     }
 
-    // MARK: Ingest — new entries (T7, design §6)
-
-    /// One captureID's gathered pieces, cached until `EntryIngest.plan` can decide.
-    private struct PendingEntryAssembly {
-        var manifestJSON: Data?
-        var metadata: RemoteEntryFields?
-        var audio: (url: URL, sha256: String)?
-        var liveLog: (url: URL, sha256: String)?
-    }
+    // MARK: Ingest — new entries (T7, design §6; fix round: durable staging — see
+    // `PendingEntryRecord`'s doc comment for why an in-memory-only buffer is not
+    // sufficient. Every piece is persisted into `sync/staging/<captureID>/` the instant
+    // it arrives and sha256-verified BEFORE it is ever written to disk — never after —
+    // so a mismatched piece is refused and simply never persisted. Nothing about the
+    // captureID's state lives in this actor's memory; `attemptEntryAssembly` always
+    // rereads `sync/staging/<captureID>/` fresh, which is what makes a brand-new actor
+    // after a relaunch pick up exactly where a torn-down one left off.)
 
     private func ingestEntry(_ record: CKRecord, captureID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — entry ingest skipped")
+            return
+        }
         guard let fields = RemoteEntryFields(record: record) else {
             log.notice("sync: fetched Entry record could not be decoded — ignored")
             return
@@ -677,76 +748,189 @@ actor SyncRecordExchange: CloudRecordExchange {
         // `manifestSnapshot` is read here, not through `RemoteEntryFields` (see that
         // type's header) — a pass-through string→Data conversion, not a decode.
         let manifestString = record[SyncEntryField.manifestSnapshot] as? String
-        var pending = pendingEntries[captureID] ?? PendingEntryAssembly()
-        pending.manifestJSON = manifestString?.data(using: .utf8) ?? Data()
-        pending.metadata = fields
-        pendingEntries[captureID] = pending
-        await attemptEntryAssembly(captureID: captureID)
+        let manifestJSON = manifestString?.data(using: .utf8) ?? Data()
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        do {
+            try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+            let state = PendingEntryRecord(manifestJSON: manifestJSON, metadata: fields)
+            let data = try CaptureCoding.encoder().encode(state)
+            try data.write(to: AppContainer.syncStagingPendingStateURL(
+                containerRoot: containerRoot, captureID: captureID), options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not persist pending entry state for \(captureID, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 
     private func ingestAudio(_ record: CKRecord, captureID: String) async {
-        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
-              let sha256 = record[SyncChildAssetField.sha256] as? String else {
-            log.notice("sync: fetched AudioAsset record missing its file or sha256 — ignored")
-            return
-        }
-        var pending = pendingEntries[captureID] ?? PendingEntryAssembly()
-        pending.audio = (url: url, sha256: sha256)
-        pendingEntries[captureID] = pending
-        await attemptEntryAssembly(captureID: captureID)
-    }
-
-    private func ingestLiveLog(_ record: CKRecord, captureID: String) async {
-        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
-              let sha256 = record[SyncChildAssetField.sha256] as? String else {
-            log.notice("sync: fetched LiveLog record missing its file or sha256 — ignored")
-            return
-        }
-        var pending = pendingEntries[captureID] ?? PendingEntryAssembly()
-        pending.liveLog = (url: url, sha256: sha256)
-        pendingEntries[captureID] = pending
-        await attemptEntryAssembly(captureID: captureID)
-    }
-
-    /// Asks `EntryIngest.plan` whenever enough has arrived to ask it at all — the Entry
-    /// record itself, which carries both `metadata` and the manifest bytes. Called after
-    /// every piece arrives (in any order); a piece that lands before the Entry record
-    /// simply waits in `pendingEntries` until it does.
-    private func attemptEntryAssembly(captureID: String) async {
         guard let containerRoot else {
             log.debug("sync: no container root wired — entry ingest skipped")
             return
         }
-        guard let pending = pendingEntries[captureID], let metadata = pending.metadata else { return }
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
+              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
+            log.notice("sync: fetched AudioAsset record missing its file or sha256 — ignored")
+            return
+        }
+        guard let bytes = try? Data(contentsOf: url) else {
+            log.error("sync: could not read the fetched AudioAsset bytes for \(captureID, privacy: .public)")
+            return
+        }
+        // Verified BEFORE anything is persisted — the whole point of the fix round: a
+        // mismatched piece must never sit on disk waiting for a commit that will only
+        // discover the mismatch later, and must never poison a sibling piece that
+        // arrived correctly.
+        guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
+            log.error("""
+                sync: AudioAsset sha256 mismatch for \(captureID, privacy: .public) — refused, \
+                never persisted
+                """)
+            return
+        }
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        do {
+            try FileManager.default.createDirectory(
+                at: SegmentLayout.finalDirectory(captureDirectory: stagingDir), withIntermediateDirectories: true)
+            try bytes.write(to: SegmentLayout.finalRecordingURL(captureDirectory: stagingDir), options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not persist staged audio for \(captureID, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
+    }
 
+    private func ingestLiveLog(_ record: CKRecord, captureID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — entry ingest skipped")
+            return
+        }
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
+              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
+            log.notice("sync: fetched LiveLog record missing its file or sha256 — ignored")
+            return
+        }
+        guard let bytes = try? Data(contentsOf: url) else {
+            log.error("sync: could not read the fetched LiveLog bytes for \(captureID, privacy: .public)")
+            return
+        }
+        guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
+            log.error("""
+                sync: LiveLog sha256 mismatch for \(captureID, privacy: .public) — refused, \
+                never persisted
+                """)
+            return
+        }
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        do {
+            try FileManager.default.createDirectory(
+                at: SegmentLayout.transcriptDirectory(captureDirectory: stagingDir), withIntermediateDirectories: true)
+            try bytes.write(to: SegmentLayout.liveTranscriptURL(captureDirectory: stagingDir), options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not persist staged liveLog for \(captureID, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
+    }
+
+    /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this
+    /// IS the rehydration (fix round): there is no in-memory cache to be stale, because
+    /// there is no in-memory cache at all. `nil` means no Entry piece is durably staged:
+    /// either none ever arrived, or what was there could not be parsed and has just been
+    /// discarded as garbage (R3: the `removeItem` below is strictly scoped to this
+    /// captureID's own `sync/staging/` subdirectory — the whole directory, not merely the
+    /// sidecar, since a corrupt sidecar means this device cannot trust anything else
+    /// staged alongside it either).
+    private func readPendingState(captureID: String, containerRoot: URL) -> PendingEntryRecord? {
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        let url = AppContainer.syncStagingPendingStateURL(containerRoot: containerRoot, captureID: captureID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Data(contentsOf: url),
+              let state = try? CaptureCoding.decoder().decode(PendingEntryRecord.self, from: data) else {
+            log.error("sync: garbage staging for \(captureID, privacy: .public) — discarding")
+            try? FileManager.default.removeItem(at: stagingDir)
+            return nil
+        }
+        return state
+    }
+
+    /// Asks `EntryIngest.plan` whenever enough is DURABLY staged to ask it at all — the
+    /// Entry record's pending sidecar must exist (it carries both `metadata` and the
+    /// manifest bytes). Called after every piece arrives (in any order, and regardless of
+    /// which app launch each piece arrived in).
+    private func attemptEntryAssembly(captureID: String, containerRoot: URL) async {
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         let captureExists = FileManager.default.fileExists(
             atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
-        let incoming = EntryIngest.Incoming(captureID: captureID,
-                                            manifestJSON: pending.manifestJSON ?? Data(),
-                                            metadata: metadata,
-                                            audio: pending.audio, liveLog: pending.liveLog)
 
-        switch EntryIngest.plan(incoming: incoming, captureExists: captureExists) {
-        case .assembleNew:
-            guard EntryAssembler.assemble(incoming: incoming, containerRoot: containerRoot) else {
-                // Refused inside the assembler (a sha256 mismatch, or an IO failure) —
-                // logged there is not possible (it is a pure/IO type with no logger), so
-                // the caller reports it. `pendingEntries` is left as-is: the same pieces
-                // are retried whenever another arrives, or on the next launch's fetch.
-                log.error("sync: entry \(captureID, privacy: .public) assembly failed — will retry")
-                return
-            }
-            pendingEntries.removeValue(forKey: captureID)
-            await localStoreDidChange?()
-        case .applyToExisting:
-            // T8 owns merging into an already-local capture.
+        // T8 owns merging into an already-local capture, and `EntryIngest.plan` itself
+        // decides `.applyToExisting` from `captureExists` alone — nothing about that
+        // depends on which pieces happen to be staged. Checked and acted on BEFORE
+        // trying to read any pending state: requiring a readable pending sidecar first
+        // would leave staging permanently orphaned for every piece that arrives AFTER an
+        // earlier piece already cleared it via this very branch (fix-round finding — the
+        // pending sidecar for an existing capture is removed the first time this fires,
+        // so a later late piece would otherwise find no sidecar and bail before ever
+        // reaching a cleanup decision).
+        guard !captureExists else {
             log.debug("""
                 sync: entry \(captureID, privacy: .public) already exists locally — merge deferred to T8
                 """)
+            try? FileManager.default.removeItem(at: stagingDir)
+            return
+        }
+
+        guard let state = readPendingState(captureID: captureID, containerRoot: containerRoot) else { return }
+
+        // Presence, read directly off the staged files themselves — not duplicated
+        // in-memory or in the sidecar. The sha256 is recomputed off what is already
+        // durably staged (already verified once, at arrival); `EntryAssembler` re-checks
+        // it again as a defense-in-depth safety net, not because production can make it
+        // disagree.
+        let audio = stagedPiece(url: SegmentLayout.finalRecordingURL(captureDirectory: stagingDir))
+        let liveLog = stagedPiece(url: SegmentLayout.liveTranscriptURL(captureDirectory: stagingDir))
+
+        let incoming = EntryIngest.Incoming(captureID: captureID, manifestJSON: state.manifestJSON,
+                                            metadata: state.metadata, audio: audio, liveLog: liveLog)
+
+        switch EntryIngest.plan(incoming: incoming, captureExists: false) {
+        case .assembleNew:
+            guard EntryAssembler.assemble(incoming: incoming, containerRoot: containerRoot) else {
+                // Refused inside the assembler — logged there is not possible (it is a
+                // pure/IO type with no logger), so the caller reports it. The durable
+                // staging is left as-is (barring what the assembler itself discarded on a
+                // hard failure): the same pieces are retried whenever another arrives, or
+                // on this device's next launch.
+                log.error("sync: entry \(captureID, privacy: .public) assembly failed — will retry")
+                return
+            }
+            await localStoreDidChange?()
+        case .applyToExisting:
+            // Unreachable in practice — the guard above already handles `captureExists`
+            // — but `IngestAction` is a 3-case enum and the switch stays exhaustive.
+            // Same cleanup, for defensive symmetry.
+            try? FileManager.default.removeItem(at: stagingDir)
         case .refuse(let reason):
             log.debug("sync: entry \(captureID, privacy: .public) assembly not ready yet: \(reason, privacy: .public)")
         }
+    }
+
+    /// `(url, sha256)` for a file already sitting at `url`, or nil when nothing is there —
+    /// the shape `EntryIngest.Incoming` needs. The sha256 is a fresh hash of exactly what
+    /// is on disk right now, not a value carried over from arrival time.
+    private func stagedPiece(url: URL) -> (url: URL, sha256: String)? {
+        guard let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        return (url: url, sha256: SyncTreeScanner.sha256Hex(bytes))
     }
 
     private func ingestJournal(_ record: CKRecord) async {

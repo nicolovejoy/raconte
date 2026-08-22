@@ -285,9 +285,12 @@ final class SyncEntryIngestTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: stagingDirectory.path))
     }
 
-    /// Interrupted-assembly recovery: a stale staging directory from a crashed prior
-    /// attempt must be DISCARDED, not merged into — otherwise a garbage leftover file
-    /// would ride along into `captures/` on the next successful assembly.
+    /// A stray, unrelated file sitting in staging (e.g. a crash-orphaned atomic-write
+    /// temp file, or garbage from some other bug) must never ride the rename into
+    /// `captures/` — but a genuinely valid, complete piece set must still commit despite
+    /// it (T7 fix round: staging is now the durable accumulation site, so a blanket
+    /// wipe-then-rebuild would destroy legitimately-staged pieces too; `assemble` prunes
+    /// only what is unexpected, actively, rather than refusing the whole commit).
     func testAssembleDiscardsAStaleStagingDirectoryRatherThanMergingIntoIt() throws {
         try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
         try Data("stale garbage from a crashed attempt".utf8)
@@ -407,7 +410,9 @@ final class SyncEntryIngestTests: XCTestCase {
 
     /// The rename path is never taken when the capture already exists locally (brief
     /// pin): an existing directory's content must survive entirely untouched, proving
-    /// no rename landed on top of it.
+    /// no rename landed on top of it. Staging is also cleaned up (fix-round ruling,
+    /// minor 5 in spirit): nothing about an entry sync already has locally should sit
+    /// around under `sync/staging/` forever.
     func testIngestWithCaptureAlreadyExistingLocallyNeverRenamesOverIt() async throws {
         try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
         let sentinel = Data("local-sentinel-content".utf8)
@@ -421,6 +426,100 @@ final class SyncEntryIngestTests: XCTestCase {
         XCTAssertEqual(
             try Data(contentsOf: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)),
             sentinel, "an existing local capture must never be overwritten by the rename path")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagingDirectory.path),
+                       "staging for an entry that already exists locally must not linger forever")
+    }
+
+    // MARK: Fix round — durable staging survives a relaunch (controller ruling)
+
+    /// THE headline pin: pieces arriving split across a simulated relaunch must still
+    /// commit. `firstExchange` receives only the Entry piece, then is torn down (no
+    /// reference survives — nothing about it is reused); `secondExchange` is a brand-new
+    /// actor over the SAME container root, with no memory of the first at all, and
+    /// receives only the AudioAsset. The Entry piece's durable persistence to
+    /// `sync/staging/<captureID>/pending.json` — not any in-memory buffer — is what lets
+    /// the second actor complete the commit.
+    ///
+    /// Mutation check (run by hand, per the fix-round ruling): reverting
+    /// `SyncRecordExchange.readPendingState` to unconditionally `return nil` (simulating
+    /// "no rehydration happens, only an in-memory buffer") makes this test fail — the
+    /// second actor can never find the first's Entry piece, so the capture never commits.
+    func testPiecesSplitAcrossASimulatedRelaunchStillCommit() async throws {
+        let when = stamp(0)
+        do {
+            let firstExchange = exchange()
+            await firstExchange.acceptRemote(
+                entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when))
+        }
+        // `firstExchange` is now out of scope — nothing referencing it survives, exactly
+        // like a fresh process after a relaunch.
+
+        let secondExchange = exchange()
+        let audioBytes = Data("m4a-bytes".utf8)
+        await secondExchange.acceptRemote(audioRecord(bytes: audioBytes))
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDirectory.path),
+                      "the Entry piece persisted durably across the simulated relaunch, so the "
+                      + "late audio (delivered to a brand-new actor) completes the commit")
+        XCTAssertEqual(try Data(contentsOf: SegmentLayout.finalRecordingURL(captureDirectory: captureDirectory)),
+                       audioBytes)
+    }
+
+    /// Garbage in `sync/staging/<captureID>/pending.json` — pre-existing before anything
+    /// in this test session touches that captureID, simulating what a crash or a bug
+    /// could leave behind — must be discarded on the first touch, never let anything
+    /// commit, and never block the whole app forever (it clears itself out rather than
+    /// re-discovering the same garbage on every future attempt).
+    func testGarbagePendingStateIsDiscardedOnFirstTouchAndCannotReachCaptures() async throws {
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        try Data("not valid pending-state json at all".utf8).write(
+            to: AppContainer.syncStagingPendingStateURL(containerRoot: containerRoot, captureID: captureID))
+
+        let ex = exchange()
+        await ex.acceptRemote(audioRecord(bytes: Data("m4a-bytes".utf8)))
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
+                       "garbage pending state must never let anything commit")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: AppContainer.syncStagingPendingStateURL(
+                    containerRoot: containerRoot, captureID: captureID).path),
+            "the garbage sidecar itself must be discarded, not left to block every future attempt")
+    }
+
+    /// A sha256-mismatched piece is refused AT ARRIVAL and leaves a previously-persisted
+    /// GOOD piece intact — chosen semantic (the fix-round ruling explicitly allows
+    /// either): a bad push for one piece must not force re-fetching everything else that
+    /// already arrived correctly.
+    func testASha256MismatchedAudioIsRefusedAtArrivalAndLeavesThePreviouslyPersistedEntryPieceIntact() async throws {
+        let when = stamp(0)
+        let ex = exchange()
+        await ex.acceptRemote(entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when))
+
+        let badAudio = SyncRecordBuilders.audioRecord(
+            captureID: captureID, m4aURL: writeTempFile(Data("m4a-bytes".utf8), name: "bad.m4a"),
+            sha256: "not-the-real-hash", bytes: 9, frameCount: 1, sampleRate: 48_000,
+            entryID: entryRecordID, zoneID: zoneID)
+        await ex.acceptRemote(badAudio)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
+                       "the mismatched piece must never let the entry commit")
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: SegmentLayout.finalRecordingURL(captureDirectory: stagingDirectory).path),
+            "the bad bytes themselves must never be persisted")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: AppContainer.syncStagingPendingStateURL(
+                    containerRoot: containerRoot, captureID: captureID).path),
+            "the earlier, good Entry piece must survive the later bad audio push")
+
+        // A later GOOD audio arrives and the entry still commits — proving the earlier
+        // bad push did not poison or wipe the durably-staged Entry piece.
+        let goodBytes = Data("real-m4a-bytes".utf8)
+        await ex.acceptRemote(audioRecord(bytes: goodBytes))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDirectory.path))
     }
 
     /// With no container root wired (mirrors the pre-T7 "no builder/ingest yet" degrade),

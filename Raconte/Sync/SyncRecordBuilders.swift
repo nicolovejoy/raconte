@@ -11,6 +11,7 @@ enum SyncRecordType {
     static let entry = "Entry"
     static let audioAsset = "AudioAsset"
     static let liveLog = "LiveLog"
+    static let revision = "Revision"
 }
 
 /// The Journal record's field names (design §2, plus two as-built additions documented
@@ -60,9 +61,10 @@ enum SyncEntryField {
     static let deviceID = "deviceID"
 }
 
-/// Shared by `AudioAsset` and `LiveLog` (design §2): both are immutable, write-once
-/// child records that reference their `Entry` with a `.deleteSelf` action, so a purge
-/// of the Entry cascades to both server-side (design §5) rather than orphaning them.
+/// Shared by `AudioAsset`, `LiveLog`, and `Revision` (design §2): all three are
+/// immutable, write-once child records that reference their `Entry` with a
+/// `.deleteSelf` action, so a purge of the Entry cascades to all of them server-side
+/// (design §5) rather than orphaning them.
 enum SyncChildAssetField {
     static let file = "file"
     static let sha256 = "sha256"
@@ -76,13 +78,33 @@ enum SyncAudioField {
     static let sampleRate = "sampleRate"
 }
 
+/// `Revision`-only field (design §2 table, T9): the payload itself, named `body`
+/// rather than reusing `SyncChildAssetField.file` — the design table's own wording,
+/// kept distinct because `file` on `AudioAsset`/`LiveLog` names literal captured
+/// media while `body` names a `canonical-<n>.json` chain node.
+///
+/// `entryRef` (shared, above) carries a second job for THIS record kind that it does
+/// not carry for `AudioAsset`/`LiveLog`: `SyncRecordName.revision(id:)` names only the
+/// revision's own ULID (design §2 note 1 — "never the file number"), with no captureID
+/// component at all, unlike `.audio(captureID:)`/`.liveLog(captureID:)`, which both
+/// embed it directly. A fetched Revision record therefore has NO OTHER WAY to say
+/// which capture it belongs to — `entryRef` is read back on ingest
+/// (`SyncRecordExchange.ingestRevision`) to recover that captureID, in addition to its
+/// ordinary cascade-delete job. Deliberately not a change to `SyncRecordName` itself
+/// (already shipped/consumed by T3's `SyncTreeScanner.scanRevisions`, which mints
+/// `.revision(id:)` with a single argument) — extending this record's OWN fields
+/// closes the gap without touching that already-tested shape.
+enum SyncRevisionField {
+    static let body = "body"
+}
+
 /// Pure builders: local state in, `CKRecord` out. No IO beyond the caller-supplied file
 /// URL for an asset, no engine, no store — which is what makes every field-coverage
 /// assertion in `SyncJournalRecordTests`/`SyncEntryRecordTests` runnable with no
 /// CloudKit account and no server traffic (`CKRecord` is constructible offline; only
 /// `CKSyncEngine` is not).
 ///
-/// Later tasks add `revisionRecord`/`markerStreamRecord` here (T9, T10).
+/// `revisionRecord` landed in T9; `markerStreamRecord` is still T10's.
 enum SyncRecordBuilders {
 
     /// The Journal record (design §2).
@@ -217,6 +239,31 @@ enum SyncRecordBuilders {
         let record = CKRecord(recordType: SyncRecordType.liveLog, recordID: recordID)
 
         record[SyncChildAssetField.file] = CKAsset(fileURL: fileURL)
+        record[SyncChildAssetField.sha256] = sha256
+        record[SyncChildAssetField.bytes] = bytes
+        record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: entryID, action: .deleteSelf)
+        return record
+    }
+
+    /// The Revision record (design §2 table, T9): immutable, write-once, one per
+    /// `canonical-<n>.json` file ever minted anywhere (`TranscriptRevisionStore
+    /// .append`/`.ingestForeignRevision`). Same shape as `audioRecord`/
+    /// `liveLogRecord` — payload asset + integrity fields + a cascading `entryRef` —
+    /// because all three are write-once children of an Entry; see
+    /// `SyncRevisionField`'s doc comment for why `entryRef` does double duty here.
+    ///
+    /// `fileURL` is the on-disk `canonical-<n>.json` this revision is numbered at on
+    /// THIS device right now — irrelevant to identity (`SyncRecordName.revision(id:)`
+    /// is the revision's own ULID, never its file number, design §2 note 1) but is
+    /// exactly the bytes design §2's "body CKAsset, the canonical-N.json bytes,
+    /// verbatim" wants pushed. `sha256`/`bytes` are the caller's own fresh digest of
+    /// those bytes — same verify-on-ingest convention as `audioRecord`/`liveLogRecord`.
+    static func revisionRecord(revisionID: String, fileURL: URL, sha256: String, bytes: Int,
+                               entryID: CKRecord.ID, zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = SyncCloudIdentifiers.recordID(.revision(id: revisionID), zoneID: zoneID)
+        let record = CKRecord(recordType: SyncRecordType.revision, recordID: recordID)
+
+        record[SyncRevisionField.body] = CKAsset(fileURL: fileURL)
         record[SyncChildAssetField.sha256] = sha256
         record[SyncChildAssetField.bytes] = bytes
         record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: entryID, action: .deleteSelf)

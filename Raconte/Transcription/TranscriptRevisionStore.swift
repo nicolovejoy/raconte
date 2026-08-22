@@ -89,11 +89,27 @@ actor TranscriptRevisionStore {
     /// callers get the exact previous behavior via the default.
     private let deviceIDProvider: @Sendable () -> String
 
+    /// M4 T9. Nil everywhere sync is off — unit tests, the UI-test harness, and any
+    /// build whose composition root refused to construct an engine. A store with no
+    /// hook behaves exactly as it did before M4, matching `JournalStore`/
+    /// `EntryMetadataStore`'s identical seam.
+    private var syncHooks: (any SyncHooks)?
+
     init(capturesRoot: URL, policy: DraftPolicy = DraftPolicy(),
-        deviceIDProvider: @escaping @Sendable () -> String = { DeviceIdentity.stable() }) {
+        deviceIDProvider: @escaping @Sendable () -> String = { DeviceIdentity.stable() },
+        syncHooks: (any SyncHooks)? = nil) {
         self.capturesRoot = capturesRoot
         self.policy = policy
         self.deviceIDProvider = deviceIDProvider
+        self.syncHooks = syncHooks
+    }
+
+    /// Wired after construction (M4 T9), for the same reason `JournalStore.attach
+    /// (syncHooks:)`/`EntryMetadataStore.attach(syncHooks:)` are: the composition root
+    /// builds this store (inside `LibraryScreenModel`) before it can build the
+    /// `SyncCoordinator` that conforms to `SyncHooks`.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     // MARK: - Listing
@@ -530,7 +546,7 @@ actor TranscriptRevisionStore {
     /// retry's recomputed number.
     @discardableResult
     func append(_ revision: TranscriptRevision, captureID: String,
-                beforeWrite: (@Sendable (Int) -> Void)? = nil) throws -> Int {
+                beforeWrite: (@Sendable (Int) -> Void)? = nil) async throws -> Int {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
 
         // C2 (verified by the reviewer): EntryMetadataStore.read answers `.defaults` —
@@ -553,18 +569,7 @@ actor TranscriptRevisionStore {
             throw TranscriptRevisionStoreError.trashedCapture
         }
 
-        func nextFileNumber() throws -> Int {
-            switch Self.listing(captureDirectory: captureDirectory) {
-            case .absent:
-                return 0
-            case .unreadable(let reason):
-                throw TranscriptRevisionStoreError.transcriptDirUnreadable(reason)
-            case .present(let files):
-                return (files.max() ?? -1) + 1
-            }
-        }
-
-        var fileNumber = try nextFileNumber()
+        var fileNumber = try nextFileNumber(captureDirectory: captureDirectory)
         let data = try CaptureCoding.encoder().encode(revision)
 
         // A2b: transcript/ is created only by this content-carrying write, never by a
@@ -581,7 +586,7 @@ actor TranscriptRevisionStore {
                                                          revision: fileNumber),
                 writing: data)
         } catch let error as AtomicFileError where isEEXIST(error) {
-            fileNumber = try nextFileNumber()
+            fileNumber = try nextFileNumber(captureDirectory: captureDirectory)
             beforeWrite?(fileNumber)
             do {
                 try AtomicFile.createExclusively(
@@ -601,12 +606,134 @@ actor TranscriptRevisionStore {
             // failure. validatedHead rebuilds over the readable chain on the next call
             // regardless of what state head.json was left in here.
         }
+
+        // M4 T9 chokepoint (design §3: "TranscriptRevisionStore.append → enqueue
+        // Revision (fires once per revision)"). Fired once, here, regardless of which
+        // caller minted the revision (`closeDraft`, `revert`, `promoteIfNeeded`, or a
+        // direct caller) — one write, one notification, matching every sibling store's
+        // hook placement at the end of a successful write.
+        await syncHooks?.noteLocalChange(.revision(id: revision.id))
         return fileNumber
     }
 
-    private func isEEXIST(_ error: AtomicFileError) -> Bool {
+    /// Where the next revision would land if written right now: `0` for an absent
+    /// chain, `max(present) + 1` otherwise, and a refusal for a `transcript/` this
+    /// device cannot list — the "never allocate over an unknown chain" rule (Gate A).
+    /// Shared by `append` (mints new content) and `ingestForeignRevision` (writes
+    /// already-minted foreign bytes verbatim) so the two write paths can never quietly
+    /// diverge on what "next free n" means — the standing branch rule applied to this
+    /// store's own internals, not just to external callers.
+    private nonisolated func nextFileNumber(captureDirectory: URL) throws -> Int {
+        switch Self.listing(captureDirectory: captureDirectory) {
+        case .absent:
+            return 0
+        case .unreadable(let reason):
+            throw TranscriptRevisionStoreError.transcriptDirUnreadable(reason)
+        case .present(let files):
+            return (files.max() ?? -1) + 1
+        }
+    }
+
+    private nonisolated func isEEXIST(_ error: AtomicFileError) -> Bool {
         if case .posix(_, let code) = error { return code == EEXIST }
         return false
+    }
+
+    // MARK: - Foreign ingest (M4 T9, design §6)
+
+    /// Writes an already-minted revision fetched from another device, verbatim, at
+    /// this device's own next free `canonical-N` slot — never `n`, never the file
+    /// number the pushing device happened to use (design §2 note 1: revision identity
+    /// is the ULID, never the file number; file numberings may differ across devices
+    /// forever, and the chain doesn't care — parents are named by id). Does NOT fire
+    /// `syncHooks` — an ingest must never echo back as a local change, or two devices
+    /// would trade the same revision's arrival forever (the same reasoning
+    /// `JournalStore.applySyncMerge`/`EntryMetadataStore.applySyncMerge` already state
+    /// for their own writes).
+    ///
+    /// (a) **Idempotence**: a no-op when `revisionID` already names a revision this
+    /// device can read anywhere in `transcript/` — checked against `rawLoad`'s own
+    /// id-dedupe walk (Gate A finding C1) rather than a second, independently-derived
+    /// "does this id exist" rule. Only readable files are consulted; an unreadable
+    /// `transcript/` refuses below via `nextFileNumber` rather than risking a
+    /// duplicate write over a chain this device cannot fully see.
+    ///
+    /// (b) **Next-free-`n` allocation**, via the exact `nextFileNumber` +
+    /// `AtomicFile.createExclusively` + one-retry-then-`.allocationCollision` dance
+    /// `append` itself uses (factored out above so the two can never diverge) —
+    /// `body` is written byte-for-byte, never re-encoded through
+    /// `CaptureCoding.encoder()`, so a device-specific encoding drift can never make a
+    /// synced-in revision differ from the bytes the origin device pushed.
+    ///
+    /// (c) **`head.json` refresh** via the same `persistHead` every local write uses —
+    /// swallowed on failure for the identical C1-trigger reason `append` swallows it:
+    /// the revision file is already durable, and `validatedHead` rebuilds over the
+    /// readable chain on the next read regardless.
+    ///
+    /// Guarded exactly like `append` (`guardWritable`: capture directory must exist,
+    /// sidecar must not be trashed) — inherited, not re-derived: a trashed-but-not-
+    /// purged capture refuses new local writes today, and there is no reason a foreign
+    /// revision should be able to write where a local edit could not.
+    func ingestForeignRevision(captureID: String, revisionID: String, body: Data) async throws {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        try guardWritable(captureDirectory: captureDirectory)
+
+        if let raw = Self.rawLoad(captureDirectory: captureDirectory),
+           raw.numbered.contains(where: { $0.revision.id == revisionID }) {
+            return
+        }
+
+        var fileNumber = try nextFileNumber(captureDirectory: captureDirectory)
+
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+
+        do {
+            try AtomicFile.createExclusively(
+                at: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
+                                                         revision: fileNumber),
+                writing: body)
+        } catch let error as AtomicFileError where isEEXIST(error) {
+            fileNumber = try nextFileNumber(captureDirectory: captureDirectory)
+            do {
+                try AtomicFile.createExclusively(
+                    at: SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory,
+                                                             revision: fileNumber),
+                    writing: body)
+            } catch let secondError as AtomicFileError where isEEXIST(secondError) {
+                throw TranscriptRevisionStoreError.allocationCollision
+            }
+        }
+
+        try? persistHead(captureID: captureID)
+    }
+
+    /// Finds which capture currently holds a readable canonical file for `revisionID`,
+    /// and its LOCAL file number — the reverse lookup the sync push path needs
+    /// (`SyncRecordExchange.recordToPush`): `SyncRecordName.revision(id:)` carries only
+    /// the revision's own id (design §2 note 1 — never the file number, and, unlike
+    /// `.entry`/`.audio`/`.liveLog`, never the captureID either), so building the
+    /// record to push has no other way to find either back except by looking.
+    ///
+    /// Walks every capture directory's readable chain — O(archive size), the same cost
+    /// this codebase already accepts for `SyncTreeScanner.scan()`'s own whole-archive
+    /// walk on every launch reconciliation. A revision is pushed at most once per
+    /// mint (immutable, create-once), never on a hot path, so this is not a
+    /// per-keystroke cost.
+    nonisolated static func locateRevision(capturesRoot: URL,
+                                           revisionID: String) -> (captureID: String, fileNumber: Int)? {
+        guard let ids = try? FileManager.default.contentsOfDirectory(atPath: capturesRoot.path) else {
+            return nil
+        }
+        for captureID in ids.sorted() {
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            guard let raw = rawLoad(captureDirectory: directory) else { continue }
+            if let match = raw.numbered.first(where: { $0.revision.id == revisionID }) {
+                return (captureID: captureID, fileNumber: match.file)
+            }
+        }
+        return nil
     }
 
     // MARK: - Draft lifecycle (T6d, design §2.5)
@@ -780,7 +907,7 @@ actor TranscriptRevisionStore {
     /// hour cap overrides whatever `reason` the caller passed, since §2.5 defines it as
     /// a hard 60-minute ceiling on one draft's lifetime, not an optional trigger.
     @discardableResult
-    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) throws -> String? {
+    func closeDraft(captureID: String, reason: DraftCloseReason, now: Date) async throws -> String? {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
@@ -823,7 +950,7 @@ actor TranscriptRevisionStore {
                                           parentID: draft.parentID, basedOnMachineID: draft.basedOnMachineID,
                                           deviceID: deviceIDProvider(), closedBy: effectiveReason)
 
-        try append(revision, captureID: captureID)
+        try await append(revision, captureID: captureID)
         try FileManager.default.removeItem(at: draftURL)
         return revision.id
     }
@@ -876,7 +1003,7 @@ actor TranscriptRevisionStore {
         guard now.timeIntervalSince(draft.lastWriteAt) > policy.sessionEndSeconds else {
             return nil
         }
-        return try? closeDraft(captureID: captureID, reason: .recovered, now: now)
+        return try? await closeDraft(captureID: captureID, reason: .recovered, now: now)
     }
 
     // MARK: - Revert (T7 Task 8, design §6.5)
@@ -900,7 +1027,7 @@ actor TranscriptRevisionStore {
     ///
     /// Returns the minted revision's id.
     @discardableResult
-    func revert(captureID: String, toRevisionID: String, now: Date) throws -> String {
+    func revert(captureID: String, toRevisionID: String, now: Date) async throws -> String {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
@@ -933,7 +1060,7 @@ actor TranscriptRevisionStore {
         let revision = try TranscriptMerge.revert(current: current, toMachine: machine,
                                                    id: ULID.make(now: now), createdAt: now,
                                                    deviceID: deviceIDProvider())
-        try append(revision, captureID: captureID)
+        try await append(revision, captureID: captureID)
         return revision.id
     }
 
@@ -1034,7 +1161,7 @@ actor TranscriptRevisionStore {
             closedBy: nil)
 
         do {
-            try append(revision, captureID: captureID)
+            try await append(revision, captureID: captureID)
             return .promoted(revisionID: revision.id)
         } catch {
             return .failed("\(error)")

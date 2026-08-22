@@ -151,6 +151,11 @@ extension SyncCoordinator {
             // here — see that parameter's doc comment on `SyncRecordExchange` for why a
             // second instance would be an uncoordinated second writer over `entry.json`.
             entryMetadataStore: library.entryMetadataStore,
+            // M4 T9: the library's own single shared instance, never a fresh one built
+            // here — identical reasoning to `entryMetadataStore` immediately above: a
+            // second instance would be an uncoordinated second writer over the same
+            // `transcript/` files a local draft close or revert can also be writing.
+            transcriptRevisionStore: library.revisionStore,
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old
             // journal names until the next launch.
@@ -176,7 +181,8 @@ extension SyncCoordinator {
         // not-empty-locally guard needs to re-push a refused deletion can only be handed
         // over after the fact.
         Task { [journalStore = library.journalStore, coverStore = library.journalCoverStore,
-                entryMetadataStore = library.entryMetadataStore] in
+                entryMetadataStore = library.entryMetadataStore,
+                revisionStore = library.revisionStore] in
             await exchange.attach(engine: engine)
             await journalStore.attach(syncHooks: coordinator)
             await coverStore.attach(journalStore: journalStore)
@@ -184,6 +190,9 @@ extension SyncCoordinator {
             // finalized entry (design §3, "`EntryMetadataStore.update` → enqueue
             // Entry") — same wiring, same reason as the two lines above.
             await entryMetadataStore.attach(syncHooks: coordinator)
+            // M4 T9: `TranscriptRevisionStore.append` → enqueue Revision (design §3),
+            // fires once per minted revision — same wiring, same reason.
+            await revisionStore.attach(syncHooks: coordinator)
         }
         return coordinator
     }

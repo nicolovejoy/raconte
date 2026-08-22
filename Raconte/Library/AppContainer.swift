@@ -121,6 +121,29 @@ enum AppContainer {
             .appendingPathComponent(syncStagingPendingStateFileName)
     }
 
+    /// M4 T9: a sibling of `pending.json` — `sync/staging/<captureID>/pending-revisions.json`
+    /// — durably parking Revision records that arrive for a captureID this device has not
+    /// committed yet. Ordering between fetched record types is not guaranteed (design
+    /// §6), so a revision can land before the Entry/Audio pair that would let it be
+    /// written straight into a real `transcript/` via `TranscriptRevisionStore
+    /// .ingestForeignRevision`. Deliberately a SIBLING file, not folded into
+    /// `pending.json`: a revision can arrive before the Entry record itself has, when
+    /// `pending.json` does not exist yet at all, so parking cannot depend on that
+    /// sidecar's presence.
+    ///
+    /// **Rides the same `EntryAssembler.assemble` rename `pending.json` does NOT** — this
+    /// file must be added to that function's `pruneUnexpectedStagingContents` allow-list
+    /// or it is deleted, unrecovered, the instant a commit's prune step runs (T7's own
+    /// fix-round note: "the allow-list must learn any new staged filename"). It survives
+    /// into `captures/<captureID>/pending-revisions.json` for exactly as long as it takes
+    /// `SyncRecordExchange.ingestParkedRevisions` to ingest and delete it — a committed
+    /// capture directory does not keep it around.
+    static let syncStagingPendingRevisionsFileName = "pending-revisions.json"
+    static func syncStagingPendingRevisionsURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingRevisionsFileName)
+    }
+
     /// The container root inferred from a captures root — the inverse of
     /// `capturesRoot(containerRoot:)`. Lets a type that was handed only `capturesRoot`
     /// (everything in M1/M2 was) find the registry without rethreading the composition

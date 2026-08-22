@@ -842,5 +842,64 @@ final class CaptureScreenModel {
 /// — model-to-model, no view required. Registered as `library.rescanObserver` at the end
 /// of `init`; see `reconcileReceipt()`'s own doc comment for what the invariant means.
 extension CaptureScreenModel: LibraryRescanObserver {
-    func libraryDidRescan() { reconcileReceipt() }
+    func libraryDidRescan() {
+        reconcileReceipt()
+        refreshJournalsFromLibrary()
+    }
+
+    /// #79 (second half): this model used to hold a bootstrap-once copy of `journals`
+    /// that nothing but its own create/rename/label intents ever refreshed. A journal
+    /// adopted from another device reaches the registry via
+    /// `JournalStore.applySyncMerge` + `library.rescan()` (`SyncCoordinator.swift:120`)
+    /// — neither of those calls into `CaptureScreenModel` at all — so the capture
+    /// picker stayed stuck on its bootstrap snapshot until the app relaunched.
+    ///
+    /// Wired through the SAME `libraryDidRescan()` seam #62 already uses, deliberately:
+    /// it is the one hook this model has that already fires on every rescan regardless
+    /// of who triggered it (a local mutation, launch, or a background sync pull), with
+    /// no view lifecycle involved.
+    ///
+    /// `library.journals` is already `.displayOrdered` (`LibraryScreenModel.rescan()`),
+    /// so this is a straight assignment — re-sorting here would be redundant, not a
+    /// second source of truth for order.
+    ///
+    /// #67-class guard: a background refresh must never move the user's capture
+    /// target. The selected id is left untouched whenever it still resolves in the
+    /// refreshed list — even when that SAME journal's name/cover/labels changed
+    /// remotely, since `selectedJournalName`/`selectedJournalVoiceLabels` already read
+    /// live off `journals` and need no extra wiring to pick up the new values. Only
+    /// when the selected id has genuinely left the registry — unreachable today,
+    /// reachable once Phase B ships deletion — does this fall back, through the exact
+    /// same `JournalSelection` rule `resolveCurrentJournal()` applies at bootstrap
+    /// (never a second, ad hoc copy of that rule).
+    private func refreshJournalsFromLibrary() {
+        guard !library.journalsUnreadable else { return }
+        journals = library.journals
+        guard let selectedJournalID, !journals.contains(where: { $0.id == selectedJournalID })
+        else { return }
+        switch JournalSelection.resolve(registry: JournalRegistry(journals: journals),
+                                        storedID: currentJournal.storedID) {
+        case .existing(let id):
+            self.selectedJournalID = id
+            currentJournal.select(id)
+            resolveBackdateForJournalChange()
+            syncActiveEntryMetadata()
+        case .needsDefault:
+            // The registry has gone from "the selected journal is gone" to "every
+            // journal is gone" between the guard above and here — only reachable if
+            // every journal in the app is deleted mid-session (Phase B). Best-effort,
+            // matching `resolveCurrentJournal()`'s own `.needsDefault` fallback: mint
+            // "Journal" and select it, off the main actor's next turn since minting is
+            // a `JournalStore` write.
+            Task { [weak self] in
+                guard let self, let created = try? await self.journalStore.create(name: "Journal")
+                else { return }
+                self.journals = (self.journals + [created]).displayOrdered
+                self.selectedJournalID = created.id
+                self.currentJournal.select(created.id)
+                self.resolveBackdateForJournalChange()
+                self.syncActiveEntryMetadata()
+            }
+        }
+    }
 }

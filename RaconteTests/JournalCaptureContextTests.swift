@@ -367,6 +367,89 @@ final class JournalCaptureContextTests: XCTestCase {
                        "labels must be visible via journalStore.journal(id:)")
     }
 
+    // MARK: Task A2 (issue #79, second half) — capture picker tracks sync-adopted journals
+
+    /// The capture picker used to hold a bootstrap-once copy of `journals` that only a
+    /// relaunch (or one of this model's own mutating intents) ever refreshed. A journal
+    /// adopted from another device lands via `JournalStore.applySyncMerge` +
+    /// `library.rescan()` (`SyncCoordinator.swift:120`), with nothing routing through
+    /// `createJournal`/`renameCurrentJournal` — so the picker never saw it until the app
+    /// relaunched. This pins the model-to-model refresh: no direct call on
+    /// `CaptureScreenModel` at all, just the same rescan a background sync pull drives.
+    func testCapturePickerTracksAJournalAdoptedFromSyncWithoutRelaunch() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let selected = try XCTUnwrap(model.selectedJournalID)
+
+        let adopted = Journal(id: "SYNC-ADOPTED", name: "From Phone",
+                              createdAt: Date(timeIntervalSince1970: 500_000))
+        try await model.library.journalStore.applySyncMerge(adopted)
+
+        // Exactly what a background sync ingest drives — never a direct call on
+        // `CaptureScreenModel`.
+        await model.library.rescan()
+
+        XCTAssertTrue(model.journals.contains(where: { $0.id == "SYNC-ADOPTED" }),
+                      "a sync-adopted journal must appear in the capture picker without relaunch")
+        XCTAssertEqual(model.journals, model.journals.displayOrdered,
+                      "the refreshed list must stay in display order (#79), never insertion order")
+
+        // #67-class guard: a background sync rescan must never move the user's capture
+        // target, even though the set of journals just changed under it.
+        XCTAssertEqual(model.selectedJournalID, selected,
+                       "a background sync rescan must not change the capture target")
+    }
+
+    /// Second half of the #67-class guarantee: the selected journal's OWN name changing
+    /// remotely must update the label the picker shows, without touching selection.
+    func testCapturePickerLabelUpdatesWhenSelectedJournalIsRenamedRemotely() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let selected = try XCTUnwrap(model.selectedJournalID)
+        let original = try XCTUnwrap(model.journals.first(where: { $0.id == selected }))
+        XCTAssertNotEqual(original.name, "Renamed On Phone")
+
+        var renamed = original
+        renamed.name = "Renamed On Phone"
+        try await model.library.journalStore.applySyncMerge(renamed)
+        await model.library.rescan()
+
+        XCTAssertEqual(model.selectedJournalID, selected,
+                       "a remote rename must not change which journal is selected")
+        XCTAssertEqual(model.selectedJournalName, "Renamed On Phone",
+                       "the picker label must reflect the remotely-renamed journal")
+    }
+
+    /// Phase B (not yet built) will make deletion reachable; this pins the fallback
+    /// ahead of it, per the plan. Standing in for "the selected id left the registry" by
+    /// simulating what a sync rescan would show if the journal were gone — some OTHER
+    /// journal must be adopted as the new selection, never a nil/dangling one, mirroring
+    /// `JournalSelection.resolve`'s rule (the same one `resolveCurrentJournal()` uses at
+    /// bootstrap).
+    func testSelectionFallsBackWhenTheSelectedJournalLeavesTheRegistryOnRescan() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let original = try XCTUnwrap(model.selectedJournalID)
+
+        // A second journal exists so the fallback has something real to land on.
+        let survivor = try await model.createJournal(name: "Survivor")
+        XCTAssertNotNil(survivor)
+        model.selectJournal(original)
+        XCTAssertEqual(model.selectedJournalID, original)
+
+        // Simulate the selected journal vanishing from the registry (Phase B's shape —
+        // no code today can produce this, so it is forced directly at the store).
+        var registry = try JournalStore.load(url: journalsURL)
+        registry.journals.removeAll { $0.id == original }
+        try JournalStore.encode(registry).write(to: journalsURL)
+        await model.library.rescan()
+
+        XCTAssertNotEqual(model.selectedJournalID, original,
+                          "a selection whose journal left the registry must not be kept")
+        XCTAssertTrue(model.journals.contains(where: { $0.id == model.selectedJournalID }),
+                      "the fallback selection must resolve to a journal that still exists")
+    }
+
     func testSetCurrentJournalVoiceLabelsFailureReturnsFalse() async throws {
         let model = makeModel()
         await model.bootstrap()

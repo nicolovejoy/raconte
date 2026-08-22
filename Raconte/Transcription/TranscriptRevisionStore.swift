@@ -674,7 +674,17 @@ actor TranscriptRevisionStore {
     /// sidecar must not be trashed) — inherited, not re-derived: a trashed-but-not-
     /// purged capture refuses new local writes today, and there is no reason a foreign
     /// revision should be able to write where a local edit could not.
-    func ingestForeignRevision(captureID: String, revisionID: String, body: Data) async throws {
+    ///
+    /// `beforeWrite` is a test-only seam (M4 T9 fix round 2), same idiom as `append`'s
+    /// own `beforeWrite`: a no-op in production (default `nil`), and the only way a
+    /// test can force a deterministic suspension at the exact point this call is about
+    /// to commit — after every refusal reason (trashed, missing, already-present) has
+    /// already been ruled out — for probing `SyncRecordExchange`'s cross-actor
+    /// reentrancy during this call (the finding: `SyncRecordExchange` is an actor, and
+    /// the `await` into this store is a suspension point during which the exchange can
+    /// be reentered by an unrelated concurrent delivery).
+    func ingestForeignRevision(captureID: String, revisionID: String, body: Data,
+                               beforeWrite: (@Sendable () async -> Void)? = nil) async throws {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         try guardWritable(captureDirectory: captureDirectory)
 
@@ -682,6 +692,8 @@ actor TranscriptRevisionStore {
            raw.numbered.contains(where: { $0.revision.id == revisionID }) {
             return
         }
+
+        await beforeWrite?()
 
         var fileNumber = try nextFileNumber(captureDirectory: captureDirectory)
 

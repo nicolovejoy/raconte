@@ -663,4 +663,114 @@ final class SyncRevisionTests: XCTestCase {
                 captureDirectory: captureDirectory, revision: 0)),
             try CaptureCoding.encoder().encode(parked))
     }
+
+    // MARK: Fix round 2 — the writeback must reconcile against disk, never a snapshot
+
+    /// A mirror of `ParkedRevisions`/`PendingRevision` (both `private` to
+    /// `SyncIngest.swift`, unreachable from this file even under `@testable import`)
+    /// for reading the raw JSON `pending-revisions.json` actually holds — property
+    /// names only need to match the real types' default (un-keyed) `Codable` shape.
+    private struct DecodedParkedRevisions: Decodable {
+        var knownToHaveExisted: Bool
+        var revisions: [DecodedPendingRevision]
+    }
+    private struct DecodedPendingRevision: Decodable {
+        var id: String
+    }
+
+    /// The "parked continuation" idiom (`TranscriptEditorModelTests.GatedCloseEditorStore`),
+    /// adapted for a plain async closure seam rather than a whole wrapped-protocol
+    /// store: suspends the caller of `wait()` until `release()` runs from elsewhere,
+    /// with a poll-able `isWaiting` so a test can deterministically wait for the gate
+    /// to actually arm before racing something else against it (no fixed sleep).
+    private final class SuspensionGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private(set) var isWaiting = false
+
+        func wait() async {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                self.continuation = continuation
+                isWaiting = true
+                lock.unlock()
+            }
+        }
+
+        func release() {
+            lock.lock()
+            let pending = continuation
+            continuation = nil
+            isWaiting = false
+            lock.unlock()
+            pending?.resume()
+        }
+    }
+
+    /// THE reentrancy probe (re-review finding): `rehydrateParkedRevisions`'s `await`
+    /// into `transcriptRevisionStore.ingestForeignRevision` is a cross-actor
+    /// suspension point during which `SyncRecordExchange` — an actor — is reentrant.
+    /// Revision A is parked while trashed, then restored, so its rehydration write is
+    /// eligible to actually land; a `beforeApply` gate suspends `TranscriptRevisionStore
+    /// .ingestForeignRevision` immediately before A's bytes are committed (every
+    /// refusal reason already ruled out). WHILE suspended: the capture is re-trashed
+    /// and revision B is delivered for the SAME captureID — it must park (the capture
+    /// reads trashed at that instant), landing in the exact `pending-revisions.json`
+    /// A has not yet been removed from. Releasing the gate lets A's write complete.
+    ///
+    /// If the writeback trusts the pre-`applyParked` snapshot (fix-round-1 shape, and
+    /// `ingestParkedRevisions`' identical shape before this fix round), A resolving
+    /// with `leftover.isEmpty` deletes the WHOLE file — destroying B, which the
+    /// snapshot never knew about. The fix reconciles against a fresh re-read instead:
+    /// A must land in `transcript/`, and B must survive in `pending-revisions.json`.
+    ///
+    /// Mutation check (ruled, run by hand — see the fix report): reverting
+    /// `reconcileParkedWriteback`'s call in `rehydrateParkedRevisions` back to the
+    /// snapshot-based `if leftover.isEmpty { removeItem }` shape makes this test fail
+    /// — B is gone, not merely "not yet applied".
+    func testRehydrationReconcilesTheWritebackAgainstFreshDiskNotAPreAwaitSnapshot() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let store = makeStore()
+        let ex = exchange(transcriptRevisionStore: store)
+
+        let idA = ULID.make()
+        let revisionA = revision(idA, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: idA, revision: revisionA))
+
+        // Restore — A is now eligible to actually land once rehydration reaches it.
+        try setTrashed(false)
+
+        let gate = SuspensionGate()
+        let rehydrateTask = Task {
+            await ex.rehydrateParkedRevisions(beforeApply: { await gate.wait() })
+        }
+
+        while !gate.isWaiting {
+            await Task.yield()
+        }
+
+        // Re-trash, then deliver B for the SAME captureID while A's write is
+        // suspended mid-flight — B must see "trashed" and park, landing in the file A
+        // has not yet been removed from.
+        try setTrashed(true)
+        let idB = ULID.make()
+        let revisionB = revision(idB, source: .userEdit, createdAt: stamp(20))
+        await ex.acceptRemote(try revisionRecord(id: idB, revision: revisionB))
+
+        gate.release()
+        await rehydrateTask.value
+
+        let landedURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        XCTAssertEqual(try Data(contentsOf: landedURL), try CaptureCoding.encoder().encode(revisionA),
+                       "A must have landed — it was eligible at the moment its write actually ran")
+
+        let parkedURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                     captureID: captureID)
+        let decoded = try CaptureCoding.decoder().decode(DecodedParkedRevisions.self,
+                                                          from: try Data(contentsOf: parkedURL))
+        XCTAssertEqual(Set(decoded.revisions.map(\.id)), [idB],
+                       "B — parked DURING the suspension — must survive the writeback; A (handled) "
+                       + "must be the only id removed")
+    }
 }

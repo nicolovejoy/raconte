@@ -355,9 +355,20 @@ final class LibraryScreenModel {
     /// is not empty — restoring that entry later would file it into a journal that no
     /// longer exists, so the guard must count `trashed`, not just `allEntries`.
     ///
-    /// Exposed rather than buried inside `deleteJournal` below: B2 (sync-ingest delete)
-    /// needs to ask this exact question from the sync side, and is forbidden from
-    /// re-implementing scanning inside `SyncIngest` to do it.
+    /// **Freshness obligation, load-bearing:** this reads `allEntries`/`trashed` AS OF
+    /// THE LAST SCAN, not disk truth. That staleness is tolerable for every other
+    /// `LibraryScreenModel` mutator (rename/`setSpan`/`setVoiceLabels` are non-destructive
+    /// or reversible, so a stale read costs at worst a wasted write) but is NOT tolerable
+    /// for a destructive caller: an entry that lands after the last scan — a background
+    /// CKSyncEngine ingest arriving while a confirmation dialog sits open, for instance —
+    /// would read as "empty" and get orphaned into a journal that no longer exists once
+    /// deleted. **Any caller of this method for a destructive decision (`deleteJournal`
+    /// below, and B2's sync-ingest delete path) MUST call `rescan()` immediately before
+    /// calling this, not rely on whatever scan happens to be cached.** This method itself
+    /// deliberately does not scan — it is a synchronous, cheap read of already-scanned
+    /// state, kept exposed rather than buried inside `deleteJournal` so B2 can ask this
+    /// exact question from the sync side without re-implementing scanning inside
+    /// `SyncIngest`. The freshness obligation travels with the exposure.
     func isJournalEmpty(_ journalID: String) -> Bool {
         !allEntries.contains { $0.journalID == journalID }
             && !trashed.contains { $0.journalID == journalID }
@@ -368,8 +379,17 @@ final class LibraryScreenModel {
     /// `renameJournal`/`trashEntry`: the caller alerts on `false`, and nothing partially
     /// happens either way — the emptiness guard runs before the store is ever touched,
     /// and the store's own guards (unknown id, last remaining journal) are honoured too.
+    ///
+    /// Rescans FIRST, before evaluating `isJournalEmpty` — see that method's freshness
+    /// obligation. Without this, an entry that arrived after the last scan (a background
+    /// sync ingest landing while a confirmation dialog is open, most concretely) would
+    /// read as belonging to an empty journal and be orphaned by the delete that follows.
+    /// This narrows, rather than closes, the race: there is still a synchronous
+    /// check-then-await gap between this rescan and the store write below, the same gap
+    /// every other mutator in this file already accepts.
     @discardableResult
     func deleteJournal(_ journalID: String) async -> Bool {
+        await rescan()
         guard isJournalEmpty(journalID) else { return false }
         guard (try? await journalStore.deleteJournal(id: journalID)) != nil else { return false }
         await rescan()

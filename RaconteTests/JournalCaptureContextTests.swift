@@ -420,6 +420,44 @@ final class JournalCaptureContextTests: XCTestCase {
                        "the picker label must reflect the remotely-renamed journal")
     }
 
+    /// Task A2 review, Finding 1: `selectedJournalID`/`selectedJournalName` alone do
+    /// NOT discriminate the #67-class guard from its removal — `JournalSelection.resolve`
+    /// is idempotent whenever the stored id still resolves, so an unconditional
+    /// re-resolve on every rescan would land on the same id either way. What the guard
+    /// actually suppresses is `resolveBackdateForJournalChange()`/`syncActiveEntryMetadata()`
+    /// firing on every rescan regardless of relevance — and
+    /// `resolveBackdateForJournalChange()` re-anchors `backdateDate` off the carried
+    /// `PartialDate` (noon for `.day` precision), which is a DIFFERENT instant than
+    /// whatever exact `Date` the owner actually dialled unless it happened to already be
+    /// noon. A background rescan silently nudging a live backdate is the same bug class
+    /// as the m4/sync merge gate's F1 (a no-op visit re-stamping `span` with `now`).
+    ///
+    /// This drives a rescan that is IRRELEVANT to the current selection (a different
+    /// journal is adopted from sync) and asserts the live backdate is untouched.
+    func testIrrelevantBackgroundRescanDoesNotReanchorTheLiveBackdate() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let selected = try XCTUnwrap(model.selectedJournalID)
+
+        model.setBackdateEnabled(true)
+        // 500s past epoch is 00:08:20 UTC — nowhere near the noon `anchorDate()` would
+        // reconstruct for `.day` precision, so a silent re-anchor is guaranteed visible.
+        model.setBackdateDate(Date(timeIntervalSince1970: 500))
+        let backdateBefore = model.backdateDate
+        let precisionBefore = model.backdatePrecision
+
+        let adopted = Journal(id: "OTHER-JOURNAL", name: "From Phone",
+                              createdAt: Date(timeIntervalSince1970: 999_000))
+        try await model.library.journalStore.applySyncMerge(adopted)
+        await model.library.rescan()
+
+        XCTAssertEqual(model.selectedJournalID, selected,
+                       "sanity: this rescan must not touch selection at all")
+        XCTAssertEqual(model.backdateDate, backdateBefore,
+                       "an irrelevant rescan must not re-anchor the live backdate")
+        XCTAssertEqual(model.backdatePrecision, precisionBefore)
+    }
+
     /// Phase B (not yet built) will make deletion reachable; this pins the fallback
     /// ahead of it, per the plan. Standing in for "the selected id left the registry" by
     /// simulating what a sync rescan would show if the journal were gone — some OTHER

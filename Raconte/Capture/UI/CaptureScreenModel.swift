@@ -899,6 +899,15 @@ extension CaptureScreenModel: LibraryRescanObserver {
                 self.currentJournal.select(created.id)
                 self.resolveBackdateForJournalChange()
                 self.syncActiveEntryMetadata()
+                // Same convention as `createJournal`/`renameCurrentJournal` (see their
+                // doc comments above): `library.journals` and this model's own
+                // `journals` are separate arrays with no shared storage, and only a
+                // rescan reconciles them. Without this, the freshly-minted default is
+                // invisible to `library.journals` — the sidebar, and anything else that
+                // reads through `library` rather than this model — until some UNRELATED
+                // rescan happens to run first. Last, same reason: the write must be
+                // durable before the rescan reads it back.
+                await self.library.rescan()
             }
         }
     }

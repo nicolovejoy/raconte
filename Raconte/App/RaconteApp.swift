@@ -23,6 +23,13 @@ final class AppServices {
         // Built from the library's own stores, never its own copies — see
         // `SyncCoordinator.live(library:)`.
         self.sync = SyncCoordinator.live(library: library)
+        // M4 T6: the finalize-completion choke point (`CaptureScreenModel
+        // .finishCurrentCapture` → `FinalizeArtifactPush.push`) needs a `SyncHooks` of
+        // its own — it fires `.audio`/`.liveLog` too, which are not
+        // `EntryMetadataStore`'s concern to notify about. Wired here, after `sync`
+        // exists, for the same construction-order reason `SyncCoordinator.live`
+        // attaches the library's stores after building the coordinator.
+        if let sync { capture.attach(syncHooks: sync) }
         // Invariant 3 (design §8): one `LibraryScreenModel` app-wide. `CaptureScreenModel`
         // resolves its own `library` internally (accepting an already-built instance or
         // minting one), so an assert here — not a unit test, which would have to stand up

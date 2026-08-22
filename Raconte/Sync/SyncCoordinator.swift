@@ -166,10 +166,15 @@ extension SyncCoordinator {
         // `engine` exists (the engine's own init takes `exchange`), so the reference the
         // not-empty-locally guard needs to re-push a refused deletion can only be handed
         // over after the fact.
-        Task { [journalStore = library.journalStore, coverStore = library.journalCoverStore] in
+        Task { [journalStore = library.journalStore, coverStore = library.journalCoverStore,
+                entryMetadataStore = library.entryMetadataStore] in
             await exchange.attach(engine: engine)
             await journalStore.attach(syncHooks: coordinator)
             await coverStore.attach(journalStore: journalStore)
+            // M4 T6: the post-update hook `EntryMetadataStore.update` fires for a
+            // finalized entry (design §3, "`EntryMetadataStore.update` → enqueue
+            // Entry") — same wiring, same reason as the two lines above.
+            await entryMetadataStore.attach(syncHooks: coordinator)
         }
         return coordinator
     }

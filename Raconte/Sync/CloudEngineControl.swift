@@ -347,6 +347,21 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 await exchange.noteSaved(record)
             }
             await handleFailedSaves(sent.failedRecordSaves, syncEngine: syncEngine)
+            // Deletions get no ledger entry — `SyncPlanner` never re-derives a delete
+            // (it iterates the disk scan, and a deleted artifact is not in it), so there
+            // is nothing to record and nothing that retries. That makes the log the ONLY
+            // evidence a delete ever left this device, which is what the owner's smoke
+            // ("delete here, watch it vanish there") has to be debugged from when it
+            // doesn't (gate finding, Minor 1).
+            for recordID in sent.deletedRecordIDs {
+                log.notice("sync: deleted \(recordID.recordName, privacy: .public) on the server")
+            }
+            for failure in sent.failedRecordDeletes {
+                log.error("""
+                    sync: delete failed \(failure.key.recordName, privacy: .public): \
+                    \(failure.value.localizedDescription, privacy: .public) — not retried
+                    """)
+            }
         case .sentDatabaseChanges(let sent):
             for failure in sent.failedZoneSaves {
                 log.error("""

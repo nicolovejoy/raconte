@@ -440,6 +440,15 @@ actor SyncRecordExchange: CloudRecordExchange {
                 guard let local else {
                     // Unknown here: take it as-is, stamps included, and take its cover if
                     // it has one.
+                    //
+                    // **This is the line that resurrects a deleted journal** (#80 owner
+                    // ruling 3, accepted and not fixed): a peer that was offline when the
+                    // deletion happened re-pushes the journal on reconnect, and to this
+                    // device that save is indistinguishable from a journal it has simply
+                    // never seen — there is no delete tombstone to consult. A reader
+                    // debugging "why did my deleted journal come back?" lands HERE, not on
+                    // `acceptRemoteJournalDeletion` (which only decides whether to apply a
+                    // deletion), so the note belongs in both places.
                     return JournalSyncMerge(journal: JournalMerge.adopted(remote: remote),
                                             coverAction: remote.coverAsset == nil ? .leave : .adopt)
                 }
@@ -509,11 +518,38 @@ actor SyncRecordExchange: CloudRecordExchange {
                 sync: inbound deletion for journal \(id, privacy: .public) refused — not \
                 empty locally; re-pushing
                 """)
+            // Forget what this device knows about the SERVER's copy first (gate finding,
+            // Important 4). Two independent reasons, and the second holds even if the
+            // first turns out not to:
+            //
+            // 1. `journalRecordToPush` builds on `archivedRecord(for:)` — archived system
+            //    fields carrying a `recordChangeTag` for a record the server has just
+            //    deleted. A save under `.ifServerRecordUnchanged` cannot match a tag on a
+            //    record that no longer exists, so it fails rather than recreating it.
+            //    Dropping the archived fields makes the next build a plain create, which
+            //    is what restoring a deleted record actually requires. (Not measured
+            //    against CloudKit — no server access — but harmless if the error code
+            //    turns out to differ: a create for a record that unexpectedly still
+            //    exists comes back `.serverRecordChanged` and routes through the normal
+            //    conflict merge.)
+            // 2. Clearing the ledger entry gives this re-push a RETRY. `SyncPlanner
+            //    .reconcile` enqueues new-or-digest-changed artifacts only, and this
+            //    device's content never changed — so with the ledger intact, a re-push
+            //    that fails for any reason is never attempted again and the two devices
+            //    diverge silently. With it cleared, the journal reads as never-uploaded
+            //    and the next launch's reconciliation scan re-enqueues it.
+            await forgetServerState(for: .journal(id: id))
             await engine?.enqueueSaves([.journal(id: id)])
             return
         }
         do {
             try await journalStore.applySyncDelete(id: id)
+            // The record is gone from the server and from here; its system fields and
+            // ledger entry describe a record that no longer exists (gate finding, Minor
+            // 3). Harmless if left — a resurrected journal's `acceptRemote` overwrites
+            // them — but this is the same cleanup the refusal branch needs, so it is the
+            // same call.
+            await forgetServerState(for: .journal(id: id))
         } catch {
             // Unknown here too (already gone independently — a genuine no-op) or the
             // last-remaining-journal guard (this device's only journal — refused, the
@@ -526,6 +562,33 @@ actor SyncRecordExchange: CloudRecordExchange {
             return
         }
         await localStoreDidChange?()
+    }
+
+    /// Drops everything this device remembers about the SERVER's copy of `name`: the
+    /// archived system fields (so the next push is a create, not an update against a tag
+    /// the server no longer holds) and the upload-ledger entry (so a reconciliation scan
+    /// treats the artifact as never-uploaded and re-enqueues it).
+    ///
+    /// Failures are logged, not swallowed: neither is data loss — the worst case is one
+    /// redundant upload, or a re-push that has to wait for the next reconciliation — but
+    /// a silent failure here is exactly what makes a divergence invisible.
+    private func forgetServerState(for name: SyncRecordName) async {
+        do {
+            try await bookkeeping.deleteSystemFields(for: name.rawValue)
+        } catch {
+            log.error("""
+                sync: could not drop archived system fields for \(name.rawValue, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
+        do {
+            try await bookkeeping.clearUpload(for: name.rawValue)
+        } catch {
+            log.error("""
+                sync: could not clear the upload ledger for \(name.rawValue, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
     }
 
     private func applyCover(_ action: JournalSyncMerge.CoverAction, for remote: RemoteJournal) async {

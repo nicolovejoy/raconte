@@ -156,6 +156,14 @@ final class LibraryScreenModel {
     /// `bootstrap()` re-walking the whole corpus, not a correctness one.
     private var headStampRan = false
 
+    /// M4 (marker-correction push hook). Nil everywhere sync is off — unit tests, the
+    /// UI-test harness, and any build whose composition root refused to construct an
+    /// engine. Matches `EntryMetadataStore`/`JournalStore`/`TranscriptRevisionStore`'s
+    /// identical seam; this model needs its own copy because the `VoiceMarkingStore`
+    /// conformance below writes through the stateless `MarkerCorrectionWriter` directly
+    /// rather than through one of those already-wired actors.
+    private var syncHooks: (any SyncHooks)?
+
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
@@ -203,6 +211,14 @@ final class LibraryScreenModel {
     /// anything while a `SkippedCapture` blocks the journal — see that method.
     func attachActiveCaptureProbe(_ probe: @escaping @MainActor () -> String?) {
         activeCaptureProbe = probe
+    }
+
+    /// Wired after construction (M4), for the same reason `EntryMetadataStore.attach
+    /// (syncHooks:)`/`JournalStore.attach(syncHooks:)`/`TranscriptRevisionStore.attach
+    /// (syncHooks:)` are: the composition root builds this model before it can build
+    /// the `SyncCoordinator` that conforms to `SyncHooks`.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     var yearGroups: [EntryYearGroup] { EntryListItem.groupedByYear(items) }
@@ -1079,26 +1095,44 @@ extension LibraryScreenModel: VoiceMarkingStore {
     /// screen's own `spans` could be one action stale (another marking session, or the
     /// editor, changed the chain since this screen last opened), and writing against a
     /// stale span array could anchor to the wrong frame silently.
+    ///
+    /// M4 (marker-correction push hook, design §3's chokepoint the T10 review left
+    /// unwired): fires `noteLocalChange(.markerStream(captureID:deviceID:))` naming
+    /// THIS device's own stream, strictly after `MarkerCorrectionWriter.addVoiceBoundary`
+    /// has already durably appended — same "fire only on a write that actually landed"
+    /// discipline `EntryMetadataStore.update`/`TranscriptRevisionStore.append` follow.
+    /// No eligibility re-check here: `markerStreamRecordToPush`'s own
+    /// `FinalizeArtifactPush.isFinalized` gate is the one and only place that decision is
+    /// made (same reasoning `TranscriptRevisionStore.append` documents for `.revision`),
+    /// so a capture-time correction — structurally unreachable through THIS screen, which
+    /// only ever opens on a capture whose `current` revision is already readable, i.e.
+    /// already finalized — would be refused at push time regardless.
     @discardableResult
     func addVoiceBoundary(atSpanIndex spanIndex: Int, voice: String, captureID: String) async throws -> Int64 {
         guard let spans = await currentSpans(for: captureID) else {
             throw MarkerCorrectionWriter.BoundaryAddError.noUsableBounds
         }
         let capturesRoot = self.capturesRoot
-        return try await Task.detached(priority: .userInitiated) {
+        let frame = try await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             return try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: spanIndex, spans: spans,
                                                                 voice: voice, captureDirectory: directory)
         }.value
+        await syncHooks?.noteLocalChange(.markerStream(captureID: captureID, deviceID: DeviceIdentity.stable()))
+        return frame
     }
 
     /// No span prerequisite (see `MarkerCorrectionWriter.addOpeningVoice`'s own doc
     /// comment) — writes unconditionally at frame 0.
+    ///
+    /// M4 (marker-correction push hook): same fire-after-durable-write discipline as
+    /// `addVoiceBoundary` above — see that method's doc comment for the full reasoning.
     func addOpeningVoice(voice: String, captureID: String) async throws {
         let capturesRoot = self.capturesRoot
         try await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             try MarkerCorrectionWriter.addOpeningVoice(voice: voice, captureDirectory: directory)
         }.value
+        await syncHooks?.noteLocalChange(.markerStream(captureID: captureID, deviceID: DeviceIdentity.stable()))
     }
 }

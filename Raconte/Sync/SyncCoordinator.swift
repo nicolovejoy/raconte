@@ -193,6 +193,12 @@ extension SyncCoordinator {
             // M4 T9: `TranscriptRevisionStore.append` → enqueue Revision (design §3),
             // fires once per minted revision — same wiring, same reason.
             await revisionStore.attach(syncHooks: coordinator)
+            // M4 (marker-correction push hook, T10 review's unwired chokepoint): the
+            // mark-voices screen's `VoiceMarkingStore` conformance writes through
+            // `MarkerCorrectionWriter` directly (a stateless enum, no store of its own),
+            // so `library` itself needs the hook — see `LibraryScreenModel.attach
+            // (syncHooks:)`'s doc comment.
+            await library.attach(syncHooks: coordinator)
             // M4 T9 fix round: a revision fetched for a then-trashed capture parked
             // rather than vanished (`SyncRecordExchange.ingestRevision`'s
             // `.trashedCapture` catch) — CKSyncEngine will never redeliver a record it

@@ -42,22 +42,15 @@ struct JournalEditorView: View {
         model.trashed.filter { $0.journalID == journalID }.count
     }
 
-    /// #80, owner ruling 1: "empty" is zero live entries AND zero trashed ones — a
-    /// trashed-only journal is not empty, since restoring later would file into a
-    /// journal that no longer exists (mirrors `LibraryScreenModel.isJournalEmpty`'s own
-    /// rule, re-derived here from the same published state rather than calling that
-    /// MainActor-only method from a computed `View` property). Owner ruling 2: the
-    /// affordance stays VISIBLE even when refused, with the reason spelled out — never
-    /// an invisible control. `nil` means deletable.
+    /// #80, owner ruling 1 (empty = zero live AND zero trashed entries) / ruling 2
+    /// (always visible, reason spelled out when refused). The logic itself lives in
+    /// `JournalDeleteEligibility.blockedReason` — pure, exhaustively unit-tested,
+    /// including the trashed-only case this view alone cannot pin. See that type's doc
+    /// comment for the drift risk against `LibraryScreenModel.isJournalEmpty`.
     private var deleteBlockedReason: String? {
-        if model.journals.count <= 1 {
-            return "This is your only journal. Raconte always needs at least one to capture into."
-        }
-        if entryCount > 0 || trashedCount > 0 {
-            return "Delete every entry in this journal — including anything still in "
-                 + "Trash — before you can delete the journal itself."
-        }
-        return nil
+        JournalDeleteEligibility.blockedReason(journalCount: model.journals.count,
+                                               entryCount: entryCount,
+                                               trashedCount: trashedCount)
     }
 
     var body: some View {

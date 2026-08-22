@@ -142,6 +142,11 @@ extension SyncCoordinator {
             coverStore: library.journalCoverStore,
             bookkeeping: bookkeeping,
             deviceID: DeviceIdentity.stable(),
+            // T7: where `captures/` and `sync/staging/` live, so entry ingest can
+            // actually assemble and commit. Without this, a real build would silently
+            // never run the new-entry ingest path at all — see that parameter's doc
+            // comment on `SyncRecordExchange`.
+            containerRoot: containerRoot,
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old
             // journal names until the next launch.

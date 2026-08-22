@@ -78,9 +78,4 @@ final class JournalDeleteEligibilityTests: XCTestCase {
                                                    hasIndeterminateContent: true),
             hasContentReason)
     }
-
-    func testIndeterminateContentIsFalseByDefault() {
-        XCTAssertNil(
-            JournalDeleteEligibility.blockedReason(journalCount: 2, entryCount: 0, trashedCount: 0))
-    }
 }

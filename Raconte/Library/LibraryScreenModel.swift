@@ -399,9 +399,13 @@ final class LibraryScreenModel {
     /// for a destructive caller: an entry that lands after the last scan — a background
     /// CKSyncEngine ingest arriving while a confirmation dialog sits open, for instance —
     /// would read as "empty" and get orphaned into a journal that no longer exists once
-    /// deleted. **Any caller of this method for a destructive decision (`deleteJournal`
-    /// below, and B2's sync-ingest delete path) MUST call `rescan()` immediately before
-    /// calling this, not rely on whatever scan happens to be cached.** This method itself
+    /// deleted. **A plain `rescan()` immediately before calling this is NOT enough**
+    /// (gate finding, Critical 1): a superseded scan publishes nothing, so `await
+    /// rescan()` guarantees only that *a* scan ran, not that the state read afterwards is
+    /// fresh. Any caller of this method for a destructive decision (`deleteJournal`
+    /// below, and B2's sync-ingest delete path) MUST go through
+    /// `rescanUntilFresh(attempts:)` and REFUSE when it returns `false` — see
+    /// `isJournalEmptyAfterRescan` and `deleteJournal` for the shape. This method itself
     /// deliberately does not scan — it is a synchronous, cheap read of already-scanned
     /// state, kept exposed rather than buried inside `deleteJournal` so B2 can ask this
     /// exact question from the sync side without re-implementing scanning inside

@@ -181,6 +181,16 @@ final class SyncEntryRecordTests: XCTestCase {
         try Data("{}\n".utf8).write(to: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory))
     }
 
+    /// The codebase's usual technique for "exists but unreadable" (see
+    /// `SyncTreeScannerTests.writeEntryMetadataAsUnreadableDirectory`): a directory sits
+    /// at the exact path `live.jsonl` would occupy. `FileManager.fileExists` reads this
+    /// as present; `Data(contentsOf:)` throws — exactly the divergence `namesToPush`
+    /// must resolve the same way `SyncTreeScanner.liveLogArtifact` does.
+    private func writeLiveLogAsUnreadableDirectory() throws {
+        let url = SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
     /// Eligibility pin: an in-flight (not yet verified) capture is not finalized — no
     /// manifest at all, and a manifest with no `final.verifiedAt`, both read false.
     func testAnInFlightCaptureIsNeverFinalized() throws {
@@ -213,6 +223,30 @@ final class SyncEntryRecordTests: XCTestCase {
         try writeLiveLog()
         XCTAssertEqual(FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID),
                        [.entry(captureID: captureID), .audio(captureID: captureID), .liveLog(captureID: captureID)])
+    }
+
+    /// Review finding (task-6 gate): `namesToPush` must treat an EXISTING-BUT-UNREADABLE
+    /// `live.jsonl` the same as an absent one — never queuing `.liveLog` for a file
+    /// nothing can actually read the bytes of — because that is exactly what
+    /// `SyncTreeScanner.liveLogArtifact` (the reconciliation scan this is meant to
+    /// agree with) already does via its own `try? Data(contentsOf:)` read. A bare
+    /// `fileExists` check would disagree here: the directory below exists, so
+    /// `fileExists` reads true while `Data(contentsOf:)` throws.
+    ///
+    /// Mutation check (run by hand): reverting `namesToPush`'s LiveLog check to
+    /// `FileManager.default.fileExists(atPath: liveLogURL.path)` makes this test fail —
+    /// `.liveLog(captureID:)` gets queued for a directory nothing can hash or upload.
+    func testNamesToPushTreatsAnUnreadableLiveLogAsAbsentNotPresent() throws {
+        try writeManifest(verified: true)
+        try writeLiveLogAsUnreadableDirectory()
+
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory).path),
+                      "sanity: something really is at that path — this is not just a missing file")
+
+        XCTAssertEqual(FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID),
+                       [.entry(captureID: captureID), .audio(captureID: captureID)],
+                       "an unreadable live.jsonl must read exactly like an absent one, never like a present one")
     }
 
     // MARK: FinalizeArtifactPush.push — the choke point itself, with a fake hook recorder

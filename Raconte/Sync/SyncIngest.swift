@@ -2161,6 +2161,91 @@ actor SyncRecordExchange: CloudRecordExchange {
         await localStoreDidChange?()
     }
 
+    /// An inbound ENTRY deletion (M4 T11, design §5). See
+    /// `CloudEngineControl.acceptRemoteEntryDeletion`'s doc comment for why every other
+    /// record kind never reaches this file at all — they cascade with the same Entry
+    /// deletion this handles.
+    ///
+    /// **Routes through `StagedRemover` exclusively — never `RecoveryExecutor`, never a
+    /// raw `FileManager.removeItem` on `captures/` itself (R3).** The staged rename is
+    /// this app's one true one-way door for a whole capture directory; recovery's own
+    /// delete path is forbidden here because its quarantine semantics
+    /// (`holdsIrreplaceableArtifacts`) would refuse — or, worse, be silently bypassed —
+    /// for exactly the captures a deletion is supposed to remove.
+    ///
+    /// **Unknown/already-deleted captureID is a silent no-op** (`stage` throws
+    /// `.captureDirectoryMissing`, caught and ignored) — a second device's independent
+    /// 30-day sweep racing this one, or a redelivered deletion event, costs nothing
+    /// (design §5: "staging an absent directory is a no-op").
+    ///
+    /// **No corrective re-push**, unlike `acceptRemoteJournalDeletion`'s not-empty-
+    /// locally guard: an entry has no resurrection semantics an owner could be
+    /// surprised by (that guard exists because a NOT-EMPTY journal must never
+    /// disappear; an entry's only content is itself). Deleted is deleted.
+    ///
+    /// Before staging — the only point they are still enumerable — gathers the
+    /// capture's own child record family (`SyncRecordFamily`: audio/liveLog/revisions/
+    /// marker streams) and, after a successful stage, retires their bookkeeping and
+    /// drops any not-yet-sent local SAVE for them (design §5, "the delete wins").
+    /// Also discards any PARKED sync state left under `sync/staging/<captureID>/` for
+    /// this captureID — parked revisions/marker streams/partial assembly describe
+    /// content whose parent is now gone, and nothing after this may ever revive them.
+    /// `rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams` already do the
+    /// launch-time half of this same discard when they find a capture purged out from
+    /// under a park; this is the live-ingest half, run the instant the deletion itself
+    /// is what does the purging.
+    func acceptRemoteEntryDeletion(captureID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — entry deletion ingest skipped")
+            return
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
+
+        let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        do {
+            _ = try remover.stage(captureID: captureID)
+        } catch StagedRemovalError.captureDirectoryMissing {
+            // Nothing local to remove. Still worth retiring bookkeeping/parked state
+            // below — a leftover from an earlier local delete or a stale park can
+            // still be sitting here even though the capture directory itself is gone.
+            discardParkedState(captureID: captureID, containerRoot: containerRoot)
+            await forgetServerState(for: .entry(captureID: captureID))
+            return
+        } catch {
+            log.error("""
+                sync: entry deletion ingest for \(captureID, privacy: .public) failed to \
+                stage: \(String(describing: error), privacy: .public)
+                """)
+            return
+        }
+        _ = remover.purge()
+
+        discardParkedState(captureID: captureID, containerRoot: containerRoot)
+
+        await forgetServerState(for: .entry(captureID: captureID))
+        if !family.isEmpty {
+            await engine?.dropPendingSaves(family)
+            for name in family {
+                await forgetServerState(for: name)
+            }
+        }
+
+        await localStoreDidChange?()
+    }
+
+    /// R3: strictly scoped to a path under `sync/staging/` — legal `removeItem` usage,
+    /// unlike `acceptRemoteEntryDeletion` above, which must route the CAPTURE removal
+    /// through `StagedRemover` alone. Discards whatever this device was durably
+    /// holding for `captureID` under `sync/staging/<captureID>/` (parked revisions,
+    /// parked marker streams, a partial new-entry assembly) now that its parent Entry
+    /// is gone — design §5, delete wins; nothing after this may ever revive them.
+    private func discardParkedState(captureID: String, containerRoot: URL) {
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        try? FileManager.default.removeItem(at: stagingDir)
+    }
+
     /// Drops everything this device remembers about the SERVER's copy of `name`: the
     /// archived system fields (so the next push is a create, not an update against a tag
     /// the server no longer holds) and the upload-ledger entry (so a reconciliation scan

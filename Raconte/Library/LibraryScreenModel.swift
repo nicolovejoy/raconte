@@ -754,13 +754,31 @@ final class LibraryScreenModel {
         guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
               metadata.isTrashed else { return false }
         let remover = self.remover
+        // M4 T11: gathered BEFORE `stage` renames the directory away — the only point
+        // it is still enumerable off disk (`SyncRecordFamily`'s own doc comment).
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
         let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
             do { _ = try remover.stage(captureID: captureID) } catch { return false }
             _ = remover.purge()
             return true
         }.value
+        if staged {
+            await noteSyncDelete(captureID: captureID, family: family)
+        }
         await rescan()
         return staged
+    }
+
+    /// M4 T11: after a successful stage — never before `deleteEntryPermanently`/
+    /// `emptyTrash`/`sweepTrash` actually renamed the directory away, since a failed
+    /// stage means the entry is still there. Tells the sync layer the Entry is gone (a
+    /// real CK delete; children cascade server-side via `.deleteSelf`) and withdraws/
+    /// retires its child family (design §5, "the delete wins") — `family` must already
+    /// have been gathered before the stage ran.
+    private func noteSyncDelete(captureID: String, family: [SyncRecordName]) async {
+        await syncHooks?.noteLocalDelete(.entry(captureID: captureID))
+        await syncHooks?.noteLocalDeleteFamily(family)
     }
 
     /// The result of `emptyTrash()`: how many trashed entries were actually removed vs.
@@ -800,11 +818,20 @@ final class LibraryScreenModel {
                 failed += 1
                 continue
             }
+            // M4 T11: gathered BEFORE `stage` renames the directory away, same
+            // reasoning as `deleteEntryPermanently`.
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
             let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
                 do { _ = try remover.stage(captureID: captureID) } catch { return false }
                 return true
             }.value
-            if staged { deleted += 1 } else { failed += 1 }
+            if staged {
+                deleted += 1
+                await noteSyncDelete(captureID: captureID, family: family)
+            } else {
+                failed += 1
+            }
         }
         _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
         await rescan()
@@ -814,7 +841,14 @@ final class LibraryScreenModel {
     /// The 30-day sweep. Called once per launch, after the first scan has published, so
     /// it never sits between the owner and his library.
     func sweepTrash() async {
-        let result = await sweeper.run()
+        // Captured before the `Task.detached` inside `sweeper.run` — `syncHooks` is a
+        // `Sendable` existential, so handing it to the `@Sendable` closure below is
+        // safe; reading `self.syncHooks` itself must happen here, on this actor.
+        let syncHooks = self.syncHooks
+        let result = await sweeper.run(onDeleted: { captureID, family in
+            await syncHooks?.noteLocalDelete(.entry(captureID: captureID))
+            await syncHooks?.noteLocalDeleteFamily(family)
+        })
         lastSweep = result
         // Only rescan when the disk actually changed — a launch with nothing expired is
         // the normal case and must not pay for a second scan.

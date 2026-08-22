@@ -68,6 +68,27 @@ actor SyncCoordinator: SyncHooks {
         // re-enqueues nothing. Leaving it was benign but it is stale bookkeeping that
         // grows forever, and a resurrected record would otherwise be pushed against a
         // change tag from before its deletion.
+        await retireBookkeeping(for: name)
+    }
+
+    /// M4 T11 (design §5, "the delete wins"): a local entry's now-gone CHILD records
+    /// — never the Entry record itself, which stays on `noteLocalDelete` above and
+    /// gets an actual CK delete. These never do: the Entry's own delete cascades them
+    /// server-side, so the ONLY local work left is withdrawing any not-yet-sent save
+    /// for one of them and retiring the same per-name bookkeeping `noteLocalDelete`
+    /// retires for its own name.
+    func noteLocalDeleteFamily(_ names: [SyncRecordName]) async {
+        guard !names.isEmpty else { return }
+        await engine.dropPendingSaves(names)
+        for name in names {
+            await retireBookkeeping(for: name)
+        }
+    }
+
+    /// Shared by `noteLocalDelete`/`noteLocalDeleteFamily`: drops what this device
+    /// remembers about `name`'s SERVER copy — see `noteLocalDelete`'s doc comment for
+    /// why this cannot cost a spurious upload.
+    private func retireBookkeeping(for name: SyncRecordName) async {
         do {
             try await bookkeeping.deleteSystemFields(for: name.rawValue)
             try await bookkeeping.clearUpload(for: name.rawValue)

@@ -70,9 +70,11 @@ final class SyncEntryIngestTests: XCTestCase {
         SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
     }
 
-    private func entryRecord(metadata: EntryMetadata, manifestJSON: Data, at when: Date) -> CKRecord {
+    private func entryRecord(metadata: EntryMetadata, manifestJSON: Data, at when: Date,
+                             deviceID: String = "device-high") -> CKRecord {
         SyncRecordBuilders.entryRecord(captureID: captureID, metadata: metadata,
-                                       manifestJSON: manifestJSON, capturedAt: when, zoneID: zoneID)
+                                       manifestJSON: manifestJSON, capturedAt: when,
+                                       deviceID: deviceID, zoneID: zoneID)
     }
 
     private func audioRecord(bytes: Data, sha256: String? = nil) -> CKRecord {

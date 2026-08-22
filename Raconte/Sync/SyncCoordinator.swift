@@ -147,6 +147,10 @@ extension SyncCoordinator {
             // never run the new-entry ingest path at all — see that parameter's doc
             // comment on `SyncRecordExchange`.
             containerRoot: containerRoot,
+            // M4 T8: the library's own single shared instance, never a fresh one built
+            // here — see that parameter's doc comment on `SyncRecordExchange` for why a
+            // second instance would be an uncoordinated second writer over `entry.json`.
+            entryMetadataStore: library.entryMetadataStore,
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old
             // journal names until the next launch.

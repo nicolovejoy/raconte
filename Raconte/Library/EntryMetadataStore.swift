@@ -199,6 +199,61 @@ actor EntryMetadataStore {
         return false
     }
 
+    /// Writes a merged entry back (M4 T8, design §4/§6) through the SAME read→merge→write
+    /// shape `JournalStore.applySyncMerge(id:decide:)` uses — but, unlike that twin,
+    /// entries carry their OWN audit log (T7 §7), so a sync-caused merge still appends
+    /// `.sync`-cause rows to `entry-log.jsonl` even though it must skip `update`'s
+    /// stamping half entirely.
+    ///
+    /// **No re-stamping, and no sync hook — the same no-echo rule `JournalStore
+    /// .applySyncMerge` follows, for the same reason.** `update`'s `now()`-stamping
+    /// exists for LOCAL edits, where "this device just wrote this field" is genuinely
+    /// true; it is not true here — `decide` already returns a value whose `modified` map
+    /// carries each field's correct WINNING stamp (`EntryFieldMerge.merge`'s own output),
+    /// and re-stamping with the local clock would make this device look like the writer
+    /// of an edit it merely received. Combined with the deviceID tie-break, an echoed
+    /// re-stamp is exactly the two-devices-trade-forever loop `SyncRecordExchange`'s own
+    /// doc comment on `applySyncMerge` warns about — which is also why this cannot simply
+    /// call `update(cause: .sync)`: that method's stamping is unconditional, not
+    /// something a cause value can switch off.
+    ///
+    /// `decide` is **non-async and `@Sendable`**, for the identical reason
+    /// `JournalStore.applySyncMerge(id:decide:)`'s is: a synchronous closure cannot
+    /// suspend, so the read → merge → write below runs to completion under this actor's
+    /// isolation with nothing — not a concurrent local edit, not a second ingest — able
+    /// to interleave in the gap.
+    ///
+    /// Same `captureMissing` guard as `update`, for the same reason (#25/T6 §4.6): a
+    /// merge write must never recreate a capture directory a staged removal has moved
+    /// away, resurrecting a deleted entry.
+    @discardableResult
+    func applySyncMerge(captureID: String,
+                        decide: @Sendable (EntryMetadata) -> EntryMetadata) async throws -> EntryMetadata {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw EntryMetadataError.captureMissing
+        }
+        let before = try read(captureID: captureID)
+        let merged = decide(before)
+
+        try write(merged, captureID: captureID)
+
+        let changes = EntryLogRecord.diff(from: before, to: merged, at: now(), cause: .sync)
+        for record in changes {
+            do {
+                try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+            } catch {
+                #if DEBUG
+                print("EntryLogWriter.append failed for \(captureID) field \(record.field): \(error)")
+                #endif
+            }
+        }
+
+        return merged
+    }
+
     // MARK: Pure seams (sync; no actor hop, so the format is testable on its own)
 
     static func read(url: URL) throws -> EntryMetadata {

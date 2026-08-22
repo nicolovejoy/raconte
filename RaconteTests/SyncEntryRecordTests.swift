@@ -63,7 +63,7 @@ final class SyncEntryRecordTests: XCTestCase {
 
         let record = SyncRecordBuilders.entryRecord(captureID: captureID, metadata: metadata,
                                                      manifestJSON: manifestJSON, capturedAt: stamp(0),
-                                                     zoneID: zoneID)
+                                                     deviceID: "device-low", zoneID: zoneID)
 
         XCTAssertEqual(record.recordType, "Entry")
         XCTAssertEqual(record.recordID.recordName, "e.\(captureID)",
@@ -77,6 +77,7 @@ final class SyncEntryRecordTests: XCTestCase {
         XCTAssertEqual(record["detectionRan"] as? Bool, true)
         XCTAssertEqual(record["manifestSnapshot"] as? String, String(data: manifestJSON, encoding: .utf8))
         XCTAssertEqual(record["capturedAt"] as? Date, stamp(0))
+        XCTAssertEqual(record["deviceID"] as? String, "device-low")
 
         let stamps: [String: Date] = SyncRecordBuilders.decodeJSON(record["modified"] as? String)
         XCTAssertEqual(stamps, ["journalID": stamp(10), "trashedAt": stamp(30)])
@@ -88,7 +89,7 @@ final class SyncEntryRecordTests: XCTestCase {
     func testUntouchedEntryStillBuildsAValidRecord() {
         let record = SyncRecordBuilders.entryRecord(captureID: captureID, metadata: .defaults,
                                                      manifestJSON: Data("{}".utf8), capturedAt: stamp(0),
-                                                     zoneID: zoneID)
+                                                     deviceID: "device-low", zoneID: zoneID)
 
         XCTAssertEqual(record.recordType, "Entry")
         XCTAssertNil(record["journalID"])

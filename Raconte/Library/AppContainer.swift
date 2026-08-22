@@ -144,6 +144,18 @@ enum AppContainer {
             .appendingPathComponent(syncStagingPendingRevisionsFileName)
     }
 
+    /// M4 T10: a sibling of `pending-revisions.json`, same shape and same reasoning —
+    /// `sync/staging/<captureID>/pending-marker-streams.json` durably parks foreign
+    /// MarkerStream content for a captureID this device has not committed yet, or whose
+    /// sidecar currently reports `trashedAt != nil` (Task 9's ruling extended to marker
+    /// streams). Rides `EntryAssembler.assemble`'s rename the same way — it too must be
+    /// added to `pruneUnexpectedStagingContents`'s allow-list or it is swept and lost.
+    static let syncStagingPendingMarkerStreamsFileName = "pending-marker-streams.json"
+    static func syncStagingPendingMarkerStreamsURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingMarkerStreamsFileName)
+    }
+
     /// The container root inferred from a captures root — the inverse of
     /// `capturesRoot(containerRoot:)`. Lets a type that was handed only `capturesRoot`
     /// (everything in M1/M2 was) find the registry without rethreading the composition

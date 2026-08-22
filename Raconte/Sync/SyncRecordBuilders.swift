@@ -12,6 +12,7 @@ enum SyncRecordType {
     static let audioAsset = "AudioAsset"
     static let liveLog = "LiveLog"
     static let revision = "Revision"
+    static let markerStream = "MarkerStream"
 }
 
 /// The Journal record's field names (design §2, plus two as-built additions documented
@@ -98,13 +99,22 @@ enum SyncRevisionField {
     static let body = "body"
 }
 
+/// `MarkerStream`-only field (design §2 table, T10): the device's own marker-log bytes,
+/// travelling as a plain `String` (like `Entry.manifestSnapshot`), never a `CKAsset` —
+/// design §7.4/§2 says so explicitly ("single-writer by construction → grows
+/// monotonically; whole-field replace is safe"), and a marker log is small text, not
+/// media, so there is no size reason to prefer an asset either.
+enum SyncMarkerStreamField {
+    static let content = "content"
+}
+
 /// Pure builders: local state in, `CKRecord` out. No IO beyond the caller-supplied file
 /// URL for an asset, no engine, no store — which is what makes every field-coverage
 /// assertion in `SyncJournalRecordTests`/`SyncEntryRecordTests` runnable with no
 /// CloudKit account and no server traffic (`CKRecord` is constructible offline; only
 /// `CKSyncEngine` is not).
 ///
-/// `revisionRecord` landed in T9; `markerStreamRecord` is still T10's.
+/// `revisionRecord` landed in T9; `markerStreamRecord` landed in T10.
 enum SyncRecordBuilders {
 
     /// The Journal record (design §2).
@@ -271,6 +281,40 @@ enum SyncRecordBuilders {
         record[SyncRevisionField.body] = CKAsset(fileURL: fileURL)
         record[SyncChildAssetField.sha256] = sha256
         record[SyncChildAssetField.bytes] = bytes
+        record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: entryID, action: .deleteSelf)
+        return record
+    }
+
+    /// The MarkerStream record (design §2 table, §7.4, T10): mutable but structurally
+    /// conflict-free — `SyncRecordName.markerStream(captureID:deviceID:)` names exactly
+    /// one device's own stream, so only that device ever writes this record (design §4,
+    /// "one writer per record"). `content` is that device's own `markers.jsonl` bytes,
+    /// decoded as UTF-8 by the caller (`SyncRecordExchange.markerStreamRecordToPush`)
+    /// and handed here as a `String`, matching `entryRecord`'s `manifestSnapshot`
+    /// convention — never re-encoded through `encodeJSON`, since the bytes are already
+    /// a JSONL document and re-encoding would risk a second, possibly-diverging
+    /// serialization.
+    ///
+    /// `entryRef` (`.deleteSelf`) is the same cascade every other child record carries
+    /// (Locked decisions: "Children (AudioAsset, Revision, LiveLog, MarkerStream) carry
+    /// a field `entryRef`…") so purging the Entry takes every device's marker stream
+    /// with it, not just this device's own.
+    ///
+    /// `base:` — same role as `journalRecord`'s/`entryRecord`'s: rebuilds onto this
+    /// device's archived system fields when a prior push has already been confirmed, so
+    /// a later re-push (this device's own log grew since the last upload) carries the
+    /// server's change tag. Unlike Journal/Entry, no OTHER device's edit can ever
+    /// collide with it (design §4: "structurally conflict-free — one writer per
+    /// record"), but the change tag is still what tells CloudKit "update", not "create
+    /// a second record at this id" after this device's own prior save.
+    static func markerStreamRecord(captureID: String, deviceID: String, content: String,
+                                   entryID: CKRecord.ID, zoneID: CKRecordZone.ID,
+                                   base: CKRecord? = nil) -> CKRecord {
+        let recordID = SyncCloudIdentifiers.recordID(.markerStream(captureID: captureID, deviceID: deviceID),
+                                                      zoneID: zoneID)
+        let record = base ?? CKRecord(recordType: SyncRecordType.markerStream, recordID: recordID)
+
+        record[SyncMarkerStreamField.content] = content
         record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: entryID, action: .deleteSelf)
         return record
     }

@@ -201,6 +201,10 @@ extension SyncCoordinator {
             // `reconcile()` already follows), so a capture restored since the last
             // session picks its parked revisions back up.
             await exchange.rehydrateParkedRevisions()
+            // M4 T10: the identical crash-backstop philosophy, for marker streams
+            // parked while their capture was trashed (or not yet committed) — see
+            // `SyncRecordExchange.rehydrateParkedMarkerStreams`'s doc comment.
+            await exchange.rehydrateParkedMarkerStreams()
         }
         return coordinator
     }

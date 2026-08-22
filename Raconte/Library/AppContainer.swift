@@ -14,6 +14,7 @@ import Foundation
 ///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
 ///       trash-pending/<name>/  staged-removal holding pen (#25)
 ///       sync/                  sync bookkeeping cache, disposable (M4 T2)
+///       sync/staging/<ULID>/   new-entry ingest assembly area, disposable (M4 T7)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
@@ -39,6 +40,12 @@ enum AppContainer {
     /// upload dedupe ledger) — losing it costs a resync against CloudKit, never data, so
     /// its interior layout is owned by `SyncBookkeepingStore`, not spelled out here.
     static let syncDirectoryName = "sync"
+    /// M4 T7: where a new entry's pieces are materialized before the commit rename
+    /// (design §6, "assemble-then-commit"). A child of `sync/` — disposable cache, same
+    /// as the rest of that directory: a stale or half-assembled staging directory costs
+    /// nothing but a rebuild, never data, because `captures/` is never touched until the
+    /// final `rename(2)` succeeds.
+    static let syncStagingDirectoryName = "staging"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -85,6 +92,21 @@ enum AppContainer {
 
     static func syncRoot(containerRoot: URL) -> URL {
         containerRoot.appendingPathComponent(syncDirectoryName, isDirectory: true)
+    }
+
+    /// `sync/staging/` — a sibling of `sync/`'s other bookkeeping, never of `captures/`
+    /// itself, for the same reason this type's header gives for every other sibling: a
+    /// stray child of `captures/` is walked by `DirectorySnapshot.gather` and handed to
+    /// the recovery planner. A half-assembled entry must stay invisible to that walk
+    /// until its commit rename lands it under `captures/` as a complete directory.
+    static func syncStagingRoot(containerRoot: URL) -> URL {
+        syncRoot(containerRoot: containerRoot).appendingPathComponent(syncStagingDirectoryName,
+                                                                      isDirectory: true)
+    }
+
+    /// One capture's staging directory: `sync/staging/<captureID>/`.
+    static func syncStagingCaptureURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingRoot(containerRoot: containerRoot).appendingPathComponent(captureID, isDirectory: true)
     }
 
     /// The container root inferred from a captures root — the inverse of

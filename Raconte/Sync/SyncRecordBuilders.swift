@@ -53,6 +53,11 @@ enum SyncEntryField {
     /// Per-field LWW stamps, same shape and same reason as `SyncJournalField.modified`
     /// — see that constant's doc comment.
     static let modified = "modified"
+    /// As-built (M4 T8), mirroring `SyncJournalField.deviceID`: the origin device's
+    /// `DeviceIdentity.stable()`, needed by `EntryFieldMerge`'s locked tie-break rule
+    /// ("equal stamps → lexicographically greater deviceID wins"), which is
+    /// unimplementable without knowing the remote's deviceID.
+    static let deviceID = "deviceID"
 }
 
 /// Shared by `AudioAsset` and `LiveLog` (design §2): both are immutable, write-once
@@ -149,8 +154,12 @@ enum SyncRecordBuilders {
     /// already its own JSON document on disk and re-encoding it here would be a second,
     /// possibly-diverging serialization of the same content design §2 note 3 says a
     /// receiving device must be able to materialize byte-for-byte.
+    /// `deviceID` (M4 T8 as-built addition, mirroring `journalRecord`'s): the origin
+    /// device's `DeviceIdentity.stable()`, written unconditionally like `journalRecord`
+    /// writes its own — needed for `EntryFieldMerge`'s tie-break, and there is no
+    /// "field was never set" state for it to preserve, unlike `cover`/`span`.
     static func entryRecord(captureID: String, metadata: EntryMetadata,
-                            manifestJSON: Data, capturedAt: Date,
+                            manifestJSON: Data, capturedAt: Date, deviceID: String,
                             zoneID: CKRecordZone.ID) -> CKRecord {
         let recordID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
         let record = CKRecord(recordType: SyncRecordType.entry, recordID: recordID)
@@ -164,6 +173,7 @@ enum SyncRecordBuilders {
         record[SyncEntryField.manifestSnapshot] = String(data: manifestJSON, encoding: .utf8) ?? "{}"
         record[SyncEntryField.capturedAt] = capturedAt
         record[SyncEntryField.modified] = encodeJSON(metadata.modified ?? [:])
+        record[SyncEntryField.deviceID] = deviceID
         return record
     }
 

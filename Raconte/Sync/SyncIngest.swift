@@ -97,6 +97,12 @@ struct RemoteEntryFields: Equatable, Sendable, Codable {
     var detectedDate: PartialDate?
     var detectionRan: Bool
     var modified: [String: Date]
+    /// The origin device's `DeviceIdentity.stable()` (M4 T8 as-built addition, mirroring
+    /// `RemoteJournal.deviceID`). Optional for the identical reason: a record written by
+    /// a build older than this one has no such field, and an absent deviceID loses every
+    /// tie — the safe direction, since a tie means both stamps landed in the same
+    /// millisecond and nothing perceptible is lost either way.
+    var deviceID: String?
 
     /// Strict about identity (`captureID`, `capturedAt`) and about `originalDate` — the
     /// same split `EntryMetadata.init(from:)` makes on the local decode path, for the
@@ -123,13 +129,14 @@ struct RemoteEntryFields: Equatable, Sendable, Codable {
             .flatMap { try? PartialDate(parsing: $0) }
         self.detectionRan = (record[SyncEntryField.detectionRan] as? Bool) ?? (self.detectedDate != nil)
         self.modified = SyncRecordBuilders.decodeJSON(record[SyncEntryField.modified] as? String)
+        self.deviceID = record[SyncEntryField.deviceID] as? String
     }
 
     /// Direct construction, for tests and for anything that already has the decoded
     /// values.
     init(captureID: String, capturedAt: Date, journalID: String? = nil, originalDate: PartialDate? = nil,
         trashedAt: Date? = nil, multiVoice: Bool = false, detectedDate: PartialDate? = nil,
-        detectionRan: Bool? = nil, modified: [String: Date] = [:]) {
+        detectionRan: Bool? = nil, modified: [String: Date] = [:], deviceID: String? = nil) {
         self.captureID = captureID
         self.capturedAt = capturedAt
         self.journalID = journalID
@@ -139,6 +146,7 @@ struct RemoteEntryFields: Equatable, Sendable, Codable {
         self.detectedDate = detectedDate
         self.detectionRan = detectionRan ?? (detectedDate != nil)
         self.modified = modified
+        self.deviceID = deviceID
     }
 
     /// What this record describes, as the sidecar type `entry.json` is actually written
@@ -509,6 +517,64 @@ struct JournalSyncMerge: Equatable, Sendable {
     var coverAction: CoverAction
 }
 
+/// Per-field last-writer-wins for entries (design §4, M4 T8) — mirrors `JournalMerge`'s
+/// shape exactly, and shares its `LWWResolve` comparison rather than re-implementing it:
+/// a tie-break rule that diverged between the two merges would mean the SAME pair of
+/// stamps resolves differently depending on which record type they happened to sit on.
+///
+/// `journalID`/`originalDate`/`trashedAt`/`multiVoice` are ordinary per-field LWW
+/// (design §2's schema table). `detectedDate`/`detectionRan` are deliberately NOT — the
+/// table calls them "write-once (origin device only)" / "write-once latch", and this
+/// task's owner ruling states the rule precisely: once `detectionRan` is true anywhere,
+/// it must never merge back to false regardless of either side's stamp. An ordinary
+/// stamp comparison would let an un-run remote — unstamped, or merely stamped LATER by
+/// nothing but wall-clock skew — revert a detection this device already ran and the
+/// owner may since have cleared by hand: issue #21's exact hazard, newly reachable
+/// through sync instead of only through a corrupted local latch.
+enum EntryFieldMerge {
+    /// The merged sidecar, written back verbatim by `EntryMetadataStore.applySyncMerge`.
+    ///
+    /// Unlike `JournalMerge.merge`, there is no identity field to protect here —
+    /// `EntryMetadata` carries no id/createdAt of its own (`captureID`/`capturedAt` live
+    /// only in `RemoteEntryFields`, for record identity and ordering, never in the
+    /// sidecar) — so every field this type owns participates in the merge.
+    static func merge(local: EntryMetadata, remote: RemoteEntryFields,
+                      localDeviceID: String, remoteDeviceID: String?) -> EntryMetadata {
+        var merged = local
+        var modified = local.modified ?? [:]
+
+        func resolve(_ field: String) -> LWWResolve.Winner {
+            let winner = LWWResolve.winner(localStamp: local.modified?[field],
+                                           remoteStamp: remote.modified[field],
+                                           localDeviceID: localDeviceID,
+                                           remoteDeviceID: remoteDeviceID)
+            if winner == .remote, let stamp = remote.modified[field] { modified[field] = stamp }
+            return winner
+        }
+
+        if resolve("journalID") == .remote { merged.journalID = remote.journalID }
+        if resolve("originalDate") == .remote { merged.originalDate = remote.originalDate }
+        if resolve("trashedAt") == .remote { merged.trashedAt = remote.trashedAt }
+        if resolve("multiVoice") == .remote { merged.multiVoice = remote.multiVoice }
+
+        // The write-once latch (owner ruling, verbatim above). `detectedDate` travels
+        // WITH `detectionRan` — the pair is set together, never independently
+        // (`EntryMetadata.detectionRan`'s own doc comment) — so the first device to have
+        // actually run detection donates both. Once local has already run, an
+        // independently-run remote (only reachable if detection somehow ran twice)
+        // changes nothing: local's answer, whatever it is, stands.
+        if !merged.detectionRan && remote.detectionRan {
+            merged.detectionRan = true
+            merged.detectedDate = remote.detectedDate
+            if let stamp = remote.modified["detectionRan"] { modified["detectionRan"] = stamp }
+            if let stamp = remote.modified["detectedDate"] { modified["detectedDate"] = stamp }
+        }
+
+        merged.modified = modified.isEmpty ? nil : modified
+        return merged
+    }
+}
+
 /// The app's side of the CloudKit conversation: turns record names into records to push,
 /// and fetched records into local writes (design §6).
 ///
@@ -535,6 +601,15 @@ actor SyncRecordExchange: CloudRecordExchange {
     private let bookkeeping: SyncBookkeepingStore
     private let deviceID: String
     private let log: Logger
+    /// Where an already-local entry's inbound field merge writes (M4 T8). Optional for
+    /// the same reason `containerRoot` is: every existing test/call site that never
+    /// exercises entry sync keeps compiling unchanged, and `SyncCoordinator.live()` is
+    /// the one production caller and always supplies the library's real, single shared
+    /// instance — never a throwaway one built here, which would be a second,
+    /// uncoordinated writer over the same `entry.json` files a local edit can also be
+    /// writing (the identical reasoning `SyncCoordinator.live()`'s doc comment gives for
+    /// reusing `library.journalStore` rather than building a fresh `JournalStore`).
+    private let entryMetadataStore: EntryMetadataStore?
     /// Where `captures/` and `sync/staging/` live (T7). Optional so every existing
     /// test/call site that never exercises entry ingest keeps compiling unchanged — a
     /// nil root degrades exactly like the pre-T7 "no builder/ingest yet" cases did,
@@ -587,6 +662,7 @@ actor SyncRecordExchange: CloudRecordExchange {
          bookkeeping: SyncBookkeepingStore,
          deviceID: String,
          containerRoot: URL? = nil,
+         entryMetadataStore: EntryMetadataStore? = nil,
          localStoreDidChange: (@Sendable () async -> Void)? = nil,
          journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)? = nil,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
@@ -595,6 +671,7 @@ actor SyncRecordExchange: CloudRecordExchange {
         self.bookkeeping = bookkeeping
         self.deviceID = deviceID
         self.containerRoot = containerRoot
+        self.entryMetadataStore = entryMetadataStore
         self.localStoreDidChange = localStoreDidChange
         self.journalIsEmptyAfterRescan = journalIsEmptyAfterRescan
         self.log = log
@@ -873,19 +950,27 @@ actor SyncRecordExchange: CloudRecordExchange {
         let captureExists = FileManager.default.fileExists(
             atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
 
-        // T8 owns merging into an already-local capture, and `EntryIngest.plan` itself
-        // decides `.applyToExisting` from `captureExists` alone — nothing about that
-        // depends on which pieces happen to be staged. Checked and acted on BEFORE
+        // T8 owns merging into an already-local capture. Checked and acted on BEFORE
         // trying to read any pending state: requiring a readable pending sidecar first
         // would leave staging permanently orphaned for every piece that arrives AFTER an
         // earlier piece already cleared it via this very branch (fix-round finding — the
         // pending sidecar for an existing capture is removed the first time this fires,
         // so a later late piece would otherwise find no sidecar and bail before ever
         // reaching a cleanup decision).
+        //
+        // Deliberately does NOT route through `EntryIngest.plan`'s `.applyToExisting`
+        // case (still structurally unreachable below, for the same reason the T7-era
+        // comment there gave): merging needs only the metadata fields, which arrive
+        // solely on the Entry record itself, never assembled from a commit set. If an
+        // Entry piece happens to be durably staged (this call was reached via the Entry
+        // record's own arrival), its `metadata` is the remote side of the merge; if not
+        // (this call was reached via a late audio/liveLog piece for a capture that
+        // already exists — an entry sync already has locally never needs those bytes at
+        // all), there is nothing to merge and this is cleanup only.
         guard !captureExists else {
-            log.debug("""
-                sync: entry \(captureID, privacy: .public) already exists locally — merge deferred to T8
-                """)
+            if let state = readPendingState(captureID: captureID, containerRoot: containerRoot) {
+                await applyExistingEntryMerge(remote: state.metadata, captureID: captureID)
+            }
             try? FileManager.default.removeItem(at: stagingDir)
             return
         }
@@ -916,13 +1001,41 @@ actor SyncRecordExchange: CloudRecordExchange {
             }
             await localStoreDidChange?()
         case .applyToExisting:
-            // Unreachable in practice — the guard above already handles `captureExists`
-            // — but `IngestAction` is a 3-case enum and the switch stays exhaustive.
-            // Same cleanup, for defensive symmetry.
+            // Unreachable in practice — the `guard !captureExists` above already
+            // handles that case, and does the actual T8 merge (`applyExistingEntryMerge`)
+            // before ever reaching this call — but `IngestAction` is a 3-case enum and
+            // the switch stays exhaustive. Same cleanup, for defensive symmetry.
             try? FileManager.default.removeItem(at: stagingDir)
         case .refuse(let reason):
             log.debug("sync: entry \(captureID, privacy: .public) assembly not ready yet: \(reason, privacy: .public)")
         }
+    }
+
+    /// T8: an inbound Entry record for a capture ALREADY present locally merges
+    /// field-by-field via `EntryFieldMerge`/`EntryMetadataStore.applySyncMerge`, rather
+    /// than being dropped. No staging, no rename — `EntryIngest.IngestAction
+    /// .applyToExisting`'s own doc comment states the principle: "an existing capture's
+    /// own content is authoritative, not whatever pieces happen to have arrived from the
+    /// wire," so only the metadata fields participate, never the audio/manifest bytes.
+    private func applyExistingEntryMerge(remote: RemoteEntryFields, captureID: String) async {
+        guard let entryMetadataStore else {
+            log.debug("sync: no entry metadata store wired — existing-entry merge skipped")
+            return
+        }
+        let localDeviceID = deviceID
+        do {
+            try await entryMetadataStore.applySyncMerge(captureID: captureID) { local in
+                EntryFieldMerge.merge(local: local, remote: remote,
+                                      localDeviceID: localDeviceID, remoteDeviceID: remote.deviceID)
+            }
+        } catch {
+            log.error("""
+                sync: existing-entry merge failed for \(captureID, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            return
+        }
+        await localStoreDidChange?()
     }
 
     /// `(url, sha256)` for a file already sitting at `url`, or nil when nothing is there —

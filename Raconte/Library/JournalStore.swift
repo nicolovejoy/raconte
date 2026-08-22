@@ -209,6 +209,28 @@ actor JournalStore {
         await syncHooks?.noteLocalDelete(.journal(id: id))
     }
 
+    /// Removes a journal due to an INBOUND deletion (#80, B2) — **no sync hook fired**,
+    /// the same no-echo rule `applySyncMerge` follows and for the same reason: announcing
+    /// a sync-caused removal as a local delete would re-enqueue a delete for a record the
+    /// server already told us is gone, and combined with the deviceID tie-break two
+    /// devices could trade the same delete back and forth.
+    ///
+    /// Same guards as `deleteJournal` (`JournalRegistry.remove` throws
+    /// `.unknownJournal`/`.lastRemainingJournal`) because they are the same rule for the
+    /// same reason regardless of which direction triggered it — an inbound delete of this
+    /// device's only journal is refused just as hard as a local one would be.
+    ///
+    /// The not-empty-locally guard is NOT here, deliberately: this actor cannot see
+    /// entries at all, only `journals.json` — `SyncRecordExchange.acceptRemoteJournalDeletion`
+    /// is the only legitimate caller and has already asked
+    /// `LibraryScreenModel.isJournalEmptyAfterRescan` (R3) before ever reaching here.
+    func applySyncDelete(id: String) async throws {
+        var registry = try load()
+        try registry.remove(id: id)
+        try save(registry)
+        JournalCoverStore.removeDirectory(containerRoot: url.deletingLastPathComponent(), journalID: id)
+    }
+
     private func save(_ registry: JournalRegistry) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)

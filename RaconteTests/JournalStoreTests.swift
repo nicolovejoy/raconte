@@ -625,6 +625,92 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertEqual(changes, [], "a delete is not also a change")
     }
 
+    // MARK: applySyncDelete (#80, B2 — inbound deletion ingest)
+
+    /// The no-echo rule (design §6, same reasoning as `applySyncMerge`): an INBOUND
+    /// deletion must never look like a local edit, or two devices trading the same
+    /// journal's delete would bounce it back and forth. `SyncIngest` is the only
+    /// legitimate caller, and it has already run the not-empty-locally guard
+    /// (`LibraryScreenModel.isJournalEmptyAfterRescan`) before ever reaching here — this
+    /// method has no way to see entries at all, only `journals.json`.
+    func testApplySyncDeleteFiresNoSyncHookAtAll() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let keep = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+        await hooks.reset()
+
+        try await s.applySyncDelete(id: toDelete.id)
+
+        let deletes = await hooks.deletedNames
+        let changes = await hooks.changedNames
+        XCTAssertEqual(deletes, [], "an inbound delete must never announce itself as a local one")
+        XCTAssertEqual(changes, [])
+        let remaining = try await s.list()
+        XCTAssertEqual(remaining.map(\.id), [keep.id], "the removal itself must still have happened")
+    }
+
+    func testApplySyncDeleteRemovesFromRegistryAndDiskBytes() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+
+        try await s.applySyncDelete(id: toDelete.id)
+
+        let remaining = try await s.list()
+        XCTAssertEqual(remaining.map(\.id), ["J1"])
+        let bytes = String(decoding: try Data(contentsOf: registryURL), as: UTF8.self)
+        XCTAssertFalse(bytes.contains(toDelete.id),
+                       "the deleted journal's id must not survive on disk")
+    }
+
+    func testApplySyncDeleteRemovesItsCoverDirectory() async throws {
+        let s = store(ids: ["J1", "J2"])
+        _ = try await s.create(name: "Keep me")
+        let toDelete = try await s.create(name: "Delete me")
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: s)
+        try await covers.write(imageData: Self.makePNG(), journalID: toDelete.id)
+        let coverDir = AppContainer.journalCoverURL(containerRoot: containerRoot, journalID: toDelete.id)
+            .deletingLastPathComponent()
+
+        try await s.applySyncDelete(id: toDelete.id)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: coverDir.path),
+                      "the whole journals/<id>/ directory must be gone, not just cover.jpg")
+    }
+
+    /// An unknown id is a no-op, the same as an inbound deletion arriving for a journal
+    /// this device never heard of, or already deleted here too.
+    func testApplySyncDeleteUnknownIDThrowsAndLeavesTheFileAlone() async throws {
+        let s = store(ids: ["J1"])
+        _ = try await s.create(name: "Keep me")
+        let before = try Data(contentsOf: registryURL)
+
+        do {
+            try await s.applySyncDelete(id: "missing")
+            XCTFail("expected unknownJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .unknownJournal("missing"))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    /// Same UI-story guard as a local delete: refuse to leave a device with zero
+    /// journals, even when the deletion is inbound.
+    func testApplySyncDeleteRefusesTheLastRemainingJournalAndLeavesTheFileAlone() async throws {
+        let s = store(ids: ["J1"])
+        let only = try await s.create(name: "The only one")
+        let before = try Data(contentsOf: registryURL)
+
+        do {
+            try await s.applySyncDelete(id: only.id)
+            XCTFail("expected lastRemainingJournal")
+        } catch {
+            XCTAssertEqual(error as? JournalError, .lastRemainingJournal(only.id))
+        }
+        XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
     // MARK: Test helpers — pure CoreGraphics/ImageIO, no UIKit/AppKit (mirrors
     // JournalCoverStoreTests' own copy; this file needs only one trivial fixture image)
 

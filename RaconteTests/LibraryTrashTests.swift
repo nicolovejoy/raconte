@@ -377,6 +377,42 @@ final class LibraryTrashTests: XCTestCase {
         XCTAssertEqual(model.items.map(\.captureID), [idB])
     }
 
+    /// Restore-race pin (task review, 2026-08-22). The unreadable-sidecar test above
+    /// only pins the READ-THROW half of the per-item guard — dropping the whole
+    /// `try? read(...)` call changes the counts, so that test catches it. It does NOT
+    /// construct a state where the read SUCCEEDS but says `isTrashed == false`, which is
+    /// the guard's actual purpose: refusing an item restored between the stale
+    /// `trashed` snapshot and the loop reaching it. A mutant that keeps the read but
+    /// drops the `isTrashed` condition would pass every other test in this file.
+    ///
+    /// Fixture: trash idA (model.trashed now lists it), then overwrite its sidecar
+    /// directly back to not-trashed via the static write seam — deliberately WITHOUT
+    /// another `rescan()`, so `model.trashed` still holds the stale row. `emptyTrash()`
+    /// must re-read the sidecar itself and refuse, per the existing guard semantics
+    /// (a refusal counts in `failed`, matching every other guard-refusal case in this
+    /// file — asserted, not assumed).
+    func testEmptyTrashRefusesAnEntryRestoredBetweenTheSnapshotAndTheLoop() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+
+        // Flip the sidecar back to not-trashed directly on disk, bypassing
+        // `model.restoreEntry` (which would rescan and correctly drop idA from
+        // `model.trashed`). This is exactly the race: a restore lands after the list
+        // was drawn but before `emptyTrash()`'s own loop re-reads the disk.
+        try EntryMetadataStore.write(
+            EntryMetadata(), url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+        XCTAssertFalse(try metadata(idA).isTrashed, "sidecar must actually say not-trashed for this to pin anything")
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 0, failed: 1),
+                       "the restored entry must be refused, not deleted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                      "a restored entry's directory must survive Empty Trash")
+    }
+
     /// An unreadable sidecar is the same per-item guard `deleteEntryPermanently` uses:
     /// the disk decides, not the stale row the button was drawn from. The other two
     /// trashed entries must still go.

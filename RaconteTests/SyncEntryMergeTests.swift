@@ -47,6 +47,42 @@ final class SyncEntryMergeTests: XCTestCase {
                           modified: modified, deviceID: deviceID)
     }
 
+    // MARK: Mirror field-count tripwire — pins the entry sync/merge surface (ruled task,
+    // Task 8 deferred minor, owner-ruled MUST-FIX 2026-08-22)
+
+    /// Mirrors `SyncJournalRoundTripTests.testJournalFieldCountMatchesTheSyncFixture`'s
+    /// pattern exactly: without this, a future field added to `EntryMetadata` would
+    /// compile, pass the whole suite, and silently never sync — nothing forces it into
+    /// `SyncRecordBuilders.entryRecord`, `RemoteEntryFields.init(record:)`, or
+    /// `EntryFieldMerge.merge`'s field list. (`EntryLogTests
+    /// .testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged` pins the same type for a
+    /// different surface — the audit-log differ — and does not cover this one.)
+    func testEntryMetadataFieldCountIsPinnedSoTheSyncMergeSurfaceCatchesNewFields() {
+        XCTAssertEqual(
+            Mirror(reflecting: EntryMetadata.defaults).children.count, 7,
+            "EntryMetadata gained or lost a field. Bump this count, then wire the field " +
+            "through SyncRecordBuilders.entryRecord (the push side), " +
+            "RemoteEntryFields.init(record:) (the decode side), and EntryFieldMerge.merge's " +
+            "field list, and confirm SyncTreeScanner.entryDigest still captures it, before " +
+            "this pin is honest again."
+        )
+    }
+
+    /// Same defect class as above, for the wire-format twin: a field added to
+    /// `RemoteEntryFields` (either straight off the record, or the `EntryMetadata` fields
+    /// it carries) would compile and pass the whole suite while never actually merging.
+    func testRemoteEntryFieldsFieldCountIsPinnedSoTheSyncMergeSurfaceCatchesNewFields() {
+        let fields = RemoteEntryFields(captureID: captureID, capturedAt: stamp(0))
+        XCTAssertEqual(
+            Mirror(reflecting: fields).children.count, 10,
+            "RemoteEntryFields gained or lost a field. Bump this count, then wire the field " +
+            "through SyncRecordBuilders.entryRecord (the push side), " +
+            "RemoteEntryFields.init(record:) (the decode side), and EntryFieldMerge.merge's " +
+            "field list, and confirm SyncTreeScanner.entryDigest still captures it, before " +
+            "this pin is honest again."
+        )
+    }
+
     // MARK: EntryFieldMerge — per field, not per record
 
     /// The owner's ruling, verbatim (brief): remote sets `originalDate` newer, local sets

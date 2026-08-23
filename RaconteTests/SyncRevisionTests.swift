@@ -294,6 +294,7 @@ final class SyncRevisionTests: XCTestCase {
     // MARK: SyncRecordExchange orchestration — push + ingest, through real CKRecords
 
     private func exchange(transcriptRevisionStore: TranscriptRevisionStore? = nil,
+                          entryMetadataStore: EntryMetadataStore? = nil,
                           localStoreDidChange: (@Sendable () async -> Void)? = nil) -> SyncRecordExchange {
         let journalStore = JournalStore(containerRoot: containerRoot)
         let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: journalStore)
@@ -301,6 +302,7 @@ final class SyncRevisionTests: XCTestCase {
             journalStore: journalStore, coverStore: covers,
             bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
             deviceID: "device-low", containerRoot: containerRoot,
+            entryMetadataStore: entryMetadataStore,
             transcriptRevisionStore: transcriptRevisionStore,
             localStoreDidChange: localStoreDidChange)
     }
@@ -772,5 +774,105 @@ final class SyncRevisionTests: XCTestCase {
         XCTAssertEqual(Set(decoded.revisions.map(\.id)), [idB],
                        "B — parked DURING the suspension — must survive the writeback; A (handled) "
                        + "must be the only id removed")
+    }
+
+    // MARK: Final review C1 — an inbound Entry that RESTORES a trashed capture must not
+    // wipe the park that was waiting for exactly that restore
+
+    /// The restore, as it actually arrives from a peer: an Entry record for a capture
+    /// this device already has, carrying `trashedAt: nil` with a stamp. The local
+    /// sidecar carries NO `modified` stamps at all (`setTrashed` writes bare
+    /// `EntryMetadata`), so `LWWResolve`'s "one side stamped → that side" rule hands
+    /// `trashedAt` to the remote and the merge un-trashes the capture.
+    private func restoringEntryRecord() -> CKRecord {
+        SyncRecordBuilders.entryRecord(
+            captureID: captureID,
+            metadata: EntryMetadata(trashedAt: nil, modified: ["trashedAt": stamp(200)]),
+            manifestJSON: Data(), capturedAt: stamp(0), deviceID: "device-high", zoneID: zoneID)
+    }
+
+    /// **C1, the data-loss defect, pinned end to end.** Sequence exactly as the final
+    /// review states it: capture X exists locally and is trashed → a Revision for X
+    /// arrives from an offline peer and parks at `sync/staging/X/pending-revisions.json`
+    /// → the peer RESTORES X, so its Entry record arrives and the `captureExists` merge
+    /// lands the restore. The old code ended that branch with `try? removeItem(at:
+    /// stagingDir)` — the WHOLE staging directory — so the restore destroyed the very
+    /// park that was waiting for it, and `CKSyncEngine` never redelivers a consumed
+    /// record (the branch's standing `inbound-sync-must-land-or-park` rule): permanent,
+    /// silent loss of a real transcript edit.
+    ///
+    /// The park must SURVIVE and then LAND — here via the immediate per-capture
+    /// rehydration kick the fix added right after the merge, so the edit appears at once
+    /// rather than at some future launch.
+    ///
+    /// **Discriminating-pin evidence (run by hand, recorded in the fix report):**
+    /// replacing `clearEntryAssemblyStaging(captureID:containerRoot:)` in
+    /// `attemptEntryAssembly`'s `captureExists` branch with the original
+    /// `try? FileManager.default.removeItem(at: stagingDir)` makes this test FAIL — the
+    /// `canonical-0.json` read below throws "no such file", because the park was deleted
+    /// before anything could apply it.
+    func testAnInboundEntryRestoringATrashedCapturePreservesAndLandsTheParkedRevision() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let store = makeStore()
+        let mergeClock = stamp(300)
+        let metadata = EntryMetadataStore(capturesRoot: capturesRoot, now: { mergeClock })
+        let ex = exchange(transcriptRevisionStore: store, entryMetadataStore: metadata)
+
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        let parkURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                    captureID: captureID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path),
+                      "sanity: the revision parked, because the capture is trashed")
+
+        await ex.acceptRemote(restoringEntryRecord())
+
+        let restored = try EntryMetadataStore.read(
+            url: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+        XCTAssertNil(restored.trashedAt, "sanity: the inbound Entry merge really did un-trash the capture")
+
+        let landedURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
+        XCTAssertEqual(try Data(contentsOf: landedURL), try CaptureCoding.encoder().encode(incoming),
+                       "the parked revision must survive the restore AND land, bytes verbatim")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parkURL.path),
+                       "the park clears once it has actually been applied")
+    }
+
+    /// The same C1 defect from the other direction, and the one that proves the fix is
+    /// an allow-list rather than a lucky ordering: the capture is restored by the inbound
+    /// Entry but the revision is NOT applicable yet for an unrelated reason — here the
+    /// exchange has no `transcriptRevisionStore` wired at all, so the kick is a no-op.
+    /// The park must still be sitting on disk afterwards for a later launch to find,
+    /// rather than having been swept along with `pending.json`.
+    func testTheEntryAssemblyCleanupPreservesAParkItCannotApplyYet() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let ex = exchange(transcriptRevisionStore: makeStore())
+
+        let revisionID = ULID.make()
+        let incoming = revision(revisionID, source: .userEdit, createdAt: stamp(10))
+        await ex.acceptRemote(try revisionRecord(id: revisionID, revision: incoming))
+
+        let parkURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                                    captureID: captureID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path), "sanity: it parked")
+
+        // A second exchange with NO revision store and NO metadata store: the Entry
+        // record still reaches `attemptEntryAssembly`'s existing-capture branch and its
+        // cleanup, but nothing can apply the park.
+        let storeless = exchange()
+        await storeless.acceptRemote(restoringEntryRecord())
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path),
+                      "an unapplied park must survive the entry-assembly cleanup — CKSyncEngine will "
+                      + "never redeliver the revision, so sweeping it here is permanent loss")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: AppContainer.syncStagingPendingStateURL(
+                containerRoot: containerRoot, captureID: captureID).path),
+            "the entry-assembly artifact itself must still be cleared — this is an allow-list, "
+            + "not a blanket refusal to clean up")
     }
 }

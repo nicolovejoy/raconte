@@ -351,6 +351,34 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(persisted.journalID, "J2")
     }
 
+    /// #84 point 2, review fix round: the entry detail screen's journal picker
+    /// (`moveEntry`) files an entry into a journal exactly like the live-capture path —
+    /// a still-provisional default must promote and push here too, not just when the
+    /// entry's `journalID` is set via `CaptureScreenModel.enqueueEntryMetadataWrite`.
+    /// [required, mutation-verified]: removing `moveEntry`'s
+    /// `promoteProvisionalDefaultAfterEntrySave` call fails this test.
+    func testMoveEntryIntoAProvisionalDefaultPromotesAndPushesIt() async throws {
+        try writeJournals([journal("J1", "1987"),
+                           Journal(id: "J2", name: "Journal", createdAt: Date(timeIntervalSince1970: 0),
+                                  provisionalDefault: true)])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+
+        let model = model()
+        let hooks = DeletionRecordingSyncHooks()
+        await model.journalStore.attach(syncHooks: hooks)
+        await model.rescan()
+
+        let moved = await model.moveEntry(idA, toJournal: "J2")
+
+        XCTAssertTrue(moved)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [.journal(id: "J2")],
+                       "filing an entry into a provisional default via the detail screen "
+                       + "must promote and push it, or it sits invisible to CloudKit forever")
+        let stored = try await model.journalStore.journal(id: "J2")
+        XCTAssertEqual(stored?.provisionalDefault, false)
+    }
+
     func testSetBackdateMovesTheEntryInTheSortAndSurvivesClearing() async throws {
         try writeCapture(idA, capturedAt: 1_000)
         try writeCapture(idB, capturedAt: 2_000)

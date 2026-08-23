@@ -77,6 +77,93 @@ actor JournalStore {
         return created
     }
 
+    /// #84 point 1: mints an auto-default journal WITHOUT firing the sync push hook,
+    /// marked `provisionalDefault: true`. On a fresh install of an account that already
+    /// has journals in CloudKit, the ordinary `create` used to push this mint before the
+    /// first fetch could land, polluting every device with a spurious empty "Journal" —
+    /// this is the fix. The ONLY difference from `create` is the missing hook call and
+    /// the flag; everything else (name normalization, the `modified["name"]` stamp) is
+    /// identical, because a provisional default is still a real, valid journal locally —
+    /// it is unpushed, not unfinished.
+    @discardableResult
+    func createProvisionalDefault(name: String) async throws -> Journal {
+        var registry = try load()
+        let createdAt = now()
+        let created = try registry.insert(
+            Journal(id: mintID(), name: name, createdAt: createdAt, provisionalDefault: true),
+            now: createdAt)
+        try save(registry)
+        // No `syncHooks?.noteLocalChange` — design point 1, the whole point of this method.
+        return created
+    }
+
+    /// #84 point 2, the entry-save half of "promote on use". `rename`/`setSpan`/
+    /// `stampCoverModified` already fire the local-change hook unconditionally and merely
+    /// needed the flag cleared alongside (see `JournalRegistry.rename`'s doc comment);
+    /// entry-save has no reason to route through any of those, so this is its own
+    /// primitive — never called directly by a screen model. **Every** caller that files
+    /// an entry into a journal must go through the ONE shared chokepoint just below,
+    /// `promoteProvisionalDefaultAfterEntrySave`, not this method directly (review
+    /// finding, gate fix round: an earlier version of this doc comment claimed
+    /// `CaptureScreenModel.enqueueEntryMetadataWrite` was the only entry-save call site —
+    /// false; `LibraryScreenModel.moveEntry` files an entry too, via the detail screen's
+    /// journal picker, and had silently bypassed promotion entirely).
+    ///
+    /// A no-op (returns `false`, no hook fired) when the journal is unknown or was never
+    /// (or is no longer) provisional — the overwhelmingly common case, since this is
+    /// called on every entry-metadata write regardless of which journal it targets, not
+    /// only ones that are actually still-provisional defaults.
+    @discardableResult
+    func promoteProvisionalDefault(id: String) async throws -> Bool {
+        var registry = try load()
+        guard registry.promoteProvisionalDefault(id: id) else { return false }
+        try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
+        return true
+    }
+
+    /// #84 point 3: called after journal ingest lands a real journal from CloudKit.
+    /// Removes the local auto-minted provisional default when it is confirmed still
+    /// unused — its `provisionalDefault` flag is still set (never renamed, given a
+    /// cover/span, labelled, or promoted by an entry save — every one of those clears the
+    /// flag atomically as part of its own write) AND `isEmpty` confirms it currently holds
+    /// no entries. The second check is not redundant with the first: `isEmpty` is called
+    /// fresh, from the caller's own rescan, closing the narrow window between an entry's
+    /// `journalID` landing on disk and this device's own `promoteProvisionalDefault` call
+    /// clearing the flag for it (see `CaptureScreenModel.enqueueEntryMetadataWrite`) — a
+    /// window this actor cannot see into on its own, since it has no visibility into
+    /// entries at all (same limitation `deleteJournal`'s doc comment states).
+    ///
+    /// No sync hook fired and no CK delete issued: a provisional default is, by
+    /// definition, never pushed, so there is no server record for anything to remove.
+    ///
+    /// Reentrancy discipline (same as `applySyncMerge(id:decide:)`): `isEmpty` suspends
+    /// (it rescans), releasing this actor's isolation while it runs. The registry is
+    /// re-read fresh after that await and the candidate re-confirmed still provisional
+    /// before anything is written — a rename/promotion/second prune landing in the gap
+    /// must not be reverted or duplicated.
+    func pruneUnusedProvisionalDefault(excluding incomingID: String,
+                                       isEmpty: @Sendable (String) async -> Bool) async throws {
+        let registry = try load()
+        guard let candidate = registry.journals.first(where: {
+            $0.provisionalDefault && $0.id != incomingID
+        }) else { return }
+        guard await isEmpty(candidate.id) else { return }
+
+        var fresh = try load()
+        guard let stillCandidate = fresh.journal(id: candidate.id), stillCandidate.provisionalDefault
+        else { return }
+        do {
+            try fresh.remove(id: candidate.id)
+        } catch {
+            // Already gone, or (should not happen here — the just-landed real journal
+            // already makes this at least the second entry) the last remaining one.
+            // Either way, nothing to write.
+            return
+        }
+        try save(fresh)
+    }
+
     @discardableResult
     func rename(id: String, to name: String) async throws -> Journal {
         var registry = try load()
@@ -263,4 +350,32 @@ actor JournalStore {
     static func encode(_ registry: JournalRegistry) throws -> Data {
         try CaptureCoding.lineEncoder().encode(registry)
     }
+}
+
+/// #84 point 2's **shared chokepoint** — the ONE place every caller that files an entry
+/// into a journal (via ANY path) must route through, so a third future call site cannot
+/// silently reintroduce the promotion gap a review caught here: an earlier version wired
+/// promotion only into `CaptureScreenModel.enqueueEntryMetadataWrite` (the live-capture
+/// recording path) and missed `LibraryScreenModel.moveEntry` (the entry detail screen's
+/// journal picker, `EntryDetailView`'s move-to-journal control) entirely — filing an
+/// entry into a still-provisional default that way left the journal, and the entry filed
+/// under it, permanently unsynced. Not prunable (`pruneUnusedProvisionalDefault`'s
+/// `isEmpty` check correctly protects a journal that really does hold an entry) but
+/// invisible to CloudKit forever, since nothing had ever called
+/// `JournalStore.promoteProvisionalDefault` for it.
+///
+/// A free function, not a method on either screen model or on `JournalStore` itself,
+/// precisely so it carries no single "obvious" owner to bypass — every call site that
+/// writes `EntryMetadata.journalID` calls this, by name, right after the write, instead
+/// of reaching for `journalStore.promoteProvisionalDefault` directly. Success-gated
+/// (`entryWriteSucceeded`): a failed metadata write (`captureMissing`, a race with a
+/// staged removal) never actually filed anything and must not promote a journal on its
+/// behalf. A `nil` `journalID` (unfiling an entry) is also a no-op — there is nothing to
+/// promote.
+@discardableResult
+func promoteProvisionalDefaultAfterEntrySave(journalStore: JournalStore,
+                                             journalID: String?,
+                                             entryWriteSucceeded: Bool) async -> Bool {
+    guard entryWriteSucceeded, let journalID else { return false }
+    return (try? await journalStore.promoteProvisionalDefault(id: journalID)) ?? false
 }

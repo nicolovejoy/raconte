@@ -780,7 +780,12 @@ final class CaptureScreenModel {
             selectedJournalID = id
             currentJournal.select(id)
         case .needsDefault:
-            if let created = try? await journalStore.create(name: "Journal") {
+            // #84: the auto-mint stays local (no push) until it is actually used — see
+            // `JournalStore.createProvisionalDefault`'s doc comment. Otherwise, on a
+            // fresh install of an account that already has journals in CloudKit, this
+            // mint pushes before the first fetch can land and pollutes every device with
+            // a spurious empty "Journal".
+            if let created = try? await journalStore.createProvisionalDefault(name: "Journal") {
                 journals = [created]
                 selectedJournalID = created.id
                 currentJournal.select(created.id)
@@ -843,16 +848,27 @@ final class CaptureScreenModel {
         let writeBackdate = backdateEnabled || clearingBackdateIfDisabled
         let journalID = selectedJournalID
         let store = entryMetadataStore
+        let journalStore = journalStore
         let previous = pendingMetadataWrite
         let task = Task { @MainActor in
             await previous?.value
-            _ = try? await store.update(captureID: captureID) { metadata in
+            let wrote = try? await store.update(captureID: captureID) { metadata in
                 if let journalID { metadata.journalID = journalID }
                 if writeBackdate {
                     metadata.setOriginalDate(originalDate)
                 }
                 if let multiVoice { metadata.multiVoice = multiVoice }
             }
+            // #84 point 2: routes through the ONE shared chokepoint every caller that
+            // files an entry into a journal must use (`promoteProvisionalDefaultAfterEntrySave`'s
+            // own doc comment names the other one, `LibraryScreenModel.moveEntry`) — a
+            // still-provisional default is promoted and pushed the moment an entry is
+            // saved into it; a no-op for every other journal (the common case) or a
+            // failed write (`wrote != nil` gates it). Idempotent — this call is shared by
+            // both the initial-recording path and a mid-capture journal switch via
+            // `syncActiveEntryMetadata`, which calls this same function.
+            _ = await promoteProvisionalDefaultAfterEntrySave(
+                journalStore: journalStore, journalID: journalID, entryWriteSucceeded: wrote != nil)
         }
         pendingMetadataWrite = task
         return task
@@ -919,7 +935,9 @@ extension CaptureScreenModel: LibraryRescanObserver {
             // "Journal" and select it, off the main actor's next turn since minting is
             // a `JournalStore` write.
             Task { [weak self] in
-                guard let self, let created = try? await self.journalStore.create(name: "Journal")
+                // #84: same local-only mint as `resolveCurrentJournal()`'s own
+                // `.needsDefault` fallback — see that call site's comment.
+                guard let self, let created = try? await self.journalStore.createProvisionalDefault(name: "Journal")
                 else { return }
                 self.journals = (self.journals + [created]).displayOrdered
                 self.selectedJournalID = created.id

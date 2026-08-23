@@ -532,6 +532,84 @@ final class SyncJournalIngestTests: XCTestCase {
         XCTAssertEqual(unchanged, fetchedBytes)
     }
 
+    // MARK: Ingest — prune an unused provisional default (#84 point 3)
+
+    /// The brief's [required] pin, mutation-checked: skipping the prune call must fail
+    /// this test.
+    func testIngestOfARealJournalPrunesAnUnusedProvisionalDefault() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let provisional = try await store.createProvisionalDefault(name: "Journal")
+        let engine = FakeCloudEngine()
+        let ex = exchange(store, covers, deviceID: deviceLow, journalIsEmptyAfterRescan: { _ in true })
+        await ex.attach(engine: engine)
+
+        let remote = RemoteJournal(id: journalID, name: "From the other device", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let gone = try await store.journal(id: provisional.id)
+        XCTAssertNil(gone, "the unused provisional default must be pruned silently")
+        let landed = try await store.journal(id: journalID)
+        XCTAssertNotNil(landed, "the real journal must still land")
+        let deletes = await engine.deletedNames
+        XCTAssertEqual(deletes, [], "never pushed, so there is nothing to issue a CK delete for")
+    }
+
+    /// The brief's other named case: an entry has actually been filed under the default
+    /// (`isEmpty` says no) — it must survive, even though `createProvisionalDefault` alone
+    /// left its flag still set (the crash-window case `pruneUnusedProvisionalDefault`'s
+    /// doc comment describes: `journalID` landed in `entry.json` before this device's own
+    /// `promoteProvisionalDefault` call could clear the flag for it).
+    func testUsedProvisionalDefaultSurvivesIngestOfARealJournal() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let provisional = try await store.createProvisionalDefault(name: "Journal")
+        let ex = exchange(store, covers, deviceID: deviceLow, journalIsEmptyAfterRescan: { _ in false })
+
+        let remote = RemoteJournal(id: journalID, name: "From the other device", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let stillThere = try await store.journal(id: provisional.id)
+        XCTAssertNotNil(stillThere, "an entry filed under it must never be orphaned by a prune")
+    }
+
+    /// The already-promoted case (the ordinary, non-crash-window path): once
+    /// `promoteProvisionalDefault` has cleared the flag, ingest must never touch it, even
+    /// if the caller's `isEmpty` were (wrongly) to say yes — the flag alone is enough to
+    /// take it out of consideration.
+    func testPromotedDefaultSurvivesIngestEvenIfIsEmptyWouldSayYes() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let provisional = try await store.createProvisionalDefault(name: "Journal")
+        _ = try await store.promoteProvisionalDefault(id: provisional.id)
+        let ex = exchange(store, covers, deviceID: deviceLow, journalIsEmptyAfterRescan: { _ in true })
+
+        let remote = RemoteJournal(id: journalID, name: "From the other device", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let stillThere = try await store.journal(id: provisional.id)
+        XCTAssertNotNil(stillThere, "a promoted (used) default must never be pruned")
+    }
+
+    /// No `journalIsEmptyAfterRescan` wired at all (sync disabled, or a test double with
+    /// nothing to lose) — the prune must be skipped entirely, not crash or guess.
+    func testIngestWithNoEmptinessCheckWiredLeavesAProvisionalDefaultAlone() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let provisional = try await store.createProvisionalDefault(name: "Journal")
+        let ex = exchange(store, covers, deviceID: deviceLow)   // no journalIsEmptyAfterRescan
+
+        let remote = RemoteJournal(id: journalID, name: "From the other device", createdAt: stamp(0),
+                                   modified: ["name": stamp(10)], deviceID: deviceHigh)
+        await ex.acceptRemote(remoteRecord(remote, deviceID: deviceHigh))
+
+        let stillThere = try await store.journal(id: provisional.id)
+        XCTAssertNotNil(stillThere, "cannot ask -> refuse, the same shape acceptRemoteJournalDeletion uses")
+    }
+
     // MARK: Ingest — inbound deletion (#80, B2)
     //
     // `acceptRemoteJournalDeletion(id:)` takes a bare journal id, not a `SyncRecordName`

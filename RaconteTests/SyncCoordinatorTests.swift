@@ -44,6 +44,30 @@ final class SyncCoordinatorTests: XCTestCase {
         SyncCoordinator(bookkeeping: store, scanner: scanner(), engine: engine)
     }
 
+    /// M4 T12: same coordinator, with an injected clock so `status()`'s timestamps are
+    /// assertable (repo convention: inject clocks, never assert on live `Date()`).
+    private func coordinator(_ store: SyncBookkeepingStore, _ engine: FakeCloudEngine,
+                             now: @escaping @Sendable () -> Date) -> SyncCoordinator {
+        SyncCoordinator(bookkeeping: store, scanner: scanner(), engine: engine, now: now)
+    }
+
+    /// Advances on every call — the frozen-clock trap (memory:
+    /// frozen-clock-two-mints-coin-flip-order applies to any two writes compared for
+    /// ordering): a launch-then-change sequence sharing one frozen clock could stamp
+    /// `lastPushAt`/`lastFetchAt` with the identical instant, masking a bug that swapped
+    /// which field a call updates.
+    private final class AdvancingClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(start: Date) { self.current = start }
+        func next() -> Date {
+            lock.lock(); defer { lock.unlock() }
+            let value = current
+            current = current.addingTimeInterval(1)
+            return value
+        }
+    }
+
     /// Two finalized captures plus a journal — cardinality >= 2 in both shapes, so an
     /// implementation that enqueued only the first artifact, or only captures, or only
     /// journals, still fails.
@@ -282,6 +306,103 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertNotNil(ledger[other.rawValue], "an unrelated record is untouched")
         XCTAssertNotNil(keptFields)
     }
+
+    // MARK: status() (M4 T12)
+
+    /// Nothing has happened yet: every field is at its honest "don't know" default.
+    /// Pins the defaults so a later test asserting a CHANGE cannot pass vacuously
+    /// against a status that was already non-default before the coordinator did anything.
+    func testStatusDefaultsBeforeAnyActivity() async throws {
+        let status = await coordinator(bookkeeping(), FakeCloudEngine()).status()
+
+        XCTAssertEqual(status, SyncStatus(accountState: "unknown", lastPushAt: nil, lastFetchAt: nil,
+                                          pendingSaveCount: 0, pendingDeleteCount: 0, lastError: nil))
+    }
+
+    /// `launch()` now ends with a fetch kick (M4 T12, design §3) — `lastFetchAt` moves,
+    /// `lastPushAt` does not (an empty archive enqueues nothing to push).
+    func testLaunchStampsLastFetchAtButNotLastPushAtWhenNothingToUpload() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_700_000_000))
+        let coordinator = coordinator(bookkeeping(), FakeCloudEngine(), now: { clock.next() })
+
+        await coordinator.launch()
+
+        let status = await coordinator.status()
+        XCTAssertNotNil(status.lastFetchAt)
+        XCTAssertNil(status.lastPushAt, "an empty archive's launch reconciliation enqueues nothing")
+    }
+
+    /// The initial-upload path DOES push (`testLaunchWithEmptyLedgerEnqueuesTheWholeArchive`'s
+    /// sibling): `lastPushAt` moves and `pendingSaveCount` reflects what the engine still
+    /// has queued.
+    func testLaunchWithAnUnsyncedArchiveStampsLastPushAtAndReportsPendingSaves() async throws {
+        try buildArchive()
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_700_000_000))
+        let coordinator = coordinator(bookkeeping(), FakeCloudEngine(), now: { clock.next() })
+
+        await coordinator.launch()
+
+        let expectedCount = scanner().scan().artifacts.count
+        let status = await coordinator.status()
+        XCTAssertNotNil(status.lastPushAt)
+        XCTAssertEqual(status.pendingSaveCount, expectedCount)
+        XCTAssertEqual(status.pendingDeleteCount, 0)
+    }
+
+    /// `noteLocalChange`/`noteLocalDelete` each stamp `lastPushAt` and move the matching
+    /// pending count — discriminates save vs. delete rather than one shared counter that
+    /// would pass even if the two were swapped.
+    func testNoteLocalChangeAndDeleteEachStampLastPushAndTheirOwnPendingCount() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_700_000_000))
+        let engine = FakeCloudEngine()
+        let coordinator = coordinator(bookkeeping(), engine, now: { clock.next() })
+
+        await coordinator.noteLocalChange(.journal(id: journalID))
+        let afterChange = await coordinator.status()
+        XCTAssertNotNil(afterChange.lastPushAt)
+        XCTAssertEqual(afterChange.pendingSaveCount, 1)
+        XCTAssertEqual(afterChange.pendingDeleteCount, 0)
+
+        let firstPushAt = afterChange.lastPushAt
+        await coordinator.noteLocalDelete(.entry(captureID: idOne))
+        let afterDelete = await coordinator.status()
+        XCTAssertNotEqual(afterDelete.lastPushAt, firstPushAt, "the clock must have advanced")
+        XCTAssertEqual(afterDelete.pendingSaveCount, 1, "the earlier save is still pending")
+        XCTAssertEqual(afterDelete.pendingDeleteCount, 1)
+    }
+
+    /// A save the engine confirms landed must leave the pending count — otherwise
+    /// "pending" would only ever grow, which is not what the field claims to mean.
+    func testAConfirmedSaveLeavesThePendingSaveCount() async throws {
+        let engine = FakeCloudEngine()
+        let coordinator = coordinator(bookkeeping(), engine)
+        await coordinator.noteLocalChange(.journal(id: journalID))
+        let beforeConfirm = await coordinator.status()
+        XCTAssertEqual(beforeConfirm.pendingSaveCount, 1)
+
+        await engine.confirmSaved([.journal(id: journalID)])
+
+        let afterConfirm = await coordinator.status()
+        XCTAssertEqual(afterConfirm.pendingSaveCount, 0)
+    }
+
+    /// Account state and the last error are the engine's to report (M4 T12,
+    /// `EngineSnapshot`) — driven here through the fake exactly as a real
+    /// `CKSyncEngineDelegate` callback would set them.
+    func testAccountStateAndLastErrorSurfaceFromTheEngineSnapshot() async throws {
+        let engine = FakeCloudEngine()
+        let coordinator = coordinator(bookkeeping(), engine)
+        let initial = await coordinator.status()
+        XCTAssertEqual(initial.accountState, "unknown")
+        XCTAssertNil(initial.lastError)
+
+        await engine.setAccountState("signed in")
+        await engine.emitError("network unavailable")
+
+        let status = await coordinator.status()
+        XCTAssertEqual(status.accountState, "signed in")
+        XCTAssertEqual(status.lastError, "network unavailable")
+    }
 }
 
 /// A `CloudEngineControl` that records what it was asked to do. An actor because the
@@ -302,6 +423,16 @@ actor FakeCloudEngine: CloudEngineControl {
     private(set) var fetchCallCount = 0
     private let persistState: SyncEngineStatePersistence?
 
+    // M4 T12: live pending sets (mirrors `CKSyncEngine.State.pendingRecordZoneChanges`
+    // conceptually — a name is pending until something confirms it, exactly like the
+    // production `snapshot()` reading `engine.state.pendingRecordZoneChanges`) plus the
+    // account/error state a test can drive directly, standing in for delegate events
+    // `CloudKitEngineControl` would otherwise observe from CloudKit.
+    private var pendingSaveNames: Set<SyncRecordName> = []
+    private var pendingDeleteNames: Set<SyncRecordName> = []
+    private var accountState = "unknown"
+    private var lastError: String?
+
     init(persistState: SyncEngineStatePersistence? = nil) {
         self.persistState = persistState
     }
@@ -314,10 +445,43 @@ actor FakeCloudEngine: CloudEngineControl {
     var droppedNameSet: Set<SyncRecordName> { Set(droppedNames.flatMap { $0 }) }
 
     func start(stateData: Data?) async { startedWith.append(stateData) }
-    func enqueueSaves(_ names: [SyncRecordName]) async { savedNames.append(names) }
-    func enqueueDeletes(_ names: [SyncRecordName]) async { deletedNames.append(names) }
-    func dropPendingSaves(_ names: [SyncRecordName]) async { droppedNames.append(names) }
+
+    func enqueueSaves(_ names: [SyncRecordName]) async {
+        savedNames.append(names)
+        pendingSaveNames.formUnion(names)
+    }
+
+    func enqueueDeletes(_ names: [SyncRecordName]) async {
+        deletedNames.append(names)
+        // Mirrors `PendingEngineChanges.bufferDeletes`: the delete wins over any
+        // still-pending save for the same name.
+        for name in names { pendingSaveNames.remove(name) }
+        pendingDeleteNames.formUnion(names)
+    }
+
+    func dropPendingSaves(_ names: [SyncRecordName]) async {
+        droppedNames.append(names)
+        for name in names { pendingSaveNames.remove(name) }
+    }
+
     func fetchNow() async { fetchCallCount += 1 }
 
+    func snapshot() async -> EngineSnapshot {
+        EngineSnapshot(accountState: accountState, pendingSaveCount: pendingSaveNames.count,
+                       pendingDeleteCount: pendingDeleteNames.count, lastError: lastError)
+    }
+
     func emitStateUpdate(_ data: Data) async { await persistState?(data) }
+
+    /// Test-only driver, standing in for a `CKSyncEngine` `.accountChange` event.
+    func setAccountState(_ state: String) async { accountState = state }
+
+    /// Test-only driver, standing in for any of the delegate's error-surfacing branches.
+    func emitError(_ message: String) async { lastError = message }
+
+    /// Test-only driver, standing in for `sentRecordZoneChanges` confirming a save
+    /// actually landed — removes it from the pending set.
+    func confirmSaved(_ names: [SyncRecordName]) async {
+        for name in names { pendingSaveNames.remove(name) }
+    }
 }

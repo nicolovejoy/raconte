@@ -21,13 +21,23 @@ actor SyncCoordinator: SyncHooks {
     private let scanner: SyncTreeScanner
     private let engine: any CloudEngineControl
     private let log: Logger
+    /// Repo idiom (memory: inject clocks, never assert on live `Date()`): tests hand in
+    /// an advancing fake so `status()`'s timestamps are assertable.
+    private let now: @Sendable () -> Date
+    /// M4 T12: when this device last asked the engine to push ANY save or delete —
+    /// the coordinator's own activity, not a server confirmation.
+    private var lastPushAt: Date?
+    /// M4 T12: when this device last asked the engine to fetch (launch or foreground).
+    private var lastFetchAt: Date?
 
     init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl,
-         log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
+         log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync"),
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.bookkeeping = bookkeeping
         self.scanner = scanner
         self.engine = engine
         self.log = log
+        self.now = now
     }
 
     /// Boot: resume the engine from its last state, then reconcile the tree against the
@@ -40,19 +50,48 @@ actor SyncCoordinator: SyncHooks {
     /// crash backstop: a hook that never fired because the app died between "file
     /// written" and "change enqueued" is caught here on the next launch.
     ///
-    /// No fetch kick: `CKSyncEngine` is configured to sync automatically, so it fetches
-    /// on its own once started. `fetchNow()` exists for the moments the app knows about
-    /// and the engine doesn't (foreground, silent push) — Task 12 wires those.
+    /// M4 T12 (design §3, "fetch on launch, foreground, and silent push"): a fetch kick
+    /// at the end of launch. `CKSyncEngine` also syncs on its own schedule once started
+    /// — this is for the moment the app KNOWS it just came up and the engine doesn't yet.
+    /// `foregrounded()` below is the same idea for scene-active transitions; silent push
+    /// is not wired (no APNs receipt path exists in this app).
     func launch() async {
         let state = await bookkeeping.engineState()
         await engine.start(stateData: state)
         await reconcile()
+        await fetchNow()
+    }
+
+    /// M4 T12: the foreground half of design §3's fetch triggers — call when the app's
+    /// scene becomes active (see `RaconteApp`'s `scenePhase` wiring).
+    func foregrounded() async {
+        await fetchNow()
+    }
+
+    private func fetchNow() async {
+        await engine.fetchNow()
+        lastFetchAt = now()
+    }
+
+    /// M4 T12: a snapshot for the Debug screen. Timestamps and their own recency are
+    /// this coordinator's own bookkeeping; account state / pending counts / last error
+    /// come from the engine (`EngineSnapshot`'s doc comment explains why those three are
+    /// best-effort where the timestamps are not).
+    func status() async -> SyncStatus {
+        let snapshot = await engine.snapshot()
+        return SyncStatus(accountState: snapshot.accountState,
+                          lastPushAt: lastPushAt,
+                          lastFetchAt: lastFetchAt,
+                          pendingSaveCount: snapshot.pendingSaveCount,
+                          pendingDeleteCount: snapshot.pendingDeleteCount,
+                          lastError: snapshot.lastError)
     }
 
     /// The hook entry point for the six local write chokepoints (design §3). Enqueues
     /// exactly the one record whose content changed; the engine batches and schedules.
     func noteLocalChange(_ name: SyncRecordName) async {
         await engine.enqueueSaves([name])
+        lastPushAt = now()
     }
 
     /// The delete half of the hook (#80, B2): the record is gone, not merely changed, so
@@ -61,6 +100,7 @@ actor SyncCoordinator: SyncHooks {
     /// whose content degraded to nothing.
     func noteLocalDelete(_ name: SyncRecordName) async {
         await engine.enqueueDeletes([name])
+        lastPushAt = now()
         // The record is gone locally, so this device's memory of the server's copy
         // describes something that no longer exists here (gate finding, Minor 3).
         // Retiring it cannot cost an upload: `SyncPlanner.reconcile` iterates the DISK
@@ -114,7 +154,20 @@ actor SyncCoordinator: SyncHooks {
         let names = SyncPlanner.reconcile(scan: scan.artifacts, ledger: ledger)
         guard !names.isEmpty else { return }
         await engine.enqueueSaves(names)
+        lastPushAt = now()
     }
+}
+
+/// M4 T12: the Debug screen's status snapshot (design §8's "status line: last push, last
+/// fetch, pending counts, last error"). Exactly the brief's five fields, nothing more —
+/// user-facing surfacing is later polish (design §8), this is debug-only.
+struct SyncStatus: Equatable, Sendable {
+    var accountState: String
+    var lastPushAt: Date?
+    var lastFetchAt: Date?
+    var pendingSaveCount: Int
+    var pendingDeleteCount: Int
+    var lastError: String?
 }
 
 extension SyncCoordinator {

@@ -49,6 +49,12 @@ final class AppServices {
 @main
 struct RaconteApp: App {
     @State private var services = AppServices()
+    /// M4 T12 (design §3, "fetch on launch, foreground, and silent push"): the
+    /// foreground half. Launch's own fetch is `ContentView`'s `.task { sync?.launch() }`
+    /// — this covers the scene coming back to `.active` afterward (backgrounded then
+    /// resumed). Not unit-testable (no UI-test harness reaches `Scene` composition on
+    /// this project); `SyncCoordinator.foregrounded()` itself is exercised directly.
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -57,5 +63,9 @@ struct RaconteApp: App {
         #if os(macOS)
         .commands { RaconteCommands(services: services) }
         #endif
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task { await services.sync?.foregrounded() }
+        }
     }
 }

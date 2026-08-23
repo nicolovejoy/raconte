@@ -35,6 +35,23 @@ protocol CloudEngineControl: Sendable {
     /// A launch/foreground/push kick. The engine also syncs on its own schedule; this
     /// is for the moments the app knows about and the engine doesn't.
     func fetchNow() async
+
+    /// Debug-surface snapshot (M4 T12): live pending-change counts plus the last
+    /// account/error state the engine's delegate callbacks observed. Never a live
+    /// CloudKit query — nothing here can delay or wait on anything (design §8) — and
+    /// never awaited by anything but the Debug screen.
+    func snapshot() async -> EngineSnapshot
+}
+
+/// What `CloudEngineControl.snapshot()` hands back. `accountState`/`lastError` are
+/// best-effort — the last thing the engine's delegate observed, not a live poll — since
+/// `CKSyncEngine` has no synchronous "ask it now" API for either. Pending counts ARE
+/// live: they read `CKSyncEngine.State.pendingRecordZoneChanges` directly.
+struct EngineSnapshot: Equatable, Sendable {
+    var accountState: String
+    var pendingSaveCount: Int
+    var pendingDeleteCount: Int
+    var lastError: String?
 }
 
 /// How an engine hands its opaque state blob back for persistence. The engine is
@@ -249,6 +266,15 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
     /// Changes that arrived before `start()` produced an engine — see
     /// `PendingEngineChanges`. Drained once, at the end of `start()`.
     private var pending = PendingEngineChanges()
+    /// M4 T12: the last account state this device's delegate callback observed. Starts
+    /// "unknown" — nothing queries `CKContainer.accountStatus()` synchronously; this
+    /// only ever moves on an actual `.accountChange` event.
+    private var accountState = "unknown"
+    /// M4 T12: the most recent error surfaced through ANY delegate path (fetch, a
+    /// non-conflict save failure, a zone-save failure, a delete failure). Overwritten by
+    /// whichever happens next — this is "what would the owner want to see first on the
+    /// Debug screen", not a history.
+    private var lastError: String?
 
     init(containerIdentifier: String = SyncCloudIdentifiers.containerIdentifier,
          zoneID: CKRecordZone.ID = SyncCloudIdentifiers.zoneID,
@@ -360,7 +386,34 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             try await engine.fetchChanges()
         } catch {
             log.error("sync: fetch failed: \(error.localizedDescription, privacy: .public)")
+            lastError = error.localizedDescription
         }
+    }
+
+    /// M4 T12: pending counts come straight from `CKSyncEngine.State` (or, before the
+    /// engine exists, the pre-start buffer) — live, not remembered — since that state IS
+    /// the authoritative "what still has to go out."
+    func snapshot() async -> EngineSnapshot {
+        var saveCount = 0
+        var deleteCount = 0
+        if let engine {
+            for change in engine.state.pendingRecordZoneChanges {
+                switch change {
+                case .saveRecord: saveCount += 1
+                case .deleteRecord: deleteCount += 1
+                @unknown default: break
+                }
+            }
+        } else {
+            for change in pending.changes {
+                switch change {
+                case .save: saveCount += 1
+                case .delete: deleteCount += 1
+                }
+            }
+        }
+        return EngineSnapshot(accountState: accountState, pendingSaveCount: saveCount,
+                              pendingDeleteCount: deleteCount, lastError: lastError)
     }
 
     // MARK: CKSyncEngineDelegate
@@ -377,6 +430,12 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             // Signing out/in is not an error and never touches `captures/`; the engine
             // itself stops or resumes. Tasks 5+ decide whether anything local reacts.
             log.notice("sync: account change \(String(describing: change.changeType), privacy: .public)")
+            // M4 T12: recorded for the Debug screen only — nothing here changes any
+            // sync DECISION, which stays entirely `CKSyncEngine`'s to make. The raw
+            // `String(describing:)` (rather than switching over the enum's cases by
+            // name) is deliberate: this is a debug label, not a decision input, and it
+            // stays correct across any future case CloudKit adds to `ChangeType`.
+            accountState = String(describing: change.changeType)
         case .fetchedRecordZoneChanges(let fetched):
             for modification in fetched.modifications {
                 await exchange.acceptRemote(modification.record)
@@ -431,6 +490,7 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     sync: delete failed \(failure.key.recordName, privacy: .public): \
                     \(failure.value.localizedDescription, privacy: .public) — not retried
                     """)
+                lastError = failure.value.localizedDescription
             }
         case .sentDatabaseChanges(let sent):
             for failure in sent.failedZoneSaves {
@@ -438,6 +498,7 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     sync: zone save failed \(failure.zone.zoneID.zoneName, privacy: .public): \
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
+                lastError = failure.error.localizedDescription
             }
         case .willFetchChanges, .willFetchRecordZoneChanges, .didFetchRecordZoneChanges,
              .didFetchChanges, .willSendChanges, .didSendChanges:
@@ -475,6 +536,7 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     sync: save failed \(failure.record.recordID.recordName, privacy: .public): \
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
+                lastError = failure.error.localizedDescription
             }
         }
         guard !conflicts.isEmpty else { return }

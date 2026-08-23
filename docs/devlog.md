@@ -2,6 +2,64 @@
 
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
+## Session 2026-08-22→23 (laptop — M4 SHIPPED TO MAIN: T12 + final review + Gate B + owner smoke; #84 built; TestFlight prepped; 1750 → 1780 unit)
+
+Continuous session from Task 12 through merge and TestFlight prep. PRs #87 (m4/sync)
+and #88 (#84 fix) both merged by owner. Suite 1750 → 1780 unit, green.
+
+- **Owner rulings:** stash@{0} dropped (nothing worth keeping); T8 Mirror tripwire ruled
+  must-fix and built (7/10 field pins, mutation-verified); device-smoke accepted for the
+  two unfakeable CK paths; #81 stays backlogged; TestFlight greenlit (cable-free installs,
+  iPad, and moving real data off the disposable dev CloudKit environment).
+- **Final whole-branch review** (most capable model, 46 commits): 1 Critical — the
+  existing-capture staging cleanup `removeItem`'d the whole `sync/staging/<id>/` dir,
+  destroying parked revisions/markers at the exact moment a cross-device restore should
+  land them (fixed via shared `clearEntryAssemblyStaging` allow-list, cleanup-before-
+  rehydration-kicks ordering is load-bearing; the fixer self-caught a vacuous pin) — and
+  1 Important — a fresh capture's `markers.jsonl` never pushed until next launch
+  (`.markerStream` added to `namesToPush`). Both mutation-verified, re-review clean.
+- **Gate B probes all 5 PASS** (suite re-run, both builds, NEW 25-capture concurrent
+  local-update-vs-inbound-merge probe — 9/25 lost-update failures under an inserted
+  suspension window, reverted; captures/ source scan clean).
+- **Owner smoke PASS end-to-end** — first cross-device entry sync, delete-refusal-and-
+  restore, Empty Trash, trash propagation, picker freshness. Test 7 (reinstall-
+  reconstructs) FAILED once then passed clean: the first run deleted the container UNDER
+  THE RUNNING APP — dangling CKAsset fileURLs got 176 records discarded, stale engine
+  state re-persisted (88 phantom pending saves), and the `.needsDefault` mint pushed a
+  spurious "Journal" to CloudKit. Clean re-run: 32/32 captures reconstructed, zero
+  discards. Post-mortem issues: **#84** (mint pushes during first-sync window — BUILT
+  this session: provisional-default flag, promote-on-use via one shared chokepoint after
+  a reviewer caught the moveEntry bypass, prune-on-real-journal-arrival) and **#85**
+  (asset guards discard instead of park — hardening, backlog).
+- **Owner feature asks filed:** #83 (swipe-to-trash: no confirm, 2s lingering row,
+  tap-to-undo, haptic; macOS visual+sound), #86 (entry detail: sidenav becomes entry
+  list, arrow-key/swipe prev-next).
+- **TestFlight pipeline:** CloudKit schema promoted dev → Production; ASC app record
+  "Raconte Journal" created (portal already had the App ID; ASC dropdown was stale);
+  iOS Release archive staged in Organizer (`Raconte-ios-tf1`) — CLI `-exportArchive`
+  fails "No Accounts" (wire the ASC API key next session; MusicForge has the recipe).
+  aps-environment stays `development` in source; App Store export rewrites it to
+  production (verify on the upload sheet — supersedes the old "flip first" note).
+- **CRITICAL migration facts:** TestFlight builds talk to the PRODUCTION CloudKit
+  environment (empty until first push). Install TestFlight OVER the existing app, never
+  delete-then-install; never interleave dev builds afterward. The Mac Desktop dev app
+  stays on the dev cloud — phone↔Mac sync is PAUSED until the macOS build also ships
+  via TestFlight.
+
+**Next steps:**
+1. **TestFlight:** confirm build 1 uploaded (Organizer) + processed; owner installs OVER
+   the phone app; ship the macOS build to TestFlight so the Mac rejoins sync on
+   production; then delete the spurious dev-env artifacts if any linger.
+2. **Headless uploads:** wire the team ASC API key into `xcodebuild -exportArchive`
+   (`-authenticationKeyPath/-authenticationKeyID/-authenticationKeyIssuerID`) per
+   MusicForge's setup — note posted to the musicforge handoff channel.
+3. **Cleanup:** delete `fix/84-default-journal-mint` local+origin; the `raconte-m4`
+   worktree sits on that merged branch (rebase it onto main or retire it); delete the
+   SDD workspace (`.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/`) once
+   TestFlight is confirmed — its ledger is the record of parked minors until then.
+4. **Sonnet batch:** #85, #83, #86, plus backlog #73–78.
+5. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
+
 ## Session 2026-08-22 (laptop — m4 SDD Tasks 6–11 + 3 ruled wiring tasks BUILT AND REVIEWED; Empty Trash + #82 shipped; CLAUDE.md slimmed; 1606 → 1750 unit)
 
 Marathon session: /readup → roadmap discussion → continuous SDD on `m4/sync` (Sonnet

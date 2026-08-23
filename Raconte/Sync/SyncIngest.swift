@@ -2179,6 +2179,23 @@ actor SyncRecordExchange: CloudRecordExchange {
         // in the same window be silently overwritten by the fetched one, which is a real
         // loss rather than a stale thumbnail.
         await applyCover(coverAction, for: remote)
+
+        // #84 point 3: landing ANY real journal is the signal to prune a still-unused
+        // local provisional default (see `JournalStore.pruneUnusedProvisionalDefault`'s
+        // doc comment). No `journalIsEmptyAfterRescan` wired (sync disabled, or a fake
+        // with nothing to lose) — skip, the same "cannot ask" -> "refuse" shape
+        // `acceptRemoteJournalDeletion` uses just below.
+        if let journalIsEmptyAfterRescan {
+            do {
+                try await journalStore.pruneUnusedProvisionalDefault(
+                    excluding: remote.id, isEmpty: journalIsEmptyAfterRescan)
+            } catch {
+                log.error("""
+                    sync: provisional-default prune failed after ingesting \
+                    \(remote.id, privacy: .public): \(error.localizedDescription, privacy: .public)
+                    """)
+            }
+        }
         await localStoreDidChange?()
     }
 

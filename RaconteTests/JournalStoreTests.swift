@@ -401,6 +401,44 @@ final class JournalStoreTests: XCTestCase {
         XCTAssertEqual(registry.journals.first?.id, "A")
     }
 
+    // MARK: #84 — provisionalDefault decode/encode leniency
+
+    func testProvisionalDefaultIsAdditiveAndLenient() throws {
+        // Every registry on disk predates this field (#84). Absent -> false, garbage ->
+        // false, and neither may take the journal's identity down with it.
+        let absent = Data(#"{"id":"J1","name":"N","createdAt":"1998-03-04T00:00:00.000Z"}"#.utf8)
+        XCTAssertEqual(try CaptureCoding.decoder().decode(Journal.self, from: absent).provisionalDefault, false)
+
+        let garbage = Data(
+            #"{"id":"J1","name":"N","createdAt":"1998-03-04T00:00:00.000Z","provisionalDefault":"oops"}"#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(Journal.self, from: garbage)
+        XCTAssertEqual(decoded.provisionalDefault, false)
+        XCTAssertEqual(decoded.name, "N", "a damaged flag must cost only the flag")
+    }
+
+    func testProvisionalDefaultTrueRoundTripsThroughDisk() throws {
+        let registry = JournalRegistry(journals: [
+            Journal(id: "A", name: "N", createdAt: Date(timeIntervalSince1970: 0),
+                   provisionalDefault: true)
+        ])
+        let data = try JournalStore.encode(registry)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(#""provisionalDefault":true"#))
+        let reloaded = try JournalStore.load(url: {
+            try data.write(to: registryURL)
+            return registryURL
+        }())
+        XCTAssertEqual(reloaded.journals.first?.provisionalDefault, true)
+    }
+
+    /// The bytes of every real (non-provisional) registry already on disk must not
+    /// change — same "an untouched record's bytes don't change" rule `span`/`voiceLabels`
+    /// already follow.
+    func testAnOrdinaryJournalEncodesWithNoProvisionalDefaultKeyAtAll() throws {
+        let journal = Journal(id: "J1", name: "N", createdAt: Date(timeIntervalSince1970: 0))
+        let data = try JournalStore.encode(JournalRegistry(journals: [journal]))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("provisionalDefault"))
+    }
+
     /// A minimal stand-in for "a build that predates `modified`" — mirrors
     /// `EntryMetadataStoreTests.PreM4EntryMetadataShape`.
     private struct PreM4JournalShape: Decodable {
@@ -524,7 +562,7 @@ final class JournalStoreTests: XCTestCase {
     /// `SyncJournalRoundTripTests`.
     func testJournalFieldCountIsPinnedSoNewFieldsGetEncoded() {
         let journal = Journal(id: "J1", name: "N", createdAt: Date())
-        XCTAssertEqual(Mirror(reflecting: journal).children.count, 6,
+        XCTAssertEqual(Mirror(reflecting: journal).children.count, 7,
                        "Journal gained or lost a field — see Journal.encode(to:)")
     }
 
@@ -709,6 +747,129 @@ final class JournalStoreTests: XCTestCase {
             XCTAssertEqual(error as? JournalError, .lastRemainingJournal(only.id))
         }
         XCTAssertEqual(try Data(contentsOf: registryURL), before)
+    }
+
+    // MARK: #84 — provisional default mint (design point 1)
+
+    /// The brief's [required] pin, mutation-checked: re-adding the hook call to
+    /// `createProvisionalDefault` must fail this test.
+    func testCreateProvisionalDefaultDoesNotFireTheSyncHook() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+
+        let created = try await s.createProvisionalDefault(name: "Journal")
+
+        let changes = await hooks.changedNames
+        let deletes = await hooks.deletedNames
+        XCTAssertEqual(changes, [], "the provisional default must not push until it is used")
+        XCTAssertEqual(deletes, [])
+        XCTAssertTrue(created.provisionalDefault)
+        let listed = try await s.list()
+        XCTAssertEqual(listed.map(\.id), [created.id], "the mint still lands in the registry")
+    }
+
+    func testCreateProvisionalDefaultStampsNameLikeAnOrdinaryCreate() async throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000)
+        let s = JournalStore(containerRoot: containerRoot, now: { stamp })
+
+        let created = try await s.createProvisionalDefault(name: "  Journal  ")
+
+        XCTAssertEqual(created.name, "Journal", "still goes through the same normalize/insert path")
+        XCTAssertEqual(created.modified, ["name": stamp])
+    }
+
+    // MARK: #84 — promote on use (design point 2)
+
+    func testRenameOfAProvisionalDefaultClearsTheFlagAndPushesIt() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let created = try await s.createProvisionalDefault(name: "Journal")
+        await hooks.reset()
+
+        let renamed = try await s.rename(id: created.id, to: "1987 Journal")
+
+        XCTAssertFalse(renamed.provisionalDefault)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [.journal(id: created.id)])
+    }
+
+    func testSetSpanOfAProvisionalDefaultClearsTheFlagAndPushesIt() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let created = try await s.createProvisionalDefault(name: "Journal")
+        await hooks.reset()
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: nil)
+
+        let updated = try await s.setSpan(id: created.id, span: span)
+
+        XCTAssertFalse(updated.provisionalDefault)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [.journal(id: created.id)])
+    }
+
+    func testStampCoverOfAProvisionalDefaultClearsTheFlagAndPushesIt() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let created = try await s.createProvisionalDefault(name: "Journal")
+        await hooks.reset()
+
+        try await s.stampCoverModified(id: created.id)
+
+        let stored = try await s.journal(id: created.id)
+        XCTAssertEqual(stored?.provisionalDefault, false)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [.journal(id: created.id)])
+    }
+
+    /// `promoteProvisionalDefault` is the entry-save chokepoint (`CaptureScreenModel
+    /// .enqueueEntryMetadataWrite`, exercised end to end in
+    /// `JournalCaptureContextTests.testFirstEntrySavedIntoTheDefaultJournalPromotesAndPushesIt`).
+    /// This pins its own idempotence directly: called again after promotion, it must not
+    /// re-push.
+    func testPromoteProvisionalDefaultPushesOnlyTheFirstTime() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let created = try await s.createProvisionalDefault(name: "Journal")
+        await hooks.reset()
+
+        let firstCall = try await s.promoteProvisionalDefault(id: created.id)
+        let secondCall = try await s.promoteProvisionalDefault(id: created.id)
+
+        XCTAssertTrue(firstCall)
+        XCTAssertFalse(secondCall, "already promoted — no-op")
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [.journal(id: created.id)], "pushed exactly once")
+        let stored = try await s.journal(id: created.id)
+        XCTAssertEqual(stored?.provisionalDefault, false)
+    }
+
+    /// The overwhelmingly common call: an entry filed into a journal that was never a
+    /// provisional default in the first place. Must be a complete no-op — this is called
+    /// unconditionally on every entry-metadata write.
+    func testPromoteProvisionalDefaultOnAnOrdinaryJournalIsANoOp() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        let created = try await s.create(name: "Ordinary journal")
+        await hooks.reset()
+
+        let promoted = try await s.promoteProvisionalDefault(id: created.id)
+
+        XCTAssertFalse(promoted)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [])
+    }
+
+    func testPromoteProvisionalDefaultOnAnUnknownIDIsANoOp() async throws {
+        let hooks = DeletionRecordingSyncHooks()
+        let s = JournalStore(containerRoot: containerRoot, syncHooks: hooks)
+        _ = try await s.createProvisionalDefault(name: "Journal")
+        await hooks.reset()
+
+        let promoted = try await s.promoteProvisionalDefault(id: "missing")
+
+        XCTAssertFalse(promoted)
+        let changes = await hooks.changedNames
+        XCTAssertEqual(changes, [])
     }
 
     // MARK: Test helpers — pure CoreGraphics/ImageIO, no UIKit/AppKit (mirrors

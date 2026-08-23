@@ -77,6 +77,88 @@ actor JournalStore {
         return created
     }
 
+    /// #84 point 1: mints an auto-default journal WITHOUT firing the sync push hook,
+    /// marked `provisionalDefault: true`. On a fresh install of an account that already
+    /// has journals in CloudKit, the ordinary `create` used to push this mint before the
+    /// first fetch could land, polluting every device with a spurious empty "Journal" —
+    /// this is the fix. The ONLY difference from `create` is the missing hook call and
+    /// the flag; everything else (name normalization, the `modified["name"]` stamp) is
+    /// identical, because a provisional default is still a real, valid journal locally —
+    /// it is unpushed, not unfinished.
+    @discardableResult
+    func createProvisionalDefault(name: String) async throws -> Journal {
+        var registry = try load()
+        let createdAt = now()
+        let created = try registry.insert(
+            Journal(id: mintID(), name: name, createdAt: createdAt, provisionalDefault: true),
+            now: createdAt)
+        try save(registry)
+        // No `syncHooks?.noteLocalChange` — design point 1, the whole point of this method.
+        return created
+    }
+
+    /// #84 point 2, the entry-save half of "promote on use". `rename`/`setSpan`/
+    /// `stampCoverModified` already fire the local-change hook unconditionally and merely
+    /// needed the flag cleared alongside (see `JournalRegistry.rename`'s doc comment);
+    /// entry-save has no reason to route through any of those, so this is its own
+    /// chokepoint — called by `CaptureScreenModel.enqueueEntryMetadataWrite` right after
+    /// an entry's `journalID` is written.
+    ///
+    /// A no-op (returns `false`, no hook fired) when the journal is unknown or was never
+    /// (or is no longer) provisional — the overwhelmingly common case, since this is
+    /// called on every entry-metadata write regardless of which journal it targets, not
+    /// only ones that are actually still-provisional defaults.
+    @discardableResult
+    func promoteProvisionalDefault(id: String) async throws -> Bool {
+        var registry = try load()
+        guard registry.promoteProvisionalDefault(id: id) else { return false }
+        try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
+        return true
+    }
+
+    /// #84 point 3: called after journal ingest lands a real journal from CloudKit.
+    /// Removes the local auto-minted provisional default when it is confirmed still
+    /// unused — its `provisionalDefault` flag is still set (never renamed, given a
+    /// cover/span, labelled, or promoted by an entry save — every one of those clears the
+    /// flag atomically as part of its own write) AND `isEmpty` confirms it currently holds
+    /// no entries. The second check is not redundant with the first: `isEmpty` is called
+    /// fresh, from the caller's own rescan, closing the narrow window between an entry's
+    /// `journalID` landing on disk and this device's own `promoteProvisionalDefault` call
+    /// clearing the flag for it (see `CaptureScreenModel.enqueueEntryMetadataWrite`) — a
+    /// window this actor cannot see into on its own, since it has no visibility into
+    /// entries at all (same limitation `deleteJournal`'s doc comment states).
+    ///
+    /// No sync hook fired and no CK delete issued: a provisional default is, by
+    /// definition, never pushed, so there is no server record for anything to remove.
+    ///
+    /// Reentrancy discipline (same as `applySyncMerge(id:decide:)`): `isEmpty` suspends
+    /// (it rescans), releasing this actor's isolation while it runs. The registry is
+    /// re-read fresh after that await and the candidate re-confirmed still provisional
+    /// before anything is written — a rename/promotion/second prune landing in the gap
+    /// must not be reverted or duplicated.
+    func pruneUnusedProvisionalDefault(excluding incomingID: String,
+                                       isEmpty: @Sendable (String) async -> Bool) async throws {
+        let registry = try load()
+        guard let candidate = registry.journals.first(where: {
+            $0.provisionalDefault && $0.id != incomingID
+        }) else { return }
+        guard await isEmpty(candidate.id) else { return }
+
+        var fresh = try load()
+        guard let stillCandidate = fresh.journal(id: candidate.id), stillCandidate.provisionalDefault
+        else { return }
+        do {
+            try fresh.remove(id: candidate.id)
+        } catch {
+            // Already gone, or (should not happen here — the just-landed real journal
+            // already makes this at least the second entry) the last remaining one.
+            // Either way, nothing to write.
+            return
+        }
+        try save(fresh)
+    }
+
     @discardableResult
     func rename(id: String, to name: String) async throws -> Journal {
         var registry = try load()

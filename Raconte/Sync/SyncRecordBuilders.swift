@@ -423,13 +423,34 @@ enum FinalizeArtifactPush {
     /// codebase has hit repeatedly (§11 of the M2 design; issue #11), and here it would
     /// also mis-scope Task 7/8's future `recordToPush` wiring, which has to read this
     /// same file to hash it and would find nothing to push.
-    static func namesToPush(capturesRoot: URL, captureID: String) -> [SyncRecordName] {
+    /// **The marker stream is the fourth answer (final review I1).** A capture's
+    /// `markers.jsonl` is written DURING capture, by voice taps, long before finalize —
+    /// and while it is being written the eligibility gate above correctly refuses every
+    /// push (nothing is finalized yet). Without this append, nothing pushed that file at
+    /// finalize either: the only remaining path was the next launch's
+    /// `SyncPlanner.reconcile()` scan, which on iOS can be weeks away, and until then the
+    /// receiving device renders that entry's transcript with its speaker attribution
+    /// missing. Same readability probe as the LiveLog check directly above, for the
+    /// identical reason — `SyncTreeScanner.markerStreamArtifact` reads the bytes to hash
+    /// them, so an existing-but-unreadable `markers.jsonl` must read here exactly as an
+    /// absent one does. `deviceID` names THIS device's own stream: it is the only marker
+    /// stream this device may ever push (`SyncRecordExchange.markerStreamRecordToPush`
+    /// refuses every other), foreign streams under `transcript/markers-<deviceID>.jsonl`
+    /// being somebody else's record to write. Defaulted rather than threaded from the
+    /// caller, matching `SyncRecordFamily.names`' own `DeviceIdentity.stable()` call —
+    /// the parameter exists so a test can pin an id without touching `.standard`.
+    static func namesToPush(capturesRoot: URL, captureID: String,
+                            deviceID: String = DeviceIdentity.stable()) -> [SyncRecordName] {
         guard isFinalized(capturesRoot: capturesRoot, captureID: captureID) else { return [] }
         var names: [SyncRecordName] = [.entry(captureID: captureID), .audio(captureID: captureID)]
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         let liveLogURL = SegmentLayout.liveTranscriptURL(captureDirectory: dir)
         if (try? Data(contentsOf: liveLogURL, options: .mappedIfSafe)) != nil {
             names.append(.liveLog(captureID: captureID))
+        }
+        let markerURL = SegmentLayout.markerLogURL(captureDirectory: dir)
+        if (try? Data(contentsOf: markerURL, options: .mappedIfSafe)) != nil {
+            names.append(.markerStream(captureID: captureID, deviceID: deviceID))
         }
         return names
     }
@@ -442,9 +463,10 @@ enum FinalizeArtifactPush {
     /// A no-op with no `syncHooks` (unit tests, the UI-test harness, or any build whose
     /// composition root refused to construct a `SyncCoordinator`) — the same "nil hook
     /// behaves exactly as before M4" rule every other store's hook already follows.
-    static func push(capturesRoot: URL, captureID: String, syncHooks: (any SyncHooks)?) async {
+    static func push(capturesRoot: URL, captureID: String, syncHooks: (any SyncHooks)?,
+                     deviceID: String = DeviceIdentity.stable()) async {
         guard let syncHooks else { return }
-        for name in namesToPush(capturesRoot: capturesRoot, captureID: captureID) {
+        for name in namesToPush(capturesRoot: capturesRoot, captureID: captureID, deviceID: deviceID) {
             await syncHooks.noteLocalChange(name)
         }
     }

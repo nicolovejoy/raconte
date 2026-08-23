@@ -63,13 +63,19 @@ extension EntryLogRecord {
     /// per changed field, in `EntryMetadata`'s declaration order. Each `from`/`to` is the
     /// field's on-disk string encoding — §7.1's one typing rule for every field.
     ///
-    /// `EntryMetadata` has **six** fields (`journalID`, `originalDate`, `trashedAt`,
-    /// `detectedDate`, `detectionRan`, `multiVoice` — `EntryMetadata.swift:47/57/61/76/
-    /// 87/97`). If this ever silently stops covering all of them, nothing here notices —
-    /// this function has no way to see a field it wasn't written to check. The guard
-    /// against that drift is `testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged`
-    /// (`EntryLogTests.swift`), a `Mirror`-based count pinned at 6: if it fires, add the
-    /// new field's case below before bumping the count.
+    /// `EntryMetadata` has **six** diffable fields (`journalID`, `originalDate`,
+    /// `trashedAt`, `detectedDate`, `detectionRan`, `multiVoice`). If this ever silently
+    /// stops covering all of them, nothing here notices — this function has no way to
+    /// see a field it wasn't written to check. The guard against that drift is
+    /// `testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged` (`EntryLogTests.swift`),
+    /// a `Mirror`-based count over the type's stored properties: if it fires, add the new
+    /// field's case below before bumping the count.
+    ///
+    /// **`modified` (M4 T1) is the seventh stored property and deliberately has no case
+    /// here.** It is this very diff's own OUTPUT — `EntryMetadataStore.update` stamps it
+    /// from the `changes` this function returns, strictly after this call — so giving it
+    /// a case would log the stamp as if it were a field the caller changed, which is not
+    /// what happened.
     static func diff(from before: EntryMetadata, to after: EntryMetadata,
                       at: Date, cause: EntryLogCause) -> [EntryLogRecord] {
         var records: [EntryLogRecord] = []

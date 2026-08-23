@@ -342,7 +342,11 @@ final class CaptureCoordinator {
         if let markerLog { return markerLog }
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
                                                        captureID: captureID)
-        let writer = MarkerLogWriter(captureDirectory: directory)
+        // M4 T1: the coordinator's own injected clock, so a marker's `at` and every
+        // other timestamped effect of this capture (`recordingSegmentStart`,
+        // `pendingInterruptionEndedAt`, …) come from the one clock this instance was
+        // built with — never a second, uninjectable `Date()` read inside the writer.
+        let writer = MarkerLogWriter(captureDirectory: directory, now: now)
         try writer.open()
         markerLog = writer
         return writer

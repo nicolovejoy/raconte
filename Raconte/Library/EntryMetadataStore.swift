@@ -29,9 +29,32 @@ enum EntryMetadataError: Error, Equatable {
 /// so a torn write would lose the whole record.
 actor EntryMetadataStore {
     nonisolated let capturesRoot: URL
+    /// M4 T1: the single clock `update` reads once per call, for both the audit-log
+    /// record's `at` and every `EntryMetadata.modified` stamp that call produces — one
+    /// read, so the log and the sync stamps can never disagree about when an edit
+    /// happened. Matches `JournalStore`'s injected-clock shape (`now`, same name, same
+    /// default), the sibling registry actor.
+    private let now: @Sendable () -> Date
 
-    init(capturesRoot: URL) {
+    /// M4 T6. Nil everywhere sync is off — unit tests, the UI-test harness, and any
+    /// build whose composition root refused to construct an engine. A store with no
+    /// hook behaves exactly as it did before M4, matching `JournalStore`'s identical
+    /// seam (Task 5).
+    private var syncHooks: (any SyncHooks)?
+
+    init(capturesRoot: URL, now: @escaping @Sendable () -> Date = { Date() },
+         syncHooks: (any SyncHooks)? = nil) {
         self.capturesRoot = capturesRoot
+        self.now = now
+        self.syncHooks = syncHooks
+    }
+
+    /// Wired after construction (M4 T6), for the same reason `JournalStore.attach
+    /// (syncHooks:)` is: the composition root builds this store (inside
+    /// `LibraryScreenModel`) before it can build the `SyncCoordinator` that conforms to
+    /// `SyncHooks`.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     nonisolated func url(captureID: String) -> URL {
@@ -76,10 +99,30 @@ actor EntryMetadataStore {
     /// before the diff ever runs). Append failure is silent (§7.2 rule 4): this is
     /// diagnostics, and `EntryDegradation` is scan-derived with nowhere to carry a
     /// log-write failure.
+    ///
+    /// M4 T1: the same diff also stamps `EntryMetadata.modified[field]` for every
+    /// changed field, ahead of `write` — so, unlike the log, the stamps are part of the
+    /// durable sidecar itself. A field the mutate closure didn't actually change (its
+    /// before/after values are equal) gets no stamp; a mutation that changes nothing at
+    /// all leaves `modified` untouched entirely.
+    ///
+    /// M4 T6: also the one place a LOCAL entry edit reaches sync (design §3:
+    /// "`EntryMetadataStore.update` → enqueue Entry"). Fires only when both are true —
+    /// something actually changed (`!changes.isEmpty`, the same condition that gates
+    /// the audit-log append above) AND the capture is already sync-eligible
+    /// (`FinalizeArtifactPush.isFinalized`, the same "m4a verified" predicate the
+    /// finalize-completion choke point uses). That second half is the eligibility pin:
+    /// without it, a mid-recording backdate/journal write — `CaptureScreenModel
+    /// .enqueueEntryMetadataWrite` runs on an ACTIVE capture, before any `.m4a` exists —
+    /// would push an Entry record with no AudioAsset behind it yet, which design §2
+    /// rule 6 ("entries sync only once finalized") forbids. Once a capture IS
+    /// finalized, every later edit (a real backdate correction, trash, restore,
+    /// `SpokenDateDetection`) re-fires this on its own; the finalize choke point never
+    /// needs to re-push `.entry` itself for that reason.
     @discardableResult
     func update<T>(captureID: String,
                    cause: EntryLogCause = .userEdit,
-                   _ mutate: @Sendable (inout EntryMetadata) -> T) throws -> (EntryMetadata, T) {
+                   _ mutate: @Sendable (inout EntryMetadata) -> T) async throws -> (EntryMetadata, T) {
         let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
@@ -89,9 +132,22 @@ actor EntryMetadataStore {
         let before = try read(captureID: captureID)
         var metadata = before
         let result = mutate(&metadata)
+
+        // M4 T1: one clock read, shared by the log record below and every stamp here —
+        // computed from the SAME before/after diff the log already needed, so "what
+        // changed" is never derived two different ways. Stamped into `metadata` before
+        // `write`, so the stamps are part of what actually lands on disk; a field that
+        // didn't change gets no stamp at all (`changes` only lists fields that differ).
+        let stamp = now()
+        let changes = EntryLogRecord.diff(from: before, to: metadata, at: stamp, cause: cause)
+        if !changes.isEmpty {
+            var modified = metadata.modified ?? [:]
+            for change in changes { modified[change.field] = stamp }
+            metadata.modified = modified
+        }
+
         try write(metadata, captureID: captureID)
 
-        let changes = EntryLogRecord.diff(from: before, to: metadata, at: Date(), cause: cause)
         for record in changes {
             do {
                 try EntryLogWriter.append(record, captureDirectory: captureDirectory)
@@ -101,6 +157,11 @@ actor EntryMetadataStore {
                 #endif
             }
         }
+
+        if !changes.isEmpty, FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) {
+            await syncHooks?.noteLocalChange(.entry(captureID: captureID))
+        }
+
         return (metadata, result)
     }
 
@@ -118,8 +179,8 @@ actor EntryMetadataStore {
     /// construction, no matter how many rejection reasons `setOriginalDate` grows.
     @discardableResult
     func setOriginalDate(_ date: PartialDate?, captureID: String, now: Date = Date(),
-                          calendar: Calendar = .gregorianCurrent) throws -> Bool {
-        let (metadata, accepted) = try update(captureID: captureID) { md in
+                          calendar: Calendar = .gregorianCurrent) async throws -> Bool {
+        let (metadata, accepted) = try await update(captureID: captureID) { md in
             md.setOriginalDate(date, now: now, calendar: calendar)
         }
         guard !accepted else { return true }
@@ -136,6 +197,61 @@ actor EntryMetadataStore {
             #endif
         }
         return false
+    }
+
+    /// Writes a merged entry back (M4 T8, design §4/§6) through the SAME read→merge→write
+    /// shape `JournalStore.applySyncMerge(id:decide:)` uses — but, unlike that twin,
+    /// entries carry their OWN audit log (T7 §7), so a sync-caused merge still appends
+    /// `.sync`-cause rows to `entry-log.jsonl` even though it must skip `update`'s
+    /// stamping half entirely.
+    ///
+    /// **No re-stamping, and no sync hook — the same no-echo rule `JournalStore
+    /// .applySyncMerge` follows, for the same reason.** `update`'s `now()`-stamping
+    /// exists for LOCAL edits, where "this device just wrote this field" is genuinely
+    /// true; it is not true here — `decide` already returns a value whose `modified` map
+    /// carries each field's correct WINNING stamp (`EntryFieldMerge.merge`'s own output),
+    /// and re-stamping with the local clock would make this device look like the writer
+    /// of an edit it merely received. Combined with the deviceID tie-break, an echoed
+    /// re-stamp is exactly the two-devices-trade-forever loop `SyncRecordExchange`'s own
+    /// doc comment on `applySyncMerge` warns about — which is also why this cannot simply
+    /// call `update(cause: .sync)`: that method's stamping is unconditional, not
+    /// something a cause value can switch off.
+    ///
+    /// `decide` is **non-async and `@Sendable`**, for the identical reason
+    /// `JournalStore.applySyncMerge(id:decide:)`'s is: a synchronous closure cannot
+    /// suspend, so the read → merge → write below runs to completion under this actor's
+    /// isolation with nothing — not a concurrent local edit, not a second ingest — able
+    /// to interleave in the gap.
+    ///
+    /// Same `captureMissing` guard as `update`, for the same reason (#25/T6 §4.6): a
+    /// merge write must never recreate a capture directory a staged removal has moved
+    /// away, resurrecting a deleted entry.
+    @discardableResult
+    func applySyncMerge(captureID: String,
+                        decide: @Sendable (EntryMetadata) -> EntryMetadata) async throws -> EntryMetadata {
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: captureDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw EntryMetadataError.captureMissing
+        }
+        let before = try read(captureID: captureID)
+        let merged = decide(before)
+
+        try write(merged, captureID: captureID)
+
+        let changes = EntryLogRecord.diff(from: before, to: merged, at: now(), cause: .sync)
+        for record in changes {
+            do {
+                try EntryLogWriter.append(record, captureDirectory: captureDirectory)
+            } catch {
+                #if DEBUG
+                print("EntryLogWriter.append failed for \(captureID) field \(record.field): \(error)")
+                #endif
+            }
+        }
+
+        return merged
     }
 
     // MARK: Pure seams (sync; no actor hop, so the format is testable on its own)

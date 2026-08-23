@@ -381,30 +381,78 @@ enum EntryTranscriptLoader {
         case present(snapped: [MarkerSnapping.SnappedMarker], hasAnyVoiceMarker: Bool)
     }
 
+    /// M4 T10: this device's own stream (readability three-answer, unchanged) plus every
+    /// foreign stream ingest has materialized beside it, folded through
+    /// `MarkerStreamMerge.merge` before `MarkerCorrections`/`MarkerSnapping` ever see a
+    /// marker — so a field-add or a correction that landed on a PEER device is not
+    /// silently invisible here (the exact hazard design §7.4 exists to close). Own-stream
+    /// readability still governs `.absent`/`.unreadable`: this device's marking UI writes
+    /// only to its own `markers.jsonl`, so a torn/unreadable own log must still refuse
+    /// exactly as before M4 — a readable foreign stream cannot paper over that.
+    ///
+    /// `.absent` own stream with at least one readable foreign stream is `.present` (a
+    /// peer marked voices, this device never has) — the corpus-wide "unreadable ≠ absent
+    /// ≠ nothing to see" rule (#11) applies per stream, not only to the local one.
     static func snappedMarkers(captureDirectory: URL, committed: [TranscriptResult],
                                sampleRate: Double) -> MarkerAttributionInputs {
         let markerLoad = MarkerLogReader.load(captureDirectory: captureDirectory)
         switch markerLoad.source {
         case .absent:
-            return .absent
+            let foreign = foreignMarkerStreams(captureDirectory: captureDirectory)
+            guard !foreign.isEmpty else { return .absent }
+            return presentAttributionInputs(merged: MarkerStreamMerge.merge(foreign),
+                                            committed: committed, sampleRate: sampleRate)
         case .unreadable(let reason):
             return .unreadable(reason)
         case .present:
-            let effective = MarkerCorrections.effectiveMarkers(markerLoad.markers)
-            let hasAnyVoiceMarker = effective.contains { $0.marker.kind == .voice }
-            guard !effective.isEmpty else {
-                return .present(snapped: [], hasAnyVoiceMarker: hasAnyVoiceMarker)
-            }
-            let intervals = MarkerSnapping.intervals(fromCommitted: committed)
-            let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
-
-            let toSnap = effective.filter { !$0.isExact }.map(\.marker)
-            let snapped = MarkerSnapping.snap(markers: toSnap, intervals: intervals, windowFrames: window)
-            let exact = effective.filter(\.isExact).map { em in
-                MarkerSnapping.SnappedMarker(marker: em.marker, snappedFrame: em.marker.frame, approximate: false)
-            }
-            return .present(snapped: snapped + exact, hasAnyVoiceMarker: hasAnyVoiceMarker)
+            let ownStream = MarkerStreamMerge.Stream(deviceID: DeviceIdentity.stable(), markers: markerLoad.markers)
+            let merged = MarkerStreamMerge.merge([ownStream] + foreignMarkerStreams(captureDirectory: captureDirectory))
+            return presentAttributionInputs(merged: merged, committed: committed, sampleRate: sampleRate)
         }
+    }
+
+    /// Every readable `transcript/markers-<deviceID>.jsonl` sibling of this device's own
+    /// `markers.jsonl` (M4 T10). An UNREADABLE foreign stream is dropped, not surfaced —
+    /// unlike the own-stream case, a corrupt peer's bytes cannot demote the whole read to
+    /// `.unreadable` (this device's own attribution must still work), so the honest
+    /// three-answer treatment happens per file and only the readable ones are folded in.
+    private static func foreignMarkerStreams(captureDirectory: URL) -> [MarkerStreamMerge.Stream] {
+        let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: transcriptDir.path) else {
+            return []
+        }
+        var streams: [MarkerStreamMerge.Stream] = []
+        for name in names.sorted() {
+            guard let deviceID = SegmentLayout.foreignStreamDeviceID(fromFileName: name) else { continue }
+            let url = transcriptDir.appendingPathComponent(name)
+            let result = MarkerLogReader.load(url: url)
+            guard case .present = result.source else { continue }
+            streams.append(MarkerStreamMerge.Stream(deviceID: deviceID, markers: result.markers))
+        }
+        return streams
+    }
+
+    /// Shared tail of `snappedMarkers`' two non-absent branches: fold corrections, split
+    /// exact (boundary-add) markers from raw taps needing `MarkerSnapping`, exactly as
+    /// before M4 — factored out so both the own-stream-present and own-absent-but-
+    /// foreign-present paths compute this identically rather than two copies free to
+    /// diverge.
+    private static func presentAttributionInputs(merged: [StructureMarker], committed: [TranscriptResult],
+                                                  sampleRate: Double) -> MarkerAttributionInputs {
+        let effective = MarkerCorrections.effectiveMarkers(merged)
+        let hasAnyVoiceMarker = effective.contains { $0.marker.kind == .voice }
+        guard !effective.isEmpty else {
+            return .present(snapped: [], hasAnyVoiceMarker: hasAnyVoiceMarker)
+        }
+        let intervals = MarkerSnapping.intervals(fromCommitted: committed)
+        let window = MarkerSnapping.windowFrames(sampleRate: sampleRate)
+
+        let toSnap = effective.filter { !$0.isExact }.map(\.marker)
+        let snapped = MarkerSnapping.snap(markers: toSnap, intervals: intervals, windowFrames: window)
+        let exact = effective.filter(\.isExact).map { em in
+            MarkerSnapping.SnappedMarker(marker: em.marker, snappedFrame: em.marker.frame, approximate: false)
+        }
+        return .present(snapped: snapped + exact, hasAnyVoiceMarker: hasAnyVoiceMarker)
     }
 
     /// The live-log fallback path's attribution (`fallbackToLiveLog`, above): no

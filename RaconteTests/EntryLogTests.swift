@@ -92,10 +92,14 @@ final class EntryLogTests: XCTestCase {
     /// .testManifestFieldCountIsPinnedSoNewFieldsGetCarriedOver`'s pattern).
     /// `EntryLogRecord.diff(from:to:)` enumerates `EntryMetadata`'s fields by hand, so a
     /// field added to `EntryMetadata` is invisible to the differ by default and no
-    /// existing test notices. If this fails: add the new field's case to
-    /// `EntryLogRecord.diff`, then bump the count here.
+    /// existing test notices. If this fails: for an ordinary field, add its case to
+    /// `EntryLogRecord.diff`, then bump the count here. `modified` (M4 T1) is the one
+    /// exception — see the assertion message and `EntryLogRecord.diff`'s doc comment.
     func testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged() {
-        XCTAssertEqual(Mirror(reflecting: EntryMetadata.defaults).children.count, 6,
-                       "EntryMetadata gained or lost a field — see EntryLogRecord.diff(from:to:)")
+        XCTAssertEqual(Mirror(reflecting: EntryMetadata.defaults).children.count, 7,
+                       "EntryMetadata gained or lost a field — see EntryLogRecord.diff(from:to:). " +
+                       "`modified` (M4 T1) is the one deliberate exception: it is this diff's own " +
+                       "OUTPUT, stamped by EntryMetadataStore.update AFTER the diff runs, so it must " +
+                       "never get a diff case of its own.")
     }
 }

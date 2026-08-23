@@ -23,13 +23,25 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// damaged value must cost only the span, never the journal's id/name/createdAt.
     var span: JournalSpan?
 
+    /// M4 T1: per-field last-writer-wins substrate for CloudKit sync, the same
+    /// convention as `EntryMetadata.modified`. Keys are `"name"`, `"voiceLabels"`,
+    /// `"cover"`, `"span"` — the four journal attributes an owner can actually edit after
+    /// creation (`id`/`createdAt` are immutable, so they need no stamp). `"cover"` is
+    /// declared here ahead of any writer stamping it (the cover image itself lives
+    /// outside this registry, at `journals/<id>/cover.jpg` via `JournalCoverStore`) —
+    /// same "the field lands now so the format doesn't churn later" precedent as
+    /// `EntryMetadata.trashedAt` before M3 T5 shipped trash. `"span"` is stamped by
+    /// `JournalRegistry.setSpan` (#70).
+    var modified: [String: Date]?
+
     init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
-         span: JournalSpan? = nil) {
+         span: JournalSpan? = nil, modified: [String: Date]? = nil) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.voiceLabels = voiceLabels
         self.span = span
+        self.modified = modified
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -57,6 +69,9 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // are "a damaged span", and a damaged span must cost only the span, never the
         // journal's identity.
         span = (try? container.decodeIfPresent(JournalSpan.self, forKey: .span)) ?? nil
+        // Additive and lenient, same reasoning as `voiceLabels` immediately above: a
+        // damaged sync-stamp map must cost only the stamps, never the journal's identity.
+        modified = (try? container.decodeIfPresent([String: Date].self, forKey: .modified)) ?? nil
     }
 
     /// Hand-written per the same rule: the synthesized encoder does not know
@@ -78,10 +93,40 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if let span {
             try container.encode(span, forKey: .span)
         }
+        // Only when non-nil AND non-empty, same "an untouched record's bytes don't
+        // change" rule `voiceLabels` follows above.
+        if let modified, !modified.isEmpty {
+            try container.encode(modified, forKey: .modified)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, voiceLabels, span
+        case id, name, createdAt, voiceLabels, span, modified
+    }
+}
+
+/// The ONE place journal display order is decided (issue #79: no surface ever sorted,
+/// so the list read a different order on every device — local creates append locally,
+/// CloudKit-adopted journals append in arrival order, and those two histories diverge
+/// per device). `JournalRegistry.journals` itself stays insertion-ordered on purpose
+/// (see its own doc comment) — this is presentation-only, applied by every surface that
+/// lists journals: `SidebarModel.rows`, `CaptureScreenModel.journals`,
+/// `LibraryScreenModel.journals`.
+///
+/// Sorted by `createdAt` ascending, ties broken by `id` ascending. `createdAt` alone
+/// converges two devices with interleaved local-create/sync-adopt histories onto the
+/// same order (the underlying record — id and createdAt — is the same regardless of
+/// which device minted it locally and which received it over sync); the id tie-break
+/// exists for the case two journals share a `createdAt` exactly (e.g. adopted from the
+/// same sync batch) and gives a deterministic order that does not depend on incoming
+/// array order. A ULID's own prefix is creation-time-ordered, so tie-breaking by id is
+/// consistent with breaking by finer-grained creation time, not an arbitrary fallback.
+extension Array where Element == Journal {
+    var displayOrdered: [Journal] {
+        sorted { lhs, rhs in
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+            return lhs.id < rhs.id
+        }
     }
 }
 
@@ -91,6 +136,11 @@ enum JournalError: Error, Equatable {
     case emptyName
     case unknownJournal(String)
     case duplicateID(String)
+    /// #80: refused because it is the ONLY journal in the registry. Every device always
+    /// needs somewhere for capture to point, and "zero journals" has no UI story
+    /// anywhere in the app — so unlike every other guard in this file, this one is not
+    /// about the argument being malformed, it is about what would be left afterward.
+    case lastRemainingJournal(String)
     // No `invalidSpan` case: `JournalRegistry.setSpan`/`JournalStore.setSpan` both take
     // an ALREADY-CONSTRUCTED `JournalSpan?`, so an inverted pair is refused earlier, by
     // `JournalSpan.init` throwing `JournalSpanError.inverted` — a different type, thrown
@@ -134,24 +184,39 @@ struct JournalRegistry: Codable, Sendable, Equatable {
     ///
     /// Names are *not* required to be unique — two "1987 Journal"s are the user's
     /// business, and an id collision is the only thing that would corrupt filing.
+    ///
+    /// M4 T1: stamps `modified["name"]` — creation is the name's first write, same as
+    /// every later `rename`. `now` defaults to `Date()` (the pure-function convention
+    /// this file's other mutators don't currently need a clock for) so existing callers
+    /// that construct a `Journal` directly and insert it — this type's own tests —
+    /// keep compiling unchanged; `JournalStore.create` passes its injected clock.
     @discardableResult
-    mutating func insert(_ journal: Journal) throws -> Journal {
+    mutating func insert(_ journal: Journal, now: Date = Date()) throws -> Journal {
         guard !Self.normalized(journal.name).isEmpty else { throw JournalError.emptyName }
         guard !contains(id: journal.id) else { throw JournalError.duplicateID(journal.id) }
         var stored = journal
         stored.name = Self.normalized(journal.name)
+        var modified = stored.modified ?? [:]
+        modified["name"] = now
+        stored.modified = modified
         journals.append(stored)
         return stored
     }
 
+    /// M4 T1: stamps `modified["name"]` only — `voiceLabels`' own stamp (`setVoiceLabels`
+    /// below) is untouched, the same per-field cardinality `EntryMetadataStore.update`
+    /// pins for the sidecar.
     @discardableResult
-    mutating func rename(id: String, to name: String) throws -> Journal {
+    mutating func rename(id: String, to name: String, now: Date = Date()) throws -> Journal {
         let trimmed = Self.normalized(name)
         guard !trimmed.isEmpty else { throw JournalError.emptyName }
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
         journals[index].name = trimmed
+        var modified = journals[index].modified ?? [:]
+        modified["name"] = now
+        journals[index].modified = modified
         return journals[index]
     }
 
@@ -159,13 +224,57 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// M4 T5: stamps `modified["cover"]` and nothing else.
+    ///
+    /// The cover image itself lives outside this registry (`journals/<id>/cover.jpg`, via
+    /// `JournalCoverStore`), but its LWW stamp has to live *in* it — that is the only
+    /// place a per-field stamp map exists, and the stamp is what a receiving device reads
+    /// to decide whether the fetched cover is newer than its own. Routing the stamp
+    /// through this type rather than letting `JournalCoverStore` touch `journals.json`
+    /// keeps the registry single-writer.
+    ///
+    /// Unknown journal throws, like every other mutator here: stamping a cover on a
+    /// journal that does not exist would leave a stamp nothing can ever explain.
+    @discardableResult
+    mutating func stampCover(id: String, now: Date = Date()) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        var modified = journals[index].modified ?? [:]
+        modified["cover"] = now
+        journals[index].modified = modified
+        return journals[index]
+    }
+
+    /// M4 T5: writes a merged journal back **verbatim** — same values, same `modified`
+    /// stamps, no clock read anywhere.
+    ///
+    /// Deliberately not `insert`/`rename`, and that is the whole reason this method
+    /// exists: both of those stamp `modified` with the local clock. A journal arriving
+    /// from another device already carries the stamps that say who wrote what and when,
+    /// and restamping them with "now" would make this device look like the most recent
+    /// writer of a name it merely received — after which a genuinely newer edit on a
+    /// third device could never win. A sync-caused write is not an edit.
+    ///
+    /// Replaces by id when the journal is known, appends when it is not (design §6,
+    /// "journals merged by id"). Insertion order is presentation-only, so appending an
+    /// ingested journal at the end is the same non-decision `insert` already makes.
+    mutating func applySyncMerge(_ journal: Journal) {
+        if let index = journals.firstIndex(where: { $0.id == journal.id }) {
+            journals[index] = journal
+        } else {
+            journals.append(journal)
+        }
+    }
+
     /// Replaces a journal's voice labels wholesale (T7 Mark Voices, issue #56). Mirrors
     /// `rename`'s shape exactly: find-by-id-or-throw, mutate in place, hand back the
     /// stored result. Values are trimmed, and a value that is empty after trimming is
     /// dropped rather than stored as a blank label — the same "no label configured"
     /// state as never having set one.
+    /// M4 T1: stamps `modified["voiceLabels"]` only — `name`'s own stamp is untouched.
     @discardableResult
-    mutating func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
+    mutating func setVoiceLabels(id: String, labels: [String: String], now: Date = Date()) throws -> Journal {
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
@@ -176,6 +285,9 @@ struct JournalRegistry: Codable, Sendable, Equatable {
             trimmed[voice] = value
         }
         journals[index].voiceLabels = trimmed
+        var modified = journals[index].modified ?? [:]
+        modified["voiceLabels"] = now
+        journals[index].modified = modified
         return journals[index]
     }
 
@@ -183,12 +295,37 @@ struct JournalRegistry: Codable, Sendable, Equatable {
     /// `setVoiceLabels`'s exact shape: find-by-id-or-throw, mutate in place, hand back
     /// the stored result. `JournalSpan`'s own initializer already refuses an inverted
     /// range, so there is nothing further to validate here.
+    ///
+    /// M4 sync (#70): stamps `modified["span"]` only — `name`'s and `voiceLabels`' own
+    /// stamps are untouched, the same per-field cardinality every other mutator here
+    /// keeps. Stamped on BOTH a set and a clear: a clear that did not stamp could never
+    /// win a later LWW comparison against a peer that has not yet heard the field was
+    /// deleted (the same bug class cover deletion hit on this branch).
     @discardableResult
-    mutating func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+    mutating func setSpan(id: String, span: JournalSpan?, now: Date = Date()) throws -> Journal {
         guard let index = journals.firstIndex(where: { $0.id == id }) else {
             throw JournalError.unknownJournal(id)
         }
         journals[index].span = span
+        var modified = journals[index].modified ?? [:]
+        modified["span"] = now
+        journals[index].modified = modified
         return journals[index]
+    }
+
+    /// Removes a journal from the registry (#80, v1: caller guarantees it holds no
+    /// entries — this type has no way to see one, since entries are filed by reference
+    /// against `captures/`, not stored here). Refuses when the id is unknown, or when
+    /// removing it would leave the registry with zero journals — see
+    /// `JournalError.lastRemainingJournal`'s doc comment for why that case exists at all.
+    @discardableResult
+    mutating func remove(id: String) throws -> Journal {
+        guard let index = journals.firstIndex(where: { $0.id == id }) else {
+            throw JournalError.unknownJournal(id)
+        }
+        guard journals.count > 1 else {
+            throw JournalError.lastRemainingJournal(id)
+        }
+        return journals.remove(at: index)
     }
 }

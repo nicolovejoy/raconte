@@ -50,6 +50,11 @@ struct ContentView: View {
                     }
             }
         }
+        // Sync boots once, alongside the UI, and is never awaited by anything the owner
+        // is waiting on. A `.task` on the root rather than `CaptureScreenModel.bootstrap`
+        // on purpose: bootstrap is the recovery path a capture depends on, and sync must
+        // not be able to delay it.
+        .task { await services.sync?.launch() }
         #if os(macOS)
         .frame(minWidth: 720, minHeight: 560)
         #endif
@@ -170,7 +175,7 @@ struct ContentView: View {
             TrashView(model: services.library)
         case .debug:
             #if DEBUG
-            DebugMenuView()
+            DebugMenuView(sync: services.sync)
             #else
             CaptureView(model: services.capture)
             #endif

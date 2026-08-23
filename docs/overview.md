@@ -308,6 +308,50 @@ browsing elsewhere would silently never get encoded.
 Details: [navigation redesign design](plans/2026-08-17-navigation-redesign-design.md)
 (§11 = as-built rulings the design doc didn't anticipate).
 
+## 8. Sync: your devices agree (M4)
+
+**Each device tells iCloud what it wrote; immutable things upload once; the
+chain means edits never conflict.** Every device — phone, mini, laptop — holds
+the whole archive, audio included. Delete the app and reinstall: the archive
+comes back from iCloud.
+
+- **What syncs is what a human made or said**, never what the app can rebuild:
+  the recording itself, the transcript's revision chain, your metadata (dates,
+  journal names, voice labels, trash state), your marker taps. Caches (the
+  editor's working draft, the recovery scanner's own bookkeeping) never leave
+  the device that made them — there is nothing there worth protecting, and
+  rebuilding them is free.
+- **Immutable things — the recording, a revision's text — upload once and are
+  done.** Nothing about them can conflict, because nothing about them can
+  change. Two devices editing offline just mint two revisions off the same
+  parent; once synced, both exist, "current" is computed the same way on every
+  device, and the other edit sits in history as a fork you can revert to.
+- **Metadata that can change (a backdate, a journal's name, an entry's trash
+  state) uses last-writer-wins, one field at a time.** A backdate set on the
+  phone and a journal renamed on the Mac both survive, because they touched
+  different fields; two edits to the *same* field within the same moment
+  resolve to whichever timestamp is later — deterministic, not silently lost.
+- **A device only ever asks iCloud for what it's missing.** New entries arrive
+  whole (nothing half-written is ever visible locally) or not at all — a
+  partial arrival is held privately until it's complete, never left in a state
+  the rest of the app could see and mistake for real. A record iCloud has
+  already handed to a device is never handed to it again, so anything that
+  can't be used the moment it arrives has to be kept somewhere safe until it
+  can be, not thrown away.
+- **Trash is a synced flag, not a delete.** Only an actual permanent deletion —
+  the 30-day sweep, or Delete Now — removes the record from iCloud, and that
+  removal is final: there's no automatic re-send for a deleted entry, unlike a
+  journal, which does get one (a deleted entry stays deleted; deleting a
+  journal doesn't delete the entries in it, so nothing there is lost by
+  re-sending it).
+- **A Debug screen (device builds only) shows the raw state**: is this device
+  currently connected to iCloud, when it last pushed, when it last pulled, how
+  many changes are still waiting to go out, and the last thing that went wrong.
+  Nothing user-facing surfaces sync status yet — that's later polish.
+
+Details: [M4 sync design](plans/2026-08-17-m4-sync-design.md) (§10 = as-built
+deviations from the approved design).
+
 ## Where the project is
 
 ```mermaid
@@ -331,9 +375,10 @@ Next, in order:
 2. **The unified editor** (#60, #59) — one editor showing visible paragraph and
    voice structure, replacing Mark voices mode; undo falls out of it. Two design
    rulings still open.
-3. **M4 — CloudKit sync** (private iCloud DB). Done = delete the app, reinstall,
-   everything comes back. Only after this: migrate the 36 frozen recountly.org
-   entries in and tear the web app down
+3. **M4 — CloudKit sync** (private iCloud DB). Built on `m4/sync` (§8 above);
+   final adversarial review and the acceptance gate — delete the app, reinstall,
+   everything comes back — remain before it merges to main. Only after that:
+   migrate the 36 frozen recountly.org entries in and tear the web app down
    ([data model + migration](plans/2026-07-29-data-model-and-migration.md)).
 4. **M5 — reading polish**, search, verified open-format export.
 

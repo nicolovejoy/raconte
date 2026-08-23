@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The shipping entitlements MINUS the M4 sync keys, for builds that cannot be signed
+  with a real development certificate — CI, and any local `xcodebuild test`.
+
+  Why this file exists (M4 T4, 2026-08-17): `com.apple.developer.icloud-*` are
+  restricted entitlements, so macOS refuses to ad-hoc-sign a binary carrying them
+  ("has entitlements that require signing with a development certificate") and there
+  is no profile to fetch on a CI runner. The measured alternatives were both worse:
+  `CODE_SIGNING_ALLOWED=NO` produces an UNSANDBOXED test host, which matters a great
+  deal here because `RaconteTests` runs with the real app as its host — unsandboxed,
+  `AppContainer.root()` resolves to the owner's actual `~/Library/Application
+  Support/Raconte` instead of a throwaway container, and the launching app would scan
+  and sweep his real archive. (It also breaks `BuildStampTests`, whose fixture paths
+  only agree inside a container.)
+
+  Keep in step with `project.yml`'s `targets.Raconte.entitlements.properties`: this
+  file must be that list minus exactly the sync keys. `EntitlementsParityTests` fails
+  if it drifts, so there is no need to remember.
+
+  Used as `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` on the
+  xcodebuild command line; nothing in `project.yml` points at it, and no shipping build
+  ever uses it.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

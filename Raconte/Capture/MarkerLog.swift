@@ -52,9 +52,16 @@ final class MarkerLogWriter {
     private(set) var nextSeq = 0
     /// A write failed partway and left an unterminated line behind.
     private var tornTail = false
+    /// M4 T1: stamps `StructureMarker.at` at append time — the same "the writer, not the
+    /// caller, assigns identity" shape as `nextSeq` above. `CaptureCoordinator` passes
+    /// its own injected clock (the capture-tap path); `MarkerCorrectionWriter` wraps its
+    /// own per-call `now: Date` parameter into a closure (the correction path). Default
+    /// matches every other clock in this codebase's leaf types.
+    private let now: @Sendable () -> Date
 
-    init(captureDirectory: URL) {
+    init(captureDirectory: URL, now: @escaping @Sendable () -> Date = Date.init) {
         self.url = SegmentLayout.markerLogURL(captureDirectory: captureDirectory)
+        self.now = now
     }
 
     deinit { fd.closeIfOpen() }
@@ -125,6 +132,10 @@ final class MarkerLogWriter {
         guard fd.value >= 0 else { throw MarkerLogError.notOpen }
         var stamped = marker
         stamped.seq = nextSeq
+        // M4 T1: overwrite whatever `at` the caller passed, exactly like `seq` above —
+        // the true append time is when this write actually happens, not whenever the
+        // marker value was constructed.
+        stamped.at = now()
 
         var data = try CaptureCoding.lineEncoder().encode(stamped)
         // A JSONL line must not contain a raw newline or the reader's line split would

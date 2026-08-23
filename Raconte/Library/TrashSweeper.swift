@@ -28,14 +28,21 @@ struct TrashSweeper: Sendable {
         self.now = now
     }
 
-    func run() async -> TrashSweepResult {
+    /// `onDeleted` (M4 T11): fired once per capture this sweep actually stages,
+    /// carrying that capture's own `SyncRecordFamily` gathered BEFORE the stage runs —
+    /// the only point it is still enumerable. `nil` in every pre-M4 caller and every
+    /// test that doesn't care (sync off, or a fixture never wired one) — a sweep
+    /// behaves exactly as it always did without it. `@Sendable` because this whole
+    /// call runs inside `Task.detached`.
+    func run(onDeleted: (@Sendable (String, [SyncRecordName]) async -> Void)? = nil) async -> TrashSweepResult {
         let capturesRoot = self.capturesRoot
         let containerRoot = self.containerRoot
         let now = self.now
         return await Task.detached(priority: .utility) {
             let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
             let candidates = Self.gather(capturesRoot: capturesRoot)
-            var result = Self.apply(TrashSweep.plan(candidates, now: now()), remover: remover)
+            var result = await Self.apply(TrashSweep.plan(candidates, now: now()), remover: remover,
+                                          capturesRoot: capturesRoot, onDeleted: onDeleted)
             // The launch-time safety net (owner answer 3): purge whatever this run just
             // staged, plus anything a previous launch staged and never got to reclaim.
             result.pendingRemovalFailures = remover.purge().failed
@@ -78,16 +85,25 @@ struct TrashSweeper: Sendable {
     /// `deleted` is staged (#25), not necessarily unlinked yet — from the library's point
     /// of view the entry is gone the moment the rename lands, and `run()`'s trailing
     /// `purge()` only reclaims the bytes.
-    static func apply(_ actions: [TrashSweepAction], remover: StagedRemover) -> TrashSweepResult {
+    ///
+    /// M4 T11: `SyncRecordFamily.names` reads `id`'s own capture directory BEFORE
+    /// `remover.stage` renames it away — the only point it is still enumerable — so
+    /// `onDeleted` always carries a real family, never an empty one just because the
+    /// directory was already gone by the time anyone asked.
+    static func apply(_ actions: [TrashSweepAction], remover: StagedRemover, capturesRoot: URL,
+                      onDeleted: (@Sendable (String, [SyncRecordName]) async -> Void)?) async -> TrashSweepResult {
         var result = TrashSweepResult()
         for action in actions {
             switch action {
             case .skip(let skipped):
                 result.skipped.append(skipped)
             case .deleteCaptureDirectory(let id):
+                let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+                let family = SyncRecordFamily.names(captureID: id, captureDirectory: directory)
                 do {
                     _ = try remover.stage(captureID: id)
                     result.deleted.append(id)
+                    await onDeleted?(id, family)
                 } catch {
                     result.skipped.append(SkippedSweep(
                         captureID: id, reason: .deleteFailed(String(describing: error))))

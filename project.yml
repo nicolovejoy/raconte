@@ -47,7 +47,10 @@ targets:
         # prompt for this with on-device SpeechAnalyzer — only the mic prompt appeared.
         # Kept so a future cloud/dictation path can't turn into a launch crash.
         NSSpeechRecognitionUsageDescription: Raconte transcribes your entries on this device.
-        UIBackgroundModes: [audio]
+        # `audio` keeps a capture alive when the app backgrounds (M1).
+        # `remote-notification` (M4 design §8) lets CloudKit's silent push wake the app
+        # so a change made on another device lands without the owner opening this one.
+        UIBackgroundModes: [audio, remote-notification]
         # TestFlight/App Store validation requires this key — its absence ("the app
         # declares no orientations") failed the upload. iPhone: portrait-only (the
         # capture screen has no rotated layout). iPad: all four, to keep multitasking
@@ -63,6 +66,20 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.device.audio-input: true
+        # M4 sync (design §8). The container was reserved on the portal long ago; these
+        # are the first entitlement keys that actually claim it. One entitlements file
+        # serves both platforms here, which is why the macOS-only sandbox key above and
+        # these shared iCloud keys sit together — iOS ignores the sandbox keys, macOS
+        # honours all of them.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.org.pianohouseproject.raconte
+        com.apple.developer.icloud-services: [CloudKit]
+        # Development environment first (design §8): schema materializes from first
+        # writes and is deployed to production before any TestFlight build.
+        aps-environment: development
+        # Required under the macOS sandbox for CloudKit to reach the network at all;
+        # without it every sync call fails with a connection error on the Mac only.
+        com.apple.security.network.client: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.pianohouseproject.raconte

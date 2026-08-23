@@ -20,12 +20,28 @@ actor JournalStore {
     private let mintID: @Sendable () -> String
     private let now: @Sendable () -> Date
 
+    /// M4 T5. Nil everywhere sync is off — unit tests, the UI-test harness, and any build
+    /// whose composition root refused to construct an engine. A store with no hook behaves
+    /// exactly as it did before M4.
+    private var syncHooks: (any SyncHooks)?
+
     init(containerRoot: URL,
          mintID: @escaping @Sendable () -> String = { ULID.make() },
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         syncHooks: (any SyncHooks)? = nil) {
         self.url = AppContainer.journalsURL(containerRoot: containerRoot)
         self.mintID = mintID
         self.now = now
+        self.syncHooks = syncHooks
+    }
+
+    /// Wired after construction because the composition root builds this store (inside
+    /// `LibraryScreenModel`) before it can build the sync coordinator that conforms to
+    /// `SyncHooks` — and the coordinator's own ingest path needs this store, so one of the
+    /// two has to be attached second. Doing it this way rather than with a two-phase init
+    /// leaves every existing `init` call site untouched.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
     }
 
     // MARK: Reads
@@ -47,46 +63,173 @@ actor JournalStore {
     // MARK: Writes
 
     @discardableResult
-    func create(name: String) throws -> Journal {
+    func create(name: String) async throws -> Journal {
         var registry = try load()
-        // `insert` normalizes the name and hands back what it stored.
-        let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: now()))
+        // `insert` normalizes the name and hands back what it stored. One clock read,
+        // reused for both `createdAt` and the M4 T1 `modified["name"]` stamp `insert`
+        // writes — the journal's creation instant and its name's first-write instant
+        // are the same moment.
+        let createdAt = now()
+        let created = try registry.insert(Journal(id: mintID(), name: name, createdAt: createdAt),
+                                          now: createdAt)
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: created.id))
         return created
     }
 
     @discardableResult
-    func rename(id: String, to name: String) throws -> Journal {
+    func rename(id: String, to name: String) async throws -> Journal {
         var registry = try load()
-        let renamed = try registry.rename(id: id, to: name)
+        let renamed = try registry.rename(id: id, to: name, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return renamed
+    }
+
+    /// Stamps `modified["cover"]` — the LWW stamp for the cover image, which lives outside
+    /// this registry at `journals/<id>/cover.jpg`. Called by `JournalCoverStore` after it
+    /// writes or removes those bytes, so `journals.json` keeps exactly one writer (this
+    /// actor) while the stamp still lands.
+    ///
+    /// Fires the hook like any other local edit: the journal record's digest includes the
+    /// cover's own sha (`SyncTreeScanner.journalArtifact`), so a new cover really is a
+    /// change to the Journal record and has to be pushed.
+    func stampCoverModified(id: String) async throws {
+        var registry = try load()
+        try registry.stampCover(id: id, now: now())
+        try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
+    }
+
+    /// Writes a merged journal back verbatim (M4 T5, design §6) — **no restamping, and no
+    /// sync hook**.
+    ///
+    /// The missing hook is the no-echo rule, and it is load-bearing rather than an
+    /// optimization. A sync-caused save that announced itself as a local change would
+    /// re-upload what was just downloaded; and because `applySyncMerge` also does not
+    /// restamp, the echo would carry the *remote's* stamps back at the remote — which,
+    /// combined with the deviceID tie-break, is a loop two devices can sit in indefinitely,
+    /// each one's echo answering the other's. See `JournalRegistry.applySyncMerge` for why
+    /// the stamps travel untouched.
+    func applySyncMerge(_ journal: Journal) throws {
+        var registry = try load()
+        registry.applySyncMerge(journal)
+        try save(registry)
+    }
+
+    /// The ingest path's read-merge-write, as ONE isolated operation.
+    ///
+    /// The two-call version of this — read the journal, merge, write it back — was a lost
+    /// update, and the reason is worth stating precisely because the obvious defence does
+    /// not work: **an actor releases its isolation at every `await`.** The ingest side
+    /// being an actor bought nothing, because the read and the write were two separate
+    /// hops into *this* actor, and a `rename` landing between them was silently reverted —
+    /// `applySyncMerge` replaces the whole `Journal`, stamps included, so the newer local
+    /// stamp was destroyed, the revert was then pushed, and the edit was lost on both
+    /// devices.
+    ///
+    /// `decide` is **non-async on purpose**: a synchronous closure cannot suspend, so
+    /// load → decide → save runs to completion under this actor's isolation with nothing
+    /// able to interleave. Making it `async` would silently reintroduce the bug, which is
+    /// why the signature is the guard rather than a comment asking callers to be careful.
+    ///
+    /// The caller gets back whatever the closure decided about the cover, because the
+    /// cover's bytes live in a different store and cannot be written from here. Only the
+    /// registry's read-modify-write has to be atomic; see `SyncRecordExchange.ingestJournal`
+    /// for what the cover half then does and the one crash window it leaves.
+    ///
+    /// No restamping and no sync hook, for the same no-echo reason as `applySyncMerge`.
+    func applySyncMerge(id: String,
+                        decide: @Sendable (Journal?) -> JournalSyncMerge) throws -> JournalSyncMerge.CoverAction {
+        var registry = try load()
+        let outcome = decide(registry.journal(id: id))
+        registry.applySyncMerge(outcome.journal)
+        try save(registry)
+        return outcome.coverAction
     }
 
     /// Sets (or clears, via an empty dict) a journal's voice labels (T7 Mark Voices,
     /// issue #56). Same load -> mutate -> save shape as `rename`; the pure trim/drop
     /// rule lives on `JournalRegistry.setVoiceLabels`.
     @discardableResult
-    func setVoiceLabels(id: String, labels: [String: String]) throws -> Journal {
+    func setVoiceLabels(id: String, labels: [String: String]) async throws -> Journal {
         var registry = try load()
-        let updated = try registry.setVoiceLabels(id: id, labels: labels)
+        let updated = try registry.setVoiceLabels(id: id, labels: labels, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return updated
     }
 
     /// Sets (or clears, via `nil`) a journal's stored span (spec ruling 2). Same
     /// load -> mutate -> save shape as `setVoiceLabels`; the pure rule lives on
-    /// `JournalRegistry.setSpan`.
+    /// `JournalRegistry.setSpan`. M4 sync (#70): passes the store's clock through so the
+    /// `modified["span"]` stamp lands, on both a set and a clear, and fires the sync hook
+    /// exactly like every other local-edit setter (`rename`, `setVoiceLabels`) — without
+    /// it a span edit would sit stamped-but-unpushed until the next launch's
+    /// reconciliation scan happened to notice the digest moved.
+    ///
+    /// Value-changed guard (gate F1, for #70): a no-op call — e.g. a journal editor
+    /// opened and closed without touching the span — must NOT re-stamp `modified["span"]`
+    /// or fire the sync hook. Without this, re-stamping a value that did not change can
+    /// beat a genuinely older but real edit from an offline peer in a later LWW merge,
+    /// silently discarding it. `rename`/`setVoiceLabels` rely on their *caller* (the
+    /// editor view) to skip a no-op call instead; `setSpan` guards here too, as a second
+    /// chokepoint any future caller inherits for free.
     @discardableResult
-    func setSpan(id: String, span: JournalSpan?) throws -> Journal {
+    func setSpan(id: String, span: JournalSpan?) async throws -> Journal {
         var registry = try load()
-        let updated = try registry.setSpan(id: id, span: span)
+        guard let current = registry.journal(id: id) else {
+            throw JournalError.unknownJournal(id)
+        }
+        guard current.span != span else { return current }
+        let updated = try registry.setSpan(id: id, span: span, now: now())
         try save(registry)
+        await syncHooks?.noteLocalChange(.journal(id: id))
         return updated
     }
 
-    // Deletion is deliberately absent: a journal with entries has no defined disposal
-    // for them yet (M3 T5 owns trash). Adding `delete` before that is how orphans happen.
+    /// Removes an EMPTY journal from the registry (#80, v1: non-empty journal deletion
+    /// is a separate, later design). Refuses (`JournalError`) when the id is unknown, or
+    /// when it is the last remaining journal — every device always needs somewhere for
+    /// capture to point, and "no journals" has no UI story anywhere in the app.
+    ///
+    /// "Empty" (zero items AND zero trashed entries) is NOT checked here — this actor
+    /// cannot see entries at all, only `journals.json`. `LibraryScreenModel.deleteJournal`
+    /// is the only legitimate caller and enforces that rule from the scan before ever
+    /// reaching this method; see its doc comment for why a trashed entry still counts.
+    ///
+    /// Cover cleanup runs only after the registry write lands, and the sync delete hook
+    /// only after that — telling either layer the journal is gone before the registry
+    /// write has actually succeeded on disk would be a lie they could act on.
+    func deleteJournal(id: String) async throws {
+        var registry = try load()
+        try registry.remove(id: id)
+        try save(registry)
+        JournalCoverStore.removeDirectory(containerRoot: url.deletingLastPathComponent(), journalID: id)
+        await syncHooks?.noteLocalDelete(.journal(id: id))
+    }
+
+    /// Removes a journal due to an INBOUND deletion (#80, B2) — **no sync hook fired**,
+    /// the same no-echo rule `applySyncMerge` follows and for the same reason: announcing
+    /// a sync-caused removal as a local delete would re-enqueue a delete for a record the
+    /// server already told us is gone, and combined with the deviceID tie-break two
+    /// devices could trade the same delete back and forth.
+    ///
+    /// Same guards as `deleteJournal` (`JournalRegistry.remove` throws
+    /// `.unknownJournal`/`.lastRemainingJournal`) because they are the same rule for the
+    /// same reason regardless of which direction triggered it — an inbound delete of this
+    /// device's only journal is refused just as hard as a local one would be.
+    ///
+    /// The not-empty-locally guard is NOT here, deliberately: this actor cannot see
+    /// entries at all, only `journals.json` — `SyncRecordExchange.acceptRemoteJournalDeletion`
+    /// is the only legitimate caller and has already asked
+    /// `LibraryScreenModel.isJournalEmptyAfterRescan` (R3) before ever reaching here.
+    func applySyncDelete(id: String) async throws {
+        var registry = try load()
+        try registry.remove(id: id)
+        try save(registry)
+        JournalCoverStore.removeDirectory(containerRoot: url.deletingLastPathComponent(), journalID: id)
+    }
 
     private func save(_ registry: JournalRegistry) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),

@@ -69,17 +69,26 @@ struct StructureMarker: Codable, Sendable, Equatable {
     /// retract has no honest value for) or `seq` itself (always this record's OWN
     /// identity, assigned by the writer, never the target's).
     var retractsSeq: Int?
+    /// M4 T1: wall-clock time of the append, stamped by `MarkerLogWriter.append` — the
+    /// same identity-assignment shape as `seq` above (the writer, not the caller, owns
+    /// it), because the true "when" is the moment the record actually reached disk, not
+    /// whenever the caller happened to construct this value. Optional and additive: every
+    /// marker on disk today predates this field, so a record written before this shipped
+    /// decodes with `at == nil` rather than throwing.
+    var at: Date?
 
-    init(seq: Int, frame: Int64, kind: Kind, voice: String? = nil, retractsSeq: Int? = nil) {
+    init(seq: Int, frame: Int64, kind: Kind, voice: String? = nil, retractsSeq: Int? = nil,
+         at: Date? = nil) {
         self.seq = seq
         self.frame = frame
         self.kind = kind
         self.voice = voice
         self.retractsSeq = retractsSeq
+        self.at = at
     }
 
     private enum CodingKeys: String, CodingKey {
-        case seq, frame, kind, voice, retractsSeq
+        case seq, frame, kind, voice, retractsSeq, at
     }
 
     /// Hand-written because Swift's synthesized decoder **ignores property defaults**
@@ -98,10 +107,13 @@ struct StructureMarker: Codable, Sendable, Equatable {
         // `try?` and not `try`: a garbage voice costs the attribute, never the frame.
         voice = (try? container.decodeIfPresent(String.self, forKey: .voice)) ?? nil
         retractsSeq = (try? container.decodeIfPresent(Int.self, forKey: .retractsSeq)) ?? nil
+        // Additive and lenient, same reasoning as `voice`/`retractsSeq` above: a garbage
+        // or absent `at` costs the sync stamp, never the marker itself.
+        at = (try? container.decodeIfPresent(Date.self, forKey: .at)) ?? nil
     }
 
-    /// `encodeIfPresent` for `voice`/`retractsSeq`, so a paragraph line carries neither
-    /// key at all (design §4's example lines).
+    /// `encodeIfPresent` for `voice`/`retractsSeq`/`at`, so a paragraph line carries none
+    /// of them when unset (design §4's example lines).
     func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(seq, forKey: .seq)
@@ -109,6 +121,7 @@ struct StructureMarker: Codable, Sendable, Equatable {
         try container.encode(kind.string, forKey: .kind)
         try container.encodeIfPresent(voice, forKey: .voice)
         try container.encodeIfPresent(retractsSeq, forKey: .retractsSeq)
+        try container.encodeIfPresent(at, forKey: .at)
     }
 }
 

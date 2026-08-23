@@ -404,6 +404,67 @@ final class CaptureUITests: XCTestCase {
                       "trash shows the permanently-deleted entry after relaunch")
     }
 
+    // MARK: owner ask 2026-08-22 — Empty Trash: bulk permanent delete from the Trash screen
+
+    /// Trash two entries, then Empty Trash in one action. Asserts both rows disappear
+    /// from Trash, then relaunches and re-checks Trash is empty from a fresh disk scan —
+    /// the same disk-truth discipline `testDeleteNowPermanentlyRemovesEntry` uses,
+    /// because an in-memory list emptying itself proves nothing about what actually
+    /// happened on disk.
+    func testEmptyTrashPermanentlyRemovesAllTrashedEntries() {
+        let app = launchApp()
+        let record = recordButton(app)
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
+
+        // Record and trash two separate entries.
+        for _ in 0..<2 {
+            press(record)
+            waitUntil(10, "never entered recording") { record.label == "Stop" }
+            Thread.sleep(forTimeInterval: 2)
+            press(record)
+            finishReceipt(app)
+            waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
+            waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+
+            press(recentRows(app).firstMatch)
+            let trashButton = app.buttons["detail.trashButton"].firstMatch
+            XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+            press(trashButton)
+            let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
+            XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
+            press(confirmTrash)
+            waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+        }
+
+        openPlace(app, "sidebar.trash")
+        waitUntil(15, "both trashed entries not listed") {
+            app.staticTexts.matching(identifier: "trash.row.remaining").count == 2
+        }
+
+        let emptyAll = app.buttons["trash.emptyAll"].firstMatch
+        XCTAssertTrue(emptyAll.waitForExistence(timeout: 10), "no Empty Trash button")
+        press(emptyAll)
+        let confirmEmptyAll = app.buttons["trash.confirmEmptyAll"].firstMatch
+        XCTAssertTrue(confirmEmptyAll.waitForExistence(timeout: 10), "no Empty Trash confirmation")
+        press(confirmEmptyAll)
+
+        waitUntil(20, "entries still listed in Trash after Empty Trash") {
+            app.staticTexts.matching(identifier: "trash.row.remaining").count == 0
+        }
+        XCTAssertTrue(app.staticTexts["trash.empty"].waitForExistence(timeout: 10),
+                      "Trash not showing empty state after Empty Trash")
+
+        // Relaunch and rescan from scratch: disk truth, not just this process's
+        // in-memory list.
+        app.terminate()
+        let relaunched = launchApp()
+        XCTAssertTrue(relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
+
+        openPlace(relaunched, "sidebar.trash")
+        XCTAssertTrue(relaunched.staticTexts["trash.empty"].firstMatch.waitForExistence(timeout: 15),
+                      "trash shows permanently-deleted entries after relaunch")
+    }
+
     // MARK: owner report 2026-08-03 — Move to Trash while playback is running (device forensics)
 
     /// Targeted repro attempt for a device failure: the owner's "Move to Trash" from an

@@ -2,91 +2,63 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-22 (laptop — m4 SDD Tasks 6–11 + 3 ruled wiring tasks BUILT AND REVIEWED; Empty Trash + #82 shipped; CLAUDE.md slimmed; 1606 → 1750 unit)
+## Session 2026-08-22→23 (laptop — M4 SHIPPED TO MAIN: T12 + final review + Gate B + owner smoke; #84 built; TestFlight prepped; 1750 → 1780 unit)
 
-Marathon session: /readup → roadmap discussion → continuous SDD on `m4/sync` (Sonnet
-implementers + Sonnet reviews per the standing cost ruling; every task adversarially
-reviewed, every Important fixed and re-reviewed). Branch `m4/sync` `c592752c..6fcd73b6`,
-**~20 commits, PUSHED**. Main carries the CLAUDE.md restructure (`e6ad36f8`). Both trees
-clean; `stash@{0}` untouched. **Not merged to main; Task 12 + final review + Gate B remain.**
+Continuous session from Task 12 through merge and TestFlight prep. PRs #87 (m4/sync)
+and #88 (#84 fix) both merged by owner. Suite 1750 → 1780 unit, green.
 
-- **Owner rulings landed this session:** corrupt-sidecar deletion block ACCEPTED as
-  fail-safe default (tracked as **#81** for a repair route); zero-frame mis-tap blocking a
-  journal ruled NOT acceptable → **#82 filed AND BUILT** (on-demand recovery for
-  provably-worthless, provably-inactive blockers — planner's own decision is the safety
-  valve, owned-decision switch with no `default:`, parked-continuation race pin);
-  CLAUDE.md slimmed to an operating manual (history → `docs/devlog.md`, `e6ad36f8`);
-  repo STAYS PUBLIC (advice: flipping private bills macOS CI minutes at 10×);
-  merged `feat/journal-editing` deleted local + origin.
-- **Empty Trash shipped** (owner asked mid-smoke: emptying one-at-a-time was blocking
-  test 2): toolbar button on the Trash screen, confirm dialog with count, loops the
-  per-entry guard (sidecar re-read per item), one purge + one rescan, honest partial-failure
-  alert. Review-approved; the review exposed that the brief's named mutation adversary was
-  structurally impossible — adjudicated as a brief defect, and the guard's restore-race
-  branch got its own mutation-verified pin (`abffce0b`).
-- **Owner smoke, partial:** journal ordering (#79) PASS on both devices. Tests 2–5 (Empty
-  Trash, cross-device empty-journal delete, disabled row + footnote, picker freshness,
-  mis-tap delete) NOT yet run — devices carry builds at `9280adaf` (Mac dylib `08DF35AC`
-  at `~/Desktop/Raconte-m4sync.app`, phone `37E561B0`), which include Empty Trash + #82
-  but NOT Tasks 6–11. Build fresh at branch head before the next smoke.
-- **m4 SDD Tasks 6–11 all complete** (ledger authoritative:
-  `/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`):
-  T6 entry+finalize record builders/hooks; T7 assemble-then-commit ingest; T8 per-field
-  entry LWW merge (shared `LWWResolve`, clean approve); T9 revision sync (2 fix rounds);
-  T10 marker streams (clean approve); T11 purge→CK delete + delete ingest via StagedRemover.
-  **Suite 1606 → 1750 unit, green throughout.**
-- **THREE PLAN DEFECTS ruled and fixed mid-loop, all the same class** (design names a
-  chokepoint no task's file list assigns — now in memory as
-  plan-preflight-sweep-design-chokepoints): `recordToPush` never wired for
-  entry/audio/liveLog (builders+ingest+merge all existed, nothing pushed — wired as a ruled
-  task with single-read discipline and scanner-shared digests); the marker-append
-  `noteLocalChange` chokepoint (setSpan precedent: an edit must not wait for a
-  reconciliation scan); and T7's pending buffer assumed CloudKit redelivery that does not
-  exist.
-- **The session's recurring catch, now in memory as inbound-sync-must-land-or-park:
-  CKSyncEngine NEVER redelivers a consumed record**, so any ingest path that
-  refuses-and-returns is permanent silent loss. Caught three times: T7's in-memory pending
-  buffer (pieces split across a launch boundary stuck forever → durable staging with
-  at-arrival sha + rehydration), T9's trashed-capture revision refusal (restore never
-  recovered the edit → parks via pending-revisions.json, resolved at rehydration:
-  restored→ingest, still-trashed→parked, purged→discard per §5 delete-wins), and T11's
-  design review. Companion rule: **any parked-state writeback after an await reconciles
-  against a fresh disk read** (`reconcileParkedWriteback`/`mergeIntoParked`) — the actor is
-  reentrant during suspension (T5 C1's class, re-caught in T9 round 2).
-- **T11's Important:** the deleted entry's OWN queued save rested on unverified engine
-  dedup — now explicitly withdrawn on both paths and the pre-start buffer dedupes
-  save-then-delete. Entries have NO corrective re-push (deleted is deleted — the journal
-  corrective re-push stays journal-specific per the #80 owner ruling).
-- **Review-accepted deviations worth knowing:** the Revision record gained `entryRef` (the
-  design's schema table had no captureID field and the record name carries only the ULID);
-  design §2's stated marker record name `<captureID>.m.<deviceID>` is actually
-  `m.<captureID>.<deviceID>` on the wire (pre-existing doc drift, fix on next doc touch).
-- **Process:** 1 background-suite stall (12th) + 2 machine-sleep kills (lid-close defeats
-  `caffeinate -ims`), each recovered by a single verified-state resume; one implementer
-  self-caught a `git checkout --` that discarded work mid-task and redid it — the reviewer
-  independently confirmed nothing half-restored. `continueAfterFailure = false` verified in
-  new UI test classes. CI's docs-only red on main (8/21) did not recur — next run green.
+- **Owner rulings:** stash@{0} dropped (nothing worth keeping); T8 Mirror tripwire ruled
+  must-fix and built (7/10 field pins, mutation-verified); device-smoke accepted for the
+  two unfakeable CK paths; #81 stays backlogged; TestFlight greenlit (cable-free installs,
+  iPad, and moving real data off the disposable dev CloudKit environment).
+- **Final whole-branch review** (most capable model, 46 commits): 1 Critical — the
+  existing-capture staging cleanup `removeItem`'d the whole `sync/staging/<id>/` dir,
+  destroying parked revisions/markers at the exact moment a cross-device restore should
+  land them (fixed via shared `clearEntryAssemblyStaging` allow-list, cleanup-before-
+  rehydration-kicks ordering is load-bearing; the fixer self-caught a vacuous pin) — and
+  1 Important — a fresh capture's `markers.jsonl` never pushed until next launch
+  (`.markerStream` added to `namesToPush`). Both mutation-verified, re-review clean.
+- **Gate B probes all 5 PASS** (suite re-run, both builds, NEW 25-capture concurrent
+  local-update-vs-inbound-merge probe — 9/25 lost-update failures under an inserted
+  suspension window, reverted; captures/ source scan clean).
+- **Owner smoke PASS end-to-end** — first cross-device entry sync, delete-refusal-and-
+  restore, Empty Trash, trash propagation, picker freshness. Test 7 (reinstall-
+  reconstructs) FAILED once then passed clean: the first run deleted the container UNDER
+  THE RUNNING APP — dangling CKAsset fileURLs got 176 records discarded, stale engine
+  state re-persisted (88 phantom pending saves), and the `.needsDefault` mint pushed a
+  spurious "Journal" to CloudKit. Clean re-run: 32/32 captures reconstructed, zero
+  discards. Post-mortem issues: **#84** (mint pushes during first-sync window — BUILT
+  this session: provisional-default flag, promote-on-use via one shared chokepoint after
+  a reviewer caught the moveEntry bypass, prune-on-real-journal-arrival) and **#85**
+  (asset guards discard instead of park — hardening, backlog).
+- **Owner feature asks filed:** #83 (swipe-to-trash: no confirm, 2s lingering row,
+  tap-to-undo, haptic; macOS visual+sound), #86 (entry detail: sidenav becomes entry
+  list, arrow-key/swipe prev-next).
+- **TestFlight pipeline:** CloudKit schema promoted dev → Production; ASC app record
+  "Raconte Journal" created (portal already had the App ID; ASC dropdown was stale);
+  iOS Release archive staged in Organizer (`Raconte-ios-tf1`) — CLI `-exportArchive`
+  fails "No Accounts" (wire the ASC API key next session; MusicForge has the recipe).
+  aps-environment stays `development` in source; App Store export rewrites it to
+  production (verify on the upload sheet — supersedes the old "flip first" note).
+- **CRITICAL migration facts:** TestFlight builds talk to the PRODUCTION CloudKit
+  environment (empty until first push). Install TestFlight OVER the existing app, never
+  delete-then-install; never interleave dev builds afterward. The Mac Desktop dev app
+  stays on the dev cloud — phone↔Mac sync is PAUSED until the macOS build also ships
+  via TestFlight.
 
 **Next steps:**
-1. **Resume the m4 SDD loop at Task 12** (debug status screen; decide `stash@{0}` — the
-   inert fetch-debounce scaffolding — per the plan). Read the ledger FIRST; its RESUME
-   POINT block carries the accumulated **Gate B agenda** (entries end-to-end from the
-   composition root on real devices; second-CK-delete-no-op is only fake-verified; T8's
-   missing Mirror field-count tripwire for EntryMetadata/RemoteEntryFields — triage
-   must-fix-before-merge; M1 engine conflict routing still unfakeable; refuse-vs-park sweep).
-2. **Final whole-branch review (Opus) + Gate B acceptance** (delete-app-reinstall-
-   reconstructs) — point the final reviewer at every deferred-minor/parked ledger line.
-3. **Fresh smoke builds at branch head** (both devices; ditto + dylib-UUID check; wireless
-   devicectl) — first builds where entries can actually sync device-to-device. Owner smoke:
-   the pending tests 2–5 (Empty Trash both devices; delete an empty journal cross-device;
-   disabled row + footnote; picker freshness; mis-tap → immediate journal delete per #82)
-   PLUS the first-ever entry sync check (record on phone → entry appears on laptop).
-4. **`m4/sync` → main after Gate B + smoke.** CLAUDE.md will conflict (this file was
-   restructured on main; the branch's Commands section supersedes — graft it onto the slim
-   structure).
-5. Nico's calls: #81 repair route timing; backlog #67 (10 items), #73–78 (cheap Sonnet
-   batch post-merge), #70 decoder half, #68 (macOS cover picker — still the only Mac cover
-   path), #66, #63, unified-editor #60/#59, TestFlight (flip aps-environment first).
+1. **TestFlight:** confirm build 1 uploaded (Organizer) + processed; owner installs OVER
+   the phone app; ship the macOS build to TestFlight so the Mac rejoins sync on
+   production; then delete the spurious dev-env artifacts if any linger.
+2. **Headless uploads:** wire the team ASC API key into `xcodebuild -exportArchive`
+   (`-authenticationKeyPath/-authenticationKeyID/-authenticationKeyIssuerID`) per
+   MusicForge's setup — note posted to the musicforge handoff channel.
+3. **Cleanup:** delete `fix/84-default-journal-mint` local+origin; the `raconte-m4`
+   worktree sits on that merged branch (rebase it onto main or retire it); delete the
+   SDD workspace (`.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/`) once
+   TestFlight is confirmed — its ledger is the record of parked minors until then.
+4. **Sonnet batch:** #85, #83, #86, plus backlog #73–78.
+5. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
 
 ## What Raconte is
 

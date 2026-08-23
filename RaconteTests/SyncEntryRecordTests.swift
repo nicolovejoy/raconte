@@ -276,6 +276,94 @@ final class SyncEntryRecordTests: XCTestCase {
                                .liveLog(captureID: captureID)])
     }
 
+    // MARK: Final review I1 — the initial marker stream must push AT finalize
+
+    private func writeMarkerLog() throws {
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        try Data("{\"t\":0}\n".utf8).write(to: SegmentLayout.markerLogURL(captureDirectory: captureDirectory))
+    }
+
+    /// Same "exists but unreadable" technique `writeLiveLogAsUnreadableDirectory` uses,
+    /// for the same reason — see that helper's doc comment.
+    private func writeMarkerLogAsUnreadableDirectory() throws {
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.markerLogURL(captureDirectory: captureDirectory), withIntermediateDirectories: true)
+    }
+
+    /// The I1 defect, pinned: `markers.jsonl` is written DURING capture by voice taps,
+    /// at which point the eligibility gate correctly refuses every push. Before this
+    /// fix `namesToPush` named only entry/audio/liveLog, so a fresh capture's marker
+    /// stream was pushed by nothing until the next launch's `SyncPlanner.reconcile()` —
+    /// on iOS potentially weeks, with the receiving device rendering that transcript
+    /// with its speaker attribution missing the whole time.
+    func testNamesToPushIncludesThisDevicesMarkerStreamWhenMarkersExist() throws {
+        try writeManifest(verified: true)
+        try writeMarkerLog()
+
+        XCTAssertEqual(
+            FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID,
+                                             deviceID: "device-under-test"),
+            [.entry(captureID: captureID), .audio(captureID: captureID),
+             .markerStream(captureID: captureID, deviceID: "device-under-test")],
+            "a finalized capture with voice-tap markers must push its own marker stream at finalize")
+
+        try writeLiveLog()
+        XCTAssertEqual(
+            FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID,
+                                             deviceID: "device-under-test"),
+            [.entry(captureID: captureID), .audio(captureID: captureID), .liveLog(captureID: captureID),
+             .markerStream(captureID: captureID, deviceID: "device-under-test")],
+            "the marker stream rides alongside the liveLog, never in place of it")
+    }
+
+    /// The absent and the unreadable case, together — the same readability probe the
+    /// LiveLog check uses, and the same reason (`SyncTreeScanner.markerStreamArtifact`
+    /// reads the bytes to hash them, so a `markers.jsonl` nothing can read must never be
+    /// queued for a push that would find nothing to upload).
+    ///
+    /// Mutation check (run by hand — see the fix report): changing `namesToPush`'s
+    /// marker check to `FileManager.default.fileExists(atPath: markerURL.path)` makes
+    /// the unreadable half of this test fail.
+    func testNamesToPushOmitsAnAbsentOrUnreadableMarkerStream() throws {
+        try writeManifest(verified: true)
+
+        XCTAssertEqual(
+            FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID,
+                                             deviceID: "device-under-test"),
+            [.entry(captureID: captureID), .audio(captureID: captureID)],
+            "no markers.jsonl at all — a capture with no voice taps has no stream to push")
+
+        try writeMarkerLogAsUnreadableDirectory()
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.markerLogURL(captureDirectory: captureDirectory).path),
+                      "sanity: something really is at that path — this is not just a missing file")
+
+        XCTAssertEqual(
+            FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID,
+                                             deviceID: "device-under-test"),
+            [.entry(captureID: captureID), .audio(captureID: captureID)],
+            "an unreadable markers.jsonl must read exactly like an absent one")
+    }
+
+    /// And through the real chokepoint, not just the pure predicate: the hook recorder
+    /// sees the marker stream fired at finalize.
+    func testPushNotifiesTheHookForTheMarkerStreamAtFinalize() async throws {
+        try writeManifest(verified: true)
+        try writeLiveLog()
+        try writeMarkerLog()
+        let hooks = RecordingSyncHooks()
+
+        await FinalizeArtifactPush.push(capturesRoot: capturesRoot, captureID: captureID,
+                                        syncHooks: hooks, deviceID: "device-under-test")
+
+        let names = await hooks.names
+        XCTAssertEqual(names, [.entry(captureID: captureID), .audio(captureID: captureID),
+                               .liveLog(captureID: captureID),
+                               .markerStream(captureID: captureID, deviceID: "device-under-test")])
+    }
+
     /// A nil hook (sync off — unit tests, the UI-test harness, an unentitled build)
     /// behaves exactly as it did before M4: no crash, nothing recorded anywhere to check.
     func testPushWithNoHookIsANoOp() async throws {

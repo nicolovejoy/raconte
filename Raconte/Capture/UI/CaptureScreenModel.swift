@@ -859,17 +859,16 @@ final class CaptureScreenModel {
                 }
                 if let multiVoice { metadata.multiVoice = multiVoice }
             }
-            // #84 point 2: an entry filed into a still-provisional default journal
-            // promotes and pushes it — a no-op for every other journal (the common
-            // case). Only after a successful write (`wrote != nil`) — a failed one (e.g.
-            // `captureMissing`, a race with a staged removal) never actually filed
-            // anything, and must not promote a journal on its behalf. Idempotent, and
-            // this is the one chokepoint every path that files an entry into a journal
-            // shares (initial recording AND a mid-capture journal switch via
-            // `syncActiveEntryMetadata`, which calls this same function).
-            if wrote != nil, let journalID {
-                _ = try? await journalStore.promoteProvisionalDefault(id: journalID)
-            }
+            // #84 point 2: routes through the ONE shared chokepoint every caller that
+            // files an entry into a journal must use (`promoteProvisionalDefaultAfterEntrySave`'s
+            // own doc comment names the other one, `LibraryScreenModel.moveEntry`) — a
+            // still-provisional default is promoted and pushed the moment an entry is
+            // saved into it; a no-op for every other journal (the common case) or a
+            // failed write (`wrote != nil` gates it). Idempotent — this call is shared by
+            // both the initial-recording path and a mid-capture journal switch via
+            // `syncActiveEntryMetadata`, which calls this same function.
+            _ = await promoteProvisionalDefaultAfterEntrySave(
+                journalStore: journalStore, journalID: journalID, entryWriteSucceeded: wrote != nil)
         }
         pendingMetadataWrite = task
         return task

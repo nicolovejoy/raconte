@@ -101,8 +101,13 @@ actor JournalStore {
     /// `stampCoverModified` already fire the local-change hook unconditionally and merely
     /// needed the flag cleared alongside (see `JournalRegistry.rename`'s doc comment);
     /// entry-save has no reason to route through any of those, so this is its own
-    /// chokepoint — called by `CaptureScreenModel.enqueueEntryMetadataWrite` right after
-    /// an entry's `journalID` is written.
+    /// primitive — never called directly by a screen model. **Every** caller that files
+    /// an entry into a journal must go through the ONE shared chokepoint just below,
+    /// `promoteProvisionalDefaultAfterEntrySave`, not this method directly (review
+    /// finding, gate fix round: an earlier version of this doc comment claimed
+    /// `CaptureScreenModel.enqueueEntryMetadataWrite` was the only entry-save call site —
+    /// false; `LibraryScreenModel.moveEntry` files an entry too, via the detail screen's
+    /// journal picker, and had silently bypassed promotion entirely).
     ///
     /// A no-op (returns `false`, no hook fired) when the journal is unknown or was never
     /// (or is no longer) provisional — the overwhelmingly common case, since this is
@@ -345,4 +350,32 @@ actor JournalStore {
     static func encode(_ registry: JournalRegistry) throws -> Data {
         try CaptureCoding.lineEncoder().encode(registry)
     }
+}
+
+/// #84 point 2's **shared chokepoint** — the ONE place every caller that files an entry
+/// into a journal (via ANY path) must route through, so a third future call site cannot
+/// silently reintroduce the promotion gap a review caught here: an earlier version wired
+/// promotion only into `CaptureScreenModel.enqueueEntryMetadataWrite` (the live-capture
+/// recording path) and missed `LibraryScreenModel.moveEntry` (the entry detail screen's
+/// journal picker, `EntryDetailView`'s move-to-journal control) entirely — filing an
+/// entry into a still-provisional default that way left the journal, and the entry filed
+/// under it, permanently unsynced. Not prunable (`pruneUnusedProvisionalDefault`'s
+/// `isEmpty` check correctly protects a journal that really does hold an entry) but
+/// invisible to CloudKit forever, since nothing had ever called
+/// `JournalStore.promoteProvisionalDefault` for it.
+///
+/// A free function, not a method on either screen model or on `JournalStore` itself,
+/// precisely so it carries no single "obvious" owner to bypass — every call site that
+/// writes `EntryMetadata.journalID` calls this, by name, right after the write, instead
+/// of reaching for `journalStore.promoteProvisionalDefault` directly. Success-gated
+/// (`entryWriteSucceeded`): a failed metadata write (`captureMissing`, a race with a
+/// staged removal) never actually filed anything and must not promote a journal on its
+/// behalf. A `nil` `journalID` (unfiling an entry) is also a no-op — there is nothing to
+/// promote.
+@discardableResult
+func promoteProvisionalDefaultAfterEntrySave(journalStore: JournalStore,
+                                             journalID: String?,
+                                             entryWriteSucceeded: Bool) async -> Bool {
+    guard entryWriteSucceeded, let journalID else { return false }
+    return (try? await journalStore.promoteProvisionalDefault(id: journalID)) ?? false
 }

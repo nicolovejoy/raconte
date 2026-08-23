@@ -159,6 +159,44 @@ final class JournalCaptureContextTests: XCTestCase {
         }
     }
 
+    // MARK: #84 — promote on use (design point 2, entry-save half)
+
+    /// The brief's "Promote on entry save" case: bootstrap mints the default silently
+    /// (`testFirstLaunchMintsAndSelectsTheDefaultJournal` already pins the mint itself
+    /// not pushing), and the moment an entry is actually filed into it, the journal loses
+    /// provisional status and pushes — the offline-first-launch story from design point 2
+    /// ("record with no sync → journal + entry push together when sync starts").
+    func testFirstEntrySavedIntoTheDefaultJournalPromotesAndPushesIt() async throws {
+        let recorder = ContextFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let defaultID = try XCTUnwrap(model.selectedJournalID)
+        let hooks = DeletionRecordingSyncHooks()
+        await model.library.journalStore.attach(syncHooks: hooks)
+        let mintedFresh = try await model.library.journalStore.journal(id: defaultID)
+        XCTAssertEqual(mintedFresh?.provisionalDefault, true, "fixture sanity: still provisional")
+
+        let captureID = try await startRecording(model, recorder)
+        await waitForSidecar(captureID, "journal never reached entry.json") {
+            $0.journalID == defaultID
+        }
+
+        // The promotion fires as a follow-on await inside the same enqueued write task —
+        // poll rather than assume it has already landed by the time the sidecar read above
+        // observed the journalID.
+        let deadline = Date().addingTimeInterval(5)
+        var seen: [SyncRecordName] = []
+        while Date() < deadline {
+            seen = await hooks.changedNames
+            if seen.contains(.journal(id: defaultID)) { break }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(seen, [.journal(id: defaultID)],
+                       "the default is pushed the first time an entry is saved into it")
+        let promoted = try await model.library.journalStore.journal(id: defaultID)
+        XCTAssertEqual(promoted?.provisionalDefault, false)
+    }
+
     // MARK: (c) switching mid-capture
 
     func testSwitchingJournalMidCaptureRewritesTheSidecar() async throws {

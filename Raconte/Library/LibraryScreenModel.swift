@@ -391,6 +391,13 @@ final class LibraryScreenModel {
         } catch {
             succeeded = false
         }
+        // #84 point 2: the detail screen's journal picker files an entry too — the same
+        // shared chokepoint `CaptureScreenModel.enqueueEntryMetadataWrite` routes
+        // through, so a still-provisional default filed into from here also promotes
+        // and pushes rather than sitting invisible to CloudKit forever (review finding:
+        // this call site was the gap an earlier version of the fix missed entirely).
+        _ = await promoteProvisionalDefaultAfterEntrySave(
+            journalStore: journalStore, journalID: journalID, entryWriteSucceeded: succeeded)
         await rescan()
         return succeeded
     }

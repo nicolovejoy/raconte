@@ -34,14 +34,31 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// `JournalRegistry.setSpan` (#70).
     var modified: [String: Date]?
 
+    /// #84: true only for an auto-minted default journal that has never been pushed
+    /// (design point 1 — "mint locally silent"). Set once, at mint, and cleared the
+    /// moment the journal is actually used — renamed, given a cover/span, or an entry
+    /// saved into it (design point 2) — every one of which already fires the ordinary
+    /// sync push hook, so clearing this flag there is exactly "loses provisional status
+    /// and pushes". Never set true anywhere else: a journal ingested or merged from
+    /// CloudKit is, by construction, not this device's local mint. Additive and lenient,
+    /// same reasoning as `voiceLabels`/`span`/`modified` above — every registry on disk
+    /// predates this field, and a damaged value must cost only the flag (defaulting to
+    /// "not provisional", the overwhelmingly common case), never the journal's identity.
+    /// Deliberately NOT synced (no CloudKit field, no `SyncJournalField` case) — it
+    /// describes only this device's local push state, and a provisional default is by
+    /// definition never pushed for a remote peer to ever see.
+    var provisionalDefault: Bool
+
     init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
-         span: JournalSpan? = nil, modified: [String: Date]? = nil) {
+         span: JournalSpan? = nil, modified: [String: Date]? = nil,
+         provisionalDefault: Bool = false) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
         self.voiceLabels = voiceLabels
         self.span = span
         self.modified = modified
+        self.provisionalDefault = provisionalDefault
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -72,6 +89,10 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // Additive and lenient, same reasoning as `voiceLabels` immediately above: a
         // damaged sync-stamp map must cost only the stamps, never the journal's identity.
         modified = (try? container.decodeIfPresent([String: Date].self, forKey: .modified)) ?? nil
+        // Additive and lenient, same reasoning: absent (every pre-#84 registry) or
+        // garbage decodes to `false`, which is also what every journal that was never a
+        // provisional default actually is.
+        provisionalDefault = ((try? container.decodeIfPresent(Bool.self, forKey: .provisionalDefault)) ?? nil) ?? false
     }
 
     /// Hand-written per the same rule: the synthesized encoder does not know
@@ -98,10 +119,15 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if let modified, !modified.isEmpty {
             try container.encode(modified, forKey: .modified)
         }
+        // Only when true, same "an untouched record's bytes don't change" rule the
+        // fields above follow — every real journal keeps producing exactly today's bytes.
+        if provisionalDefault {
+            try container.encode(provisionalDefault, forKey: .provisionalDefault)
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, createdAt, voiceLabels, span, modified
+        case id, name, createdAt, voiceLabels, span, modified, provisionalDefault
     }
 }
 
@@ -217,6 +243,9 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         var modified = journals[index].modified ?? [:]
         modified["name"] = now
         journals[index].modified = modified
+        // #84 point 2: renaming is "using" the journal — clears provisional status
+        // (a no-op assignment for every journal that was never provisional).
+        journals[index].provisionalDefault = false
         return journals[index]
     }
 
@@ -243,6 +272,8 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         var modified = journals[index].modified ?? [:]
         modified["cover"] = now
         journals[index].modified = modified
+        // #84 point 2: same "using it clears provisional status" rule as `rename`.
+        journals[index].provisionalDefault = false
         return journals[index]
     }
 
@@ -288,6 +319,16 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         var modified = journals[index].modified ?? [:]
         modified["voiceLabels"] = now
         journals[index].modified = modified
+        // #84: labelling voices is also "using" the journal, not merely #84's own listed
+        // trio (renamed/cover/span) — every mutator that already fires the local-change
+        // sync hook unconditionally MUST also clear this flag, or the invariant this
+        // field exists to hold (`provisionalDefault == true` iff never pushed) breaks:
+        // a still-flagged-provisional journal that has, in fact, already been pushed by
+        // this call would then be wrongly eligible for `pruneUnusedProvisionalDefault`'s
+        // silent local removal, orphaning a record CloudKit still has (reported as a
+        // brief deviation in the fix-84 report — the brief's list names rename/cover/
+        // span/entry-save as examples of "used", not an exhaustive set).
+        journals[index].provisionalDefault = false
         return journals[index]
     }
 
@@ -310,7 +351,25 @@ struct JournalRegistry: Codable, Sendable, Equatable {
         var modified = journals[index].modified ?? [:]
         modified["span"] = now
         journals[index].modified = modified
+        // #84 point 2: same "using it clears provisional status" rule as `rename`.
+        journals[index].provisionalDefault = false
         return journals[index]
+    }
+
+    /// #84 point 2, the entry-save path: promotes a still-provisional default the moment
+    /// an entry is actually filed into it. Unlike `rename`/`setSpan`/`stampCover`, which
+    /// already fire the ordinary local-change hook unconditionally and merely need the
+    /// flag cleared alongside, entry-save has no reason to route through one of those —
+    /// `JournalStore.promoteProvisionalDefault` is the dedicated chokepoint, and this is
+    /// its pure half. A no-op (returns `false`) for an unknown id or a journal that is
+    /// not (or no longer) provisional — the caller decides, from the return value,
+    /// whether the hook needs to fire.
+    @discardableResult
+    mutating func promoteProvisionalDefault(id: String) -> Bool {
+        guard let index = journals.firstIndex(where: { $0.id == id }),
+              journals[index].provisionalDefault else { return false }
+        journals[index].provisionalDefault = false
+        return true
     }
 
     /// Removes a journal from the registry (#80, v1: caller guarantees it holds no

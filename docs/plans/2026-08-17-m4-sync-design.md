@@ -303,6 +303,19 @@ None change the model above; recorded here so the doc stays trustworthy.
      attached) and resolves each parked item: **restored → ingest** it now,
      **still trashed → stay parked**, **purged → discard** (this last case is §5's
      "the delete wins" applied to inbound work that arrived too late to matter).
+   - **The rule governs work that could still land, not garbage.** Four classes are
+     DELIBERATELY discarded rather than parked, each a decision rather than an
+     oversight: (a) an asset whose **sha256 does not match** the record's claimed
+     digest — the bytes are wrong, and parking them would only park corruption;
+     (b) a **malformed record** that will not decode at all (missing
+     `captureID`/`capturedAt`, an unparseable `originalDate`) — there is nothing
+     well-formed enough to park; (c) the **registry-unreadable refusal** in
+     `ingestJournal` — adopting a remote journal over a registry this device merely
+     failed to parse is issue #11's mistake, so the record is refused and returns
+     only on that journal's next remote edit (or a full resync/token reset);
+     (d) an **IO failure on the park write itself** — there is nowhere durable left
+     to put the item. (a) and (b) lose nothing real; (c) and (d) are accepted
+     fail-safe costs, chosen over writing something wrong to disk.
 4. **Fetch-on-launch and fetch-on-foreground are the coordinator's own responsibility**
    (§3's stated trigger list), wired in Task 12: `SyncCoordinator.launch()` ends with
    a fetch kick, and `foregrounded()` (called from `RaconteApp`'s `scenePhase`

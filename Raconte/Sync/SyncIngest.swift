@@ -345,7 +345,10 @@ enum EntryAssembler {
             try entryData.write(
                 to: SegmentLayout.entryMetadataURL(captureDirectory: stagingDir), options: .atomic)
 
-            let audioBytes = try Data(contentsOf: audio.url)
+            // `.mappedIfSafe` (final review M1): the same hash-and-check read the
+            // scanner already maps rather than slurping — an m4a is the largest thing
+            // this codebase reads, and there is no reason to hold a whole one resident.
+            let audioBytes = try Data(contentsOf: audio.url, options: .mappedIfSafe)
             guard SyncTreeScanner.sha256Hex(audioBytes) == audio.sha256 else {
                 try? fm.removeItem(at: stagingDir)
                 return false
@@ -1235,7 +1238,9 @@ actor SyncRecordExchange: CloudRecordExchange {
             log.notice("sync: fetched AudioAsset record missing its file or sha256 — ignored")
             return
         }
-        guard let bytes = try? Data(contentsOf: url) else {
+        // `.mappedIfSafe` (final review M1): identical hash-and-check read to
+        // `SyncTreeScanner`'s, and identically mapped rather than slurped.
+        guard let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else {
             log.error("sync: could not read the fetched AudioAsset bytes for \(captureID, privacy: .public)")
             return
         }
@@ -1590,37 +1595,60 @@ actor SyncRecordExchange: CloudRecordExchange {
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
 
         for captureID in captureIDs.sorted() {
-            let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
-                                                                   captureID: captureID)
-            guard let parked = readParked(url: url) else { continue }
-
-            let captureExists = FileManager.default.fileExists(
-                atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
-
-            guard captureExists else {
-                if parked.knownToHaveExisted {
-                    log.notice("""
-                        sync: capture \(captureID, privacy: .public) was purged while a revision \
-                        was parked for it — discarding the parking (design §5 delete-wins)
-                        """)
-                    try? FileManager.default.removeItem(at: url)
-                }
-                // else: an ordinary in-flight "unknown capture" park — leave it for the
-                // assembly-attempt path.
-                continue
-            }
-
-            let leftover = await applyParked(parked.revisions, captureID: captureID,
-                                             transcriptRevisionStore: transcriptRevisionStore,
-                                             beforeWrite: beforeApply)
-            let handledIDs = Set(parked.revisions.map(\.id)).subtracting(leftover.map(\.id))
-            guard !handledIDs.isEmpty else { continue }
-            // Re-reads `url` fresh (fix round 2) — never trusts `parked`, the
-            // pre-`applyParked` snapshot captured above, which a concurrent delivery
-            // could have appended to during that `await`.
-            reconcileParkedWriteback(url: url, handledIDs: handledIDs)
-            await localStoreDidChange?()
+            await rehydrateParkedRevisions(captureID: captureID, containerRoot: containerRoot,
+                                           capturesRoot: capturesRoot,
+                                           transcriptRevisionStore: transcriptRevisionStore,
+                                           beforeApply: beforeApply)
         }
+    }
+
+    /// One captureID's worth of the loop above — extracted (final review C1) so the
+    /// existing-capture entry-merge path can kick exactly the capture it just possibly
+    /// un-trashed, instead of waiting for the next launch's whole-staging-root sweep.
+    /// The semantics are the launch sweep's, unchanged; see `rehydrateParkedRevisions()`
+    /// for the three-outcome reasoning and the fix-round-2 writeback discipline.
+    private func rehydrateParkedRevisions(captureID: String, containerRoot: URL, capturesRoot: URL,
+                                          transcriptRevisionStore: TranscriptRevisionStore,
+                                          beforeApply: (@Sendable () async -> Void)? = nil) async {
+        let url = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot,
+                                                               captureID: captureID)
+        guard let parked = readParked(url: url) else { return }
+
+        let captureExists = FileManager.default.fileExists(
+            atPath: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID).path)
+
+        guard captureExists else {
+            if parked.knownToHaveExisted {
+                log.notice("""
+                    sync: capture \(captureID, privacy: .public) was purged while a revision \
+                    was parked for it — discarding the parking (design §5 delete-wins)
+                    """)
+                try? FileManager.default.removeItem(at: url)
+            }
+            // else: an ordinary in-flight "unknown capture" park — leave it for the
+            // assembly-attempt path.
+            return
+        }
+
+        let leftover = await applyParked(parked.revisions, captureID: captureID,
+                                         transcriptRevisionStore: transcriptRevisionStore,
+                                         beforeWrite: beforeApply)
+        let handledIDs = Set(parked.revisions.map(\.id)).subtracting(leftover.map(\.id))
+        guard !handledIDs.isEmpty else { return }
+        // Re-reads `url` fresh (fix round 2) — never trusts `parked`, the
+        // pre-`applyParked` snapshot captured above, which a concurrent delivery
+        // could have appended to during that `await`.
+        reconcileParkedWriteback(url: url, handledIDs: handledIDs)
+        await localStoreDidChange?()
+    }
+
+    /// The entry-merge path's kick (final review C1): same as the launch sweep, for one
+    /// captureID, resolving the optional store the same way `ingestParkedRevisions` does.
+    private func rehydrateParkedRevisions(captureID: String, containerRoot: URL) async {
+        guard let transcriptRevisionStore else { return }
+        await rehydrateParkedRevisions(captureID: captureID, containerRoot: containerRoot,
+                                       capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot),
+                                       transcriptRevisionStore: transcriptRevisionStore)
     }
 
     // MARK: Ingest — marker streams (M4 T10, design §6/§7.4)
@@ -1855,30 +1883,46 @@ actor SyncRecordExchange: CloudRecordExchange {
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
 
         for captureID in captureIDs.sorted() {
-            let url = AppContainer.syncStagingPendingMarkerStreamsURL(containerRoot: containerRoot,
-                                                                      captureID: captureID)
-            guard let parked = readParkedMarkerStreams(url: url) else { continue }
-
-            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-            let captureExists = FileManager.default.fileExists(atPath: directory.path)
-
-            guard captureExists else {
-                if parked.knownToHaveExisted {
-                    log.notice("""
-                        sync: capture \(captureID, privacy: .public) was purged while a marker stream \
-                        was parked for it — discarding the parking (design §5 delete-wins)
-                        """)
-                    try? FileManager.default.removeItem(at: url)
-                }
-                continue
-            }
-
-            let leftover = applyParkedMarkerStreams(parked.streams, captureDirectory: directory)
-            let handledDeviceIDs = Set(parked.streams.map(\.deviceID)).subtracting(leftover.map(\.deviceID))
-            guard !handledDeviceIDs.isEmpty else { continue }
-            reconcileParkedMarkerStreamsWriteback(url: url, handledDeviceIDs: handledDeviceIDs)
-            await localStoreDidChange?()
+            await rehydrateParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot,
+                                               capturesRoot: capturesRoot)
         }
+    }
+
+    /// One captureID's worth of the loop above — extracted for the same reason its
+    /// revision twin was (final review C1): the existing-capture entry-merge path kicks
+    /// exactly the capture whose restore it may have just applied.
+    private func rehydrateParkedMarkerStreams(captureID: String, containerRoot: URL,
+                                              capturesRoot: URL) async {
+        let url = AppContainer.syncStagingPendingMarkerStreamsURL(containerRoot: containerRoot,
+                                                                  captureID: captureID)
+        guard let parked = readParkedMarkerStreams(url: url) else { return }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let captureExists = FileManager.default.fileExists(atPath: directory.path)
+
+        guard captureExists else {
+            if parked.knownToHaveExisted {
+                log.notice("""
+                    sync: capture \(captureID, privacy: .public) was purged while a marker stream \
+                    was parked for it — discarding the parking (design §5 delete-wins)
+                    """)
+                try? FileManager.default.removeItem(at: url)
+            }
+            return
+        }
+
+        let leftover = applyParkedMarkerStreams(parked.streams, captureDirectory: directory)
+        let handledDeviceIDs = Set(parked.streams.map(\.deviceID)).subtracting(leftover.map(\.deviceID))
+        guard !handledDeviceIDs.isEmpty else { return }
+        reconcileParkedMarkerStreamsWriteback(url: url, handledDeviceIDs: handledDeviceIDs)
+        await localStoreDidChange?()
+    }
+
+    /// The entry-merge path's kick (final review C1) — the marker-stream twin of the
+    /// revision overload above.
+    private func rehydrateParkedMarkerStreams(captureID: String, containerRoot: URL) async {
+        await rehydrateParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot,
+                                           capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot))
     }
 
     /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this
@@ -1932,8 +1976,25 @@ actor SyncRecordExchange: CloudRecordExchange {
         guard !captureExists else {
             if let state = readPendingState(captureID: captureID, containerRoot: containerRoot) {
                 await applyExistingEntryMerge(remote: state.metadata, captureID: captureID)
+                // Cleanup runs BEFORE the kicks below, deliberately: a park has to
+                // survive an ordinary cleanup on its own merits, never because a kick
+                // happened to consume it a moment earlier. Ordered the other way round,
+                // C1's pin would pass against the old wholesale `removeItem` too, and any
+                // future path that merges without kicking would resurrect the defect.
+                clearEntryAssemblyStaging(captureID: captureID, containerRoot: containerRoot)
+                // A merge can UN-TRASH the capture (a remote `trashedAt: nil` winning the
+                // per-field LWW) — precisely the state a parked revision/marker stream is
+                // waiting for. Kick THIS capture's own rehydration here rather than
+                // leaving it to the next launch: on iOS that can be weeks away. Both
+                // kicks are no-ops when nothing is parked, and both re-park whatever the
+                // capture is still too trashed (or too unreadable) to accept.
+                await rehydrateParkedRevisions(captureID: captureID, containerRoot: containerRoot)
+                await rehydrateParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot)
             }
-            try? FileManager.default.removeItem(at: stagingDir)
+            // Second pass, idempotent: the kicks above may have just emptied the staging
+            // directory by applying and removing the last park in it. Re-reads fresh and
+            // removes only what is still there.
+            clearEntryAssemblyStaging(captureID: captureID, containerRoot: containerRoot)
             return
         }
 
@@ -1972,10 +2033,50 @@ actor SyncRecordExchange: CloudRecordExchange {
             // Unreachable in practice — the `guard !captureExists` above already
             // handles that case, and does the actual T8 merge (`applyExistingEntryMerge`)
             // before ever reaching this call — but `IngestAction` is a 3-case enum and
-            // the switch stays exhaustive. Same cleanup, for defensive symmetry.
-            try? FileManager.default.removeItem(at: stagingDir)
+            // the switch stays exhaustive. Same cleanup, for defensive symmetry — and
+            // deliberately the SAME park-preserving cleanup (final-review M4): a
+            // defensive arm that still wiped the directory wholesale would silently
+            // re-introduce C1 the day anything made this path reachable.
+            clearEntryAssemblyStaging(captureID: captureID, containerRoot: containerRoot)
         case .refuse(let reason):
             log.debug("sync: entry \(captureID, privacy: .public) assembly not ready yet: \(reason, privacy: .public)")
+        }
+    }
+
+    /// Clears exactly the ENTRY-ASSEMBLY artifacts staged under
+    /// `sync/staging/<captureID>/` — `pending.json`, the staged `final/`, the staged
+    /// `transcript/`, and any stray cruft — while PRESERVING the two durable parks that
+    /// share that directory (`pending-revisions.json`, `pending-marker-streams.json`).
+    ///
+    /// The final review's C1, verbatim: the old code removed the whole directory. That
+    /// directory is also where `parkRevision`/`parkMarkerStream` durably park content
+    /// for a capture that exists but is trashed, so an inbound Entry record that
+    /// RESTORED such a capture destroyed the very park that was waiting for the
+    /// restore — and `CKSyncEngine` never redelivers a consumed record, making that
+    /// permanent silent loss (the branch's standing `inbound-sync-must-land-or-park`
+    /// rule). The preserved set is the same allow-list `EntryAssembler
+    /// .pruneUnexpectedStagingContents` already encodes for the same two files.
+    ///
+    /// The directory listing is read HERE, not passed in from the caller's pre-`await`
+    /// snapshot: `SyncRecordExchange` is reentrant across every suspension, so a
+    /// concurrent delivery can have parked or persisted something during the caller's
+    /// `applyExistingEntryMerge`/rehydration awaits. Reading fresh is what keeps that
+    /// arrival out of the removal list (the same reconciliation discipline
+    /// `reconcileParkedWriteback`/`mergeIntoParked` apply on the writeback side).
+    ///
+    /// The directory itself goes only if it is empty afterwards — an empty staging
+    /// subdirectory is cruft, a non-empty one is somebody's park.
+    private func clearEntryAssemblyStaging(captureID: String, containerRoot: URL) {
+        let fm = FileManager.default
+        let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+        let preserved: Set<String> = [AppContainer.syncStagingPendingRevisionsFileName,
+                                      AppContainer.syncStagingPendingMarkerStreamsFileName]
+        guard let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) else { return }
+        for name in names where !preserved.contains(name) {
+            try? fm.removeItem(at: stagingDir.appendingPathComponent(name))
+        }
+        if let remaining = try? fm.contentsOfDirectory(atPath: stagingDir.path), remaining.isEmpty {
+            try? fm.removeItem(at: stagingDir)
         }
     }
 
@@ -2028,8 +2129,11 @@ actor SyncRecordExchange: CloudRecordExchange {
         //
         // A throw is the registry being unreadable. `try?` would collapse that with "this
         // journal is new to us", and adopting a remote journal over a registry we merely
-        // failed to parse is issue #11's mistake in a new place. Nothing is written; the
-        // record is offered again after the next token reset.
+        // failed to parse is issue #11's mistake in a new place. Nothing is written, and
+        // the refusal STAYS: `CKSyncEngine` never redelivers a consumed record, so this
+        // journal comes back only on its next remote edit (or a full resync/token reset
+        // that refetches the zone). That honest cost is accepted as the fail-safe
+        // direction — never adopt over a registry we merely failed to read.
         let localDeviceID = deviceID
         let coverAction: JournalSyncMerge.CoverAction
         do {

@@ -175,7 +175,7 @@ struct ContentView: View {
             TrashView(model: services.library)
         case .debug:
             #if DEBUG
-            DebugMenuView()
+            DebugMenuView(sync: services.sync)
             #else
             CaptureView(model: services.capture)
             #endif

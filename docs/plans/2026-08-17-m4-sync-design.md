@@ -94,7 +94,7 @@ Revision           recordName = revision ULID (its id, NEVER the file number)
 LiveLog            recordName = <captureID>.live      immutable, write-once
   file             CKAsset       live.jsonl at promotion time
 
-MarkerStream       recordName = <captureID>.m.<deviceID>
+MarkerStream       recordName = m.<captureID>.<deviceID>
   content          String        that device's marker lines (JSONL);
                                  single-writer by construction → grows
                                  monotonically; whole-field replace is safe
@@ -271,3 +271,49 @@ the receiving smoke device):
 - Conflict UI (per-field LWW + the chain's fork visibility cover it).
 - Migration of the 36 frozen recountly.org entries (M5, after sync verifies).
 - The §9 revision-format economies (independent optimization).
+
+## 10. As-built deviations (M4 T12, 2026-08-22)
+
+Rulings and implementation drifted from this design in five ways over Tasks 1–12.
+None change the model above; recorded here so the doc stays trustworthy.
+
+1. **The Revision record carries an `entryRef` field.** §2's schema table has no
+   captureID column for `Revision` — the record's own name (`recordName = revision
+   ULID`) carries only the revision's id, never the capture it belongs to. `entryRef`
+   (the same shared cascade field every child record carries, `.deleteSelf`) does
+   double duty here: it is both the delete cascade AND the only way ingest recovers
+   which capture a fetched Revision record belongs to.
+2. **The MarkerStream record name on the wire is `m.<captureID>.<deviceID>`**, not
+   `<captureID>.m.<deviceID>` as originally written above in §2 (now corrected in
+   place) — pre-existing doc drift from `SyncRecordName.swift`'s actual encoding,
+   caught and fixed on this touch.
+3. **Inbound ingest is land-or-park, never refuse-and-return.** `CKSyncEngine` never
+   redelivers a record it has already handed to this device, so any ingest path that
+   declines an inbound record and simply returns loses it permanently. Two concrete
+   consequences beyond what §6 describes:
+   - A new entry's pieces (manifest, `entry.json`, the m4a, transcript artifacts) are
+     staged durably under `sync/staging/<captureID>/` with a `pending.json` sidecar
+     the instant each piece decodes, sha-verified at arrival — not held only in
+     memory. A launch boundary crossing mid-assembly cannot lose them.
+   - A revision or marker stream arriving for a capture that is currently trashed
+     locally cannot be ingested (the store refuses writes to a trashed capture), so
+     it parks instead, in `sync/staging/<captureID>/pending-revisions.json` (and the
+     marker-stream equivalent) rather than being dropped.
+   - Rehydration runs at every launch (`SyncCoordinator.live`, after the stores are
+     attached) and resolves each parked item: **restored → ingest** it now,
+     **still trashed → stay parked**, **purged → discard** (this last case is §5's
+     "the delete wins" applied to inbound work that arrived too late to matter).
+4. **Fetch-on-launch and fetch-on-foreground are the coordinator's own responsibility**
+   (§3's stated trigger list), wired in Task 12: `SyncCoordinator.launch()` ends with
+   a fetch kick, and `foregrounded()` (called from `RaconteApp`'s `scenePhase`
+   watcher) covers the scene returning to `.active`. No task before T12 owned this
+   wiring, so it had silently dropped out of the plan text despite being mandated
+   here; only silent push remains unbuilt (no APNs receipt path exists in this app).
+5. **Entry deletion has no corrective re-push; that exists for journals only** (#80,
+   owner ruling) — an entry that reaches the server as deleted stays deleted, with no
+   retry path if the delete itself fails to land. **Trashing an entry is NOT a
+   deletion for push purposes**: `trashedAt` is an ordinary per-field LWW-merged
+   value on `entry.json` like any other metadata field, so a trashed entry keeps
+   pushing normally (including the trash flag) — only a PERMANENT delete (30-day
+   sweep or Delete Now) routes through the no-corrective-re-push CK-delete path §5
+   describes.

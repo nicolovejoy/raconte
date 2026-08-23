@@ -2,62 +2,74 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-22→23 (laptop — M4 SHIPPED TO MAIN: T12 + final review + Gate B + owner smoke; #84 built; TestFlight prepped; 1750 → 1780 unit)
+## Session 2026-08-23 (laptop — TestFlight shipped to iPhone+iPad; CRITICAL sync bug found and root-caused, fix not yet written)
 
-Continuous session from Task 12 through merge and TestFlight prep. PRs #87 (m4/sync)
-and #88 (#84 fix) both merged by owner. Suite 1750 → 1780 unit, green.
+Resync (closed #79/#80/#82 as shipped-but-open, verified against code; cleaned up merged
+`fix/84-default-journal-mint` branch/worktree), then TestFlight headless upload made to
+actually work end-to-end, then the app went on real devices — which surfaced a real,
+previously-unknown sync bug.
 
-- **Owner rulings:** stash@{0} dropped (nothing worth keeping); T8 Mirror tripwire ruled
-  must-fix and built (7/10 field pins, mutation-verified); device-smoke accepted for the
-  two unfakeable CK paths; #81 stays backlogged; TestFlight greenlit (cable-free installs,
-  iPad, and moving real data off the disposable dev CloudKit environment).
-- **Final whole-branch review** (most capable model, 46 commits): 1 Critical — the
-  existing-capture staging cleanup `removeItem`'d the whole `sync/staging/<id>/` dir,
-  destroying parked revisions/markers at the exact moment a cross-device restore should
-  land them (fixed via shared `clearEntryAssemblyStaging` allow-list, cleanup-before-
-  rehydration-kicks ordering is load-bearing; the fixer self-caught a vacuous pin) — and
-  1 Important — a fresh capture's `markers.jsonl` never pushed until next launch
-  (`.markerStream` added to `namesToPush`). Both mutation-verified, re-review clean.
-- **Gate B probes all 5 PASS** (suite re-run, both builds, NEW 25-capture concurrent
-  local-update-vs-inbound-merge probe — 9/25 lost-update failures under an inserted
-  suspension window, reverted; captures/ source scan clean).
-- **Owner smoke PASS end-to-end** — first cross-device entry sync, delete-refusal-and-
-  restore, Empty Trash, trash propagation, picker freshness. Test 7 (reinstall-
-  reconstructs) FAILED once then passed clean: the first run deleted the container UNDER
-  THE RUNNING APP — dangling CKAsset fileURLs got 176 records discarded, stale engine
-  state re-persisted (88 phantom pending saves), and the `.needsDefault` mint pushed a
-  spurious "Journal" to CloudKit. Clean re-run: 32/32 captures reconstructed, zero
-  discards. Post-mortem issues: **#84** (mint pushes during first-sync window — BUILT
-  this session: provisional-default flag, promote-on-use via one shared chokepoint after
-  a reviewer caught the moveEntry bypass, prune-on-real-journal-arrival) and **#85**
-  (asset guards discard instead of park — hardening, backlog).
-- **Owner feature asks filed:** #83 (swipe-to-trash: no confirm, 2s lingering row,
-  tap-to-undo, haptic; macOS visual+sound), #86 (entry detail: sidenav becomes entry
-  list, arrow-key/swipe prev-next).
-- **TestFlight pipeline:** CloudKit schema promoted dev → Production; ASC app record
-  "Raconte Journal" created (portal already had the App ID; ASC dropdown was stale);
-  iOS Release archive staged in Organizer (`Raconte-ios-tf1`) — CLI `-exportArchive`
-  fails "No Accounts" (wire the ASC API key next session; MusicForge has the recipe).
-  aps-environment stays `development` in source; App Store export rewrites it to
-  production (verify on the upload sheet — supersedes the old "flip first" note).
-- **CRITICAL migration facts:** TestFlight builds talk to the PRODUCTION CloudKit
-  environment (empty until first push). Install TestFlight OVER the existing app, never
-  delete-then-install; never interleave dev builds afterward. The Mac Desktop dev app
-  stays on the dev cloud — phone↔Mac sync is PAUSED until the macOS build also ships
-  via TestFlight.
+- **Headless upload pipeline fixed for real** (was blocked, see prior Next Steps item 2):
+  MusicForge's shared ASC key turned out to be app-scoped to MusicForge only and
+  couldn't be edited to add Raconte (only revoke); minted Raconte its own key
+  (`AuthKey_K3MNF85G68.p8`, App Manager, Raconte-only). Along the way: ASC's cert-type
+  filter is `DISTRIBUTION` now, not the legacy `IOS_DISTRIBUTION` (Apple unified cert
+  types ~2019); profile names are unique **account-wide**, not per bundle ID (caused a
+  409 from a duplicate Xcode had auto-created). Wrote `scripts/asc_regenerate_profile.py`
+  (parameterized `--platform ios|macos`) — regenerates a provisioning profile via the ASC
+  REST API. **Must be run by Nico, never by the agent**: the auto-mode classifier
+  correctly hard-blocks any Claude-run process from reading the `.p8` key file, so every
+  step touching it (profile regen, `-exportArchive`) is a command handed to Nico to run
+  himself. `docs/testflight-deploy.md` updated with all of this.
+- **iOS build 1 live**: uploaded, processed, installed on iPhone (replace-in-place over
+  the dev build, real local data + audio confirmed intact) and iPad (was fully empty —
+  Nico deleted its old dev-only app first, zero risk since nothing was on it; safe
+  canary before touching the iPhone).
+- **macOS archive built** (`Raconte-macos-tf1.xcarchive`, real automatic signing) +
+  `scripts/ExportOptions-macos.plist` added. Profile regen for macOS written but not yet
+  run by Nico; export/upload not yet done.
+- **CRITICAL BUG — real entries not reaching production CloudKit.** Root-caused via
+  CloudKit Dashboard request logs + code investigation (two independent agent passes,
+  confirmed reproducible across a full app relaunch, 2.5h apart, same failure both
+  times). `journalRecordToPush`/`entryRecordToPush` (`SyncIngest.swift:1104`/`:938`)
+  reuse cached CKRecord system-fields (`sync/system-fields/<name>.bin`, archived at
+  `CloudEngineControl.swift:1142-1166`) with **zero environment/container scoping**
+  (`archivedRecord`, `CloudEngineControl.swift:1133-1140`). Any record previously synced
+  under the **dev** CloudKit environment carries that stale metadata, so pushing to
+  **production** for the first time sends an UPDATE against a record ID production has
+  never seen → permanent `NOT_FOUND`. `handleFailedSaves` (`CloudEngineControl.swift:
+  522-547`) only re-resolves `.serverRecordChanged`; nothing clears the poisoned cache on
+  `NOT_FOUND`, so it fails identically forever, and because pushes batch atomically, the
+  one poisoned Journal record's failure also aborts sibling Entry/Audio records riding in
+  the same batch. Separate, related finding: `SyncRecordBuilders.swift:442-446` /
+  `CloudEngineControl.swift:549-571` build an Entry and its children (Audio/LiveLog/
+  Revision/Marker) independently at send time — a transient build failure on the Entry
+  silently drops it from the batch while a sibling's `CKRecord.Reference` still gets sent
+  and NOT_FOUNDs. **Fix (not yet written):** on a push failure with `CKError.unknownItem`
+  (NOT_FOUND), call `forgetServerState`/`deleteSystemFields` for that record before
+  returning, so the next push rebuilds a fresh CREATE; longer-term, tag archived system
+  fields with the CloudKit environment and invalidate on mismatch. Also worth fixing: make
+  Entry+children one atomic push unit instead of independently-built siblings.
+  **Data is not at risk** — real entries remain local-only on the iPhone untouched, just
+  stuck out of sync; nothing was deleted or overwritten.
+- **Diagnostic gap found along the way:** the Debug screen (all sync-status UI) is
+  `#if DEBUG`-gated in 4 places (`SidebarView.swift:99-103`, `RaconteCommands.swift:
+  39-40`, `ContentView.swift:177-178`, `DebugMenuView.swift`) — so Release/TestFlight
+  builds have **zero** sync-status visibility on-device. Worth an issue.
 
 **Next steps:**
-1. **TestFlight:** confirm build 1 uploaded (Organizer) + processed; owner installs OVER
-   the phone app; ship the macOS build to TestFlight so the Mac rejoins sync on
-   production; then delete the spurious dev-env artifacts if any linger.
-2. **Headless uploads:** wire the team ASC API key into `xcodebuild -exportArchive`
-   (`-authenticationKeyPath/-authenticationKeyID/-authenticationKeyIssuerID`) per
-   MusicForge's setup — note posted to the musicforge handoff channel.
-3. **Cleanup:** delete `fix/84-default-journal-mint` local+origin; the `raconte-m4`
-   worktree sits on that merged branch (rebase it onto main or retire it); delete the
-   SDD workspace (`.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/`) once
-   TestFlight is confirmed — its ledger is the record of parked minors until then.
-4. **Sonnet batch:** #85, #83, #86, plus backlog #73–78.
+1. **Fix the NOT_FOUND bug** (see above, `CloudEngineControl.handleFailedSaves`) —
+   TDD it, mutation-verify, bump `CFBundleVersion`, rebuild+re-export+upload iOS build 2,
+   get it onto the iPhone to unblock the stuck real entries. This blocks the phone ever
+   reaching a healthy synced state — highest priority.
+2. **File an issue** for "no sync-status UI in Release/TestFlight builds" (Debug screen
+   `#if DEBUG`-gated, see above).
+3. **macOS TestFlight**: archive already built; still need Nico to run
+   `python3 scripts/asc_regenerate_profile.py --platform macos` then the export/upload
+   command it prints, once the NOT_FOUND fix (item 1) has shipped and the sync path is
+   trusted again.
+4. **Sonnet batch:** #85, #83, #86, plus backlog #73–78 (all reconfirmed still open/real
+   this session's resync).
 5. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
 
 ## What Raconte is

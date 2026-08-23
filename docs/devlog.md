@@ -2,6 +2,23 @@
 
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
+## Session 2026-08-23 (laptop — TestFlight shipped to iPhone+iPad; CRITICAL sync bug found and root-caused, fix not yet written)
+
+Resync (closed #79/#80/#82 as shipped-but-open, verified against code; cleaned up merged
+`fix/84-default-journal-mint` branch/worktree), then TestFlight headless upload made to
+actually work end-to-end, then the app went on real devices — which surfaced a real,
+previously-unknown sync bug. Full detail in CLAUDE.md's current session section (will be
+rolled into this entry verbatim next time CLAUDE.md's latest-session slot turns over) —
+key points: new Raconte-scoped ASC key (`K3MNF85G68`) and `scripts/asc_regenerate_profile.py`
+made the headless TestFlight pipeline actually work; iOS build 1 installed on iPhone (real
+data intact) and iPad (was empty, safe canary); macOS archive built, not yet uploaded;
+**critical bug** — real entries aren't reaching production CloudKit because cached CKRecord
+system-fields from the old dev CloudKit environment get reused against production with no
+environment scoping (`CloudEngineControl.swift:1133-1166`, `SyncIngest.swift:938/1104`),
+causing permanent `NOT_FOUND` on push, root-caused but not yet fixed. Data is not at risk —
+stuck local-only, nothing lost. Also found: Debug/sync-status UI is `#if DEBUG`-gated, so
+Release/TestFlight builds have zero sync visibility.
+
 ## Session 2026-08-22→23 (laptop — M4 SHIPPED TO MAIN: T12 + final review + Gate B + owner smoke; #84 built; TestFlight prepped; 1750 → 1780 unit)
 
 Continuous session from Task 12 through merge and TestFlight prep. PRs #87 (m4/sync)

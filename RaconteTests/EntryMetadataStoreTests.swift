@@ -27,7 +27,18 @@ final class EntryMetadataStoreTests: XCTestCase {
         SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
     }
 
-    private func store() -> EntryMetadataStore { EntryMetadataStore(capturesRoot: capturesRoot) }
+    /// M4 T1: a fixed, millisecond-safe clock by default (not real `Date()`) — the sync
+    /// stamps `update` now writes go through the same millisecond-precision ISO8601
+    /// round trip every other Date field on this type does, and a sub-millisecond real
+    /// timestamp does not survive that round trip byte-for-byte. Tests that need to see
+    /// the clock *advance* between two writes pass their own `now:` (frozen-clock trap —
+    /// see the standing house rule).
+    private static let defaultNow = Date(timeIntervalSince1970: 1_650_000_000)
+
+    private func store(now: @escaping @Sendable () -> Date = { EntryMetadataStoreTests.defaultNow })
+    -> EntryMetadataStore {
+        EntryMetadataStore(capturesRoot: capturesRoot, now: now)
+    }
 
     @discardableResult
     private func writeRaw(_ json: String) throws -> URL {
@@ -124,7 +135,9 @@ final class EntryMetadataStoreTests: XCTestCase {
 
     func testUpdateOnAnAbsentSidecarStartsFromDefaults() async throws {
         let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
-        XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
+        XCTAssertEqual(updated.journalID, "J1")
+        // M4 T1: `update` now stamps the field it actually changed.
+        XCTAssertEqual(updated.modified, ["journalID": EntryMetadataStoreTests.defaultNow])
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
 
@@ -153,7 +166,9 @@ final class EntryMetadataStoreTests: XCTestCase {
     func testUpdateStillWritesWhenTheDirectoryExistsWithNoSidecar() async throws {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarURL.path))
         let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
-        XCTAssertEqual(updated, EntryMetadata(journalID: "J1"))
+        XCTAssertEqual(updated.journalID, "J1")
+        // M4 T1: `update` now stamps the field it actually changed.
+        XCTAssertEqual(updated.modified, ["journalID": EntryMetadataStoreTests.defaultNow])
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
     }
 
@@ -167,6 +182,9 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertFalse(text.contains("trashedAt"))
     }
 
+    /// M4 T1: this is also the `modified` byte-pin — an untouched entry (including a
+    /// nil `modified`) still encodes as exactly `{}`, load-bearing for carry-over and
+    /// for `journals.json`-style byte-identity.
     func testDefaultsEncodeToAnEmptyObject() throws {
         XCTAssertEqual(String(decoding: try EntryMetadataStore.encode(.defaults), as: UTF8.self), "{}")
     }
@@ -682,5 +700,99 @@ final class EntryMetadataStoreTests: XCTestCase {
                            "\(testCase.name): the store's answer must match whether the " +
                            "sidecar actually holds the attempted date, not a guess made ahead of it")
         }
+    }
+
+    // MARK: M4 T1 — sync stamps (`modified`)
+
+    /// Advances on every call — the frozen-clock trap (memory:
+    /// frozen-clock-two-mints-coin-flip-order applies to any two writes compared for
+    /// ordering, not just ULID mints): two `update` calls sharing one frozen clock could
+    /// stamp two DIFFERENT fields with the identical instant, which would make the
+    /// "second update leaves the first field's stamp untouched" assertion below pass
+    /// vacuously even if `update` re-stamped every field on every call.
+    private final class AdvancingClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(start: Date) { self.current = start }
+        func next() -> Date {
+            lock.lock(); defer { lock.unlock() }
+            let value = current
+            current = current.addingTimeInterval(1)
+            return value
+        }
+    }
+
+    /// The cardinality requirement: `update` stamps ONLY the field(s) the mutation
+    /// actually changed. A second `update` that changes a DIFFERENT field must leave the
+    /// first field's stamp exactly as it was — this is the per-field last-writer-wins
+    /// substrate later M4 tasks build a merge rule on, so a stamp moving for a field
+    /// nobody touched would silently break that merge rule.
+    func testUpdateStampsOnlyTheChangedFieldAndLeavesOtherStampsUntouched() async throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let s = store(now: { clock.next() })
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "J1", originalDate: PartialDate(year: 1998, month: 3)),
+            url: sidecarURL)
+
+        let (afterFirst, _) = try await s.update(captureID: captureID) {
+            $0.setOriginalDate(PartialDate(year: 1998, month: 3, day: 4))
+        }
+        let originalDateStamp = try XCTUnwrap(afterFirst.modified?["originalDate"])
+        XCTAssertNil(afterFirst.modified?["journalID"], "journalID never changed — no stamp for it")
+
+        let (afterSecond, _) = try await s.update(captureID: captureID) { $0.journalID = "J2" }
+        XCTAssertEqual(afterSecond.modified?["originalDate"], originalDateStamp,
+                       "a later update to journalID must not touch originalDate's stamp")
+        let journalIDStamp = try XCTUnwrap(afterSecond.modified?["journalID"])
+        XCTAssertGreaterThan(journalIDStamp, originalDateStamp,
+                             "sanity: the clock genuinely advanced between the two updates")
+
+        // And the stamp actually reached disk, not just the in-memory return value.
+        let persisted = try await s.read(captureID: captureID)
+        XCTAssertEqual(persisted.modified, afterSecond.modified)
+    }
+
+    /// Counterpart to the test above, mirroring `testUpdateThatChangesNothingAppendsNothing`:
+    /// a mutation whose before/after are equal stamps nothing at all, not an empty dict.
+    func testUpdateThatChangesNothingStampsNothing() async throws {
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"), url: sidecarURL)
+        let (updated, _) = try await store().update(captureID: captureID) { $0.journalID = "J1" }
+        XCTAssertNil(updated.modified)
+    }
+
+    func testModifiedMapRoundTripsThroughDisk() throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000.5)
+        let metadata = EntryMetadata(journalID: "J1", modified: ["journalID": stamp])
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
+        let readBack = try EntryMetadataStore.read(url: sidecarURL)
+        XCTAssertEqual(readBack, metadata)
+        XCTAssertTrue(String(decoding: try Data(contentsOf: sidecarURL), as: UTF8.self)
+            .contains("modified"))
+    }
+
+    /// Additive and lenient, same shape as `testMultiVoiceGarbageDecodesFalse`: a garbage
+    /// `modified` value costs only the sync stamps, never the rest of the sidecar.
+    func testGarbageModifiedMapDecodesNilWithoutLosingOtherFields() throws {
+        let decoded = try EntryMetadataStore.decode(
+            Data(#"{"journalID":"J1","modified":"oops"}"#.utf8))
+        XCTAssertNil(decoded.modified)
+        XCTAssertEqual(decoded.journalID, "J1")
+    }
+
+    /// A minimal stand-in for "a build that predates `modified`" — its `CodingKeys`
+    /// (implicit, from having only this one property) has no `modified` case at all.
+    private struct PreM4EntryMetadataShape: Decodable {
+        var journalID: String?
+    }
+
+    /// Forward-compat pin (M4 T1): a record a NEWER build wrote (carrying `modified`)
+    /// must still decode cleanly on a build that has never heard of the field — the
+    /// ordinary "unknown keys are ignored" JSON behavior, pinned explicitly so a future
+    /// change to `EntryMetadata`'s decoder can't quietly turn `modified` into a required
+    /// key without a test noticing.
+    func testEntryMetadataWithModifiedDecodesInAnOldShapedDecoderIgnoringIt() throws {
+        let json = Data(#"{"journalID":"J1","modified":{"journalID":"2024-01-01T00:00:00.000Z"}}"#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(PreM4EntryMetadataShape.self, from: json)
+        XCTAssertEqual(decoded.journalID, "J1")
     }
 }

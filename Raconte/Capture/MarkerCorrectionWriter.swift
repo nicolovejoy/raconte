@@ -40,18 +40,18 @@ enum MarkerCorrectionWriter {
     /// already gone or never existed — this writer does not need to check first, and
     /// deliberately doesn't: checking-then-writing would be a TOCTOU against a second
     /// device or a second correction session doing the same retract.
-    static func retract(seq targetSeq: Int, captureDirectory: URL) throws {
+    static func retract(seq targetSeq: Int, captureDirectory: URL, now: Date = Date()) throws {
         try appendOne(StructureMarker(seq: 0, frame: 0, kind: .correctionRetract, retractsSeq: targetSeq),
-                     captureDirectory: captureDirectory)
+                     captureDirectory: captureDirectory, now: now)
     }
 
     /// Case 2: correct the voice AT an existing boundary. `frame` must be the raw
     /// tap's own frame (never a scrubbed or re-derived one) — that is what "an
     /// existing boundary" (brief case 2) means, and it is how
     /// `MarkerCorrections.effectiveMarkers` finds the marker to override.
-    static func correctVoice(frame: Int64, voice: String, captureDirectory: URL) throws {
+    static func correctVoice(frame: Int64, voice: String, captureDirectory: URL, now: Date = Date()) throws {
         try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionVoice, voice: voice),
-                     captureDirectory: captureDirectory)
+                     captureDirectory: captureDirectory, now: now)
     }
 
     /// Case 3: mint a boundary the owner never tapped, anchored to the PICKED WORD's
@@ -67,10 +67,10 @@ enum MarkerCorrectionWriter {
     /// so "offerable in the UI" and "acceptable to the writer" can never disagree.
     @discardableResult
     static func addBoundary(atSpanIndex spanIndex: Int, spans: [TranscriptSpan],
-                            captureDirectory: URL) throws -> Int64 {
+                            captureDirectory: URL, now: Date = Date()) throws -> Int64 {
         let frame = try placeableFrame(atSpanIndex: spanIndex, spans: spans)
         try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionBoundaryAdd),
-                     captureDirectory: captureDirectory)
+                     captureDirectory: captureDirectory, now: now)
         return frame
     }
 
@@ -96,10 +96,10 @@ enum MarkerCorrectionWriter {
     /// of a plain `.paragraph` one at this exact, word-anchored frame.
     @discardableResult
     static func addVoiceBoundary(atSpanIndex spanIndex: Int, spans: [TranscriptSpan],
-                                 voice: String, captureDirectory: URL) throws -> Int64 {
+                                 voice: String, captureDirectory: URL, now: Date = Date()) throws -> Int64 {
         let frame = try placeableFrame(atSpanIndex: spanIndex, spans: spans)
         try appendOne(StructureMarker(seq: 0, frame: frame, kind: .correctionBoundaryAdd, voice: voice),
-                     captureDirectory: captureDirectory)
+                     captureDirectory: captureDirectory, now: now)
         return frame
     }
 
@@ -111,9 +111,9 @@ enum MarkerCorrectionWriter {
     /// `markers.jsonl` if it doesn't exist yet — there is no prerequisite readable state
     /// to check first the way `addBoundary`/`addVoiceBoundary` have (a readable
     /// `current` revision supplying `spans`).
-    static func addOpeningVoice(voice: String, captureDirectory: URL) throws {
+    static func addOpeningVoice(voice: String, captureDirectory: URL, now: Date = Date()) throws {
         try appendOne(StructureMarker(seq: 0, frame: 0, kind: .correctionBoundaryAdd, voice: voice),
-                     captureDirectory: captureDirectory)
+                     captureDirectory: captureDirectory, now: now)
     }
 
     /// A sentence for the UI (mirrors `TranscriptEditorModel.saveFailureMessage`'s
@@ -123,8 +123,12 @@ enum MarkerCorrectionWriter {
             + "so a boundary can’t be placed there."
     }
 
-    private static func appendOne(_ marker: StructureMarker, captureDirectory: URL) throws {
-        let writer = MarkerLogWriter(captureDirectory: captureDirectory)
+    /// M4 T1: `now` wraps into the closure `MarkerLogWriter` wants — a per-call `Date`
+    /// here (like `LibraryScreenModel.trashEntry`'s `now: Date = Date()`), rather than an
+    /// injected clock on this enum, since these are stateless static functions with
+    /// nothing to hold a clock property.
+    private static func appendOne(_ marker: StructureMarker, captureDirectory: URL, now: Date) throws {
+        let writer = MarkerLogWriter(captureDirectory: captureDirectory, now: { now })
         try writer.open()
         try writer.append(marker)
         try writer.close()

@@ -30,11 +30,32 @@ struct JournalEditorView: View {
     @State private var voiceLabelsFailed = false
     @State private var spanFailed = false
     @State private var showingCoverPicker = false
+    @State private var showingDeleteConfirmation = false
+    @State private var deleteFailed = false
     @FocusState private var nameFocused: Bool
 
     private var journal: Journal? { model.journals.first { $0.id == journalID } }
     private var entryCount: Int {
         model.allEntries.filter { $0.journalID == journalID }.count
+    }
+    private var trashedCount: Int {
+        model.trashed.filter { $0.journalID == journalID }.count
+    }
+
+    /// #80, owner ruling 1 (empty = zero live AND zero trashed entries) / ruling 2
+    /// (always visible, reason spelled out when refused). The logic itself lives in
+    /// `JournalDeleteEligibility.blockedReason` — pure, exhaustively unit-tested,
+    /// including the trashed-only case this view alone cannot pin. See that type's doc
+    /// comment for the drift risk against `LibraryScreenModel.isJournalEmpty`.
+    private var deleteBlockedReason: String? {
+        JournalDeleteEligibility.blockedReason(
+            journalCount: model.journals.count,
+            entryCount: entryCount,
+            trashedCount: trashedCount,
+            // The model's own rule, not a second copy of it (gate findings Important 2
+            // and 3): without this the row would offer Delete while the authoritative
+            // guard refuses it, which reads as a broken button.
+            hasIndeterminateContent: model.hasIndeterminateContent(forJournal: journalID))
     }
 
     var body: some View {
@@ -93,6 +114,24 @@ struct JournalEditorView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("journalEditor.derived")
                 }
+
+                // Owner-ruled shape (#80, ruling 2): a destructive row at the bottom of
+                // the editor behind a confirmation dialog — NOT a sidebar swipe action.
+                // The row itself stays on-screen and queryable even when refused; only
+                // `.disabled` changes, with the footer explaining why. Never absent —
+                // an absent control cannot be discovered, let alone understood.
+                Section {
+                    Button("Delete Journal", role: .destructive) {
+                        showingDeleteConfirmation = true
+                    }
+                    .disabled(deleteBlockedReason != nil)
+                    .accessibilityIdentifier("journalEditor.delete")
+                } footer: {
+                    if let reason = deleteBlockedReason {
+                        Text(reason)
+                            .accessibilityIdentifier("journalEditor.delete.reason")
+                    }
+                }
             }
             .navigationTitle(journal.name)
             .onAppear {
@@ -119,6 +158,36 @@ struct JournalEditorView: View {
                 Button("OK", role: .cancel) {}
             }
             .alert("Couldn’t save this date range", isPresented: $spanFailed) {
+                Button("OK", role: .cancel) {}
+            }
+            // Attached to the Form itself, never to a `Section` — a `.confirmationDialog`
+            // (like `.sheet`, below) attached to a `Section` silently never presents on
+            // iOS 26; this project has already paid for that trap once (#68's cover
+            // sheet class of bug). `journal.name` here reads the live value at the
+            // moment the dialog is shown, since it is still non-nil whenever this
+            // button was reachable to tap.
+            .confirmationDialog("Delete \u{201C}\(journal.name)\u{201D}?",
+                                isPresented: $showingDeleteConfirmation,
+                                titleVisibility: .visible) {
+                Button("Delete Journal", role: .destructive) {
+                    Task {
+                        if await model.deleteJournal(journalID) == false {
+                            deleteFailed = true
+                        }
+                    }
+                }
+                .accessibilityIdentifier("journalEditor.confirmDelete")
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                // Deliberately NOT "this can't be undone" (gate finding, Minor 2): owner
+                // ruling 3 accepts that another device which edits this journal while
+                // offline will re-push it and bring it back — last-writer-wins on the
+                // record's existence, no delete tombstone (`SyncRecordExchange
+                // .acceptRemoteJournalDeletion`). Promising irreversibility here would be
+                // literally untrue.
+                Text("The journal is removed from this device and your others.")
+            }
+            .alert("Couldn’t delete this journal", isPresented: $deleteFailed) {
                 Button("OK", role: .cancel) {}
             }
             // #68: this sheet renders EMPTY on macOS — the PhotosPicker row is absent,
@@ -176,8 +245,17 @@ struct JournalEditorView: View {
     /// one) — the only failure reachable here is the store rejecting an unknown journal
     /// id, i.e. this journal was deleted out from under an open editor. No draft to reset
     /// on failure: the span editor owns its own field state, not this view.
+    ///
+    /// Value-changed guard mirrors `commitName`/`commitVoiceLabels` above (gate F1, for
+    /// #70): `JournalSpanEditor.commit()` fires unconditionally from `onDisappear`, so
+    /// simply opening a journal's editor and navigating away — for an unrelated reason,
+    /// e.g. a rename — would otherwise re-stamp `modified["span"]` with `now()` for a
+    /// value that never changed. That stamp can then beat a genuinely older but real span
+    /// edit from an offline peer in the LWW merge, discarding it. `JournalStore.setSpan`
+    /// carries the same guard as a second, store-layer chokepoint (any caller, not just
+    /// this view).
     private func commitSpan(_ span: JournalSpan?) {
-        guard journal != nil else { return }
+        guard let journal, journal.span != span else { return }
         Task {
             if await model.setJournalSpan(journalID, span: span) == false {
                 spanFailed = true

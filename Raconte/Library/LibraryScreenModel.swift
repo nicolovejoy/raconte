@@ -10,6 +10,24 @@ protocol LibraryRescanObserver: AnyObject {
     func libraryDidRescan()
 }
 
+/// Whether a journal can be deleted, as of the last scan (#82). Replaces a plain boolean
+/// for this purpose: some blockers are worthless captures `deleteJournal` can resolve on
+/// its own demand, and lumping them in with genuinely hard blockers is exactly the
+/// "worthless capture blocks deletion until next launch" defect this type exists to fix.
+/// See `LibraryScreenModel.emptinessVerdict(forJournal:)` for the full decision.
+enum JournalEmptinessVerdict: Equatable {
+    /// Nothing here — deletable, no resolution needed.
+    case empty
+    /// Blocked, and `deleteJournal` must not attempt to clear it itself: a real entry, an
+    /// unreadable sidecar somewhere in the corpus, or a skipped capture that might be the
+    /// one actively recording (including "might be" because the probe is unattached).
+    case blockedHard
+    /// Blocked only by worthless-looking `SkippedCapture`s, each PROVABLY not the active
+    /// capture (probe attached, ids differ). `deleteJournal` may resolve these through
+    /// the real recovery machinery and re-check; nothing else may act on this case.
+    case blockedResolvable(captureIDs: [String])
+}
+
 /// Composition + orchestration for the library and entry-detail screens (M3 T4).
 ///
 /// Constraints this shape exists to hold:
@@ -94,6 +112,27 @@ final class LibraryScreenModel {
     /// pair (there are many) would leak one for the length of the test process.
     weak var rescanObserver: (any LibraryRescanObserver)?
 
+    /// #82: whichever capture id `CaptureCoordinator.activeCaptureID` currently names,
+    /// or `nil` when unattached. `@MainActor`, not `@Sendable` — honest about
+    /// `activeCaptureID`'s real isolation rather than claiming this can be called from
+    /// any thread; every caller below already runs on THIS actor, which is itself
+    /// `@MainActor`, so no hop is needed. See `attachActiveCaptureProbe` for the
+    /// fail-safe contract an absent probe carries.
+    private var activeCaptureProbe: (@MainActor () -> String?)?
+
+    /// Test-only injection seam (#82 task review fix). Invoked once per capture inside
+    /// `resolveWorthlessBlockers`, between the active-capture recheck and that
+    /// capture's fresh `DirectorySnapshot` gather. `nil` in every production path —
+    /// `AppServices` never sets it, so production behavior is unchanged (the ordinary
+    /// `await Task.yield()` still runs regardless of whether this is set). A test parks
+    /// this on a `CheckedContinuation` (see `RaconteTests/LibraryScreenModelTests
+    /// .ResolutionPark`), lands a competing disk write while parked, then releases —
+    /// landing content deterministically in the window between the verdict and the
+    /// per-capture read, which a same-process `Task.yield()` race could not reliably
+    /// reach (see the #82 task report, "Attempts A and B", for why that was tried
+    /// first and abandoned).
+    var beforeResolutionHook: (@MainActor () async -> Void)?
+
     /// Bumped on entry to `rescan()` and checked before results are assigned. Three UI
     /// paths (`selectJournalScope`, `moveEntry`, `setBackdate`) each fire their own Task,
     /// so scans overlap and, unguarded, the *later-finishing* one wins rather than the
@@ -116,6 +155,14 @@ final class LibraryScreenModel {
     /// a head is trustworthy, so this guard is a cost saver against a second
     /// `bootstrap()` re-walking the whole corpus, not a correctness one.
     private var headStampRan = false
+
+    /// M4 (marker-correction push hook). Nil everywhere sync is off — unit tests, the
+    /// UI-test harness, and any build whose composition root refused to construct an
+    /// engine. Matches `EntryMetadataStore`/`JournalStore`/`TranscriptRevisionStore`'s
+    /// identical seam; this model needs its own copy because the `VoiceMarkingStore`
+    /// conformance below writes through the stateless `MarkerCorrectionWriter` directly
+    /// rather than through one of those already-wired actors.
+    private var syncHooks: (any SyncHooks)?
 
     init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
         self.capturesRoot = capturesRoot
@@ -152,6 +199,28 @@ final class LibraryScreenModel {
         return LibraryScreenModel(capturesRoot: CaptureScreenModel.defaultCapturesRoot())
     }
 
+    /// Wires visibility into whichever capture is currently active, matching the
+    /// `attach(syncHooks:)` idiom (`EntryMetadataStore`/`JournalStore`/`CaptureScreenModel`)
+    /// — set once, after construction, from `AppServices.init`, the one place `library`
+    /// and `capture.coordinator` coexist.
+    ///
+    /// **FAIL-SAFE DEFAULT (#82):** never calling this — a test, or a future composition
+    /// root that forgets to wire it — must never make on-demand blocker resolution MORE
+    /// aggressive than refusing outright. `emptinessVerdict(forJournal:)` treats an
+    /// unattached probe as "the active capture is unknown" and refuses to resolve
+    /// anything while a `SkippedCapture` blocks the journal — see that method.
+    func attachActiveCaptureProbe(_ probe: @escaping @MainActor () -> String?) {
+        activeCaptureProbe = probe
+    }
+
+    /// Wired after construction (M4), for the same reason `EntryMetadataStore.attach
+    /// (syncHooks:)`/`JournalStore.attach(syncHooks:)`/`TranscriptRevisionStore.attach
+    /// (syncHooks:)` are: the composition root builds this model before it can build
+    /// the `SyncCoordinator` that conforms to `SyncHooks`.
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
+    }
+
     var yearGroups: [EntryYearGroup] { EntryListItem.groupedByYear(items) }
 
     // MARK: - Scan
@@ -165,7 +234,19 @@ final class LibraryScreenModel {
     /// so scanning the superset once and filtering it three ways is both cheaper and
     /// strictly more consistent: the list, the recents strip and the trash count now
     /// always describe the same instant on disk.
-    func rescan() async {
+    ///
+    /// **Returns whether THIS scan published.** `false` means it was superseded — another
+    /// `rescan()` started while this one was in flight, so this one assigned nothing and
+    /// every published list still describes whatever the *winning* scan last left there,
+    /// which may predate both. Every ordinary caller ignores the answer (hence
+    /// `@discardableResult`): for a refresh, "someone else's newer scan won" is a better
+    /// outcome, not a failure. A **destructive** caller must not ignore it — see
+    /// `rescanUntilFresh(attempts:)`. Gate finding (Critical 1): without this, a scan whose
+    /// result was discarded returned indistinguishably from one that published, so
+    /// `deleteJournal`/`isJournalEmptyAfterRescan` evaluated emptiness against pre-scan
+    /// state and orphaned real recordings.
+    @discardableResult
+    func rescan() async -> Bool {
         scanGeneration &+= 1
         let generation = scanGeneration
         isLoading = true
@@ -189,9 +270,10 @@ final class LibraryScreenModel {
 
         // A superseded scan publishes nothing, and leaves `isLoading` set — the scan
         // that overtook it is still running and owns clearing it.
-        guard generation == scanGeneration else { return }
+        guard generation == scanGeneration else { return false }
 
-        journals = loadedJournals ?? []
+        // Display order, not registry (insertion) order — issue #79.
+        journals = (loadedJournals ?? []).displayOrdered
         journalCovers = loadedCovers
         journalsUnreadable = loadedJournals == nil || result.journalsUnreadable
         items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)
@@ -205,6 +287,31 @@ final class LibraryScreenModel {
         // observer's whole job is to compare a receipt against `allEntries`, so it must
         // never see a half-applied scan or one this model has already abandoned.
         rescanObserver?.libraryDidRescan()
+        return true
+    }
+
+    /// Rescan until one of OUR scans actually publishes, or give up. `true` means the
+    /// published state is this call's own scan and nothing has landed on this actor since
+    /// — the caller's very next statement, with no `await` between, reads state it can
+    /// trust. `false` means every attempt was superseded, and the caller must **refuse**
+    /// rather than read whatever is currently published: a destructive decision on
+    /// unproven-fresh state is exactly how entries get orphaned.
+    ///
+    /// Bounded rather than unbounded: a livelock (something rescanning continuously) must
+    /// end in a refusal, never in a spin. Three attempts is arbitrary but generous — each
+    /// attempt loses only if another rescan *starts* inside its window, and the app's own
+    /// rescans are event-driven, not periodic.
+    ///
+    /// `attempts` is a parameter solely so the give-up branch is directly testable
+    /// (`attempts: 0` = "no fresh scan is obtainable"); production always takes the
+    /// default via the two callers below.
+    private func rescanUntilFresh(attempts: Int) async -> Bool {
+        var remaining = attempts
+        while remaining > 0 {
+            remaining -= 1
+            if await rescan() { return true }
+        }
+        return false
     }
 
     /// Derived, not stored — see `JournalDateRange`. `nil` for a journal with no
@@ -349,6 +456,229 @@ final class LibraryScreenModel {
         return true
     }
 
+    /// The emptiness rule for journal deletion (#80, owner ruling 1): zero items AND
+    /// zero trashed entries, from the last scan. A journal holding only a TRASHED entry
+    /// is not empty — restoring that entry later would file it into a journal that no
+    /// longer exists, so the guard must count `trashed`, not just `allEntries`.
+    ///
+    /// **Freshness obligation, load-bearing:** this reads `allEntries`/`trashed` AS OF
+    /// THE LAST SCAN, not disk truth. That staleness is tolerable for every other
+    /// `LibraryScreenModel` mutator (rename/`setSpan`/`setVoiceLabels` are non-destructive
+    /// or reversible, so a stale read costs at worst a wasted write) but is NOT tolerable
+    /// for a destructive caller: an entry that lands after the last scan — a background
+    /// CKSyncEngine ingest arriving while a confirmation dialog sits open, for instance —
+    /// would read as "empty" and get orphaned into a journal that no longer exists once
+    /// deleted. **A plain `rescan()` immediately before calling this is NOT enough**
+    /// (gate finding, Critical 1): a superseded scan publishes nothing, so `await
+    /// rescan()` guarantees only that *a* scan ran, not that the state read afterwards is
+    /// fresh. Any caller of this method for a destructive decision (`deleteJournal`
+    /// below, and B2's sync-ingest delete path) MUST go through
+    /// `rescanUntilFresh(attempts:)` and REFUSE when it returns `false` — see
+    /// `isJournalEmptyAfterRescan` and `deleteJournal` for the shape. This method itself
+    /// deliberately does not scan — it is a synchronous, cheap read of already-scanned
+    /// state, kept exposed rather than buried inside `deleteJournal` so B2 can ask this
+    /// exact question from the sync side without re-implementing scanning inside
+    /// `SyncIngest`. The freshness obligation travels with the exposure.
+    func isJournalEmpty(_ journalID: String) -> Bool {
+        if case .empty = emptinessVerdict(forJournal: journalID) { return true }
+        return false
+    }
+
+    /// Something on disk that this scan cannot rule out of `journalID`, so "empty" is not
+    /// an answer this model is entitled to give. Gate findings (Important 2 and 3) — both
+    /// are the project's recurring three-answers mistake (#11) landing on a destructive
+    /// path: absent, unreadable and present are three different answers, and collapsing
+    /// "I cannot tell" into "absent" orphans a real recording.
+    ///
+    /// **#82 revision — this is now the UI-FACING half of `emptinessVerdict(forJournal:)`,
+    /// not a second computation.** `.blockedResolvable` reads as `false` here (the
+    /// journal-editor row enables) because `deleteJournal` can clear a purely worthless
+    /// blocker on its own, on demand — running that recovery machinery from a state READ
+    /// like this one would be exactly backwards. Only `.blockedHard` reads as `true`;
+    /// `isJournalEmpty` above uses the same verdict but only accepts `.empty`, so a
+    /// resolvable blocker still refuses a delete that has not actually resolved it yet.
+    func hasIndeterminateContent(forJournal journalID: String) -> Bool {
+        if case .blockedHard = emptinessVerdict(forJournal: journalID) { return true }
+        return false
+    }
+
+    /// The three-way answer to "can this journal be deleted?" (#82), replacing a plain
+    /// boolean for this purpose. Gate findings (Important 2 and 3) established that
+    /// absent/unreadable/present are three different answers for a `SkippedCapture`'s
+    /// sidecar; this extends the same reasoning one step further — among the "present but
+    /// unreadable" captures, some are genuinely worthless (a mis-tap that never got any
+    /// frames) and some might still be recording, and only the active-capture probe can
+    /// tell them apart.
+    ///
+    /// - `.empty`: zero live entries, zero trashed entries, zero skipped blockers for this
+    ///   journal, and no `.metadataUnreadable` degradation anywhere (that degradation
+    ///   blocks every journal, not just this one — see the two-source reasoning this
+    ///   replaced, still true: an unreadable sidecar's row carries `journalID == nil`
+    ///   and so protects nothing, while the capture itself may hold real audio filed
+    ///   somewhere we cannot read).
+    /// - `.blockedHard`: a real entry (live or trashed) in this journal, ANY
+    ///   `.metadataUnreadable` degradation anywhere, a skipped blocker that IS the active
+    ///   capture, or a skipped blocker while the probe is unattached (fail-safe: unknown
+    ///   reads as "could be the active capture", never as "safe").
+    /// - `.blockedResolvable(captureIDs:)`: every blocker for this journal is a
+    ///   `SkippedCapture`, and the probe (attached) provably reports none of them as the
+    ///   active capture. `deleteJournal` is the only caller entitled to act on this —
+    ///   it resolves each id through the real recovery machinery, never a plain read.
+    func emptinessVerdict(forJournal journalID: String) -> JournalEmptinessVerdict {
+        if allEntries.contains(where: { $0.journalID == journalID }) { return .blockedHard }
+        if trashed.contains(where: { $0.journalID == journalID }) { return .blockedHard }
+        if allEntries.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return .blockedHard }
+        if trashed.contains(where: { $0.degradations.contains(.metadataUnreadable) }) { return .blockedHard }
+
+        let blockers = skipped.filter { $0.journalID == journalID }
+        guard !blockers.isEmpty else { return .empty }
+
+        // Fail-safe default (#82): an unattached probe means "unknown", never "safe".
+        guard let probe = activeCaptureProbe else { return .blockedHard }
+        if let activeID = probe(), blockers.contains(where: { $0.captureID == activeID }) {
+            return .blockedHard
+        }
+        return .blockedResolvable(captureIDs: blockers.map(\.captureID))
+    }
+
+    /// Rescan-then-check as ONE `LibraryScreenModel`-isolated call (#80, B2) — the ONE
+    /// legitimate way to ask `isJournalEmpty` from OFF-MainActor code (the sync ingest
+    /// path, `SyncRecordExchange.acceptRemoteJournalDeletion`) while keeping its
+    /// freshness obligation intact.
+    ///
+    /// Splitting rescan and the read across two separate `await`s from an off-actor
+    /// caller would not give the same guarantee `deleteJournal` gets above: this actor is
+    /// a serial executor, so once `await rescan()` resumes, THIS task runs exclusively —
+    /// with nothing else able to land on `LibraryScreenModel` — until it either awaits
+    /// again or returns. Calling `isJournalEmpty` as the very next statement, inside the
+    /// same method body, is what makes that true; a caller that instead did
+    /// `await library.rescan()` followed by a SEPARATE `await library.isJournalEmpty(id)`
+    /// would release isolation between the two hops (each is its own actor-hop
+    /// suspension), reopening exactly the staleness window `deleteJournal`'s doc comment
+    /// warns about.
+    ///
+    /// **The rescan must be one WE won** (gate finding, Critical 1). A superseded scan
+    /// publishes nothing, so `await rescan()` alone guarantees only that *a* scan ran, not
+    /// that the state read afterwards is fresh — one level below the hazard the reasoning
+    /// above addresses. `rescanUntilFresh` closes it, and its `false` is
+    /// answered with `false` here: "I could not prove this journal is empty" must read as
+    /// "not empty" on a path whose only consumer deletes.
+    func isJournalEmptyAfterRescan(_ journalID: String, freshScanAttempts: Int = 3) async -> Bool {
+        guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
+        return isJournalEmpty(journalID)
+    }
+
+    /// Deletes an EMPTY journal (#80, v1: non-empty journal deletion is a separate,
+    /// later design — see `isJournalEmpty`). Same false-on-failure shape as
+    /// `renameJournal`/`trashEntry`: the caller alerts on `false`, and nothing partially
+    /// happens either way — the emptiness guard runs before the store is ever touched,
+    /// and the store's own guards (unknown id, last remaining journal) are honoured too.
+    ///
+    /// Rescans FIRST, before evaluating `isJournalEmpty` — see that method's freshness
+    /// obligation. Without this, an entry that arrived after the last scan (a background
+    /// sync ingest landing while a confirmation dialog is open, most concretely) would
+    /// read as belonging to an empty journal and be orphaned by the delete that follows.
+    /// And not merely "rescan": a rescan **we won** (gate finding, Critical 1) — a
+    /// superseded scan publishes nothing, so a plain `await rescan()` would leave this
+    /// reading pre-scan state whenever anything else (a capture finalizing, an ingest, a
+    /// trash write) started its own scan inside ours. Refuses when it cannot get one:
+    /// a delete that cannot prove freshness must not proceed.
+    ///
+    /// This narrows, rather than closes, the race: there is still a synchronous
+    /// check-then-await gap between the fresh scan and the store write below, the same gap
+    /// every other mutator in this file already accepts.
+    ///
+    /// **#82 addition:** a `.blockedResolvable` verdict is not an immediate refusal. It is
+    /// the ONE place in this model allowed to run real recovery machinery on a "worthless"
+    /// blocker, because it is the only place that can also re-check freshness and re-check
+    /// the verdict afterward, on this same actor, before the destructive registry write.
+    /// A UI-state read (`hasIndeterminateContent`) must never do this — see that method.
+    @discardableResult
+    func deleteJournal(_ journalID: String, freshScanAttempts: Int = 3) async -> Bool {
+        guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
+
+        switch emptinessVerdict(forJournal: journalID) {
+        case .empty:
+            break
+        case .blockedHard:
+            return false
+        case .blockedResolvable(let captureIDs):
+            guard await resolveWorthlessBlockers(captureIDs) else { return false }
+            guard await rescanUntilFresh(attempts: freshScanAttempts) else { return false }
+            guard case .empty = emptinessVerdict(forJournal: journalID) else { return false }
+        }
+
+        guard (try? await journalStore.deleteJournal(id: journalID)) != nil else { return false }
+        await rescan()
+        return true
+    }
+
+    /// On-demand resolution for #82: runs HALF of the recovery machinery
+    /// `recoverAtLaunch()` runs at every launch — `DirectorySnapshot` gather →
+    /// `RecoveryPlanner.plan(for:)`, always; `RecoveryExecutor.apply`, only for the two
+    /// decisions this method is entitled to own outright (below) — scoped to exactly the
+    /// capture directories a `.blockedResolvable` verdict named, never the whole corpus,
+    /// and never a hand-rolled `removeItem`.
+    ///
+    /// **Not full parity with `recoverAtLaunch()`, deliberately (task review fix,
+    /// Important 2).** `recoverAtLaunch()` also consumes `RecoveryOutcome.finalizeQueue`/
+    /// `.verifyQueue` and hands them to `CaptureCoordinator`'s finalize pipeline — this
+    /// model has no such queue and no session-lifetime place to put that work. So the
+    /// planner's decision is applied ONLY when it is `.deleteCaptureDirectory` or
+    /// `.quarantineCaptureDirectory` — both complete, no-follow-up-required operations
+    /// entirely within `RecoveryExecutor.apply`'s own disk effects. Every other decision
+    /// (`.normalizeToCaptured`, `.enqueueFinalize`, `.discardFinalPartRequeue`,
+    /// `.verifyFinal`, `.finishRawDelete`) means real content showed up since the scan
+    /// that judged this capture worthless — the directory is left BYTE-UNTOUCHED, this
+    /// method refuses, and the capture waits for the next launch's `recoverAtLaunch()` to
+    /// finish the job it actually owns. A silent partial mutation with no finalize
+    /// follow-up (e.g. `.normalizeToCaptured` renaming `.pcm.part` and writing a
+    /// `captured` manifest, then nobody ever enqueueing it) would leave the capture in
+    /// limbo indefinitely — worse than doing nothing.
+    ///
+    /// Re-checks each id against the active-capture probe before touching its directory:
+    /// `emptinessVerdict` computed "provably not active" against the last scan, and time
+    /// has passed since. **This recheck is BEFORE the `await Task.yield()` below, not
+    /// "immediately before" the disk read** — there is a real suspension point between
+    /// the two, so in principle a capture could start recording in that gap. Left
+    /// unclosed on purpose: capture ids are ULIDs, never reused, and nothing in this app
+    /// re-arms `activeCaptureID` to a PAST id — so the only way this recheck could go
+    /// stale is a capture id being reused, which does not happen. Returns `false` without
+    /// touching anything the moment the recheck fails, or when the probe has gone missing
+    /// since the caller's own check (defensive; `deleteJournal` already verified it was
+    /// attached).
+    ///
+    /// The `Task.yield()` before each gather, and `beforeResolutionHook` right after it,
+    /// are deliberate, not decorative: without a suspension point here, nothing can land
+    /// between the verdict this method was handed and the disk read it is about to act
+    /// on, so a competing MainActor-hopping writer (a background finalize completion,
+    /// most concretely) has no chance to run in between — the same synchronous
+    /// check-then-act gap `deleteJournal`'s own doc comment already accepts as inherent
+    /// for its registry write, closed here as tightly as cooperative scheduling allows.
+    /// `beforeResolutionHook` is the test-controllable version of that same suspension
+    /// point — see its own doc comment.
+    private func resolveWorthlessBlockers(_ captureIDs: [String]) async -> Bool {
+        guard let probe = activeCaptureProbe else { return false }
+        let executor = RecoveryExecutor(capturesRoot: capturesRoot)
+        for captureID in captureIDs {
+            guard probe() != captureID else { return false }
+            await Task.yield()
+            await beforeResolutionHook?()
+            let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot, captureID: captureID)
+            let action = RecoveryPlanner.plan(for: snapshot)
+            switch action {
+            case .deleteCaptureDirectory, .quarantineCaptureDirectory:
+                executor.apply([action])
+            case .normalizeToCaptured, .enqueueFinalize, .discardFinalPartRequeue,
+                 .verifyFinal, .finishRawDelete:
+                // Not ours to own — see the doc comment above. Leave the directory
+                // exactly as it is; the next launch's `recoverAtLaunch()` will finish it.
+                return false
+            }
+        }
+        return true
+    }
+
     // MARK: - Journal cover (issue #14 part 3)
 
     /// Sets or replaces a journal's cover image. `imageData` is any ImageIO-decodable
@@ -424,19 +754,112 @@ final class LibraryScreenModel {
         guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
               metadata.isTrashed else { return false }
         let remover = self.remover
+        // M4 T11: gathered BEFORE `stage` renames the directory away — the only point
+        // it is still enumerable off disk (`SyncRecordFamily`'s own doc comment).
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
         let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
             do { _ = try remover.stage(captureID: captureID) } catch { return false }
             _ = remover.purge()
             return true
         }.value
+        if staged {
+            await noteSyncDelete(captureID: captureID, family: family)
+        }
         await rescan()
         return staged
+    }
+
+    /// M4 T11: after a successful stage — never before `deleteEntryPermanently`/
+    /// `emptyTrash`/`sweepTrash` actually renamed the directory away, since a failed
+    /// stage means the entry is still there. Tells the sync layer the Entry is gone (a
+    /// real CK delete; children cascade server-side via `.deleteSelf`) and withdraws/
+    /// retires its child family (design §5, "the delete wins") — `family` must already
+    /// have been gathered before the stage ran.
+    ///
+    /// **Fix round (review Important): the Entry's own name rides along in the family
+    /// drop too**, not just the real CK delete. `enqueueDeletes` alone leaves an
+    /// undocumented, untested assumption that the engine internally dedupes a queued
+    /// save against a queued delete for the same record — a local edit that queued a
+    /// save moments before this permanent deletion must be withdrawn explicitly at
+    /// this layer, never left to engine internals.
+    private func noteSyncDelete(captureID: String, family: [SyncRecordName]) async {
+        let entryName = SyncRecordName.entry(captureID: captureID)
+        await syncHooks?.noteLocalDelete(entryName)
+        await syncHooks?.noteLocalDeleteFamily(family + [entryName])
+    }
+
+    /// The result of `emptyTrash()`: how many trashed entries were actually removed vs.
+    /// skipped because the disk no longer agreed they were trashed or a stage failed.
+    struct EmptyTrashResult: Equatable {
+        var deleted: Int
+        var failed: Int
+    }
+
+    /// Owner-initiated bulk permanent delete (2026-08-22): everything in the trash, gone
+    /// in one action, independent of the 30-day retention sweep (`sweepTrash`/`sweeper`
+    /// are never touched here — that is a different tool for a different trigger).
+    ///
+    /// Re-reads each candidate's sidecar and skips it (counted as `failed`) unless the
+    /// disk still says it is trashed — the identical per-item guard `deleteEntryPermanently`
+    /// uses, never trusting the `trashed` row snapshot the button was drawn from. That is
+    /// also why this needs no `rescanUntilFresh`: a stale list can only over-include (the
+    /// guard refuses) or under-include (harmless — the button deletes what it knows).
+    ///
+    /// One bad entry — an unreadable sidecar, a staging failure — must not abort the rest
+    /// of the batch. `purge()` runs once after the loop, not per item, matching
+    /// `deleteEntryPermanently`'s one-way-door semantics: the rename is the deletion, so an
+    /// item whose stage succeeded counts as `deleted` even if the purge that follows fails
+    /// (it retries at the next launch).
+    @discardableResult
+    func emptyTrash() async -> EmptyTrashResult {
+        let candidates = trashed
+        guard !candidates.isEmpty else { return EmptyTrashResult(deleted: 0, failed: 0) }
+
+        var deleted = 0
+        var failed = 0
+        let remover = self.remover
+        for item in candidates {
+            let captureID = item.captureID
+            guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
+                  metadata.isTrashed else {
+                failed += 1
+                continue
+            }
+            // M4 T11: gathered BEFORE `stage` renames the directory away, same
+            // reasoning as `deleteEntryPermanently`.
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
+            let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
+                do { _ = try remover.stage(captureID: captureID) } catch { return false }
+                return true
+            }.value
+            if staged {
+                deleted += 1
+                await noteSyncDelete(captureID: captureID, family: family)
+            } else {
+                failed += 1
+            }
+        }
+        _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
+        await rescan()
+        return EmptyTrashResult(deleted: deleted, failed: failed)
     }
 
     /// The 30-day sweep. Called once per launch, after the first scan has published, so
     /// it never sits between the owner and his library.
     func sweepTrash() async {
-        let result = await sweeper.run()
+        // Captured before the `Task.detached` inside `sweeper.run` — `syncHooks` is a
+        // `Sendable` existential, so handing it to the `@Sendable` closure below is
+        // safe; reading `self.syncHooks` itself must happen here, on this actor.
+        let syncHooks = self.syncHooks
+        let result = await sweeper.run(onDeleted: { captureID, family in
+            // Fix round: the Entry's own name rides along in the family drop too —
+            // see `noteSyncDelete`'s doc comment.
+            let entryName = SyncRecordName.entry(captureID: captureID)
+            await syncHooks?.noteLocalDelete(entryName)
+            await syncHooks?.noteLocalDeleteFamily(family + [entryName])
+        })
         lastSweep = result
         // Only rescan when the disk actually changed — a launch with nothing expired is
         // the normal case and must not pay for a second scan.
@@ -717,26 +1140,44 @@ extension LibraryScreenModel: VoiceMarkingStore {
     /// screen's own `spans` could be one action stale (another marking session, or the
     /// editor, changed the chain since this screen last opened), and writing against a
     /// stale span array could anchor to the wrong frame silently.
+    ///
+    /// M4 (marker-correction push hook, design §3's chokepoint the T10 review left
+    /// unwired): fires `noteLocalChange(.markerStream(captureID:deviceID:))` naming
+    /// THIS device's own stream, strictly after `MarkerCorrectionWriter.addVoiceBoundary`
+    /// has already durably appended — same "fire only on a write that actually landed"
+    /// discipline `EntryMetadataStore.update`/`TranscriptRevisionStore.append` follow.
+    /// No eligibility re-check here: `markerStreamRecordToPush`'s own
+    /// `FinalizeArtifactPush.isFinalized` gate is the one and only place that decision is
+    /// made (same reasoning `TranscriptRevisionStore.append` documents for `.revision`),
+    /// so a capture-time correction — structurally unreachable through THIS screen, which
+    /// only ever opens on a capture whose `current` revision is already readable, i.e.
+    /// already finalized — would be refused at push time regardless.
     @discardableResult
     func addVoiceBoundary(atSpanIndex spanIndex: Int, voice: String, captureID: String) async throws -> Int64 {
         guard let spans = await currentSpans(for: captureID) else {
             throw MarkerCorrectionWriter.BoundaryAddError.noUsableBounds
         }
         let capturesRoot = self.capturesRoot
-        return try await Task.detached(priority: .userInitiated) {
+        let frame = try await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             return try MarkerCorrectionWriter.addVoiceBoundary(atSpanIndex: spanIndex, spans: spans,
                                                                 voice: voice, captureDirectory: directory)
         }.value
+        await syncHooks?.noteLocalChange(.markerStream(captureID: captureID, deviceID: DeviceIdentity.stable()))
+        return frame
     }
 
     /// No span prerequisite (see `MarkerCorrectionWriter.addOpeningVoice`'s own doc
     /// comment) — writes unconditionally at frame 0.
+    ///
+    /// M4 (marker-correction push hook): same fire-after-durable-write discipline as
+    /// `addVoiceBoundary` above — see that method's doc comment for the full reasoning.
     func addOpeningVoice(voice: String, captureID: String) async throws {
         let capturesRoot = self.capturesRoot
         try await Task.detached(priority: .userInitiated) {
             let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
             try MarkerCorrectionWriter.addOpeningVoice(voice: voice, captureDirectory: directory)
         }.value
+        await syncHooks?.noteLocalChange(.markerStream(captureID: captureID, deviceID: DeviceIdentity.stable()))
     }
 }

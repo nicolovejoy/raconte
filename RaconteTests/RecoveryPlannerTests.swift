@@ -465,6 +465,24 @@ final class RecoveryExecutorTests: XCTestCase {
         XCTAssertFalse(exists(dir))
     }
 
+    /// #82 safety story: `CaptureSnapshot` has no field for `entry.json` at all —
+    /// `DirectorySnapshot`'s gather never reads it — so planting one in an otherwise
+    /// zero-frame capture must not change the decision. This is what
+    /// `LibraryScreenModel.deleteJournal`'s on-demand resolution trusts: a "worthless"
+    /// blocker's own sidecar naming a journal is irrelevant to whether the planner will
+    /// delete its directory.
+    func testEntryJSONDoesNotChangeTheDecisionForAZeroFrameCapture() throws {
+        let dir = makeCapture(id: "cap")  // empty segments dir, no manifest
+        try EntryMetadataStore.write(
+            EntryMetadata(journalID: "some-journal"),
+            url: SegmentLayout.entryMetadataURL(captureDirectory: dir))
+
+        let actions = RecoveryPlanner.plan(DirectorySnapshot.gather(capturesRoot: root))
+
+        XCTAssertEqual(actions, [.deleteCaptureDirectory(captureID: "cap")],
+                       "entry.json is not part of CaptureSnapshot — planting it must not change the decision")
+    }
+
     // MARK: finishRawDelete — idempotent
 
     func testFinishRawDeleteRemovesSegmentsIdempotent() throws {

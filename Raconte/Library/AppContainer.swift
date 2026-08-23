@@ -13,6 +13,8 @@ import Foundation
 ///       journals.json          journals registry (M3 T1)
 ///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
 ///       trash-pending/<name>/  staged-removal holding pen (#25)
+///       sync/                  sync bookkeeping cache, disposable (M4 T2)
+///       sync/staging/<ULID>/   new-entry ingest assembly area, disposable (M4 T7)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
@@ -30,6 +32,20 @@ enum AppContainer {
     /// still holds `final/recording.m4a`, so being unreachable by that walk is what keeps
     /// the quarantine rule from adopting it forever.
     static let trashPendingDirectoryName = "trash-pending"
+    /// M4: root of the sync engine's on-disk bookkeeping (`SyncBookkeepingStore`) — a
+    /// sibling of `captures/`, never inside it, for the reason this type's header
+    /// already gives: a stray child of `captures/` is walked by `DirectorySnapshot.gather`
+    /// and handed to the recovery planner. Unlike every other sibling here, this whole
+    /// directory is a disposable cache (CKSyncEngine state, per-record system fields, an
+    /// upload dedupe ledger) — losing it costs a resync against CloudKit, never data, so
+    /// its interior layout is owned by `SyncBookkeepingStore`, not spelled out here.
+    static let syncDirectoryName = "sync"
+    /// M4 T7: where a new entry's pieces are materialized before the commit rename
+    /// (design §6, "assemble-then-commit"). A child of `sync/` — disposable cache, same
+    /// as the rest of that directory: a stale or half-assembled staging directory costs
+    /// nothing but a rebuild, never data, because `captures/` is never touched until the
+    /// final `rename(2)` succeeds.
+    static let syncStagingDirectoryName = "staging"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -72,6 +88,72 @@ enum AppContainer {
 
     static func trashPendingURL(containerRoot: URL, name: String) -> URL {
         trashPendingRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
+    }
+
+    static func syncRoot(containerRoot: URL) -> URL {
+        containerRoot.appendingPathComponent(syncDirectoryName, isDirectory: true)
+    }
+
+    /// `sync/staging/` — a sibling of `sync/`'s other bookkeeping, never of `captures/`
+    /// itself, for the same reason this type's header gives for every other sibling: a
+    /// stray child of `captures/` is walked by `DirectorySnapshot.gather` and handed to
+    /// the recovery planner. A half-assembled entry must stay invisible to that walk
+    /// until its commit rename lands it under `captures/` as a complete directory.
+    static func syncStagingRoot(containerRoot: URL) -> URL {
+        syncRoot(containerRoot: containerRoot).appendingPathComponent(syncStagingDirectoryName,
+                                                                      isDirectory: true)
+    }
+
+    /// One capture's staging directory: `sync/staging/<captureID>/`.
+    static func syncStagingCaptureURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingRoot(containerRoot: containerRoot).appendingPathComponent(captureID, isDirectory: true)
+    }
+
+    /// M4 T7 fix round: the durable sidecar `sync/staging/<captureID>/pending.json`
+    /// recording an arrived Entry record's decoded metadata + manifest snapshot bytes —
+    /// see `PendingEntryRecord` in `SyncIngest.swift`. Written the instant the Entry
+    /// record decodes, so assembly can resume across a relaunch instead of depending on
+    /// an in-memory buffer CKSyncEngine's change-token semantics do not guarantee will
+    /// ever be reconstructable (a record already fetched is not redelivered).
+    static let syncStagingPendingStateFileName = "pending.json"
+    static func syncStagingPendingStateURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingStateFileName)
+    }
+
+    /// M4 T9: a sibling of `pending.json` — `sync/staging/<captureID>/pending-revisions.json`
+    /// — durably parking Revision records that arrive for a captureID this device has not
+    /// committed yet. Ordering between fetched record types is not guaranteed (design
+    /// §6), so a revision can land before the Entry/Audio pair that would let it be
+    /// written straight into a real `transcript/` via `TranscriptRevisionStore
+    /// .ingestForeignRevision`. Deliberately a SIBLING file, not folded into
+    /// `pending.json`: a revision can arrive before the Entry record itself has, when
+    /// `pending.json` does not exist yet at all, so parking cannot depend on that
+    /// sidecar's presence.
+    ///
+    /// **Rides the same `EntryAssembler.assemble` rename `pending.json` does NOT** — this
+    /// file must be added to that function's `pruneUnexpectedStagingContents` allow-list
+    /// or it is deleted, unrecovered, the instant a commit's prune step runs (T7's own
+    /// fix-round note: "the allow-list must learn any new staged filename"). It survives
+    /// into `captures/<captureID>/pending-revisions.json` for exactly as long as it takes
+    /// `SyncRecordExchange.ingestParkedRevisions` to ingest and delete it — a committed
+    /// capture directory does not keep it around.
+    static let syncStagingPendingRevisionsFileName = "pending-revisions.json"
+    static func syncStagingPendingRevisionsURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingRevisionsFileName)
+    }
+
+    /// M4 T10: a sibling of `pending-revisions.json`, same shape and same reasoning —
+    /// `sync/staging/<captureID>/pending-marker-streams.json` durably parks foreign
+    /// MarkerStream content for a captureID this device has not committed yet, or whose
+    /// sidecar currently reports `trashedAt != nil` (Task 9's ruling extended to marker
+    /// streams). Rides `EntryAssembler.assemble`'s rename the same way — it too must be
+    /// added to `pruneUnexpectedStagingContents`'s allow-list or it is swept and lost.
+    static let syncStagingPendingMarkerStreamsFileName = "pending-marker-streams.json"
+    static func syncStagingPendingMarkerStreamsURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingMarkerStreamsFileName)
     }
 
     /// The container root inferred from a captures root — the inverse of

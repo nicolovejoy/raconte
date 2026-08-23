@@ -17,11 +17,19 @@ import SwiftUI
 /// only) since nav T5/T6 retired the old toolbar-button/sheet presentation.
 struct DebugMenuView: View {
     private let controller = TransitionBreakpointController.shared
+    /// Nil in every build `SyncCoordinator.live()` refuses (XCTest host, UI-test
+    /// harness, preview) — see `AppServices.sync`'s doc comment. The section below
+    /// degrades to a plain explanatory row rather than hiding, so a build that
+    /// unexpectedly has no sync coordinator is visible on this screen too.
+    let sync: SyncCoordinator?
 
     // Bundle enumeration + a dyld image walk are I/O that can't change
     // within a process lifetime — compute once in `.task`, never inline in
     // `body` (which re-evaluates on every re-render).
     @State private var buildInfo: String?
+    /// M4 T12: fetched on appear and on demand (Refresh) — unlike `buildInfo`, this can
+    /// genuinely change while the screen is open.
+    @State private var syncStatus: SyncStatus?
 
     var body: some View {
         List {
@@ -33,6 +41,30 @@ struct DebugMenuView: View {
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .accessibilityIdentifier("debug.buildInfo")
+            }
+
+            // M4 T12 (design §8: "status line: last push, last fetch, pending counts,
+            // last error" — debug-only visibility is fine for M4, user-facing
+            // surfacing is later polish).
+            Section("Sync") {
+                if let sync {
+                    if let syncStatus {
+                        LabeledContent("Account", value: syncStatus.accountState)
+                        LabeledContent("Last push",
+                                      value: syncStatus.lastPushAt.map(Self.timestamp(_:)) ?? "never")
+                        LabeledContent("Last fetch",
+                                      value: syncStatus.lastFetchAt.map(Self.timestamp(_:)) ?? "never")
+                        LabeledContent("Pending saves", value: "\(syncStatus.pendingSaveCount)")
+                        LabeledContent("Pending deletes", value: "\(syncStatus.pendingDeleteCount)")
+                        LabeledContent("Last error", value: syncStatus.lastError ?? "none")
+                    } else {
+                        Text("Loading…")
+                    }
+                    Button("Refresh") { Task { syncStatus = await sync.status() } }
+                        .accessibilityIdentifier("debug.sync.refresh")
+                } else {
+                    Text("Sync unavailable in this build")
+                }
             }
 
             Section {
@@ -65,7 +97,15 @@ struct DebugMenuView: View {
             if buildInfo == nil {
                 buildInfo = await BuildStamp.currentBuildDisplayStringAsync()
             }
+            if let sync, syncStatus == nil {
+                syncStatus = await sync.status()
+            }
         }
+    }
+
+    /// A standard local formatter — this is a debug surface, no special handling needed.
+    private static func timestamp(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .standard)
     }
 
     @ViewBuilder
@@ -92,6 +132,6 @@ struct DebugMenuView: View {
 }
 
 #Preview {
-    NavigationStack { DebugMenuView() }
+    NavigationStack { DebugMenuView(sync: nil) }
 }
 #endif

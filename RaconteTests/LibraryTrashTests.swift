@@ -330,6 +330,193 @@ final class LibraryTrashTests: XCTestCase {
                        "restore must not recreate the capture directory")
     }
 
+    // MARK: - Empty Trash (owner ask, 2026-08-22): bulk permanent delete
+
+    private let idC = "01CCCCCCCCCCCCCCCCCCCCCCCC"
+
+    /// The straightforward case: everything trashed goes, the result counts it.
+    func testEmptyTrashRemovesAllTrashedEntries() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        try writeCapture(idC, capturedAt: 3_000)
+        let model = model()
+        await model.trashEntry(idA)
+        await model.trashEntry(idB)
+        await model.trashEntry(idC)
+        XCTAssertEqual(Set(model.trashed.map(\.captureID)), [idA, idB, idC])
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 3, failed: 0))
+        XCTAssertTrue(model.trashed.isEmpty)
+        for id in [idA, idB, idC] {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(id).path))
+        }
+    }
+
+    /// A live entry sitting alongside the trash must survive byte-identically — Empty
+    /// Trash only ever touches what is actually trashed on disk.
+    func testEmptyTrashLeavesNonTrashedEntriesUntouched() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = model()
+        await model.trashEntry(idA)
+        await model.rescan()
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+        XCTAssertEqual(model.items.map(\.captureID), [idB])
+        let beforeManifest = try Data(contentsOf: SegmentLayout.manifestURL(captureDirectory: captureDir(idB)))
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 1, failed: 0))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idB).path),
+                      "a live entry must not be touched by Empty Trash")
+        let afterManifest = try Data(contentsOf: SegmentLayout.manifestURL(captureDirectory: captureDir(idB)))
+        XCTAssertEqual(beforeManifest, afterManifest, "the live entry's own files must be byte-identical")
+        XCTAssertEqual(model.items.map(\.captureID), [idB])
+    }
+
+    /// Restore-race pin (task review, 2026-08-22). The unreadable-sidecar test above
+    /// only pins the READ-THROW half of the per-item guard — dropping the whole
+    /// `try? read(...)` call changes the counts, so that test catches it. It does NOT
+    /// construct a state where the read SUCCEEDS but says `isTrashed == false`, which is
+    /// the guard's actual purpose: refusing an item restored between the stale
+    /// `trashed` snapshot and the loop reaching it. A mutant that keeps the read but
+    /// drops the `isTrashed` condition would pass every other test in this file.
+    ///
+    /// Fixture: trash idA (model.trashed now lists it), then overwrite its sidecar
+    /// directly back to not-trashed via the static write seam — deliberately WITHOUT
+    /// another `rescan()`, so `model.trashed` still holds the stale row. `emptyTrash()`
+    /// must re-read the sidecar itself and refuse, per the existing guard semantics
+    /// (a refusal counts in `failed`, matching every other guard-refusal case in this
+    /// file — asserted, not assumed).
+    func testEmptyTrashRefusesAnEntryRestoredBetweenTheSnapshotAndTheLoop() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+
+        // Flip the sidecar back to not-trashed directly on disk, bypassing
+        // `model.restoreEntry` (which would rescan and correctly drop idA from
+        // `model.trashed`). This is exactly the race: a restore lands after the list
+        // was drawn but before `emptyTrash()`'s own loop re-reads the disk.
+        try EntryMetadataStore.write(
+            EntryMetadata(), url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+        XCTAssertFalse(try metadata(idA).isTrashed, "sidecar must actually say not-trashed for this to pin anything")
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 0, failed: 1),
+                       "the restored entry must be refused, not deleted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path),
+                      "a restored entry's directory must survive Empty Trash")
+    }
+
+    /// An unreadable sidecar is the same per-item guard `deleteEntryPermanently` uses:
+    /// the disk decides, not the stale row the button was drawn from. The other two
+    /// trashed entries must still go.
+    func testEmptyTrashCountsAnUnreadableSidecarAsFailedAndDeletesTheRest() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        try writeCapture(idC, capturedAt: 3_000)
+        let model = model()
+        await model.trashEntry(idA)
+        await model.trashEntry(idB)
+        await model.trashEntry(idC)
+
+        let corruptURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idC))
+        let corrupt = Data("{ broken".utf8)
+        try corrupt.write(to: corruptURL)
+        // Deliberately no `rescan()` here: a rescan against a now-unreadable sidecar
+        // decodes to `.defaults` (isTrashed == false) and would move idC out of
+        // `trashed` entirely before `emptyTrash()` even runs — which would prove
+        // nothing about the per-item guard this test exists to pin. Leaving the stale
+        // `trashed` snapshot (from the trash calls above, when the sidecar was still
+        // valid) in place is exactly the "over-include, guard refuses" case the brief
+        // names: `emptyTrash()` must catch the now-unreadable sidecar itself.
+        XCTAssertEqual(Set(model.trashed.map(\.captureID)), [idA, idB, idC])
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 2, failed: 1))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idB).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idC).path),
+                      "the entry with the unreadable sidecar must be left alone")
+        XCTAssertEqual(try Data(contentsOf: corruptURL), corrupt)
+    }
+
+    /// A staging failure on one item (sealed `capturesRoot`, `testDeleteNowReturnsFalseWhenStagingFails`'s
+    /// technique) must not abort the loop — every other item still gets processed. With
+    /// `capturesRoot` itself sealed, every rename in the batch fails the same way, so all
+    /// three count as `failed` and all three directories survive.
+    func testEmptyTrashStagingFailureOnOneItemDoesNotAbortTheRest() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = model()
+        await model.trashEntry(idA)
+        await model.trashEntry(idB)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: capturesRoot.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: capturesRoot.path)
+        }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: capturesRoot.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 0, failed: 2),
+                       "every rename fails identically while capturesRoot is sealed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idB).path))
+    }
+
+    /// Purge failure after a successful stage still counts as `deleted` — same
+    /// one-way-door semantics as `deleteEntryPermanently`
+    /// (`testDeleteNowSucceedsWhenTheStagedPurgeFails`'s technique): the rename is the
+    /// deletion, the purge only reclaims bytes, and a purge failure retries at the next
+    /// launch.
+    func testEmptyTrashCountsAnItemAsDeletedEvenWhenItsPurgeFails() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.trashEntry(idA)
+
+        let segments = SegmentLayout.segmentsDirectory(captureDirectory: captureDir(idA))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: segments.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: segments.path)
+        }
+        try XCTSkipIf(FileManager.default.isWritableFile(atPath: segments.path),
+                      "running as root — permissions cannot be made to bite")
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 1, failed: 0),
+                       "the rename landed — the entry is gone from the library regardless of the purge")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDir(idA).path))
+        let stagingRoot = AppContainer.trashPendingRoot(containerRoot: containerRoot)
+        let staged = try FileManager.default.contentsOfDirectory(atPath: stagingRoot.path)
+        XCTAssertEqual(staged.count, 1, "the staged directory must survive a failed purge")
+    }
+
+    /// Nothing to do: no staging root is even created, matching `deleteEntryPermanently`'s
+    /// "the disk decides" discipline applied to the whole batch at once.
+    func testEmptyTrashOnAnEmptyTrashNoOps() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = model()
+        await model.rescan()
+        XCTAssertTrue(model.trashed.isEmpty)
+
+        let result = await model.emptyTrash()
+
+        XCTAssertEqual(result, LibraryScreenModel.EmptyTrashResult(deleted: 0, failed: 0))
+        let stagingRoot = AppContainer.trashPendingRoot(containerRoot: containerRoot)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stagingRoot.path),
+                       "an empty trash must not even create the staging root")
+    }
+
     // MARK: - Sweep
 
     func testSweepRemovesExpiredEntriesAndRepublishesTheLists() async throws {

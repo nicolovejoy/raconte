@@ -35,6 +35,21 @@ final class MarkerLogTests: XCTestCase {
         StructureMarker(seq: 0, frame: frame, kind: kind, voice: voice)
     }
 
+    /// Advances on every call — the frozen-clock trap (memory:
+    /// frozen-clock-two-mints-coin-flip-order). `now: @Sendable () -> Date` closures
+    /// can't mutate a captured `var` directly under strict concurrency, hence the class.
+    private final class AdvancingClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(start: Date) { self.current = start }
+        func next() -> Date {
+            lock.lock(); defer { lock.unlock() }
+            let value = current
+            current = current.addingTimeInterval(1)
+            return value
+        }
+    }
+
     // MARK: Round trip
 
     /// Design §4's exact example: a frame-0 `bn` opener, a paragraph, a switch to `ln`.
@@ -296,5 +311,63 @@ final class MarkerLogTests: XCTestCase {
                                                           from: Data(garbage.utf8))
         XCTAssertEqual(lenient.frame, 20)
         XCTAssertNil(lenient.voice)
+    }
+
+    /// A record written before `at` existed decodes with `at == nil` rather than
+    /// throwing — additive/lenient, same as `voice`/`retractsSeq`.
+    func testMarkerWithoutAtStillDecodes() throws {
+        let line = #"{"seq":0,"frame":10,"kind":"paragraph"}"#
+        let decoded = try CaptureCoding.decoder().decode(StructureMarker.self, from: Data(line.utf8))
+        XCTAssertNil(decoded.at)
+        XCTAssertEqual(decoded.frame, 10)
+    }
+
+    /// A minimal stand-in for "a build that predates `at`" — mirrors
+    /// `EntryMetadataStoreTests.PreM4EntryMetadataShape` / `JournalStoreTests
+    /// .PreM4JournalShape`. Forward-compat pin (M4 T1): a marker a NEWER build wrote
+    /// (carrying `at`) must still decode on a build that has never heard of the field.
+    private struct PreM4StructureMarkerShape: Decodable {
+        var seq: Int
+        var frame: Int64
+    }
+
+    func testMarkerWithAtDecodesInAnOldShapedDecoderIgnoringIt() throws {
+        let json = Data(#"{"seq":0,"frame":10,"kind":"paragraph","at":"2024-01-01T00:00:00.000Z"}"#.utf8)
+        let decoded = try CaptureCoding.decoder().decode(PreM4StructureMarkerShape.self, from: json)
+        XCTAssertEqual(decoded.seq, 0)
+        XCTAssertEqual(decoded.frame, 10)
+    }
+
+    // MARK: M4 T1 — `at` stamping (sync substrate)
+
+    /// The writer, not the caller, owns `at` — same shape as `seq`. A caller-supplied
+    /// `at` on the marker passed to `append` is overwritten with whatever the injected
+    /// clock reports at append time.
+    func testAppendStampsAtFromTheInjectedClock() throws {
+        let stamp = Date(timeIntervalSince1970: 1_650_000_000)
+        let writer = MarkerLogWriter(captureDirectory: captureDir, now: { stamp })
+        try writer.open()
+        try writer.append(marker(.paragraph, 0))
+        try writer.close()
+
+        let read = MarkerLogReader.load(captureDirectory: captureDir).markers
+        XCTAssertEqual(read.map(\.at), [stamp])
+    }
+
+    /// Frozen-clock trap (memory: frozen-clock-two-mints-coin-flip-order): the clock
+    /// must be advanced BETWEEN the two appends, or a bug that stamps every record with
+    /// the writer's construction-time clock read (rather than reading fresh on each
+    /// append) could pass this test by coincidence.
+    func testConsecutiveAppendsCarryDistinctAtStampsFromAnAdvancingClock() throws {
+        let clock = AdvancingClock(start: Date(timeIntervalSince1970: 1_650_000_000))
+        let writer = MarkerLogWriter(captureDirectory: captureDir, now: { clock.next() })
+        try writer.open()
+        try writer.append(marker(.voice, 0, voice: "bn"))
+        try writer.append(marker(.paragraph, 4_800))
+        try writer.close()
+
+        let read = MarkerLogReader.load(captureDirectory: captureDir).markers
+        XCTAssertEqual(read.map(\.at), [Date(timeIntervalSince1970: 1_650_000_000),
+                                        Date(timeIntervalSince1970: 1_650_000_001)])
     }
 }

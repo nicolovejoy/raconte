@@ -71,6 +71,17 @@ final class CaptureScreenModel {
     /// Live transcription, or nil when the build has none wired (the UI-test harness).
     let transcription: LiveTranscriptionCoordinator?
 
+    /// M4 T6. Nil everywhere sync is off — unit tests, the UI-test harness, and any
+    /// build whose composition root refused to construct an engine. Wired by
+    /// `AppServices.init()` once `sync` exists, mirroring `JournalStore.attach
+    /// (syncHooks:)`/`EntryMetadataStore.attach(syncHooks:)`: construction order means
+    /// the coordinator does not exist yet when this model is built.
+    private var syncHooks: (any SyncHooks)?
+
+    func attach(syncHooks: any SyncHooks) {
+        self.syncHooks = syncHooks
+    }
+
     // MARK: Journal context (M3 T3)
     //
     // ONE `JournalStore` and ONE `EntryMetadataStore` instance for the whole **app** —
@@ -429,7 +440,8 @@ final class CaptureScreenModel {
     @discardableResult
     func createJournal(name: String) async -> Journal? {
         guard let created = try? await journalStore.create(name: name) else { return nil }
-        journals.append(created)
+        // Re-sort, not append-and-trust: display order, not insertion order (#79).
+        journals = (journals + [created]).displayOrdered
         selectedJournalID = created.id
         currentJournal.select(created.id)
         resolveBackdateForJournalChange()
@@ -443,7 +455,13 @@ final class CaptureScreenModel {
     func renameCurrentJournal(to name: String) async {
         guard let id = selectedJournalID,
               let renamed = try? await journalStore.rename(id: id, to: name) else { return }
-        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = renamed }
+        // A rename never changes createdAt, so this patch cannot itself change display
+        // order — re-sorting here is defensive symmetry with every other assignment
+        // site, not a behavior fix on its own (#79).
+        if let index = journals.firstIndex(where: { $0.id == id }) {
+            journals[index] = renamed
+            journals = journals.displayOrdered
+        }
         await library.rescan()
     }
 
@@ -460,7 +478,12 @@ final class CaptureScreenModel {
         guard let id = selectedJournalID,
               let updated = try? await journalStore.setVoiceLabels(id: id, labels: labels)
         else { return false }
-        if let index = journals.firstIndex(where: { $0.id == id }) { journals[index] = updated }
+        // Voice labels never change createdAt either — same defensive symmetry as
+        // `renameCurrentJournal` above (#79).
+        if let index = journals.firstIndex(where: { $0.id == id }) {
+            journals[index] = updated
+            journals = journals.displayOrdered
+        }
         return true
     }
 
@@ -634,6 +657,22 @@ final class CaptureScreenModel {
         // window is silently reverted. Here the store is dead and the finalizer is done —
         // the only point today where neither is true.
         for id in transcribed { await recordTranscriptRef(for: id) }
+        // M4 T6 choke point (design §3: "finalize completion (m4a verified +
+        // promotion) → enqueue Entry + AudioAsset + LiveLog"). Placed strictly after
+        // the `recordTranscriptRef` loop above: that is the first point at which BOTH
+        // halves of "m4a verified AND transcript ref recorded" are true for this id —
+        // `runFinalizer` already ran (so `FinalizeArtifactPush.isFinalized` can only
+        // read true for a capture whose `.m4a` really was verified/promoted), and
+        // whatever transcript ref exists has already been written into `manifest.json`
+        // by `recordTranscriptRef`, so the entry that gets pushed today never needs a
+        // second push just to pick up a ref that landed moments after the first one.
+        // This is the ONE place capture-side code fires `.entry`/`.audio`/`.liveLog`;
+        // every later edit to `entry.json` re-fires `.entry` on its own, from
+        // `EntryMetadataStore.update`'s own hook (same eligibility gate) — see that
+        // method's doc comment.
+        for id in transcribed {
+            await FinalizeArtifactPush.push(capturesRoot: capturesRoot, captureID: id, syncHooks: syncHooks)
+        }
         // Between the ref write and spoken-date detection: promotion reads
         // `manifest.transcript` for `coverageFrames`/`skippedRanges` provenance, so it
         // must run AFTER the ref lands, not before.
@@ -736,7 +775,8 @@ final class CaptureScreenModel {
         }
         switch JournalSelection.resolve(registry: registry, storedID: currentJournal.storedID) {
         case .existing(let id):
-            journals = registry.journals
+            // Display order, not registry (insertion) order — issue #79.
+            journals = registry.journals.displayOrdered
             selectedJournalID = id
             currentJournal.select(id)
         case .needsDefault:
@@ -747,7 +787,7 @@ final class CaptureScreenModel {
             } else {
                 // Best-effort: the registry stays empty and the header falls back to the
                 // "Journal" literal in `selectedJournalName` until the next bootstrap.
-                journals = registry.journals
+                journals = registry.journals.displayOrdered
             }
         }
     }
@@ -829,5 +869,73 @@ final class CaptureScreenModel {
 /// — model-to-model, no view required. Registered as `library.rescanObserver` at the end
 /// of `init`; see `reconcileReceipt()`'s own doc comment for what the invariant means.
 extension CaptureScreenModel: LibraryRescanObserver {
-    func libraryDidRescan() { reconcileReceipt() }
+    func libraryDidRescan() {
+        reconcileReceipt()
+        refreshJournalsFromLibrary()
+    }
+
+    /// #79 (second half): this model used to hold a bootstrap-once copy of `journals`
+    /// that nothing but its own create/rename/label intents ever refreshed. A journal
+    /// adopted from another device reaches the registry via
+    /// `JournalStore.applySyncMerge` + `library.rescan()` (`SyncCoordinator.swift:120`)
+    /// — neither of those calls into `CaptureScreenModel` at all — so the capture
+    /// picker stayed stuck on its bootstrap snapshot until the app relaunched.
+    ///
+    /// Wired through the SAME `libraryDidRescan()` seam #62 already uses, deliberately:
+    /// it is the one hook this model has that already fires on every rescan regardless
+    /// of who triggered it (a local mutation, launch, or a background sync pull), with
+    /// no view lifecycle involved.
+    ///
+    /// `library.journals` is already `.displayOrdered` (`LibraryScreenModel.rescan()`),
+    /// so this is a straight assignment — re-sorting here would be redundant, not a
+    /// second source of truth for order.
+    ///
+    /// #67-class guard: a background refresh must never move the user's capture
+    /// target. The selected id is left untouched whenever it still resolves in the
+    /// refreshed list — even when that SAME journal's name/cover/labels changed
+    /// remotely, since `selectedJournalName`/`selectedJournalVoiceLabels` already read
+    /// live off `journals` and need no extra wiring to pick up the new values. Only
+    /// when the selected id has genuinely left the registry — unreachable today,
+    /// reachable once Phase B ships deletion — does this fall back, through the exact
+    /// same `JournalSelection` rule `resolveCurrentJournal()` applies at bootstrap
+    /// (never a second, ad hoc copy of that rule).
+    private func refreshJournalsFromLibrary() {
+        guard !library.journalsUnreadable else { return }
+        journals = library.journals
+        guard let selectedJournalID, !journals.contains(where: { $0.id == selectedJournalID })
+        else { return }
+        switch JournalSelection.resolve(registry: JournalRegistry(journals: journals),
+                                        storedID: currentJournal.storedID) {
+        case .existing(let id):
+            self.selectedJournalID = id
+            currentJournal.select(id)
+            resolveBackdateForJournalChange()
+            syncActiveEntryMetadata()
+        case .needsDefault:
+            // The registry has gone from "the selected journal is gone" to "every
+            // journal is gone" between the guard above and here — only reachable if
+            // every journal in the app is deleted mid-session (Phase B). Best-effort,
+            // matching `resolveCurrentJournal()`'s own `.needsDefault` fallback: mint
+            // "Journal" and select it, off the main actor's next turn since minting is
+            // a `JournalStore` write.
+            Task { [weak self] in
+                guard let self, let created = try? await self.journalStore.create(name: "Journal")
+                else { return }
+                self.journals = (self.journals + [created]).displayOrdered
+                self.selectedJournalID = created.id
+                self.currentJournal.select(created.id)
+                self.resolveBackdateForJournalChange()
+                self.syncActiveEntryMetadata()
+                // Same convention as `createJournal`/`renameCurrentJournal` (see their
+                // doc comments above): `library.journals` and this model's own
+                // `journals` are separate arrays with no shared storage, and only a
+                // rescan reconciles them. Without this, the freshly-minted default is
+                // invisible to `library.journals` — the sidebar, and anything else that
+                // reads through `library` rather than this model — until some UNRELATED
+                // rescan happens to run first. Last, same reason: the write must be
+                // durable before the rescan reads it back.
+                await self.library.rescan()
+            }
+        }
+    }
 }

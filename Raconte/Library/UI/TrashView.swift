@@ -21,6 +21,17 @@ struct TrashView: View {
     /// A restore that reported failure — same swallowed-`try?` family.
     @State private var restoreFailed = false
 
+    /// Boolean-flag confirmation idiom (`JournalEditorView`'s delete-journal dialog):
+    /// there is nothing per-item to name here, so a flag is enough — the count comes
+    /// straight from `model.trashed` at presentation time.
+    @State private var showingEmptyTrashConfirmation = false
+
+    /// A completed Empty Trash whose `failed` count is nonzero. Holds the count so the
+    /// alert can say how many, not just that something went wrong — the same
+    /// never-read-as-total-success discipline as `permanentDeleteFailed` above, applied
+    /// to a batch instead of one entry.
+    @State private var emptyTrashFailedCount: Int?
+
     var body: some View {
         Group {
             if model.trashed.isEmpty {
@@ -45,6 +56,56 @@ struct TrashView: View {
         }
         .navigationTitle("Trash")
         .task { await model.rescan() }
+        // Visible-but-disabled when there is nothing to empty — the journal-editor
+        // disabled-delete idiom (#80 ruling 2): an absent control cannot be discovered,
+        // let alone understood, so the button always exists and only `.disabled` moves.
+        .toolbar {
+            ToolbarItem {
+                Button("Empty Trash", role: .destructive) {
+                    showingEmptyTrashConfirmation = true
+                }
+                .disabled(model.trashed.isEmpty)
+                .accessibilityIdentifier("trash.emptyAll")
+            }
+        }
+        // Attached to the screen's outer view, never a `Section` or other child — a
+        // `.confirmationDialog` on a `Section` silently never presents on iOS 26
+        // (`JournalEditorView`'s delete-journal dialog carries the same note; #68's
+        // class of bug).
+        .confirmationDialog(
+            model.trashed.count == 1
+                ? "Permanently delete 1 entry?"
+                : "Permanently delete \(model.trashed.count) entries?",
+            isPresented: $showingEmptyTrashConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete All", role: .destructive) {
+                showingEmptyTrashConfirmation = false
+                Task {
+                    let result = await model.emptyTrash()
+                    if result.failed > 0 { emptyTrashFailedCount = result.failed }
+                }
+            }
+            .accessibilityIdentifier("trash.confirmEmptyAll")
+            Button("Cancel", role: .cancel) { showingEmptyTrashConfirmation = false }
+        } message: {
+            Text("The audio and its transcript are erased. This can’t be undone.")
+        }
+        // A partial failure must never read as total success (owner's own hit on the
+        // single-entry path — see `permanentDeleteFailed` above). Bound to a count, not
+        // a bare flag, so the alert can say how many rather than just that something
+        // went wrong.
+        .alert(
+            emptyTrashFailedCount == 1
+                ? "1 entry couldn’t be deleted"
+                : "\(emptyTrashFailedCount ?? 0) entries couldn’t be deleted",
+            isPresented: Binding(get: { emptyTrashFailedCount != nil },
+                                 set: { if !$0 { emptyTrashFailedCount = nil } })
+        ) {
+            Button("OK") { emptyTrashFailedCount = nil }
+        } message: {
+            Text("Try again, or restart the app.")
+        }
         .confirmationDialog(
             "Delete this recording permanently?",
             isPresented: Binding(get: { pendingPermanentDelete != nil },

@@ -449,4 +449,47 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertEqual(inLibrary?.name, "Renamed Journal",
                        "the shared library still has the journal's OLD name")
     }
+
+    // MARK: #94 secondary finding — bootstrap must push what it healed, same launch
+
+    /// #94 secondary finding: a capture healed by LAUNCH recovery must be enqueued
+    /// for sync in the same launch — before this fix, `bootstrap` ran the finalizer
+    /// but never called `FinalizeArtifactPush.push`, so the heal waited a full
+    /// relaunch to sync. End-to-end through the real pipeline: planner emits
+    /// `.verifyFinal`, the finalizer stamps off the existing m4a (Task 2), and
+    /// bootstrap pushes the now-eligible names into the recorded hooks.
+    func testBootstrapPushesACaptureHealedByLaunchRecovery() async throws {
+        let id = "01J000000000000000000097"
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: id)
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: dir), withIntermediateDirectories: true)
+        try Data([0x00, 0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let manifestFmt = AudioFormatDescriptor(sampleRate: 48000, channels: 1,
+                                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        let manifest = Manifest(captureID: id, createdAt: Date(timeIntervalSince1970: 0),
+                                state: .finalizing, stateSeq: 7,
+                                stateUpdatedAt: Date(timeIntervalSince1970: 0),
+                                format: manifestFmt, segmentCount: 3,
+                                lastKnownFrameOffset: 2500)
+        try AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir),
+                               writing: CaptureCoding.encoder().encode(manifest))
+
+        let encoder = FakeAudioEncoder()
+        encoder.verifyOverride = VerifyResult(decodable: true, decodedFrameCount: 2500, nonSilent: true)
+        let hooks = RecordingSyncHooks()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: encoder)
+        model.attach(syncHooks: hooks)
+
+        await model.bootstrap()
+
+        let names = await hooks.names
+        XCTAssertTrue(names.contains(.entry(captureID: id)),
+                      "a launch-healed capture must sync this launch, not the next one")
+        XCTAssertTrue(names.contains(.audio(captureID: id)))
+    }
 }

@@ -527,40 +527,59 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
     }
 
-    /// A save that came back `.serverRecordChanged` is the push half of design §4's
-    /// per-field LWW. The server's copy is merged into local state through the same ingest
-    /// path a fetched change takes — same rules, one implementation — and the record is
-    /// re-enqueued. The merged CONTENT is not assembled here: the next
-    /// `nextRecordZoneChangeBatch` rebuilds it from the now-merged store plus the freshly
-    /// archived server system fields, so there is exactly one path from local state to a
-    /// pushed record.
+    /// One `SaveFailureDisposition` per failed save, then ONE re-enqueue of everything
+    /// that should go out again. Re-enqueueing here — not waiting for the next launch's
+    /// reconciliation scan — is what makes a heal visible without a relaunch; the
+    /// content is never assembled here, the next `nextRecordZoneChangeBatch` rebuilds it
+    /// from local state plus whatever system fields are (still) archived, so there is
+    /// exactly one path from local state to a pushed record.
     ///
-    /// Any other failure is logged and dropped. Dropping is safe for the same reason the
-    /// batch builder's nil is: no ledger entry was written, so the next launch's
-    /// reconciliation scan re-enqueues it.
+    /// A `.drop`, and a `.recreate` that found nothing archived, are safe to leave for
+    /// the same reason the batch builder's nil is: no ledger entry was written, so the
+    /// next reconciliation scan re-enqueues them.
     private func handleFailedSaves(_ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
+        var toResend: [SyncRecordName] = []
         for failure in failures {
-            // Every failure, conflict or not, retires what the exchange remembered about
-            // that build — the content it describes was not accepted, so no later
-            // confirmation may be credited to it.
-            if let name = SyncCloudIdentifiers.name(of: failure.record.recordID) {
+            let recordName = failure.record.recordID.recordName
+            let name = SyncCloudIdentifiers.name(of: failure.record.recordID)
+            // Every failure, whatever its disposition, retires what the exchange
+            // remembered about that build — the content it describes was not accepted,
+            // so no later confirmation may be credited to it.
+            if let name {
                 await exchange.noteSaveFailed(for: name)
             }
-            if failure.error.code == .serverRecordChanged, let server = failure.error.serverRecord {
-                conflicts.append(server)
-            } else {
+            switch SaveFailureDisposition.decide(code: failure.error.code,
+                                                 hasServerRecord: failure.error.serverRecord != nil) {
+            case .mergeConflict:
+                if let server = failure.error.serverRecord {
+                    conflicts.append(server)
+                }
+            case .recreate:
+                guard let name else { break }
+                if await exchange.resolveUnknownItem(for: name) {
+                    toResend.append(name)
+                } else {
+                    lastError = failure.error.localizedDescription
+                }
+            case .retry:
+                guard let name else { break }
+                log.notice("sync: \(recordName, privacy: .public) fell with its batch — re-enqueued")
+                toResend.append(name)
+            case .drop:
                 log.error("""
-                    sync: save failed \(failure.record.recordID.recordName, privacy: .public): \
+                    sync: save failed \(recordName, privacy: .public): \
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
                 lastError = failure.error.localizedDescription
             }
         }
-        guard !conflicts.isEmpty else { return }
-        let toResave = await exchange.resolvePushConflicts(conflicts)
-        syncEngine.state.add(pendingRecordZoneChanges: toResave.map {
+        if !conflicts.isEmpty {
+            toResend += await exchange.resolvePushConflicts(conflicts)
+        }
+        guard !toResend.isEmpty else { return }
+        syncEngine.state.add(pendingRecordZoneChanges: toResend.map {
             .saveRecord(SyncCloudIdentifiers.recordID($0, zoneID: zoneID))
         })
     }

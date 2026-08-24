@@ -795,11 +795,13 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// M4 T9's push half: find where THIS device currently has `id`'s bytes
     /// (`TranscriptRevisionStore.locateRevision` — the reverse lookup
     /// `SyncRecordName.revision(id:)`'s deliberately name-only-the-ULID shape
-    /// requires), hash them fresh, and build the record. `nil` — CKSyncEngine's
-    /// documented "drop this pending change" answer — when this device no longer has
-    /// the revision at all (its capture was purged before the push landed; T11's
-    /// delete path leaves no ledger entry to re-derive this from) or the file
-    /// vanished/became unreadable between being located and being read.
+    /// requires), hash them fresh, and build the record. `nil` when there is nothing to
+    /// push for this revision: this device no longer has the revision at all (its capture
+    /// was purged before the push landed; T11's delete path leaves no ledger entry to
+    /// re-derive this from) or the file vanished/became unreadable between being located
+    /// and being read. Nil alone only excludes the record from the current batch;
+    /// `CloudKitEngineControl.provideRecord` removes the pending change before answering
+    /// nil, and `SyncPlanner.reconcile` re-enqueues the name once it becomes buildable.
     ///
     /// `note(build:)` is called here for the identical reason `journalRecordToPush`
     /// calls it: without an in-flight record, `noteSaved` has nothing to credit to the

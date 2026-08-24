@@ -206,8 +206,10 @@ extension SyncHooks {
 /// engine sits behind `CloudEngineControl` and this does not.
 protocol CloudRecordExchange: Sendable {
     /// Build the record to push for `name`, or nil when there is nothing to push (the
-    /// artifact is gone, or its kind is not built yet). Nil is `CKSyncEngine`'s documented
-    /// "drop this one" answer.
+    /// artifact is gone, or its kind is not built yet). Nil alone only excludes the record
+    /// from the current batch — it does not remove the pending change;
+    /// `CloudKitEngineControl.provideRecord` removes it before answering nil, and the next
+    /// reconciliation scan re-enqueues the name once it is buildable.
     func recordToPush(for name: SyncRecordName, zoneID: CKRecordZone.ID) async -> CKRecord?
 
     /// A record arrived from the server — a fetched change, or the server's copy handed

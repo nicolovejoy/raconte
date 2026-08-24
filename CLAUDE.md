@@ -45,15 +45,18 @@ Plan-reviewed then executed the NOT_FOUND fix end-to-end with subagent-driven de
   They play fine locally — data safe, but they never reach the server. This was masked
   yesterday: the diagnosis assumed entries were healthy and merely aborted by the
   journal's batch; the build-1 logs show the same refusals, so they were never buildable.
-  Open questions for the investigator (Explore agent, report → next session): why does
-  something re-enqueue them every launch if the scanner also refuses them (scanner/builder
-  manifest-decode parity? restored engine-state pending changes?); did the Manifest schema
-  gain non-optional fields after Aug 16 that old manifest.json files fail to decode; or do
-  these manifests genuinely lack `final.verifiedAt` (verify step postdating the
-  recordings) — and if so, what retroactive verify/migration is safe. Decisive experiment
-  HANDED TO NICO, result unknown at handoff: record a NEW entry on the phone — if it
-  syncs to the iPad, the pipeline is healthy and the bug is confined to the 20 old
-  captures.
+  **Investigation COMPLETE → #94 (full root-cause + fixes).** Two causes: (1) a nil from
+  `nextRecordZoneChangeBatch`'s recordProvider does NOT remove the pending change — the
+  codebase's "nil = documented drop" comment is false (the batch init is a value init
+  with no State access; Apple's sample calls `state.remove` itself) — so names enqueued
+  in Aug 17–21 dev builds (before the entry builders existed) are stuck in
+  `engine-state.bin` forever; (2) the 20 captures likely have `final.verifiedAt == nil`
+  (crash between promote and the `.complete` write), and `.verifyFinal` recovery is a
+  dead end once `segments/` is deleted — `FinalizerWorker.finalize` returns `.skipped`
+  without stamping. Fixes in #94: `state.remove` before returning nil; make
+  `.verifyFinal` probe the existing m4a and stamp. Decisive experiment HANDED TO NICO,
+  result unknown at handoff: record a NEW entry on the phone — if it syncs to the iPad,
+  the pipeline is healthy and the damage is confined to the 20 old captures.
 - Expected log noise, not failures: one expired-change-token retry on first fetch; the
   untouched dev-synced archive not migrating is #90 (ledger says "uploaded").
 - **PR #93 open (merge after smoke):** `ITSAppUsesNonExemptEncryption=false` in
@@ -66,10 +69,11 @@ Plan-reviewed then executed the NOT_FOUND fix end-to-end with subagent-driven de
   waits for a launch-only reconcile on iOS).
 
 **Next steps:**
-1. **Root-cause the 20 refused entries** (new bug above): read the Explore agent's report
-   (or re-run the investigation — its questions are listed above), fold in Nico's
-   new-entry experiment result, then fix. Highest priority — the real corpus still
-   doesn't sync.
+1. **Fix #94** (the 20 refused entries — root cause known, fixes specified in the
+   issue): `state.remove` before nil in the batch provider + `.verifyFinal` stamps off
+   the existing m4a. Run #94's two cheap confirmations first; fold in Nico's new-entry
+   experiment result. Highest priority — the real corpus still doesn't sync. TDD both,
+   then iOS build 3 (which also picks up PR #93's export-compliance key).
 2. Merge PR #93 (export compliance + this handoff's docs).
 3. **macOS TestFlight**: `Raconte-macos-tf1.xcarchive` predates the fix — rebuild from
    merged main, then Nico runs `python3 scripts/asc_regenerate_profile.py --platform

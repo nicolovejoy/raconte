@@ -12,8 +12,12 @@ enum SaveFailureDisposition: Equatable, Sendable {
     /// archived server state (`CloudRecordExchange.resolveUnknownItem`) so the next
     /// push is a CREATE; re-enqueue only if there was state to drop.
     case recreate
-    /// `.batchRequestFailed`: this record was fine — a sibling in the same atomic batch
-    /// failed and took it down with it. Re-enqueue as-is, archived state untouched.
+    /// `.batchRequestFailed`: this record was not the one the server rejected — a
+    /// sibling in the same atomic batch failed and took it down with it. Re-enqueue
+    /// as-is, archived state untouched. That does not guarantee this record is itself
+    /// sound (its own reference could dangle behind whichever sibling failed first);
+    /// if it is broken, its own next failure gets decided on its own merits rather
+    /// than being masked here.
     case retry
     /// Anything else: log, surface as `lastError`, leave to the next reconciliation
     /// scan. `.zoneNotFound` sits here on purpose — the zone is re-saved on every

@@ -27,7 +27,7 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
 - `.unknownItem` → re-enqueue ONLY when archived system fields existed for that name. A record with no archived state that NOT_FOUNDs is a dangling reference (child before parent); re-enqueueing it loops forever. Leave it to reconciliation.
 - `.batchRequestFailed` siblings are re-enqueued as-is; their archived state is NEVER cleared.
 - `.zoneNotFound` is deliberately NOT handled in this plan (the zone is re-saved on every `start()`); it stays in the `.drop` bucket with a comment saying so.
-- Resurrection is the documented bias: a record the server deleted that this device still holds gets re-CREATED by this path; the deletion still wins once fetched (design §5). Say so in the doc comment; pin it with a test.
+- Resurrection is the documented bias: a record the server deleted that this device still holds gets re-CREATED by this path; that resurrects it on every device — design §5's delete-wins does not apply to a record that was mid-push when it was deleted. Say so in the doc comment; pin it with a test.
 - Doc comments match the surrounding density and voice (terse, "why", no "this line does X"). No comment says where a change came from or that it is correct.
 - Commit per task, on the worktree branch, never on `main`.
 

@@ -239,8 +239,15 @@ protocol CloudRecordExchange: Sendable {
     ///
     /// Deliberate bias: if the server copy is missing because another device DELETED
     /// it, this recreates it. Local audio is ground truth and is never dropped on a
-    /// server's say-so; the deletion, once fetched, still wins through
-    /// `acceptRemoteEntryDeletion`/`acceptRemoteJournalDeletion` (design §5).
+    /// server's say-so. That recreate resurrects the record on every device — a
+    /// zone-change fetch delivers a record's current state, not its history, so the
+    /// tombstone never re-arrives once this device has re-CREATEd it. Design §5's
+    /// delete-wins does not apply to a record that was mid-push when it was deleted.
+    /// One tighter race stays survivable: if this device's own recreate lands before
+    /// its own fetch delivers the deletion, `acceptRemoteEntryDeletion`/
+    /// `acceptRemoteJournalDeletion` then purges the local copy anyway, leaving a
+    /// childless Entry on the server that every device parks in `sync/staging/` — a
+    /// ghost, not a loss.
     func resolveUnknownItem(for name: SyncRecordName) async -> Bool
 
     /// Server copies handed back by failed saves. Merges each one and returns the records

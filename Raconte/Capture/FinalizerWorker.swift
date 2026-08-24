@@ -97,8 +97,37 @@ actor FinalizerWorker {
         let all = readSegments(dir: dir, format: format)
         let (prefix, hadGap) = contiguousPrefix(all)
 
-        // Nothing contiguous to encode: keep everything, flag if a gap orphaned it.
+        // Nothing contiguous to encode.
         guard !prefix.isEmpty else {
+            // #94: raw segments gone but a promoted `.m4a` exists and was never
+            // stamped — the crash-between-promote-and-`.complete` state. Re-deriving
+            // from raw is impossible forever, so verify the m4a itself (decode
+            // probe) and stamp. Without this, recovery re-plans `.verifyFinal`
+            // every launch and this returns `.skipped` every time, leaving the
+            // capture permanently push-ineligible while playing fine locally.
+            let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: dir)
+            if !hadGap, manifest.final.verifiedAt == nil,
+               FileManager.default.fileExists(atPath: m4aURL.path) {
+                if let verified = try? await encoder.verify(m4aURL: m4aURL),
+                   verified.decodable, verified.nonSilent {
+                    manifest.final.verifiedAt = now()
+                    manifest.final.durationFrames = verified.decodedFrameCount
+                    writeManifest(manifest, dir: dir, state: .complete)
+                    return FinalizeOutcome(captureID: captureID, status: .completed,
+                                           encodedFrameCount: 0,
+                                           finalizeAttempts: manifest.finalizeAttempts ?? 0,
+                                           hadGap: false)
+                }
+                // Probe failed with no raw to fall back on: keep every byte,
+                // surface it. NOT the failEncode path — that would delete a
+                // `.part` and burn retry budget on a state retries cannot change.
+                manifest.needsAttention = true
+                writeManifest(manifest, dir: dir, state: manifest.state)
+                return FinalizeOutcome(captureID: captureID, status: .needsAttention,
+                                       encodedFrameCount: 0,
+                                       finalizeAttempts: manifest.finalizeAttempts ?? 0,
+                                       hadGap: false)
+            }
             if hadGap {
                 manifest.needsAttention = true
                 writeManifest(manifest, dir: dir, state: .captured)

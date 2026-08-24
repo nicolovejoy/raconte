@@ -2,86 +2,60 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-24 (laptop — NOT_FOUND self-heal SHIPPED via full SDD; iOS build 2 uploaded; iPhone smoke in progress at handoff)
+## Session 2026-08-24 pm (laptop — #94 FIXED via full SDD; PR #95 open, CI pending at handoff)
 
-Plan-reviewed then executed the NOT_FOUND fix end-to-end with subagent-driven development
-(4 tasks, per-task + whole-branch reviews; plan at
-`docs/plans/2026-08-23-not-found-self-heal-plan.md`). PR #92 merged, 1791 unit tests green
-(1780 baseline + 11 new).
+Executed #94 end-to-end with subagent-driven development (plan at
+`docs/plans/2026-08-24-94-stuck-pending-verify-final-plan.md`; per-task reviews, Fable
+whole-branch review, one comment-only fix wave, scoped re-review — all clean).
+**PR #95 open ("Addresses #94", deliberately not "Fixes" — device verification pending).**
+Unit suite 1791 → 1798; iOS compile check green. Merge #93 first, then #95; the two
+branches both rewrite this CLAUDE.md section and devlog — resolve by taking #95's
+version of BOTH files (this branch's docs were built as the final desired state, with
+#93's session block already rolled into devlog).
 
-- **`resolveUnknownItem`** (`CloudRecordExchange`/`SyncRecordExchange`): a save failing
-  `CKError.unknownItem` drops that record's archived system fields + upload-ledger entry
-  so the next build is a fresh CREATE; returns whether there was state to drop.
-- **`SaveFailureDisposition`** (pure, tested) + rewritten
-  `CloudKitEngineControl.handleFailedSaves`: `.unknownItem` heals and re-enqueues
-  **immediately** (no relaunch) — but only when archived state existed, so a dangling
-  child reference cannot retry-loop; `.batchRequestFailed` siblings re-enqueue untouched;
-  `.zoneNotFound` deliberately stays dropped (zone re-saved every start). The iPhone's
-  stuck entries converge in two pushes.
-- **`entryCanBePushed`** guard on all four child builders — no child ever ships a
-  `CKRecord.Reference` to an Entry that is neither on the server nor buildable in-batch.
-  One `SyncRevisionTests` fixture had encoded an unreachable state (revision push on a
-  never-finalized capture) and now finalizes its capture.
-- **Corrected semantics (final review caught a plan defect):** a recreate after a
-  cross-device delete is *permanent* — CloudKit fetches deliver current state; no
-  tombstone re-arrives. Resurrection is the documented bias (audio is ground truth);
-  the `resolveUnknownItem` doc comment states what really happens.
-- `CFBundleVersion` → 2; **iOS build 2 uploaded and SMOKE-VERIFIED on the iPhone**: the
-  poisoned journal logged exactly one `unknown to the server — archived system fields
-  dropped, next push is a create`, re-pushed as a CREATE, and appeared on the iPad with
-  its cover photo. No repeat failure, no batch casualties. **The fix works.**
-  Smoke technique that finally worked (Console.app streaming was fiddly): Nico runs
-  `sudo /usr/bin/log collect --device-name "Nico's iPhone 17 pro" --last 10m --output
-  /tmp/x.logarchive && sudo chmod -R a+rX /tmp/x.logarchive`, then the agent reads it with
-  `/usr/bin/log show <archive> --predicate 'subsystem == "org.pianohouseproject.raconte"'
-  --info --debug --style compact`. Captures history, agent-verifiable. (First smoke pass
-  "failed" because the phone was still on build 1 — check the installed build in the
-  TestFlight app before trusting a smoke.)
-- **NEW BUG unmasked by the heal (investigation launched, report pending at handoff):**
-  the iPad received ONLY the journal — **all 20 real entries (ULID-dated 2026-08-07 →
-  08-16, the dev-build corpus) are re-enqueued every launch and refused** with
-  `not finalized — push refused` from the record builders (`loadFinalizedManifest`/
-  `isFinalized` reading nil/unverified), plus `revision <id> not found locally to push`.
-  They play fine locally — data safe, but they never reach the server. This was masked
-  yesterday: the diagnosis assumed entries were healthy and merely aborted by the
-  journal's batch; the build-1 logs show the same refusals, so they were never buildable.
-  **Investigation COMPLETE → #94 (full root-cause + fixes).** Two causes: (1) a nil from
-  `nextRecordZoneChangeBatch`'s recordProvider does NOT remove the pending change — the
-  codebase's "nil = documented drop" comment is false (the batch init is a value init
-  with no State access; Apple's sample calls `state.remove` itself) — so names enqueued
-  in Aug 17–21 dev builds (before the entry builders existed) are stuck in
-  `engine-state.bin` forever; (2) the 20 captures likely have `final.verifiedAt == nil`
-  (crash between promote and the `.complete` write), and `.verifyFinal` recovery is a
-  dead end once `segments/` is deleted — `FinalizerWorker.finalize` returns `.skipped`
-  without stamping. Fixes in #94: `state.remove` before returning nil; make
-  `.verifyFinal` probe the existing m4a and stamp. Decisive experiment HANDED TO NICO,
-  result unknown at handoff: record a NEW entry on the phone — if it syncs to the iPad,
-  the pipeline is healthy and the damage is confined to the 20 old captures.
-- Expected log noise, not failures: one expired-change-token retry on first fetch; the
-  untouched dev-synced archive not migrating is #90 (ledger says "uploaded").
-- **PR #93 open (merge after smoke):** `ITSAppUsesNonExemptEncryption=false` in
-  Info.plist so ASC stops asking the export-compliance question — recipe live-confirmed
-  with the MusicForge session; effective from build 3's archive. This handoff's doc
-  commit rides on that branch.
-- Issues filed: **#89** (no sync-status UI in Release builds), **#90** (environment-tag
-  `sync/` bookkeeping — system fields AND ledger AND engine-state; the only path that
-  migrates the untouched dev archive), **#91** (child NOT_FOUND with no archived state
-  waits for a launch-only reconcile on iOS).
+- **Cause 1:** `CloudKitEngineControl.provideRecord` (new tested static seam; the batch
+  provider closure routes through it) calls `state.remove(pendingRecordZoneChanges:)`
+  before answering nil — nil alone NEVER removed a pending change (the batch init is a
+  value init with no State access; every comment claiming otherwise is corrected).
+  Safe because the upload ledger is written only after a record lands → reconcile
+  re-enqueues once buildable. **Semantics change:** transiently unbuildable records now
+  wait for a launch-time reconcile instead of retrying mid-session — noted on #91,
+  whose scope this widens.
+- **Cause 2:** `FinalizerWorker.finalize`'s empty-prefix branch decode-probes an
+  existing promoted `.m4a` (`decodable && nonSilent`) and stamps
+  `final.verifiedAt`/`durationFrames`, manifest → `.complete`. Failed probe stamps
+  nothing, touches zero bytes, flags `needsAttention` (not the `failEncode` path).
+- **Secondary:** `bootstrap` now mirrors `finishCurrentCapture`'s
+  `FinalizeArtifactPush.push` loop (after `detectSpokenDate`, before `rescan`) so a
+  launch heal syncs the same launch. Task 3's test drives the real
+  recovery → verifyFinal → stamp → push pipeline off an on-disk dead-end fixture.
+- **Device experiment (build 2, decisive):** a NEW iPhone entry synced to the iPad with
+  transcript — pipeline healthy, #94 damage confined to the ~20 dev-era captures. But it
+  arrived **"unfiled"**: the recorded-into dev-era journal is never pushed (15-min log
+  window shows zero journal push attempts → ledger claims uploaded, dev environment) —
+  that's **#90**, now with a user-visible symptom (commented on the issue). Unconfirmed:
+  whether that journal is absent from the iPad's journal list.
+- **⚠️ Release trap (in PR body too):** `project.yml` does not pin `CFBundleVersion`, so
+  every `xcodegen generate` resets Info.plist to build 1 (happened mid-branch,
+  hand-reverted). Pin it (ideally in project.yml) before archiving build 3.
+- Build-3 smoke expectations: first iPhone launch decode-probes ~20 m4as sequentially in
+  bootstrap (one-time slow launch is expected), then all 20 push; watch for finalize
+  stamps and `not buildable — pending change removed` lines draining dead names out of
+  `engine-state.bin`.
 
 **Next steps:**
-1. **Fix #94** (the 20 refused entries — root cause known, fixes specified in the
-   issue): `state.remove` before nil in the batch provider + `.verifyFinal` stamps off
-   the existing m4a. Run #94's two cheap confirmations first; fold in Nico's new-entry
-   experiment result. Highest priority — the real corpus still doesn't sync. TDD both,
-   then iOS build 3 (which also picks up PR #93's export-compliance key).
-2. Merge PR #93 (export compliance + this handoff's docs).
-3. **macOS TestFlight**: `Raconte-macos-tf1.xcarchive` predates the fix — rebuild from
-   merged main, then Nico runs `python3 scripts/asc_regenerate_profile.py --platform
-   macos` and the export/upload it prints. Hold until item 1 is understood.
-4. #90 (env-tag sync bookkeeping) when sync work resumes; #89 (About page w/ version +
-   sync status — would have saved this whole smoke session) / #91 alongside.
-5. **Sonnet batch:** #85, #83, #86, plus backlog #73–78.
-6. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
+1. Nico: merge **PR #93** (export compliance) then **PR #95** (#94 fixes) — docs
+   conflict resolves by taking #95's CLAUDE.md + devlog. Merges are his.
+2. Pin `CFBundleVersion` (bump to 3) surviving `xcodegen generate`, archive iOS build 3
+   from merged main, upload, smoke per the expectations above (all 20 on the iPad).
+3. Confirm the unfiled-journal theory: is the recorded-into journal absent from the
+   iPad's journal list? Then **#90** (env-tag sync bookkeeping — now user-visible) is the
+   next sync fix; #91 (launch-only reconcile latency, scope widened by #94) alongside.
+4. **macOS TestFlight:** rebuild from merged main (`Raconte-macos-tf1.xcarchive`
+   predates all fixes), `asc_regenerate_profile.py --platform macos`, upload.
+5. #89 (About page w/ version + sync status) — would have saved two smoke sessions.
+6. Sonnet batch: #85, #83, #86, backlog #73–78; Nico's calls: #81, #67, #70, #68, #66,
+   #63, #60/#59.
 
 ## What Raconte is
 

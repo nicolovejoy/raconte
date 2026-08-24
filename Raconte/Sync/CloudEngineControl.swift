@@ -206,8 +206,10 @@ extension SyncHooks {
 /// engine sits behind `CloudEngineControl` and this does not.
 protocol CloudRecordExchange: Sendable {
     /// Build the record to push for `name`, or nil when there is nothing to push (the
-    /// artifact is gone, or its kind is not built yet). Nil is `CKSyncEngine`'s documented
-    /// "drop this one" answer.
+    /// artifact is gone, or its kind is not built yet). Nil alone only excludes the record
+    /// from the current batch — it does not remove the pending change;
+    /// `CloudKitEngineControl.provideRecord` removes it before answering nil, and the next
+    /// reconciliation scan re-enqueues the name once it is buildable.
     func recordToPush(for name: SyncRecordName, zoneID: CKRecordZone.ID) async -> CKRecord?
 
     /// A record arrived from the server — a fetched change, or the server's copy handed
@@ -541,9 +543,8 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
     /// from local state plus whatever system fields are (still) archived, so there is
     /// exactly one path from local state to a pushed record.
     ///
-    /// A `.drop`, and a `.recreate` that found nothing archived, are safe to leave for
-    /// the same reason the batch builder's nil is: no ledger entry was written, so the
-    /// next reconciliation scan re-enqueues them.
+    /// A `.drop`, and a `.recreate` that found nothing archived, are safe to leave: no
+    /// ledger entry was written, so the next reconciliation scan re-enqueues them.
     private func handleFailedSaves(_ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
@@ -591,6 +592,33 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         })
     }
 
+    /// The body of `nextRecordZoneChangeBatch`'s recordProvider, extracted so the
+    /// nil-means-remove contract is unit-testable (`BatchRecordProviderTests`).
+    ///
+    /// #94: `RecordZoneChangeBatch.init(pendingChanges:recordProvider:)` is a value
+    /// initializer with no access to the engine's `State` — a nil return skips the
+    /// record for THIS batch only and removes nothing. Anything unbuildable must be
+    /// removed here explicitly or it is retried on every send and every launch
+    /// (persisted via `engine-state.bin`), which is exactly how the dev-era entries
+    /// got stuck. Removal is safe: the upload ledger is written only after a record
+    /// lands, so the next reconciliation scan re-enqueues anything that has become
+    /// buildable since.
+    static func provideRecord(for recordID: CKRecord.ID,
+                              exchange: any CloudRecordExchange,
+                              zoneID: CKRecordZone.ID,
+                              removePendingSave: @Sendable (CKRecord.ID) async -> Void)
+        async -> CKRecord? {
+        guard let name = SyncCloudIdentifiers.name(of: recordID) else {
+            await removePendingSave(recordID)
+            return nil
+        }
+        guard let record = await exchange.recordToPush(for: name, zoneID: zoneID) else {
+            await removePendingSave(recordID)
+            return nil
+        }
+        return record
+    }
+
     func nextRecordZoneChangeBatch(_ context: CKSyncEngine.SendChangesContext,
                                    syncEngine: CKSyncEngine) async -> CKSyncEngine.RecordZoneChangeBatch? {
         let pending = syncEngine.state.pendingRecordZoneChanges.filter {
@@ -598,21 +626,25 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
         guard !pending.isEmpty else { return nil }
 
-        // A change whose record cannot be built resolves to nil, which is CKSyncEngine's
-        // documented "drop this one" answer — deliberately chosen over returning nil for
-        // the whole batch, which would leave the same unfulfillable changes pending and
-        // re-asked forever. Dropping is safe because the upload ledger is only written
-        // after a record actually lands, so the next launch's reconciliation scan
-        // re-enqueues everything dropped here.
+        // #94: a nil from this provider does NOT remove the pending change — the
+        // batch init is a value init with no State access (the old comment here
+        // claimed otherwise). `provideRecord` removes the pending save explicitly
+        // before answering nil, so an unbuildable name stops retrying; the next
+        // reconciliation scan re-enqueues it once it is buildable.
         let log = self.log
         let exchange = self.exchange
         let zoneID = self.zoneID
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: pending) { recordID in
-            guard let name = SyncCloudIdentifiers.name(of: recordID) else {
-                log.error("sync: pending change for an unparseable record name — dropped")
-                return nil
-            }
-            return await exchange.recordToPush(for: name, zoneID: zoneID)
+            let record = await Self.provideRecord(
+                for: recordID, exchange: exchange, zoneID: zoneID,
+                removePendingSave: { id in
+                    log.notice("""
+                        sync: \(id.recordName, privacy: .public) not buildable — \
+                        pending change removed; reconcile re-enqueues when eligible
+                        """)
+                    syncEngine.state.remove(pendingRecordZoneChanges: [.saveRecord(id)])
+                })
+            return record
         }
     }
 }

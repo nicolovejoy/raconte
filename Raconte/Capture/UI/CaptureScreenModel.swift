@@ -305,6 +305,16 @@ final class CaptureScreenModel {
         // be read has never had detection run over it, and this is the one other place a
         // transcript first becomes available.
         for id in recoveredQueue { await detectSpokenDate(for: id) }
+        // #94 secondary finding: the launch-recovery mirror of
+        // `finishCurrentCapture`'s push loop. Without it a capture healed at
+        // launch is not enqueued for sync until the NEXT launch's reconcile.
+        // `push` is internally gated on `isFinalized`, so only captures whose
+        // `.m4a` really verified fire, and a nil `syncHooks` no-ops exactly as
+        // everywhere else. Before `rescan()` so the library's refreshed view and
+        // sync eligibility can never disagree within one bootstrap.
+        for id in recoveredQueue {
+            await FinalizeArtifactPush.push(capturesRoot: capturesRoot, captureID: id, syncHooks: syncHooks)
+        }
         await library.rescan()
         // Fire-and-forget corpus promotion (T6c) + head-cache stamping (T7 Task 3 fix
         // round 2) + stale-draft recovery (T7 prereq #41), ONE Task, sequential: the

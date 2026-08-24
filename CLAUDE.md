@@ -26,15 +26,36 @@ Plan-reviewed then executed the NOT_FOUND fix end-to-end with subagent-driven de
   cross-device delete is *permanent* — CloudKit fetches deliver current state; no
   tombstone re-arrives. Resurrection is the documented bias (audio is ground truth);
   the `resolveUnknownItem` doc comment states what really happens.
-- `CFBundleVersion` → 2; **iOS build 2 uploaded** (Nico ran the `.p8` steps), iPad canary
-  passed, **iPhone smoke in progress at handoff**. Pass = one `unknown to the server —
-  archived system fields dropped, next push is a create` per poisoned record in Console
-  (subsystem `org.pianohouseproject.raconte`, category `sync`), then silence; fail = that
-  line twice for one name. Then CloudKit Dashboard prod Logs (one NOT_FOUND each, then a
-  successful ModifyRecords) and entries appearing on the iPad. Expected noise: one
-  expired-change-token retry on first fetch; the untouched dev-synced archive does NOT
-  migrate (see #90 — the dedupe ledger says "uploaded", so unchanged records never push,
-  never fail, never heal).
+- `CFBundleVersion` → 2; **iOS build 2 uploaded and SMOKE-VERIFIED on the iPhone**: the
+  poisoned journal logged exactly one `unknown to the server — archived system fields
+  dropped, next push is a create`, re-pushed as a CREATE, and appeared on the iPad with
+  its cover photo. No repeat failure, no batch casualties. **The fix works.**
+  Smoke technique that finally worked (Console.app streaming was fiddly): Nico runs
+  `sudo /usr/bin/log collect --device-name "Nico's iPhone 17 pro" --last 10m --output
+  /tmp/x.logarchive && sudo chmod -R a+rX /tmp/x.logarchive`, then the agent reads it with
+  `/usr/bin/log show <archive> --predicate 'subsystem == "org.pianohouseproject.raconte"'
+  --info --debug --style compact`. Captures history, agent-verifiable. (First smoke pass
+  "failed" because the phone was still on build 1 — check the installed build in the
+  TestFlight app before trusting a smoke.)
+- **NEW BUG unmasked by the heal (investigation launched, report pending at handoff):**
+  the iPad received ONLY the journal — **all 20 real entries (ULID-dated 2026-08-07 →
+  08-16, the dev-build corpus) are re-enqueued every launch and refused** with
+  `not finalized — push refused` from the record builders (`loadFinalizedManifest`/
+  `isFinalized` reading nil/unverified), plus `revision <id> not found locally to push`.
+  They play fine locally — data safe, but they never reach the server. This was masked
+  yesterday: the diagnosis assumed entries were healthy and merely aborted by the
+  journal's batch; the build-1 logs show the same refusals, so they were never buildable.
+  Open questions for the investigator (Explore agent, report → next session): why does
+  something re-enqueue them every launch if the scanner also refuses them (scanner/builder
+  manifest-decode parity? restored engine-state pending changes?); did the Manifest schema
+  gain non-optional fields after Aug 16 that old manifest.json files fail to decode; or do
+  these manifests genuinely lack `final.verifiedAt` (verify step postdating the
+  recordings) — and if so, what retroactive verify/migration is safe. Decisive experiment
+  HANDED TO NICO, result unknown at handoff: record a NEW entry on the phone — if it
+  syncs to the iPad, the pipeline is healthy and the bug is confined to the 20 old
+  captures.
+- Expected log noise, not failures: one expired-change-token retry on first fetch; the
+  untouched dev-synced archive not migrating is #90 (ledger says "uploaded").
 - **PR #93 open (merge after smoke):** `ITSAppUsesNonExemptEncryption=false` in
   Info.plist so ASC stops asking the export-compliance question — recipe live-confirmed
   with the MusicForge session; effective from build 3's archive. This handoff's doc
@@ -45,12 +66,16 @@ Plan-reviewed then executed the NOT_FOUND fix end-to-end with subagent-driven de
   waits for a launch-only reconcile on iOS).
 
 **Next steps:**
-1. Finish the iPhone build-2 smoke (criteria above); confirm entries land on the iPad.
+1. **Root-cause the 20 refused entries** (new bug above): read the Explore agent's report
+   (or re-run the investigation — its questions are listed above), fold in Nico's
+   new-entry experiment result, then fix. Highest priority — the real corpus still
+   doesn't sync.
 2. Merge PR #93 (export compliance + this handoff's docs).
 3. **macOS TestFlight**: `Raconte-macos-tf1.xcarchive` predates the fix — rebuild from
    merged main, then Nico runs `python3 scripts/asc_regenerate_profile.py --platform
-   macos` and the export/upload it prints.
-4. #90 (env-tag sync bookkeeping) when sync work resumes; #89/#91 alongside.
+   macos` and the export/upload it prints. Hold until item 1 is understood.
+4. #90 (env-tag sync bookkeeping) when sync work resumes; #89 (About page w/ version +
+   sync status — would have saved this whole smoke session) / #91 alongside.
 5. **Sonnet batch:** #85, #83, #86, plus backlog #73–78.
 6. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
 

@@ -224,6 +224,32 @@ protocol CloudRecordExchange: Sendable {
     /// same record name can never be credited to content the server never accepted.
     func noteSaveFailed(for name: SyncRecordName) async
 
+    /// A save came back `CKError.unknownItem`: the server has no record with this ID,
+    /// yet the push was an UPDATE built on this device's archived system fields
+    /// (`sync/system-fields/<name>.bin`). Those fields describe a record that exists
+    /// in some other CloudKit environment — every record first synced under dev
+    /// carried dev change tags into the first production push and NOT_FOUND-ed forever.
+    ///
+    /// Drops the archived system fields and the upload-ledger entry so the next
+    /// `recordToPush` builds a fresh CREATE. Returns `true` when there WAS archived
+    /// state to drop — the caller's cue to re-enqueue at once. `false` means there was
+    /// none, so the failure is not stale metadata but a dangling `CKRecord.Reference`
+    /// (a child sent before its Entry landed); re-enqueueing that fails identically
+    /// forever, and the next reconciliation scan retries it once the parent is up.
+    ///
+    /// Deliberate bias: if the server copy is missing because another device DELETED
+    /// it, this recreates it. Local audio is ground truth and is never dropped on a
+    /// server's say-so. That recreate resurrects the record on every device — a
+    /// zone-change fetch delivers a record's current state, not its history, so the
+    /// tombstone never re-arrives once this device has re-CREATEd it. Design §5's
+    /// delete-wins does not apply to a record that was mid-push when it was deleted.
+    /// One tighter race stays survivable: if this device's own recreate lands before
+    /// its own fetch delivers the deletion, `acceptRemoteEntryDeletion`/
+    /// `acceptRemoteJournalDeletion` then purges the local copy anyway, leaving a
+    /// childless Entry on the server that every device parks in `sync/staging/` — a
+    /// ghost, not a loss.
+    func resolveUnknownItem(for name: SyncRecordName) async -> Bool
+
     /// Server copies handed back by failed saves. Merges each one and returns the records
     /// that must be re-enqueued for save — the merged content is produced by the next
     /// `recordToPush`, which by then reads merged local state plus the freshly archived
@@ -508,40 +534,59 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
     }
 
-    /// A save that came back `.serverRecordChanged` is the push half of design §4's
-    /// per-field LWW. The server's copy is merged into local state through the same ingest
-    /// path a fetched change takes — same rules, one implementation — and the record is
-    /// re-enqueued. The merged CONTENT is not assembled here: the next
-    /// `nextRecordZoneChangeBatch` rebuilds it from the now-merged store plus the freshly
-    /// archived server system fields, so there is exactly one path from local state to a
-    /// pushed record.
+    /// One `SaveFailureDisposition` per failed save, then ONE re-enqueue of everything
+    /// that should go out again. Re-enqueueing here — not waiting for the next launch's
+    /// reconciliation scan — is what makes a heal visible without a relaunch; the
+    /// content is never assembled here, the next `nextRecordZoneChangeBatch` rebuilds it
+    /// from local state plus whatever system fields are (still) archived, so there is
+    /// exactly one path from local state to a pushed record.
     ///
-    /// Any other failure is logged and dropped. Dropping is safe for the same reason the
-    /// batch builder's nil is: no ledger entry was written, so the next launch's
-    /// reconciliation scan re-enqueues it.
+    /// A `.drop`, and a `.recreate` that found nothing archived, are safe to leave for
+    /// the same reason the batch builder's nil is: no ledger entry was written, so the
+    /// next reconciliation scan re-enqueues them.
     private func handleFailedSaves(_ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave],
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
+        var toResend: [SyncRecordName] = []
         for failure in failures {
-            // Every failure, conflict or not, retires what the exchange remembered about
-            // that build — the content it describes was not accepted, so no later
-            // confirmation may be credited to it.
-            if let name = SyncCloudIdentifiers.name(of: failure.record.recordID) {
+            let recordName = failure.record.recordID.recordName
+            let name = SyncCloudIdentifiers.name(of: failure.record.recordID)
+            // Every failure, whatever its disposition, retires what the exchange
+            // remembered about that build — the content it describes was not accepted,
+            // so no later confirmation may be credited to it.
+            if let name {
                 await exchange.noteSaveFailed(for: name)
             }
-            if failure.error.code == .serverRecordChanged, let server = failure.error.serverRecord {
-                conflicts.append(server)
-            } else {
+            switch SaveFailureDisposition.decide(code: failure.error.code,
+                                                 hasServerRecord: failure.error.serverRecord != nil) {
+            case .mergeConflict:
+                if let server = failure.error.serverRecord {
+                    conflicts.append(server)
+                }
+            case .recreate:
+                guard let name else { break }
+                if await exchange.resolveUnknownItem(for: name) {
+                    toResend.append(name)
+                } else {
+                    lastError = failure.error.localizedDescription
+                }
+            case .retry:
+                guard let name else { break }
+                log.notice("sync: \(recordName, privacy: .public) fell with its batch — re-enqueued")
+                toResend.append(name)
+            case .drop:
                 log.error("""
-                    sync: save failed \(failure.record.recordID.recordName, privacy: .public): \
+                    sync: save failed \(recordName, privacy: .public): \
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
                 lastError = failure.error.localizedDescription
             }
         }
-        guard !conflicts.isEmpty else { return }
-        let toResave = await exchange.resolvePushConflicts(conflicts)
-        syncEngine.state.add(pendingRecordZoneChanges: toResave.map {
+        if !conflicts.isEmpty {
+            toResend += await exchange.resolvePushConflicts(conflicts)
+        }
+        guard !toResend.isEmpty else { return }
+        syncEngine.state.add(pendingRecordZoneChanges: toResend.map {
             .saveRecord(SyncCloudIdentifiers.recordID($0, zoneID: zoneID))
         })
     }

@@ -107,6 +107,26 @@ final class FinalizerTests: XCTestCase {
                         now: { Date(timeIntervalSince1970: 1_000) })
     }
 
+    /// #94 cause 2: manifest present with `final.verifiedAt == nil`, a promoted
+    /// `final/recording.m4a` on disk, and NO `segments/` directory at all — the
+    /// crash-between-promote-and-complete state the 20 dev-era captures are in.
+    private func layDownPromotedButUnstampedCapture(id: String, state: CaptureState = .finalizing) throws {
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: id)
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: dir), withIntermediateDirectories: true)
+        try Data([0x00, 0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let manifestFmt = AudioFormatDescriptor(sampleRate: Self.sampleRate, channels: 1,
+                                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        let manifest = Manifest(captureID: id, createdAt: Date(timeIntervalSince1970: 0),
+                                state: state, stateSeq: 7,
+                                stateUpdatedAt: Date(timeIntervalSince1970: 0),
+                                format: manifestFmt, segmentCount: 3,
+                                lastKnownFrameOffset: 2500)
+        let data = try CaptureCoding.encoder().encode(manifest)
+        try AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir), writing: data)
+    }
+
     // MARK: ordered, contiguous feed → complete, raw deleted
 
     func testOrderedContiguousFeedCompletesAndDeletesRaw() async throws {
@@ -251,5 +271,58 @@ final class FinalizerTests: XCTestCase {
         // Queue is empty after draining.
         let again = await worker.drain()
         XCTAssertTrue(again.isEmpty)
+    }
+
+    // MARK: #94 — verifyFinal with raw segments gone
+
+    func testPromotedButUnstampedCaptureIsVerifiedInPlaceAndStamped() async throws {
+        let id = "01J000000000000000000094"
+        try layDownPromotedButUnstampedCapture(id: id)
+        let encoder = FakeAudioEncoder()
+        encoder.verifyOverride = VerifyResult(decodable: true, decodedFrameCount: 2500, nonSilent: true)
+        let worker = makeWorker(encoder: encoder)
+        await worker.enqueue(id)
+
+        let outcomes = await worker.drain()
+
+        XCTAssertEqual(outcomes.first?.status, .completed)
+        XCTAssertEqual(encoder.calls, [], "nothing to encode — the existing m4a is verified in place")
+        let manifest = try readManifest(id)
+        XCTAssertNotNil(manifest.final.verifiedAt, "the stamp is the whole fix — push eligibility reads it")
+        XCTAssertEqual(manifest.final.durationFrames, 2500)
+        XCTAssertEqual(manifest.state, .complete)
+    }
+
+    func testFailedProbeStampsNothingKeepsTheM4aAndFlagsAttention() async throws {
+        let id = "01J000000000000000000095"
+        try layDownPromotedButUnstampedCapture(id: id)
+        let encoder = FakeAudioEncoder()
+        encoder.verifyOverride = VerifyResult(decodable: false, decodedFrameCount: 0, nonSilent: false)
+        let worker = makeWorker(encoder: encoder)
+        await worker.enqueue(id)
+
+        let outcomes = await worker.drain()
+
+        XCTAssertEqual(outcomes.first?.status, .needsAttention)
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: id)
+        XCTAssertTrue(exists(SegmentLayout.finalRecordingURL(captureDirectory: dir)),
+                      "audio is ground truth — a failed probe must not touch the m4a")
+        let manifest = try readManifest(id)
+        XCTAssertNil(manifest.final.verifiedAt)
+        XCTAssertEqual(manifest.needsAttention, true)
+    }
+
+    func testCaptureWithNeitherSegmentsNorM4aStaysSkipped() async throws {
+        let id = "01J000000000000000000096"
+        try layDownPromotedButUnstampedCapture(id: id)
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: id)
+        try FileManager.default.removeItem(at: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let worker = makeWorker(encoder: FakeAudioEncoder())
+        await worker.enqueue(id)
+
+        let outcomes = await worker.drain()
+
+        XCTAssertEqual(outcomes.first?.status, .skipped)
+        XCTAssertNil(try readManifest(id).final.verifiedAt)
     }
 }

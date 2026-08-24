@@ -2,75 +2,60 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-23 (laptop — TestFlight shipped to iPhone+iPad; CRITICAL sync bug found and root-caused, fix not yet written)
+## Session 2026-08-24 pm (laptop — #94 FIXED via full SDD; PR #95 open, CI pending at handoff)
 
-Resync (closed #79/#80/#82 as shipped-but-open, verified against code; cleaned up merged
-`fix/84-default-journal-mint` branch/worktree), then TestFlight headless upload made to
-actually work end-to-end, then the app went on real devices — which surfaced a real,
-previously-unknown sync bug.
+Executed #94 end-to-end with subagent-driven development (plan at
+`docs/plans/2026-08-24-94-stuck-pending-verify-final-plan.md`; per-task reviews, Fable
+whole-branch review, one comment-only fix wave, scoped re-review — all clean).
+**PR #95 open ("Addresses #94", deliberately not "Fixes" — device verification pending).**
+Unit suite 1791 → 1798; iOS compile check green. Merge #93 first, then #95; the two
+branches both rewrite this CLAUDE.md section and devlog — resolve by taking #95's
+version of BOTH files (this branch's docs were built as the final desired state, with
+#93's session block already rolled into devlog).
 
-- **Headless upload pipeline fixed for real** (was blocked, see prior Next Steps item 2):
-  MusicForge's shared ASC key turned out to be app-scoped to MusicForge only and
-  couldn't be edited to add Raconte (only revoke); minted Raconte its own key
-  (`AuthKey_K3MNF85G68.p8`, App Manager, Raconte-only). Along the way: ASC's cert-type
-  filter is `DISTRIBUTION` now, not the legacy `IOS_DISTRIBUTION` (Apple unified cert
-  types ~2019); profile names are unique **account-wide**, not per bundle ID (caused a
-  409 from a duplicate Xcode had auto-created). Wrote `scripts/asc_regenerate_profile.py`
-  (parameterized `--platform ios|macos`) — regenerates a provisioning profile via the ASC
-  REST API. **Must be run by Nico, never by the agent**: the auto-mode classifier
-  correctly hard-blocks any Claude-run process from reading the `.p8` key file, so every
-  step touching it (profile regen, `-exportArchive`) is a command handed to Nico to run
-  himself. `docs/testflight-deploy.md` updated with all of this.
-- **iOS build 1 live**: uploaded, processed, installed on iPhone (replace-in-place over
-  the dev build, real local data + audio confirmed intact) and iPad (was fully empty —
-  Nico deleted its old dev-only app first, zero risk since nothing was on it; safe
-  canary before touching the iPhone).
-- **macOS archive built** (`Raconte-macos-tf1.xcarchive`, real automatic signing) +
-  `scripts/ExportOptions-macos.plist` added. Profile regen for macOS written but not yet
-  run by Nico; export/upload not yet done.
-- **CRITICAL BUG — real entries not reaching production CloudKit.** Root-caused via
-  CloudKit Dashboard request logs + code investigation (two independent agent passes,
-  confirmed reproducible across a full app relaunch, 2.5h apart, same failure both
-  times). `journalRecordToPush`/`entryRecordToPush` (`SyncIngest.swift:1104`/`:938`)
-  reuse cached CKRecord system-fields (`sync/system-fields/<name>.bin`, archived at
-  `CloudEngineControl.swift:1142-1166`) with **zero environment/container scoping**
-  (`archivedRecord`, `CloudEngineControl.swift:1133-1140`). Any record previously synced
-  under the **dev** CloudKit environment carries that stale metadata, so pushing to
-  **production** for the first time sends an UPDATE against a record ID production has
-  never seen → permanent `NOT_FOUND`. `handleFailedSaves` (`CloudEngineControl.swift:
-  522-547`) only re-resolves `.serverRecordChanged`; nothing clears the poisoned cache on
-  `NOT_FOUND`, so it fails identically forever, and because pushes batch atomically, the
-  one poisoned Journal record's failure also aborts sibling Entry/Audio records riding in
-  the same batch. Separate, related finding: `SyncRecordBuilders.swift:442-446` /
-  `CloudEngineControl.swift:549-571` build an Entry and its children (Audio/LiveLog/
-  Revision/Marker) independently at send time — a transient build failure on the Entry
-  silently drops it from the batch while a sibling's `CKRecord.Reference` still gets sent
-  and NOT_FOUNDs. **Fix (not yet written):** on a push failure with `CKError.unknownItem`
-  (NOT_FOUND), call `forgetServerState`/`deleteSystemFields` for that record before
-  returning, so the next push rebuilds a fresh CREATE; longer-term, tag archived system
-  fields with the CloudKit environment and invalidate on mismatch. Also worth fixing: make
-  Entry+children one atomic push unit instead of independently-built siblings.
-  **Data is not at risk** — real entries remain local-only on the iPhone untouched, just
-  stuck out of sync; nothing was deleted or overwritten.
-- **Diagnostic gap found along the way:** the Debug screen (all sync-status UI) is
-  `#if DEBUG`-gated in 4 places (`SidebarView.swift:99-103`, `RaconteCommands.swift:
-  39-40`, `ContentView.swift:177-178`, `DebugMenuView.swift`) — so Release/TestFlight
-  builds have **zero** sync-status visibility on-device. Worth an issue.
+- **Cause 1:** `CloudKitEngineControl.provideRecord` (new tested static seam; the batch
+  provider closure routes through it) calls `state.remove(pendingRecordZoneChanges:)`
+  before answering nil — nil alone NEVER removed a pending change (the batch init is a
+  value init with no State access; every comment claiming otherwise is corrected).
+  Safe because the upload ledger is written only after a record lands → reconcile
+  re-enqueues once buildable. **Semantics change:** transiently unbuildable records now
+  wait for a launch-time reconcile instead of retrying mid-session — noted on #91,
+  whose scope this widens.
+- **Cause 2:** `FinalizerWorker.finalize`'s empty-prefix branch decode-probes an
+  existing promoted `.m4a` (`decodable && nonSilent`) and stamps
+  `final.verifiedAt`/`durationFrames`, manifest → `.complete`. Failed probe stamps
+  nothing, touches zero bytes, flags `needsAttention` (not the `failEncode` path).
+- **Secondary:** `bootstrap` now mirrors `finishCurrentCapture`'s
+  `FinalizeArtifactPush.push` loop (after `detectSpokenDate`, before `rescan`) so a
+  launch heal syncs the same launch. Task 3's test drives the real
+  recovery → verifyFinal → stamp → push pipeline off an on-disk dead-end fixture.
+- **Device experiment (build 2, decisive):** a NEW iPhone entry synced to the iPad with
+  transcript — pipeline healthy, #94 damage confined to the ~20 dev-era captures. But it
+  arrived **"unfiled"**: the recorded-into dev-era journal is never pushed (15-min log
+  window shows zero journal push attempts → ledger claims uploaded, dev environment) —
+  that's **#90**, now with a user-visible symptom (commented on the issue). Unconfirmed:
+  whether that journal is absent from the iPad's journal list.
+- **⚠️ Release trap (in PR body too):** `project.yml` does not pin `CFBundleVersion`, so
+  every `xcodegen generate` resets Info.plist to build 1 (happened mid-branch,
+  hand-reverted). Pin it (ideally in project.yml) before archiving build 3.
+- Build-3 smoke expectations: first iPhone launch decode-probes ~20 m4as sequentially in
+  bootstrap (one-time slow launch is expected), then all 20 push; watch for finalize
+  stamps and `not buildable — pending change removed` lines draining dead names out of
+  `engine-state.bin`.
 
 **Next steps:**
-1. **Fix the NOT_FOUND bug** (see above, `CloudEngineControl.handleFailedSaves`) —
-   TDD it, mutation-verify, bump `CFBundleVersion`, rebuild+re-export+upload iOS build 2,
-   get it onto the iPhone to unblock the stuck real entries. This blocks the phone ever
-   reaching a healthy synced state — highest priority.
-2. **File an issue** for "no sync-status UI in Release/TestFlight builds" (Debug screen
-   `#if DEBUG`-gated, see above).
-3. **macOS TestFlight**: archive already built; still need Nico to run
-   `python3 scripts/asc_regenerate_profile.py --platform macos` then the export/upload
-   command it prints, once the NOT_FOUND fix (item 1) has shipped and the sync path is
-   trusted again.
-4. **Sonnet batch:** #85, #83, #86, plus backlog #73–78 (all reconfirmed still open/real
-   this session's resync).
-5. Nico's calls: #81, #67 (10 items), #70, #68, #66, #63, #60/#59.
+1. Nico: merge **PR #93** (export compliance) then **PR #95** (#94 fixes) — docs
+   conflict resolves by taking #95's CLAUDE.md + devlog. Merges are his.
+2. Pin `CFBundleVersion` (bump to 3) surviving `xcodegen generate`, archive iOS build 3
+   from merged main, upload, smoke per the expectations above (all 20 on the iPad).
+3. Confirm the unfiled-journal theory: is the recorded-into journal absent from the
+   iPad's journal list? Then **#90** (env-tag sync bookkeeping — now user-visible) is the
+   next sync fix; #91 (launch-only reconcile latency, scope widened by #94) alongside.
+4. **macOS TestFlight:** rebuild from merged main (`Raconte-macos-tf1.xcarchive`
+   predates all fixes), `asc_regenerate_profile.py --platform macos`, upload.
+5. #89 (About page w/ version + sync status) — would have saved two smoke sessions.
+6. Sonnet batch: #85, #83, #86, backlog #73–78; Nico's calls: #81, #67, #70, #68, #66,
+   #63, #60/#59.
 
 ## What Raconte is
 

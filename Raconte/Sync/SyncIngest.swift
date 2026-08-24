@@ -872,6 +872,13 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// absent (`.defaults`) or decodable, the same three-answer rule
     /// `entryRecordToPush` applies. Holding back costs nothing — no ledger entry is
     /// written, so the next reconciliation scan re-enqueues the child.
+    ///
+    /// The "already landed" branch below trusts the archived system fields at face
+    /// value — exactly the signal that can be stale across CloudKit environments
+    /// (dev change tags replayed against production). It leans on
+    /// `resolveUnknownItem`'s `.unknownItem` self-heal to invalidate that state when
+    /// it turns out to be wrong, so the two converge on a correct answer rather than
+    /// looping against each other.
     private func entryCanBePushed(capturesRoot: URL, captureID: String) async -> Bool {
         let entryName = SyncRecordName.entry(captureID: captureID)
         if await bookkeeping.systemFields(for: entryName.rawValue) != nil {

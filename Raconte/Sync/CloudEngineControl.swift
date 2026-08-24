@@ -224,6 +224,25 @@ protocol CloudRecordExchange: Sendable {
     /// same record name can never be credited to content the server never accepted.
     func noteSaveFailed(for name: SyncRecordName) async
 
+    /// A save came back `CKError.unknownItem`: the server has no record with this ID,
+    /// yet the push was an UPDATE built on this device's archived system fields
+    /// (`sync/system-fields/<name>.bin`). Those fields describe a record that exists
+    /// in some other CloudKit environment — every record first synced under dev
+    /// carried dev change tags into the first production push and NOT_FOUND-ed forever.
+    ///
+    /// Drops the archived system fields and the upload-ledger entry so the next
+    /// `recordToPush` builds a fresh CREATE. Returns `true` when there WAS archived
+    /// state to drop — the caller's cue to re-enqueue at once. `false` means there was
+    /// none, so the failure is not stale metadata but a dangling `CKRecord.Reference`
+    /// (a child sent before its Entry landed); re-enqueueing that fails identically
+    /// forever, and the next reconciliation scan retries it once the parent is up.
+    ///
+    /// Deliberate bias: if the server copy is missing because another device DELETED
+    /// it, this recreates it. Local audio is ground truth and is never dropped on a
+    /// server's say-so; the deletion, once fetched, still wins through
+    /// `acceptRemoteEntryDeletion`/`acceptRemoteJournalDeletion` (design §5).
+    func resolveUnknownItem(for name: SyncRecordName) async -> Bool
+
     /// Server copies handed back by failed saves. Merges each one and returns the records
     /// that must be re-enqueued for save — the merged content is produced by the next
     /// `recordToPush`, which by then reads merged local state plus the freshly archived

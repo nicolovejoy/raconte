@@ -1127,6 +1127,23 @@ actor SyncRecordExchange: CloudRecordExchange {
         inFlight.removeValue(forKey: name.rawValue)
     }
 
+    func resolveUnknownItem(for name: SyncRecordName) async -> Bool {
+        let hadServerState = await bookkeeping.systemFields(for: name.rawValue) != nil
+        await forgetServerState(for: name)
+        if hadServerState {
+            log.notice("""
+                sync: \(name.rawValue, privacy: .public) unknown to the server — archived \
+                system fields dropped, next push is a create
+                """)
+        } else {
+            log.notice("""
+                sync: \(name.rawValue, privacy: .public) unknown to the server with nothing \
+                archived — a reference to a record not yet there; left to reconciliation
+                """)
+        }
+        return hadServerState
+    }
+
     /// A `CKRecord` rebuilt from this device's archived system fields, or nil when there
     /// are none. Archived fields carry the server's change tag, which is what lets
     /// CloudKit answer a push with "the server copy moved" instead of overwriting it.

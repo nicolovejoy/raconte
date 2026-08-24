@@ -819,6 +819,10 @@ actor SyncRecordExchange: CloudRecordExchange {
             log.notice("sync: revision \(id, privacy: .public) not found locally to push")
             return nil
         }
+        guard await entryCanBePushed(capturesRoot: capturesRoot, captureID: located.captureID) else {
+            log.notice("sync: revision \(id, privacy: .public) held back — its Entry cannot be pushed yet")
+            return nil
+        }
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
                                                         captureID: located.captureID)
         let fileURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: directory,
@@ -858,6 +862,36 @@ actor SyncRecordExchange: CloudRecordExchange {
               manifest.final.verifiedAt != nil
         else { return nil }
         return (data, manifest)
+    }
+
+    /// Whether a CHILD record (AudioAsset/LiveLog/Revision/MarkerStream) may go out for
+    /// `captureID` right now. Each carries a `CKRecord.Reference` to its Entry, and
+    /// CloudKit rejects a save whose reference targets a record it does not hold — so
+    /// a child is safe only when the Entry has already landed (archived system fields)
+    /// or would build alongside it: a finalized manifest and an entry.json that is
+    /// absent (`.defaults`) or decodable, the same three-answer rule
+    /// `entryRecordToPush` applies. Holding back costs nothing — no ledger entry is
+    /// written, so the next reconciliation scan re-enqueues the child.
+    ///
+    /// The "already landed" branch below trusts the archived system fields at face
+    /// value — exactly the signal that can be stale across CloudKit environments
+    /// (dev change tags replayed against production). It leans on
+    /// `resolveUnknownItem`'s `.unknownItem` self-heal to invalidate that state when
+    /// it turns out to be wrong, so the two converge on a correct answer rather than
+    /// looping against each other.
+    private func entryCanBePushed(capturesRoot: URL, captureID: String) async -> Bool {
+        let entryName = SyncRecordName.entry(captureID: captureID)
+        if await bookkeeping.systemFields(for: entryName.rawValue) != nil {
+            return true
+        }
+        guard loadFinalizedManifest(capturesRoot: capturesRoot, captureID: captureID) != nil else {
+            return false
+        }
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let entryURL = SegmentLayout.entryMetadataURL(captureDirectory: directory)
+        guard FileManager.default.fileExists(atPath: entryURL.path) else { return true }
+        guard let data = try? Data(contentsOf: entryURL) else { return false }
+        return (try? EntryMetadataStore.decode(data)) != nil
     }
 
     /// M4 T6/T9-defect-fix: the Entry push. `metadata`/`capturedAt`/`manifestJSON` all
@@ -970,6 +1004,10 @@ actor SyncRecordExchange: CloudRecordExchange {
                 """)
             return nil
         }
+        guard await entryCanBePushed(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: audio \(captureID, privacy: .public) held back — its Entry cannot be pushed yet")
+            return nil
+        }
 
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: directory)
@@ -1004,6 +1042,10 @@ actor SyncRecordExchange: CloudRecordExchange {
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         guard FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) else {
             log.notice("sync: live log \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+        guard await entryCanBePushed(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: live log \(captureID, privacy: .public) held back — its Entry cannot be pushed yet")
             return nil
         }
 
@@ -1061,6 +1103,10 @@ actor SyncRecordExchange: CloudRecordExchange {
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         guard FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) else {
             log.notice("sync: marker stream \(captureID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+        guard await entryCanBePushed(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: marker stream \(captureID, privacy: .public) held back — its Entry cannot be pushed yet")
             return nil
         }
 
@@ -1125,6 +1171,23 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// content that was never accepted.
     func noteSaveFailed(for name: SyncRecordName) async {
         inFlight.removeValue(forKey: name.rawValue)
+    }
+
+    func resolveUnknownItem(for name: SyncRecordName) async -> Bool {
+        let hadServerState = await bookkeeping.systemFields(for: name.rawValue) != nil
+        await forgetServerState(for: name)
+        if hadServerState {
+            log.notice("""
+                sync: \(name.rawValue, privacy: .public) unknown to the server — archived \
+                system fields dropped, next push is a create
+                """)
+        } else {
+            log.notice("""
+                sync: \(name.rawValue, privacy: .public) unknown to the server with nothing \
+                archived — a reference to a record not yet there; left to reconciliation
+                """)
+        }
+        return hadServerState
     }
 
     /// A `CKRecord` rebuilt from this device's archived system fields, or nil when there

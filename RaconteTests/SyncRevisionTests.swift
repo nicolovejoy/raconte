@@ -308,9 +308,22 @@ final class SyncRevisionTests: XCTestCase {
     }
 
     /// Push, end to end through the orchestrator: a locally-minted revision's
-    /// `recordToPush` answer carries the exact file bytes as its `body` asset.
+    /// `recordToPush` answer carries the exact file bytes as its `body` asset. A
+    /// verified manifest is part of the fixture — `SyncTreeScanner.scanCapture` never
+    /// enqueues a revision for an unfinalized capture (T13's child-holdback guard
+    /// applies the same rule at push time), so a bare capture directory is not a state
+    /// this push is ever reached from in practice.
     func testRecordToPushBuildsARevisionRecordWithBodyBytesVerbatim() async throws {
         try mkCaptureDirectory()
+        let when = stamp(0)
+        let manifest = Manifest(captureID: captureID, createdAt: when, state: .complete, stateSeq: 1,
+                                stateUpdatedAt: when,
+                                format: AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
+                                                              commonFormat: .pcmFormatFloat32,
+                                                              interleaved: false, bytesPerFrame: 4),
+                                final: FinalRef(verifiedAt: when, durationFrames: 480_000))
+        try CaptureCoding.encoder().encode(manifest)
+            .write(to: SegmentLayout.manifestURL(captureDirectory: captureDirectory))
         let store = makeStore()
         let minted = revision("R0")
         _ = try await store.append(minted, captureID: captureID)

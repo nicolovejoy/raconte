@@ -284,6 +284,14 @@ extension SyncCoordinator {
             // second instance would be an uncoordinated second writer over the same
             // `transcript/` files a local draft close or revert can also be writing.
             transcriptRevisionStore: library.revisionStore,
+            // Image-capture plan Task 5: the library's own single shared instance,
+            // never a fresh one built here — identical reasoning to the two stores
+            // above: a second instance would be an uncoordinated second writer over
+            // the same `images/` directory a local add or remove can also be writing.
+            // Without this, inbound Image records would park forever instead of
+            // landing (they would never be dropped — see `SyncRecordExchange
+            // .ingestImage`'s no-store branch — but they would never appear either).
+            imageStore: library.imageStore,
             // Ingest writes straight to the stores, which the screen model has already
             // read into published state — without this it would keep showing the old
             // journal names until the next launch.
@@ -340,6 +348,13 @@ extension SyncCoordinator {
             // parked while their capture was trashed (or not yet committed) — see
             // `SyncRecordExchange.rehydrateParkedMarkerStreams`'s doc comment.
             await exchange.rehydrateParkedMarkerStreams()
+            // Image-capture plan Task 5: the identical crash-backstop philosophy, for
+            // images parked while their capture was trashed, not yet committed, or
+            // committed by a launch that had no `ImageStore` wired — see
+            // `SyncRecordExchange.rehydrateParkedImages`'s doc comment for why that
+            // third case makes this sweep look in `captures/` as well as
+            // `sync/staging/`.
+            await exchange.rehydrateParkedImages()
         }
         return coordinator
     }

@@ -29,6 +29,8 @@ enum SegmentLayout {
     static let sidecarExtension = "json"
     /// Zero-padded 6-digit decimal keeps `readdir` order == chronological order.
     static let segmentIndexWidth = 6
+    static let imagesDirName = "images"
+    static let imageThumbnailsDirName = "thumbnails"
 
     // MARK: Naming
 
@@ -210,6 +212,42 @@ enum SegmentLayout {
     /// `manifest.json.part`, `000042.pcm` -> `000042.pcm.part`).
     static func partURL(for url: URL) -> URL {
         url.appendingPathExtension(partExtension)
+    }
+
+    // MARK: Images
+
+    /// Where captured/attached image originals and their sidecars live —
+    /// `<captureDirectory>/images/`.
+    static func imagesDirectory(captureDirectory: URL) -> URL {
+        captureDirectory.appendingPathComponent(imagesDirName, isDirectory: true)
+    }
+
+    /// `<captureDirectory>/images/thumbnails/` — generated previews, one per image,
+    /// kept apart from the originals so the originals directory stays a clean list of
+    /// user-owned artifacts (image + sidecar pairs only).
+    static func imageThumbnailsDirectory(captureDirectory: URL) -> URL {
+        imagesDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent(imageThumbnailsDirName, isDirectory: true)
+    }
+
+    /// `images/<imageID>.<ext>` — the original image file, in whatever format it was
+    /// captured/imported as.
+    static func imageOriginalURL(captureDirectory: URL, imageID: String, ext: String) -> URL {
+        imagesDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent("\(imageID).\(ext)")
+    }
+
+    /// `images/<imageID>.json` — the image's metadata sidecar.
+    static func imageSidecarURL(captureDirectory: URL, imageID: String) -> URL {
+        imagesDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent("\(imageID).\(sidecarExtension)")
+    }
+
+    /// `images/thumbnails/<imageID>.jpg` — always `.jpg`, regardless of the
+    /// original's format, since the thumbnail is a generated re-encode, not a copy.
+    static func imageThumbnailURL(captureDirectory: URL, imageID: String) -> URL {
+        imageThumbnailsDirectory(captureDirectory: captureDirectory)
+            .appendingPathComponent("\(imageID).jpg")
     }
 
     // MARK: Frame / byte math

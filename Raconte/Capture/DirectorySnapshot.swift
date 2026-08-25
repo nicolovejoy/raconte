@@ -31,6 +31,11 @@ struct CaptureSnapshot: Equatable {
     /// means an unreadable directory must still be treated as holding irreplaceable
     /// artifacts, so this flag always implies `transcriptPresent == true`.
     var transcriptDirUnreadable: Bool
+    /// `images/` present and contains at least one `.json` sidecar (stat-level:
+    /// existence + non-empty, same contract as `transcriptPresent` — never decodes a
+    /// sidecar). Part of the issue #8 guard: a photo is exactly as irreplaceable as
+    /// the audio it sits beside.
+    var imagesPresent: Bool
     /// Byte size of `transcript/live.jsonl`, or nil if absent. A *stat*, deliberately
     /// — the scan must stay cheap, so it never parses the log. Whether the records
     /// inside are complete is the reader's problem, at the point of use.
@@ -65,6 +70,7 @@ struct CaptureSnapshot: Equatable {
          finalM4APartPresent: Bool = false,
          transcriptPresent: Bool = false,
          transcriptDirUnreadable: Bool = false,
+         imagesPresent: Bool = false,
          liveTranscriptByteSize: Int? = nil,
          canonicalRevisions: [Int] = [],
          revisionsByteSize: Int? = nil,
@@ -79,6 +85,7 @@ struct CaptureSnapshot: Equatable {
         self.finalM4APartPresent = finalM4APartPresent
         self.transcriptPresent = transcriptPresent
         self.transcriptDirUnreadable = transcriptDirUnreadable
+        self.imagesPresent = imagesPresent
         self.liveTranscriptByteSize = liveTranscriptByteSize
         self.canonicalRevisions = canonicalRevisions.sorted()
         self.revisionsByteSize = revisionsByteSize
@@ -92,8 +99,10 @@ struct CaptureSnapshot: Equatable {
     /// so `hasData` is false forever. Without this guard a single flipped byte in the
     /// manifest of a finished recording routes it to `.deleteCaptureDirectory` and
     /// destroys `final/recording.m4a` — the one file M1 promises is indestructible.
+    /// Images (`images/`) are the same kind of irreplaceable artifact as audio and
+    /// transcript: a real, un-losable photo with no other copy on disk.
     var holdsIrreplaceableArtifacts: Bool {
-        finalM4APresent || finalM4APartPresent || transcriptPresent
+        finalM4APresent || finalM4APartPresent || transcriptPresent || imagesPresent
     }
 }
 
@@ -268,6 +277,12 @@ extension DirectorySnapshot {
         // An empty directory holds nothing, so it must not keep junk alive forever.
         let transcriptPresent = !transcriptNames.isEmpty || transcriptDirUnreadable
 
+        // Images. Stat-level only, matching transcriptPresent's contract: existence +
+        // non-empty (at least one .json sidecar), never decoded.
+        let imagesDir = SegmentLayout.imagesDirectory(captureDirectory: directory)
+        let imageNames = (try? fm.contentsOfDirectory(atPath: imagesDir.path)) ?? []
+        let imagesPresent = imageNames.contains { $0.hasSuffix(".\(SegmentLayout.sidecarExtension)") }
+
         // Format resolution: manifest → sidecar → default; always bytesPerFrame-filled.
         let resolved = manifest?.format ?? sidecarFormat ?? defaultFormat
         let format = normalizingBytesPerFrame(resolved)
@@ -280,6 +295,7 @@ extension DirectorySnapshot {
             finalM4APresent: finalM4APresent, finalM4APartPresent: finalM4APartPresent,
             transcriptPresent: transcriptPresent,
             transcriptDirUnreadable: transcriptDirUnreadable,
+            imagesPresent: imagesPresent,
             liveTranscriptByteSize: liveSize,
             canonicalRevisions: canonicalRevisions,
             revisionsByteSize: revisionsByteSize,

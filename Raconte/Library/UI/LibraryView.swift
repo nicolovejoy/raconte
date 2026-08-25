@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Where a `LibraryView` push lands (also entry detail, since both screens share one
 /// `LibraryScreenModel`). Lives here rather than in `ContentView` because the library
@@ -290,6 +291,16 @@ struct LibraryEntryRow: View {
     let model: LibraryScreenModel
     let item: EntryListItem
 
+    /// image capture plan Task 9: row-level drag-and-drop target, design doc's "the
+    /// entry list row" alongside the detail screen's own `.onDrop`
+    /// (`EntryDetailView.handleImageProviders`). Cosmetic highlight only.
+    @State private var imageDropTargeted = false
+    /// Same failure surface as `EntryDetailView.imageAddFailed` — a dropped item that
+    /// wasn't a usable image, or a write that failed — shown here because the row has
+    /// no other place to report it (unlike the detail screen, a library row has no
+    /// sheet to reopen).
+    @State private var imageAddFailed = false
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             if let thumbnail = item.leadingThumbnail {
@@ -322,6 +333,46 @@ struct LibraryEntryRow: View {
         }
         .padding(.vertical, 6)
         .accessibilityIdentifier("library.row")
+        // image capture plan Task 9. Left cross-platform (not `#if os(macOS)`-gated) —
+        // same reasoning as `EntryDetailView`'s own `.onDrop`: SwiftUI's `.onDrop`
+        // compiles and is documented to work on iPadOS with no extra code in the common
+        // case, and there is no iPad simulator in this environment to confirm it live,
+        // so this is written once for both platforms rather than force-gated and then
+        // untested either way.
+        .onDrop(of: [.image], isTargeted: $imageDropTargeted, perform: handleImageProviders)
+        .background {
+            if imageDropTargeted {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+            }
+        }
+        .alert("Couldn’t Use That Photo", isPresented: $imageAddFailed) {
+            Button("OK", role: .cancel) {}
+        }
+    }
+
+    /// Row-level counterpart to `EntryDetailView.handleImageProviders` — same
+    /// `ImageDropSource.extract` data-extraction step, then the SAME
+    /// `LibraryScreenModel.addImage` the detail screen's picker sheet and drop/paste all
+    /// terminate at. No backdate-suggestion prompt here (Task 8's `EntryDetailView
+    /// .suggestedBackdate` sheet): a library row has no sheet host of its own to present
+    /// one into — that affordance stays scoped to the detail screen, where the owner is
+    /// already looking at the entry the image just landed on.
+    private func handleImageProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }) else {
+            return false
+        }
+        let captureID = item.captureID
+        Task {
+            guard let (data, type) = await ImageDropSource.extract(from: providers) else {
+                imageAddFailed = true
+                return
+            }
+            if !(await model.addImage(captureID, data: data, sourceUTType: type.identifier)) {
+                imageAddFailed = true
+            }
+        }
+        return true
     }
 
     private var rowContent: some View {

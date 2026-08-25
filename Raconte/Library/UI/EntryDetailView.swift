@@ -65,6 +65,15 @@ struct EntryDetailView: View {
     @State private var showingImageViewer = false
     @State private var viewerIndex = 0
 
+    /// image capture plan Task 9. `.onDrop`'s highlight while a drag hovers this
+    /// screen — cosmetic only, no logic depends on it.
+    @State private var imageDropTargeted = false
+    /// Shared by a failed drop and a failed paste (`ImageDropSource.extract` returned
+    /// nil, or `addImage` itself failed) — same copy `ImageCapturePickerSheet.pickError`
+    /// already shows for its own decode failures, since this is the same failure mode
+    /// reached a different way.
+    @State private var imageAddFailed = false
+
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
@@ -100,6 +109,38 @@ struct EntryDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // image capture plan Task 9: drag-and-drop onto the whole detail screen, not
+        // just the images strip — matches the design doc ("drag-and-drop onto the entry
+        // detail screen"). Left cross-platform, ungated by `#if os(macOS)`: SwiftUI's
+        // `.onDrop` compiles and is documented to work on iPadOS with no extra code in
+        // the common case (design doc, "iPad drag-and-drop"), and there is no iPad
+        // simulator in this environment to verify it live — so this is written once,
+        // for both platforms, rather than force-gated to macOS only and then untested
+        // either way.
+        .onDrop(of: [.image], isTargeted: $imageDropTargeted, perform: handleImageProviders)
+        .overlay {
+            if imageDropTargeted {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 3)
+                    .allowsHitTesting(false)
+            }
+        }
+        #if os(macOS)
+        // Paste is scoped to this screen having focus, not app-wide — a `.commands`
+        // scene modifier (the pattern `RaconteCommands` uses for the Mac menu bar)
+        // would fire regardless of which screen is showing, which is wrong for an
+        // action that only makes sense on an open entry. `.onPasteCommand` is SwiftUI's
+        // per-view paste hook: it wires into the Edit menu's Paste item and ⌘V for
+        // free, scoped to whichever view has it attached, with no `NSPasteboard` read
+        // of our own to write and no new Sendable surface to reason about — this
+        // codebase has no existing `NSPasteboard`/⌘V precedent (checked), so this is
+        // the minimal idiomatic mechanism SwiftUI offers rather than an invented one.
+        // macOS-only per the design doc; `JournalCoverPickerSheet`'s `#if os(iOS)` /
+        // `#else` split is the precedent for gating a platform-only affordance this way.
+        .onPasteCommand(of: [.image]) { providers in
+            _ = handleImageProviders(providers)
+        }
+        #endif
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -207,6 +248,9 @@ struct EntryDetailView: View {
             Button("OK") { backdateFailed = false }
         } message: {
             Text("The change didn’t save. Try again.")
+        }
+        .alert("Couldn’t Use That Photo", isPresented: $imageAddFailed) {
+            Button("OK", role: .cancel) {}
         }
     }
 
@@ -488,23 +532,56 @@ struct EntryDetailView: View {
 
     private var imagePickerSheet: some View {
         ImageCapturePickerSheet { data, type in
-            // Snapshot BEFORE the add — see `suggestedBackdate`'s doc comment. Adding a
-            // SECOND image to an already-backdated entry must never reopen or alter the
-            // backdate sheet; this is what guarantees it, regardless of what `item` looks
-            // like once `refresh()` below re-reads it.
-            let hadOriginalDateBeforeAdd = item.isBackdated
-            let succeeded = await model.addImage(captureID, data: data, sourceUTType: type.identifier)
-            if succeeded {
-                await refresh()
-                if let suggested = Self.suggestedBackdate(hadOriginalDateBeforeAdd: hadOriginalDateBeforeAdd,
-                                                           exifCapturedAt: ImageEXIF.capturedAt(from: data)) {
-                    backdateDraft = suggested
-                    backdatePrecisionDraft = .day
-                    showingBackdatePicker = true
-                }
-            }
-            return succeeded
+            await addPickedImage(data: data, type: type)
         }
+    }
+
+    /// The one place that calls `LibraryScreenModel.addImage` plus the backdate-suggestion
+    /// bookkeeping that has to happen around it — shared by the picker sheet's `onPick`
+    /// (Task 6) and by drag-and-drop / paste (`handleImageProviders`, Task 9), so those
+    /// two newer entry points terminate at exactly the same write path the picker sheet
+    /// already exercises, not a parallel one.
+    ///
+    /// Snapshot BEFORE the add — see `suggestedBackdate`'s doc comment. Adding a SECOND
+    /// image to an already-backdated entry must never reopen or alter the backdate sheet;
+    /// this is what guarantees it, regardless of what `item` looks like once `refresh()`
+    /// below re-reads it.
+    private func addPickedImage(data: Data, type: UTType) async -> Bool {
+        let hadOriginalDateBeforeAdd = item.isBackdated
+        let succeeded = await model.addImage(captureID, data: data, sourceUTType: type.identifier)
+        if succeeded {
+            await refresh()
+            if let suggested = Self.suggestedBackdate(hadOriginalDateBeforeAdd: hadOriginalDateBeforeAdd,
+                                                       exifCapturedAt: ImageEXIF.capturedAt(from: data)) {
+                backdateDraft = suggested
+                backdatePrecisionDraft = .day
+                showingBackdatePicker = true
+            }
+        }
+        return succeeded
+    }
+
+    /// The data-extraction + write step shared by `.onDrop` and `.onPasteCommand`
+    /// (image capture plan Task 9). Returns `true`/`false` synchronously per SwiftUI's
+    /// `.onDrop` contract (whether this drop was ACCEPTED — i.e. at least one provider
+    /// looks like an image — not whether the eventual add succeeded, which the async
+    /// `Task` below resolves after this call already returned); `.onPasteCommand`'s own
+    /// signature has no return value to feed, so its call site just discards it.
+    /// `ImageDropSource.extract` does the actual `NSItemProvider` -> `(Data, UTType)`
+    /// work — the same pure step `ImageDropSourceTests` pins directly — and
+    /// `addPickedImage` above is the same write path `imagePickerSheet` already uses.
+    private func handleImageProviders(_ providers: [NSItemProvider]) -> Bool {
+        guard providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }) else {
+            return false
+        }
+        Task {
+            if let (data, type) = await ImageDropSource.extract(from: providers) {
+                if !(await addPickedImage(data: data, type: type)) { imageAddFailed = true }
+            } else {
+                imageAddFailed = true
+            }
+        }
+        return true
     }
 
     private var imageViewer: some View {

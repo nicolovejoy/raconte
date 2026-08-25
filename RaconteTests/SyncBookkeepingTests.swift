@@ -252,4 +252,56 @@ final class SyncBookkeepingTests: XCTestCase {
         let read = await s.engineState()
         XCTAssertEqual(read, Data([0x02]))
     }
+
+    // MARK: #90 environment tag
+
+    func testEnvironmentTagRoundTrips() async throws {
+        let s = store()
+        let initial = await s.environmentTag()
+        XCTAssertNil(initial)
+        try await s.saveEnvironmentTag(.development)
+        let read = await s.environmentTag()
+        XCTAssertEqual(read, .development)
+    }
+
+    func testUnreadableTagIsNil() async throws {
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data([0xff, 0xfe]).write(to: SyncBookkeepingStore.environmentTagURL(root: syncRoot))
+        let read = await store().environmentTag()
+        XCTAssertNil(read)
+    }
+
+    func testUnrecognizedTagIsNil() async throws {
+        // Valid UTF-8, but not a `CloudKitEnvironment` case — distinct from the
+        // invalid-bytes path above: this exercises the `CloudKitEnvironment(rawValue:)`
+        // failure, not the `String(data:encoding:)` failure.
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data("staging".utf8).write(to: SyncBookkeepingStore.environmentTagURL(root: syncRoot))
+        let read = await store().environmentTag()
+        XCTAssertNil(read)
+    }
+
+    func testEnvironmentTagTrimsWhitespaceAndNewlines() async throws {
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data("production\n".utf8).write(to: SyncBookkeepingStore.environmentTagURL(root: syncRoot))
+        let read = await store().environmentTag()
+        XCTAssertEqual(read, .production)
+    }
+
+    func testWipeRemovesTag() async throws {
+        let s = store()
+        try await s.saveEnvironmentTag(.production)
+        try await s.wipe()
+        let read = await s.environmentTag()
+        XCTAssertNil(read)
+    }
+
+    func testHasBookkeepingTracksRootExistence() async throws {
+        let s = store()
+        let before = await s.hasBookkeeping()
+        XCTAssertFalse(before)
+        try await s.recordUpload(UploadedDigest(sha256: "aa", bytes: 1), for: "e.X")
+        let after = await s.hasBookkeeping()
+        XCTAssertTrue(after)
+    }
 }

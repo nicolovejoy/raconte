@@ -29,15 +29,20 @@ actor SyncCoordinator: SyncHooks {
     private var lastPushAt: Date?
     /// M4 T12: when this device last asked the engine to fetch (launch or foreground).
     private var lastFetchAt: Date?
+    /// #90: which CloudKit environment this binary talks to — the gate's other
+    /// input, alongside whatever tag `bookkeeping` was last stamped with.
+    private let environment: CloudKitEnvironment
 
     init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync"),
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         environment: CloudKitEnvironment = .production) {
         self.bookkeeping = bookkeeping
         self.scanner = scanner
         self.engine = engine
         self.log = log
         self.now = now
+        self.environment = environment
     }
 
     /// Boot: resume the engine from its last state, then reconcile the tree against the
@@ -56,10 +61,59 @@ actor SyncCoordinator: SyncHooks {
     /// `foregrounded()` below is the same idea for scene-active transitions; silent push
     /// is not wired (no APNs receipt path exists in this app).
     func launch() async {
+        await applyEnvironmentGate()
         let state = await bookkeeping.engineState()
         await engine.start(stateData: state)
         await reconcile()
         await fetchNow()
+    }
+
+    /// #90: before the engine resumes from `engine-state.bin`, make sure every
+    /// byte of bookkeeping was written by the environment this binary talks to.
+    /// Wipe-then-tag ordering matters: `wipe()` removes the tag file too, so the
+    /// tag write must follow it. A failed wipe must NOT be followed by the tag
+    /// write — writing the tag over incompletely-wiped (possibly still
+    /// wrong-environment) bookkeeping would make the next launch see tag ==
+    /// detected and proceed, permanently certifying the stranded state; there is
+    /// no downstream self-heal for that (the NOT_FOUND self-heal covers a
+    /// different failure — a record CloudKit no longer has — not stale local
+    /// bookkeeping from the wrong environment). So on a failed wipe we return
+    /// without writing the tag, and the gate retries from scratch next launch.
+    /// A failed TAG write (wipe having succeeded) stays `try?`: at worst the
+    /// next launch wipes an already-empty directory again, which is harmless.
+    ///
+    /// Benign race: `live()`'s composition-time rehydration Task
+    /// (`rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams`) enumerates
+    /// `sync/staging/` concurrently with this wipe. Every interleaving is
+    /// benign — read-before-wipe applies whatever was parked before this method
+    /// clears it, and any staging file re-created after (by the forced refetch
+    /// this wipe triggers) is repopulated by that refetch anyway; read-after-wipe
+    /// simply finds nothing and no-ops.
+    private func applyEnvironmentGate() async {
+        let tag = await bookkeeping.environmentTag()
+        let exists = await bookkeeping.hasBookkeeping()
+        switch EnvironmentGate.decide(tag: tag, detected: environment, bookkeepingExists: exists) {
+        case .proceed:
+            return
+        case .writeTag:
+            try? await bookkeeping.saveEnvironmentTag(environment)
+            log.notice("sync: environment tag written (\(self.environment.rawValue, privacy: .public))")
+        case .wipeAndWriteTag:
+            do {
+                try await bookkeeping.wipe()
+            } catch {
+                log.error("""
+                    sync: bookkeeping wipe failed — tag NOT written, gate retries next launch: \
+                    \(String(describing: error), privacy: .public)
+                    """)
+                return
+            }
+            try? await bookkeeping.saveEnvironmentTag(environment)
+            log.notice("""
+                sync: environment tag \(tag?.rawValue ?? "absent", privacy: .public) vs \
+                \(self.environment.rawValue, privacy: .public) — bookkeeping wiped, full resync
+                """)
+        }
     }
 
     /// M4 T12: the foreground half of design §3's fetch triggers — call when the app's
@@ -246,7 +300,8 @@ extension SyncCoordinator {
         let engine = CloudKitEngineControl(exchange: exchange, persistState: { [bookkeeping] data in
             try? await bookkeeping.saveEngineState(data)
         })
-        let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine)
+        let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine,
+                                          environment: CloudKitEnvironment.detectFromBundle())
         // Wired last, and in this order, because each half needs the other: the stores
         // notify the coordinator, and the coordinator's exchange writes through the
         // stores. See `JournalStore.attach(syncHooks:)`. `exchange.attach(engine:)`

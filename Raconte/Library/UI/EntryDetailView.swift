@@ -469,10 +469,40 @@ struct EntryDetailView: View {
         }
     }
 
+    /// Image capture plan Task 8: whether adding an image should prefill and present the
+    /// backdate sheet. Pure, so the sticky-backdate rule (CLAUDE.md: "Backdates are
+    /// sticky: editable with explicit overrides, never clearable by one tap") pins with a
+    /// plain unit test rather than a view-inspection harness — same reasoning as
+    /// `backdateButtonVisible`/`playbackSectionVisible` above.
+    ///
+    /// `hadOriginalDateBeforeAdd` MUST be a snapshot taken before the add, never derived
+    /// from a post-add re-read: the call site captures `item.isBackdated` synchronously,
+    /// before the `await model.addImage(...)` that follows it, so no concurrent edit in
+    /// between can be mistaken for "the entry always had no date". Returns the date to
+    /// prefill, or nil when the existing date must stick (already backdated) or there was
+    /// no EXIF date to suggest in the first place.
+    static func suggestedBackdate(hadOriginalDateBeforeAdd: Bool, exifCapturedAt: Date?) -> Date? {
+        guard !hadOriginalDateBeforeAdd, let exifCapturedAt else { return nil }
+        return exifCapturedAt
+    }
+
     private var imagePickerSheet: some View {
         ImageCapturePickerSheet { data, type in
+            // Snapshot BEFORE the add — see `suggestedBackdate`'s doc comment. Adding a
+            // SECOND image to an already-backdated entry must never reopen or alter the
+            // backdate sheet; this is what guarantees it, regardless of what `item` looks
+            // like once `refresh()` below re-reads it.
+            let hadOriginalDateBeforeAdd = item.isBackdated
             let succeeded = await model.addImage(captureID, data: data, sourceUTType: type.identifier)
-            if succeeded { await refresh() }
+            if succeeded {
+                await refresh()
+                if let suggested = Self.suggestedBackdate(hadOriginalDateBeforeAdd: hadOriginalDateBeforeAdd,
+                                                           exifCapturedAt: ImageEXIF.capturedAt(from: data)) {
+                    backdateDraft = suggested
+                    backdatePrecisionDraft = .day
+                    showingBackdatePicker = true
+                }
+            }
             return succeeded
         }
     }

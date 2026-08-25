@@ -481,11 +481,16 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 case .audio, .revision, .liveLog, .markerStream, .image:
                     // `.image` (image-capture design) sits here on the same cascade
                     // reasoning as its siblings — an Image record carries the same
-                    // `.deleteSelf` `entryRef`. The one shape that is NOT a cascade,
-                    // a remote removal of ONE image from a still-live entry, has no
-                    // producer yet: nothing in this build ever enqueues an
-                    // image-only delete. Wiring that inbound removal belongs with
-                    // inbound image ingest (plan Task 5), not here.
+                    // `.deleteSelf` `entryRef`, and THIS branch is still correct for
+                    // that true cascade case (the parent Entry deleted). The one shape
+                    // that is NOT a cascade — a remote removal of ONE image from a
+                    // still-live entry — now HAS an outbound producer
+                    // (`LibraryScreenModel.removeImage`, residual-review fix: it now
+                    // fires a real `noteLocalDelete` for the image record), but still
+                    // has no INBOUND consumer: nothing here acts on that event to
+                    // remove the image from a remote device's own local copy. That gap
+                    // is real, known, and belongs with inbound image ingest (plan
+                    // Task 5), not here.
                     //
                     // These cascade from the SAME Entry deletion `.entry` above already
                     // handles (design §5: children carry `.deleteSelf`, so purging the

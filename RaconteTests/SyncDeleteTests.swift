@@ -402,6 +402,47 @@ final class LibraryScreenModelDeleteSyncTests: XCTestCase {
         XCTAssertTrue(dropped.isEmpty)
     }
 
+    // MARK: removeImage (add-then-delete race, residual review issue 1)
+
+    /// If `addImage` (which queues a save via `noteLocalChange`) is immediately
+    /// followed by `removeImage` for the SAME image, the queued save must be
+    /// withdrawn, not left for the real `CKSyncEngine` to (maybe) dedupe on its own —
+    /// `CloudEngineControl.enqueueDeletes` on the real engine only ever ADDS a pending
+    /// delete; it never removes a pending save for the same name. Mirrors
+    /// `testDeleteEntryPermanentlyEnqueuesEntryDeleteAndDropsFamilySaves` above:
+    /// `droppedNameSet` is this suite's established way to prove a withdrawal actually
+    /// happened, not merely that a delete was queued.
+    func testRemoveImageWithdrawsAPendingSaveForTheSameImage() async throws {
+        let directory = captureDir(idA)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let engine = FakeCloudEngine()
+        let m = model()
+        m.attach(syncHooks: coordinator(engine: engine))
+
+        let added = await m.addImage(idA, data: try XCTUnwrap(Self.onePixelPNG), sourceUTType: nil)
+        XCTAssertTrue(added)
+        let mintedImageID = await m.images(for: idA).first?.id
+        let imageID = try XCTUnwrap(mintedImageID)
+        let imageName = SyncRecordName.image(captureID: idA, imageID: imageID)
+
+        let savedBefore = await engine.savedNameSet
+        XCTAssertTrue(savedBefore.contains(imageName), "fixture sanity: addImage really queued a save")
+
+        await m.removeImage(idA, imageID: imageID)
+
+        let dropped = await engine.droppedNameSet
+        XCTAssertTrue(dropped.contains(imageName),
+                     "the queued save for the same image must be withdrawn, not left pending")
+        let deletes = await engine.deletedNames
+        XCTAssertEqual(deletes, [[imageName]],
+                       "removeImage also fires a real CK delete — it is not a cascade child of anything")
+    }
+
+    /// A minimal valid 1x1 PNG, so `ImageStore.addImage`'s ImageIO decode succeeds.
+    /// Same fixture as `LibraryScreenModelBlankEntryTests`.
+    private static let onePixelPNG: Data? = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+
     // MARK: emptyTrash (bulk)
 
     func testEmptyTrashEnqueuesEntryDeleteForEveryTrashedEntry() async throws {

@@ -142,12 +142,21 @@ struct SyncTreeScanner {
 
         if let audioArtifact = audioArtifact(captureID: captureID, directory: directory) {
             artifacts.append(audioArtifact)
-        } else {
+        } else if manifest.final.durationFrames != 0 {
             // `final.verifiedAt` is set but the m4a is gone or unreadable — worth
             // surfacing, but a DIFFERENT failure than an unreadable manifest, so it
             // gets its own path-qualified form (matching the revision case below)
             // rather than reusing the bare-captureID form that means "whole capture
             // excluded."
+            //
+            // `durationFrames == 0` is the ONE case where a missing m4a is not a
+            // failure at all: an entry that never had audio (`BlankEntryMinter`
+            // stamps exactly that — `verifiedAt` set, `durationFrames = 0`), i.e.
+            // every image-only and blank entry. Reporting those would fill the Debug
+            // screen's diagnostic list with normal entries. A nil `durationFrames` is
+            // NOT silenced: a verified manifest with no frame count at all is
+            // anomalous (`audioRecordToPush` refuses to push one), so it keeps its
+            // report.
             skipped.append("\(captureID)/final/\(SegmentLayout.finalRecordingName)")
         }
 
@@ -160,6 +169,8 @@ struct SyncTreeScanner {
         if let markerStream = markerStreamArtifact(captureID: captureID, directory: directory) {
             artifacts.append(markerStream)
         }
+
+        artifacts += scanImages(captureID: captureID, directory: directory, skipped: &skipped)
 
         return artifacts
     }
@@ -265,6 +276,52 @@ struct SyncTreeScanner {
         return artifacts
     }
 
+    /// One artifact per attached image (image-capture design, "Sync mapping"), so
+    /// reconciliation can discover an image the same way it discovers everything else.
+    /// **This is what actually gets a locally-added image uploaded**: an image is
+    /// attached long AFTER finalize (`LibraryScreenModel.addImage`), so
+    /// `FinalizeArtifactPush.namesToPush` — which runs at finalize, once — has already
+    /// come and gone by then. Without an artifact here, `SyncPlanner.reconcile` would
+    /// have nothing to compare against the ledger and the image would never be
+    /// enqueued by anything, ever.
+    ///
+    /// Digest definition (locked): sha256 of the ORIGINAL file's bytes, verbatim,
+    /// through the shared `rawDigest` — the identical formula
+    /// `SyncRecordExchange.imageRecordToPush` ledgers after a confirmed save. That
+    /// equality is the whole point of sharing it: if the two disagreed, this capture's
+    /// images would re-enqueue on every launch forever (the T9 lesson every sibling
+    /// digest comment states). The sidecar's own stored `sha256` is deliberately NOT
+    /// used — it is a claim about the bytes, not the bytes.
+    ///
+    /// The listing and the identity rules are the SAME ones the push list applies
+    /// (`ImageStore.sidecarURLs` + a ULID filename + a decodable sidecar) — a third
+    /// hand-rolled enumeration, or a looser predicate here, would mean the scan and the
+    /// push disagreed about which images exist. An `.orig` that is missing or
+    /// unreadable produces no artifact and a path-qualified skip, exactly as an
+    /// unreadable revision does; a sidecar that fails the identity rules is silently
+    /// not an image at all (it may be any stray `.json`), matching how `scanRevisions`
+    /// ignores a filename that isn't a `canonical-<n>.json` in the first place.
+    private func scanImages(captureID: String, directory: URL, skipped: inout [String]) -> [SyncArtifactState] {
+        var artifacts: [SyncArtifactState] = []
+        for sidecarURL in ImageStore.sidecarURLs(captureDirectory: directory) {
+            let imageID = sidecarURL.deletingPathExtension().lastPathComponent
+            guard ULID.isWellFormed(imageID),
+                  let sidecarData = try? Data(contentsOf: sidecarURL),
+                  let sidecar = try? ImageStore.decodeSidecar(sidecarData) else { continue }
+            let originalURL = SegmentLayout.imageOriginalURL(captureDirectory: directory,
+                                                              imageID: imageID,
+                                                              ext: sidecar.originalExtension)
+            guard let data = try? Data(contentsOf: originalURL, options: .mappedIfSafe) else {
+                skipped.append("\(captureID)/\(SegmentLayout.imagesDirName)/\(originalURL.lastPathComponent)")
+                continue
+            }
+            let digest = Self.rawDigest(data)
+            artifacts.append(SyncArtifactState(name: .image(captureID: captureID, imageID: imageID),
+                                                sha256: digest.sha256, bytes: digest.bytes))
+        }
+        return artifacts
+    }
+
     // MARK: Digest
 
     /// Full lowercase-hex sha256 — the one hashing formula every digest definition
@@ -284,9 +341,12 @@ struct SyncTreeScanner {
 /// unusable. Everything else is path-qualified to name exactly which artifact failed
 /// while the rest of that capture still scanned normally:
 /// `"<captureID>/entry.json"` (entry.json exists but is unreadable — no Entry
-/// artifact), `"<captureID>/final/recording.m4a"` (verified but the file is gone or
-/// unreadable — no AudioAsset artifact), `"<captureID>/<fileName>"` for an unreadable
-/// revision file. `AppContainer.journalsFileName` names an unreadable registry. This is
+/// artifact), `"<captureID>/final/recording.m4a"` (verified, the manifest reports
+/// audio, and the file is gone or unreadable — no AudioAsset artifact; an entry that
+/// never had audio at all, `durationFrames == 0`, is NOT reported, since a missing m4a
+/// is that entry's normal state), `"<captureID>/<fileName>"` for an unreadable
+/// revision file, `"<captureID>/images/<imageID>.<ext>"` for an image whose sidecar
+/// reads but whose original file is gone or unreadable — no Image artifact. `AppContainer.journalsFileName` names an unreadable registry. This is
 /// Debug-screen diagnostics (T12), never a decision input to `SyncPlanner` — a skipped
 /// item produces no artifact and is simply absent from `artifacts`, which is all the
 /// planner ever sees.

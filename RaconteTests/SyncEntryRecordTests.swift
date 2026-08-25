@@ -217,6 +217,12 @@ final class SyncEntryRecordTests: XCTestCase {
                        "not finalized at all — nothing pushes yet")
 
         try writeManifest(verified: true)
+        // The `.m4a` is part of the fixture (image-capture plan Task 4): `.audio` is no
+        // longer named unconditionally for a finalized capture — it is named when a
+        // readable `final/recording.m4a` is actually there, because an entry can now be
+        // finalized with no audio at all. This fixture is an AUDIO-BEARING capture, so it
+        // writes one, and the assertions below are unchanged from before that change.
+        try writeFinalM4a()
         XCTAssertEqual(FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID),
                        [.entry(captureID: captureID), .audio(captureID: captureID)],
                        "finalized but no transcript/live.jsonl — a degraded capture still pushes its recording")
@@ -239,6 +245,8 @@ final class SyncEntryRecordTests: XCTestCase {
     /// `.liveLog(captureID:)` gets queued for a directory nothing can hash or upload.
     func testNamesToPushTreatsAnUnreadableLiveLogAsAbsentNotPresent() throws {
         try writeManifest(verified: true)
+        // Audio-bearing fixture — see `testNamesToPushIsThreeAnswerHonestAboutTheLiveLog`.
+        try writeFinalM4a()
         try writeLiveLogAsUnreadableDirectory()
 
         XCTAssertTrue(FileManager.default.fileExists(
@@ -266,6 +274,8 @@ final class SyncEntryRecordTests: XCTestCase {
 
     func testPushNotifiesTheHookForEveryEligibleNameOnceFinalized() async throws {
         try writeManifest(verified: true)
+        // Audio-bearing fixture — see `testNamesToPushIsThreeAnswerHonestAboutTheLiveLog`.
+        try writeFinalM4a()
         try writeLiveLog()
         let hooks = RecordingSyncHooks()
 
@@ -300,6 +310,8 @@ final class SyncEntryRecordTests: XCTestCase {
     /// with its speaker attribution missing the whole time.
     func testNamesToPushIncludesThisDevicesMarkerStreamWhenMarkersExist() throws {
         try writeManifest(verified: true)
+        // Audio-bearing fixture — see `testNamesToPushIsThreeAnswerHonestAboutTheLiveLog`.
+        try writeFinalM4a()
         try writeMarkerLog()
 
         XCTAssertEqual(
@@ -328,6 +340,8 @@ final class SyncEntryRecordTests: XCTestCase {
     /// the unreadable half of this test fail.
     func testNamesToPushOmitsAnAbsentOrUnreadableMarkerStream() throws {
         try writeManifest(verified: true)
+        // Audio-bearing fixture — see `testNamesToPushIsThreeAnswerHonestAboutTheLiveLog`.
+        try writeFinalM4a()
 
         XCTAssertEqual(
             FinalizeArtifactPush.namesToPush(capturesRoot: capturesRoot, captureID: captureID,
@@ -351,6 +365,8 @@ final class SyncEntryRecordTests: XCTestCase {
     /// sees the marker stream fired at finalize.
     func testPushNotifiesTheHookForTheMarkerStreamAtFinalize() async throws {
         try writeManifest(verified: true)
+        // Audio-bearing fixture — see `testNamesToPushIsThreeAnswerHonestAboutTheLiveLog`.
+        try writeFinalM4a()
         try writeLiveLog()
         try writeMarkerLog()
         let hooks = RecordingSyncHooks()

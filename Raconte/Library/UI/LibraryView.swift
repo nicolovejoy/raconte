@@ -26,6 +26,10 @@ struct LibraryView: View {
     /// Pushes `.journalEditor(id)` onto `router.detailPath` (wired in `ContentView`).
     /// A no-op default keeps `#Preview`/tests that never tap the header working.
     var onEditJournal: (String) -> Void = { _ in }
+    /// Pushes `.entry(captureID)` onto `router.detailPath` for a freshly minted blank
+    /// entry (image capture plan Task 7, "+ New entry" toolbar action) — same
+    /// no-op-default-for-previews shape as `onEditJournal` above.
+    var onCreateEntry: (String) -> Void = { _ in }
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
     /// trash or move, if any. Held here rather than per-row `@State` because the
@@ -38,6 +42,9 @@ struct LibraryView: View {
     /// `EntryDetailView`/`TrashView`.
     @State private var trashFailed = false
     @State private var moveFailed = false
+    /// `BlankEntryMinter` write failure surfaced to the owner — one more instance of the
+    /// `trashFailed`/`moveFailed` family (image capture plan Task 7).
+    @State private var createEntryFailed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +63,22 @@ struct LibraryView: View {
             #endif
         }
         .navigationTitle(title)
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    Task {
+                        if let captureID = await model.createBlankEntry(journalID: journal?.id) {
+                            onCreateEntry(captureID)
+                        } else {
+                            createEntryFailed = true
+                        }
+                    }
+                } label: {
+                    Label("New Entry", systemImage: "plus")
+                }
+                .accessibilityIdentifier("library.newEntry")
+            }
+        }
         .task { await model.rescan() }
         .confirmationDialog("Move this entry to the trash?",
                             isPresented: Binding(
@@ -98,6 +121,11 @@ struct LibraryView: View {
         }
         .alert("Couldn’t move this entry", isPresented: $moveFailed) {
             Button("OK") { moveFailed = false }
+        } message: {
+            Text("The change didn’t save. Try again.")
+        }
+        .alert("Couldn’t create a new entry", isPresented: $createEntryFailed) {
+            Button("OK") { createEntryFailed = false }
         } message: {
             Text("The change didn’t save. Try again.")
         }
@@ -179,7 +207,7 @@ struct LibraryView: View {
                     Section(String(group.year)) {
                         ForEach(group.items) { item in
                             NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                                LibraryEntryRow(item: item)
+                                LibraryEntryRow(model: model, item: item)
                             }
                             // On the LINK, not on the row inside it. A `NavigationLink`
                             // merges its label's children into one accessibility element,
@@ -256,9 +284,47 @@ struct LibraryView: View {
 /// accessibility label naming exactly what they mean rather than raising an icon that
 /// reads as an error.
 struct LibraryEntryRow: View {
+    /// Only needed for the leading thumbnail's model-mediated read
+    /// (`thumbnailData(captureID:imageID:)`) — image capture plan Task 7. Every other
+    /// field on this row comes from `item` alone, same as before that task.
+    let model: LibraryScreenModel
     let item: EntryListItem
 
     var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let thumbnail = item.leadingThumbnail {
+                AsyncCaptureImage(id: thumbnail.id, load: {
+                    await model.thumbnailData(captureID: item.captureID, imageID: thumbnail.id)
+                }, loaded: { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                }, placeholder: {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.quaternary)
+                })
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .accessibilityIdentifier("library.row.thumbnail")
+                // A `NavigationLink`'s label flattens every child into ONE accessibility
+                // element (this row's own doc comment, and `library.row.duration`'s —
+                // see `CaptureUITests.recentRows`), so `library.row.thumbnail` is not
+                // independently queryable from a UI test; only the merged element's
+                // LABEL is. This label is the thing a thumbnail-presence UI test can
+                // actually assert on, same technique `CaptureUITests.durationSeconds
+                // (in:)` uses for the duration text.
+                .accessibilityLabel("Entry photo")
+            }
+
+            rowContent
+        }
+        .padding(.vertical, 6)
+        .accessibilityIdentifier("library.row")
+    }
+
+    private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(dateText)
@@ -314,8 +380,6 @@ struct LibraryEntryRow: View {
                     .accessibilityIdentifier("library.row.journal")
             }
         }
-        .padding(.vertical, 6)
-        .accessibilityIdentifier("library.row")
     }
 
     private var dateText: String { item.formattedEffectiveDate() }

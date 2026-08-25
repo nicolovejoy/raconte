@@ -268,7 +268,7 @@ struct CaptureView: View {
                 Text("Last entry")
                     .captureLabel(.recentHeader)
                 NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                    LibraryEntryRow(item: item)
+                    LibraryEntryRow(model: model.library, item: item)
                 }
                 .accessibilityIdentifier("capture.recentRow")
             }

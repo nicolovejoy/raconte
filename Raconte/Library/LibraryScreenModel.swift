@@ -199,6 +199,10 @@ final class LibraryScreenModel {
             // frame-bounded spans (one already voice-marked, one not), since the
             // editor's fixture above is deliberately frameless. No-op unless asked for.
             UITestVoiceMarkingSeed.seedIfRequested(capturesRoot: capturesRoot)
+            // Image capture plan Task 7: a blank entry with one real image already
+            // attached, for the library-row-thumbnail and remove-round-trip UI tests.
+            // No-op unless asked for.
+            UITestImageSeed.seedIfRequested(capturesRoot: capturesRoot)
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif

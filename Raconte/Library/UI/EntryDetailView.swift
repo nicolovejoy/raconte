@@ -446,8 +446,7 @@ struct EntryDetailView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
-                            ImageThumbnailView(capturesRoot: model.capturesRoot, captureID: captureID,
-                                               sidecar: sidecar)
+                            ImageThumbnailView(model: model, captureID: captureID, sidecar: sidecar)
                                 .frame(width: 80, height: 80)
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 .contentShape(Rectangle())
@@ -479,7 +478,7 @@ struct EntryDetailView: View {
     }
 
     private var imageViewer: some View {
-        ImageFullScreenViewer(capturesRoot: model.capturesRoot, captureID: captureID, images: images,
+        ImageFullScreenViewer(model: model, captureID: captureID, images: images,
                               selectedIndex: viewerIndex) { sidecar in
             await model.removeImage(captureID, imageID: sidecar.id)
             await refresh()
@@ -759,38 +758,31 @@ struct EntryDetailView: View {
     }
 }
 
-/// One thumbnail in `EntryDetailView`'s images strip — reads `images/thumbnails/
-/// <imageID>.jpg` off disk (image capture plan Task 2's generated-preview file, never
-/// the original). A missing/corrupt thumbnail degrades to a generic placeholder icon
-/// (design doc, "Thumbnails": "degrades to a generic image placeholder") rather than
-/// blocking or erroring the whole strip — regeneration of a missing thumbnail is not
-/// this task's concern.
+/// One thumbnail in `EntryDetailView`'s images strip — the generated `images/
+/// thumbnails/<imageID>.jpg` preview (image capture plan Task 2), never the original.
+/// A missing/corrupt thumbnail degrades to a generic placeholder icon (design doc,
+/// "Thumbnails": "degrades to a generic image placeholder") rather than blocking or
+/// erroring the whole strip — regeneration of a missing thumbnail is not this task's
+/// concern. Reads through `LibraryScreenModel.thumbnailData(captureID:imageID:)`
+/// (Task 6 fix round 1) rather than touching disk itself — see `AsyncCaptureImage`'s
+/// doc comment.
 private struct ImageThumbnailView: View {
-    let capturesRoot: URL
+    let model: LibraryScreenModel
     let captureID: String
     let sidecar: ImageSidecar
 
-    @State private var data: Data?
-
     var body: some View {
-        Group {
-            if let data, let image = JournalCoverThumbnail.decode(data) {
-                image
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.quaternary)
-            }
-        }
-        .task(id: sidecar.id) { await load() }
-    }
-
-    private func load() async {
-        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        let url = SegmentLayout.imageThumbnailURL(captureDirectory: directory, imageID: sidecar.id)
-        data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
+        AsyncCaptureImage(id: sidecar.id, load: {
+            await model.thumbnailData(captureID: captureID, imageID: sidecar.id)
+        }, loaded: { image in
+            image
+                .resizable()
+                .scaledToFill()
+        }, placeholder: {
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.quaternary)
+        })
     }
 }

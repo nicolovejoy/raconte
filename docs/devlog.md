@@ -2,6 +2,63 @@
 
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
+## Session 2026-08-24 late (laptop — #90 SHIPPED via SDD + device-verified; headless TestFlight pipeline; builds 4+5 uploaded from CLI)
+
+Big session: the #94 mystery resolved, #90 designed→shipped→verified, and the release
+loop went fully headless.
+
+- **Build-4 smoke overturned the working theory.** #97's diagnostics showed
+  `recovery: recovered=0 finalize=0 verify=0 quarantined=0 deleted=0` — the phone's
+  disk was already fully healed. The #94 heal had worked **silently during build 3's
+  launch** (its refusal lines were a race: sync drained pending before verifyFinal
+  stamped, and build 3 had no stamp logging). Quarantine and manifest-shape theories
+  both dead; the only remaining blocker was **#90**: dev-era `ledger.json` claiming
+  "uploaded", so reconcile never enqueues → never pushes → never heals.
+- **#90 shipped (PR #99, merged):** `sync/` bookkeeping now carries an environment tag
+  (`sync/environment`), detected by parsing the embedded provisioning profile (absent ⇒
+  production; iOS can't read its own signed entitlements). Mismatch or pre-tag
+  bookkeeping ⇒ wipe the whole directory + full resync. Three pure cores
+  (`CloudKitEnvironment.parse`, `EnvironmentGate.decide`, tag round-trip) + one wiring
+  site at the top of `SyncCoordinator.launch()` before the engine resumes state.
+  Design (with verified safety argument + one accepted risk: an unflushed delete at the
+  crossing moment resurrects): `docs/plans/2026-08-24-90-environment-tag-design.md`.
+  Suite 1798 → 1817+2. Opus final review caught the one load-bearing bug: tagging
+  after a *failed* wipe would permanently certify stale bookkeeping — gate now logs
+  and retries next launch instead.
+- **Device-verified:** build 5 first launch wiped + resynced; the ~20 stranded dev-era
+  entries appeared on the iPad (owner-confirmed, "appears to be working"). The
+  unfiled-journal symptom (#90's user-visible face) resolves with it. #90 left open
+  pending a formal close; #94's full arc is now closed on device too.
+- **Headless TestFlight pipeline (PR #98, merged):** `scripts/upload_testflight.sh` —
+  `xcodebuild archive -allowProvisioningUpdates` (Xcode GUI account) then
+  `-exportArchive` with ASC API-key flags against `scripts/ExportOptions.plist`
+  (`destination: upload` = export IS the upload). Recipe cross-checked against
+  MusicForge's (see `~/src/.handoff/musicforge-raconte.md`); key/issuer read from
+  `~/.appstoreconnect/` by the script — values never enter a session. Builds 4 AND 5
+  archived+uploaded this way, zero Xcode GUI. Nico granted `gh pr merge` +
+  `xcodebuild` permissions, so the merge→bump→build→upload loop is now agent-runnable;
+  device smoke stays human.
+- **Device log capture without Console.app:** `sudo /usr/bin/log collect --device-name
+  "Nico's iPhone 17 pro" --last 30m --output <path>.logarchive` (sudo is Nico's, via
+  `!`), then `log show --archive … --predicate 'subsystem == "org.pianohouseproject.raconte"' --info`.
+  Retroactive — captures a launch that already happened. NB: a `log` zsh function
+  shadows the real tool; always `/usr/bin/log`.
+- Mac container survey: all 30 captures healthy (not 7 as previously noted).
+
+**Next steps:**
+1. Close #90 on GitHub (device-verified) with a comment pointing at PR #99 + the
+   build-5 smoke; note the accepted pending-delete resurrection risk from design §4.
+2. **macOS TestFlight:** rebuild from current main (old archive predates every fix),
+   `asc_regenerate_profile.py --platform macos` if the profile is stale, upload via
+   `scripts/upload_testflight.sh` adapted for macOS (or Organizer). Expect the Mac's
+   first sync to wipe+resync (env crossing) — that's the gate working.
+3. #89 (About page: version + sync status, incl. "last full resync") — four smoke
+   sessions have paid for its absence. Import/export facility on the roadmap
+   (owner-endorsed).
+4. #91 (reconcile-latency, scope widened by #94) — next sync fix.
+5. Sonnet batch: #85, #83, #86, backlog #73–78; Nico's calls: #81, #67, #70, #68,
+   #66, #63, #60/#59.
+
 ## Session 2026-08-24 pm (laptop — #94 fixed+merged; CI halved; build-3 smoke: half a win; diagnostics PR #97 open at handoff)
 
 Executed #94 end-to-end with subagent-driven development (plan at

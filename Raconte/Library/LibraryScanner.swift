@@ -118,9 +118,17 @@ struct LibraryScanner: Sendable {
 
     /// Anything durable at all. Mirrors `holdsIrreplaceableArtifacts` plus raw frames:
     /// a capture recording *right now* has neither an `.m4a` nor a transcript, only
-    /// segments, and must still appear.
+    /// segments, and must still appear. Also true whenever `manifest.final.verifiedAt`
+    /// is set (image capture plan, design doc "Entry existence with no audio") — a
+    /// blank entry minted by `BlankEntryMinter` is finalized from the instant it's
+    /// written and has none of the above (no m4a, no transcript, no images yet, no raw
+    /// segments), so without this it would read as `noDurableContent` and vanish from
+    /// the library the moment it's created. The library scan reads `verifiedAt != nil`
+    /// and nothing else about *why* it's set, per the design doc — same stance
+    /// `FinalizeArtifactPush.isFinalized` and `RecoveryPlanner` already take.
     static func holdsSomethingToShow(_ capture: CaptureSnapshot) -> Bool {
         if capture.holdsIrreplaceableArtifacts { return true }
+        if capture.manifest?.final.verifiedAt != nil { return true }
         return PlayableSourceSelector.frameTotal(of: PlayableSourceSelector.rawSegments(capture)) > 0
     }
 
@@ -161,7 +169,8 @@ struct LibraryScanner: Sendable {
             journal: journal,
             snippet: transcript.snippet,
             transcript: transcript.state,
-            degradations: degradations)
+            degradations: degradations,
+            images: ImageStore.readSidecars(captureDirectory: capture.directory))
     }
 
     // MARK: - Per-capture facts

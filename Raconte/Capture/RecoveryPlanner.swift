@@ -99,7 +99,18 @@ enum RecoveryPlanner {
         case .complete:
             if capture.finalM4APresent && verified { return .finishRawDelete(captureID: capture.captureID) }
             if capture.finalM4APresent { return .verifyFinal(captureID: capture.captureID) }
-            // Anomalous: `complete` but no `.m4a`. Keep audio if any, else discard.
+            // `complete` + verified + no `.m4a` is the blank-entry shape (image capture
+            // plan, design doc "Entry existence with no audio"): nothing to verify, so
+            // it was stamped `verifiedAt` immediately at mint time and never had a
+            // `recording.m4a` to begin with. `.finishRawDelete` is a safe no-op here —
+            // there is no `segments/` directory either — and is the same "already
+            // done, nothing left to do" action a real finalized capture gets. Without
+            // this branch a blank entry with no images yet (nothing in
+            // `holdsIrreplaceableArtifacts`) falls through to the anomalous case below
+            // and gets deleted the very next launch.
+            if verified { return .finishRawDelete(captureID: capture.captureID) }
+            // Anomalous: `complete` but no `.m4a` and never verified. Keep audio if
+            // any, else discard.
             return hasData ? .enqueueFinalize(captureID: capture.captureID)
                            : .deleteCaptureDirectory(captureID: capture.captureID)
 

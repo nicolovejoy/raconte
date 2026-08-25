@@ -218,4 +218,84 @@ final class ImageStoreTests: XCTestCase {
         let thumbURL = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: "IMG_INGEST")
         XCTAssertTrue(FileManager.default.fileExists(atPath: thumbURL.path))
     }
+
+    // MARK: regenerateThumbnailIfMissing (final review I4)
+
+    /// The design doc's degrade-never-skip rule for thumbnails, second half: a thumbnail
+    /// that never generated at add-time (the `thumbnailer: { _ in nil }` state pinned
+    /// above) is repaired from the `.orig` on a later read, not broken forever.
+    func testRegenerateRepairsAThumbnailThatNeverGenerated() async throws {
+        let failing = store(mintImageID: { "IMG_REGEN" }, thumbnailer: { _ in nil })
+        let source = ImageThumbnailerTests.makeJPEG(width: 60, height: 40, color: (11, 22, 33))
+        _ = try await failing.addImage(captureID: captureID, data: source, sourceUTType: nil)
+
+        // Read once through the same store that could not generate it: still nil.
+        let beforeAbsent = await failing.thumbnailData(captureID: captureID, imageID: "IMG_REGEN")
+        XCTAssertNil(beforeAbsent, "no thumbnail file at all")
+
+        // A store with a working thumbnailer (i.e. the next launch / the real app) heals it.
+        let healthy = store()
+        let regenerated = await healthy.regenerateThumbnailIfMissing(captureID: captureID, imageID: "IMG_REGEN")
+        XCTAssertNotNil(regenerated)
+        let after = await healthy.thumbnailData(captureID: captureID, imageID: "IMG_REGEN")
+        XCTAssertEqual(after, regenerated, "a subsequent plain read returns the real bytes")
+        let afterBytes = try XCTUnwrap(after)
+        XCTAssertNotNil(ImageStore.decodeImageInfo(data: afterBytes, sourceUTType: nil),
+                        "and they decode as an image")
+    }
+
+    /// A TORN thumbnail — bytes on disk that are not an image — is the same state as an
+    /// absent one to every reader, so `thumbnailData` reports nil and the regen repairs it.
+    func testTornThumbnailReadsAsNilAndIsRegenerated() async throws {
+        let s = store(mintImageID: { "IMG_TORN" })
+        let source = ImageThumbnailerTests.makeJPEG(width: 60, height: 40, color: (1, 2, 3))
+        _ = try await s.addImage(captureID: captureID, data: source, sourceUTType: nil)
+        let thumbURL = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: "IMG_TORN")
+        let generated = await s.thumbnailData(captureID: captureID, imageID: "IMG_TORN")
+        let good = try XCTUnwrap(generated)
+
+        // Truncate to a header fragment — readable bytes, not a decodable image.
+        try good.prefix(8).write(to: thumbURL)
+        let torn = await s.thumbnailData(captureID: captureID, imageID: "IMG_TORN")
+        XCTAssertNil(torn, "corrupt reads as missing, so the caller degrades to the placeholder")
+
+        let repaired = await s.regenerateThumbnailIfMissing(captureID: captureID, imageID: "IMG_TORN")
+        let regenerated = try XCTUnwrap(repaired)
+        XCTAssertNotNil(ImageStore.decodeImageInfo(data: regenerated, sourceUTType: nil))
+        let reread = await s.thumbnailData(captureID: captureID, imageID: "IMG_TORN")
+        XCTAssertEqual(reread, regenerated)
+    }
+
+    /// `IfMissing`, literally: a healthy thumbnail is returned untouched — no rewrite —
+    /// so the read path may call this on every render without churning bytes.
+    func testRegenerateLeavesAHealthyThumbnailUntouched() async throws {
+        let s = store(mintImageID: { "IMG_OK" })
+        let source = ImageThumbnailerTests.makeJPEG(width: 60, height: 40, color: (7, 7, 7))
+        _ = try await s.addImage(captureID: captureID, data: source, sourceUTType: nil)
+        let thumbURL = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: "IMG_OK")
+        let before = try FileManager.default.attributesOfItem(atPath: thumbURL.path)[.modificationDate] as? Date
+        let bytes = try Data(contentsOf: thumbURL)
+
+        let result = await s.regenerateThumbnailIfMissing(captureID: captureID, imageID: "IMG_OK")
+
+        XCTAssertEqual(result, bytes)
+        let after = try FileManager.default.attributesOfItem(atPath: thumbURL.path)[.modificationDate] as? Date
+        XCTAssertEqual(before, after, "no write happened")
+    }
+
+    /// Nothing to regenerate from: the orig is gone, so the repair fails and the caller
+    /// keeps degrading to the placeholder rather than getting garbage.
+    func testRegenerateReturnsNilWhenTheOriginalIsGone() async throws {
+        let s = store(mintImageID: { "IMG_NOORIG" })
+        let source = ImageThumbnailerTests.makeJPEG(width: 60, height: 40, color: (4, 4, 4))
+        let sidecar = try await s.addImage(captureID: captureID, data: source, sourceUTType: nil)
+        try FileManager.default.removeItem(
+            at: SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: "IMG_NOORIG"))
+        try FileManager.default.removeItem(
+            at: SegmentLayout.imageOriginalURL(captureDirectory: captureDirectory, imageID: "IMG_NOORIG",
+                                               ext: sidecar.originalExtension))
+
+        let result = await s.regenerateThumbnailIfMissing(captureID: captureID, imageID: "IMG_NOORIG")
+        XCTAssertNil(result)
+    }
 }

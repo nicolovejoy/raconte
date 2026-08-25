@@ -165,6 +165,11 @@ struct LibraryScanner: Sendable {
             captureID: capture.captureID,
             capturedAt: capturedAt(capture),
             durationSeconds: durationSeconds(capture),
+            // Final-review I3: the row needs the m4a's PRESENCE, not just its duration —
+            // a verified `.m4a` whose manifest carries no `durationFrames` reads as
+            // `durationSeconds == 0` below but is perfectly playable. See
+            // `EntryListItem.hasAudio`.
+            finalM4APresent: capture.finalM4APresent,
             metadata: metadata,
             journal: journal,
             snippet: transcript.snippet,

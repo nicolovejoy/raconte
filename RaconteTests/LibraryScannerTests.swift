@@ -218,6 +218,41 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(item.durationSeconds, 5, accuracy: 0.0001)
     }
 
+    /// Final-review I3. The anomalous-but-reachable state: `final/recording.m4a` is on
+    /// disk, `segments/` is gone, and the manifest carries NO `durationFrames` at all
+    /// (distinct from the explicit `0` `BlankEntryMinter` writes). `durationSeconds`
+    /// legitimately reads 0 — there is no frame count to divide — but the entry very
+    /// much has audio, and gating playback on the duration hid the play button for it.
+    func testFinalM4AWithNilDurationFramesHasAudioDespiteZeroDuration() async throws {
+        try writeFinalM4A(idA)
+        var m = manifest(idA, durationFrames: nil)
+        // Verified, but frameless — exactly what `SyncTreeScanner` calls "a verified
+        // manifest with no frame count at all".
+        m.final.verifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try write(m, id: idA)
+
+        let item = try await firstItem()
+        XCTAssertEqual(item.durationSeconds, 0, accuracy: 0.0001, "no frame count to derive one from")
+        XCTAssertTrue(item.finalM4APresent, "the scan sees the m4a")
+        XCTAssertTrue(item.hasAudio, "…so playback must still be offered (final-review I3)")
+        XCTAssertTrue(EntryDetailView.playbackSectionVisible(hasAudio: item.hasAudio),
+                      "the detail screen's gate agrees")
+        // And the source selector — the thing that would actually play it — agrees too,
+        // so `hasAudio` is not a claim the playback machinery would then refuse.
+        let snapshot = DirectorySnapshot.gather(capturesRoot: capturesRoot, captureID: idA)
+        XCTAssertNotEqual(PlayableSourceSelector.select(snapshot), .none)
+    }
+
+    /// The other side of the same coin: an image-only/blank entry (no m4a, no segments)
+    /// still hides playback, so I3's fix did not simply make the gate always true.
+    func testEntryWithNoAudioAtAllStillHasNoAudio() async throws {
+        try write(manifest(idA, durationFrames: 0), id: idA)
+        let item = try await firstItem()
+        XCTAssertFalse(item.finalM4APresent)
+        XCTAssertFalse(item.hasAudio)
+        XCTAssertFalse(EntryDetailView.playbackSectionVisible(hasAudio: item.hasAudio))
+    }
+
     func testRawSegmentsSumTheirFrameCounts() async throws {
         let segs = SegmentLayout.segmentsDirectory(captureDirectory: captureDir(idA))
         try FileManager.default.createDirectory(at: segs, withIntermediateDirectories: true)

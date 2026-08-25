@@ -43,7 +43,8 @@ enum ImageStoreError: Error, Equatable {
 /// `.orig` with no sidecar is invisible to every reader (`images(captureID:)` only
 /// lists `.json` files) — exactly like an orphaned `.pcm` with no manifest entry is
 /// invisible to the capture recovery scan. A sidecar with no thumbnail is not an
-/// orphan at all; it is the ordinary "needs thumbnail regen" state (see `addImage`).
+/// orphan at all; it is the ordinary "needs thumbnail regen" state (see `addImage`) —
+/// serviced at read time by `regenerateThumbnailIfMissing`.
 actor ImageStore {
     nonisolated let capturesRoot: URL
     private let now: @Sendable () -> Date
@@ -115,10 +116,48 @@ actor ImageStore {
     /// screen's images strip: the view itself must never touch `SegmentLayout`/
     /// `FileManager` directly, matching `JournalCoverThumbnail`'s convention of only
     /// ever rendering `Data` handed to it.
+    ///
+    /// A file that exists but does not DECODE as an image reads as nil here too
+    /// (final-review I4): a torn write leaves readable-but-truncated bytes, and to every
+    /// reader — the placeholder degrade in `AsyncCaptureImage`, and
+    /// `regenerateThumbnailIfMissing`'s repair trigger — a corrupt thumbnail and an
+    /// absent one are the same state and want the same answer. The probe is a header
+    /// read (`decodeImageInfo`), not a pixel decode, so this stays cheap enough for the
+    /// per-row library read path.
     func thumbnailData(captureID: String, imageID: String) -> Data? {
         let directory = captureDirectory(captureID: captureID)
         let url = SegmentLayout.imageThumbnailURL(captureDirectory: directory, imageID: imageID)
-        return try? Data(contentsOf: url)
+        guard let data = try? Data(contentsOf: url),
+              Self.decodeImageInfo(data: data, sourceUTType: nil) != nil else { return nil }
+        return data
+    }
+
+    /// Repairs a missing/unreadable/corrupt thumbnail from the image's `.orig`, which is
+    /// always the ground truth here — the thumbnail is a derived preview and is never
+    /// synced (`SyncRecordBuilders.imageRecord` ships only the original; the receiver
+    /// regenerates its own). Returns the thumbnail bytes now on disk, or nil when the
+    /// repair was not possible.
+    ///
+    /// The missing half of the design doc's degrade-never-skip rule for thumbnails
+    /// (final-review I4): `addImage`/`ingest` are the only writers of
+    /// `writeThumbnailIfPossible`, so before this existed a thumbnail that failed to
+    /// generate at add-time, or was later torn, stayed broken forever. Mirrors
+    /// `JournalCoverStore`'s shape — a nil-returning read that never throws, plus a
+    /// separate write verb the read path invokes — rather than making `thumbnailData`
+    /// itself a read-modify-write.
+    ///
+    /// **`IfMissing`, literally**: a thumbnail already on disk that decodes is returned
+    /// untouched, no regeneration and no write, so a caller may invoke this on every
+    /// read without churning bytes. Fires NO sync hook: the thumbnail is local, derived
+    /// state that no record carries, so regenerating it is not a change any other device
+    /// needs to hear about.
+    @discardableResult
+    func regenerateThumbnailIfMissing(captureID: String, imageID: String) -> Data? {
+        if let existing = thumbnailData(captureID: captureID, imageID: imageID) { return existing }
+        let directory = captureDirectory(captureID: captureID)
+        guard let original = originalData(captureID: captureID, imageID: imageID) else { return nil }
+        writeThumbnailIfPossible(original, captureDirectory: directory, imageID: imageID)
+        return thumbnailData(captureID: captureID, imageID: imageID)
     }
 
     /// One image's original, full-quality bytes — `images/<imageID>.<ext>` — or `nil`

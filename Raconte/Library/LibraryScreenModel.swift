@@ -441,23 +441,59 @@ final class LibraryScreenModel {
     /// `moveEntry`/`trashEntry`. Rescans unconditionally, matching those — a rescan is
     /// a pure re-read, never a write, so it costs nothing on the failure path and stays
     /// consistent with concurrent disk changes either way.
+    ///
+    /// **Fires `noteLocalChange(.image(...))` on success (final-review I2).** Without it
+    /// the only producer that ever discovers a locally added image is
+    /// `SyncPlanner.reconcile`, which runs once at `SyncCoordinator.live()` composition
+    /// — so a photo added today would first reach the server at the NEXT APP LAUNCH.
+    /// Fired unconditionally on every successful add, exactly as
+    /// `TranscriptRevisionStore.append` fires `.revision`: push eligibility is not this
+    /// method's business, it is `SyncRecordExchange.imageRecordToPush`'s (`isFinalized`
+    /// + `entryCanBePushed`), which degrades an ineligible name to nil at exchange time.
+    ///
+    /// Fired HERE, from the local-add path, and never from `ImageStore.ingest` — the
+    /// sync-inbound write path must never echo an arriving image back as a local change,
+    /// or two devices would trade the same image's arrival forever (the property
+    /// `TranscriptRevisionStore.ingestForeignRevision` and
+    /// `JournalCoverStore.ingest` already state for their own writes).
     @discardableResult
     func addImage(_ captureID: String, data: Data, sourceUTType: String?) async -> Bool {
-        let succeeded: Bool
+        let addedImageID: String?
         do {
-            _ = try await imageStore.addImage(captureID: captureID, data: data, sourceUTType: sourceUTType)
-            succeeded = true
+            let sidecar = try await imageStore.addImage(captureID: captureID, data: data,
+                                                        sourceUTType: sourceUTType)
+            addedImageID = sidecar.id
         } catch {
-            succeeded = false
+            addedImageID = nil
+        }
+        if let addedImageID {
+            await syncHooks?.noteLocalChange(.image(captureID: captureID, imageID: addedImageID))
         }
         await rescan()
-        return succeeded
+        return addedImageID != nil
     }
 
     /// Removes one image. Idempotent, matching `ImageStore.removeImage` — already
     /// absent is not an error, so there is nothing to report false about.
+    ///
+    /// **Fires `noteLocalDelete(.image(...))` (final-review I1).** `SyncPlanner
+    /// .reconcile` deliberately never infers a delete from an artifact's absence from a
+    /// scan (see its doc comment), so without this explicit verb the server record would
+    /// survive forever: a second device would keep showing the removed image, and a
+    /// wipe/resync or a newly paired device would refetch it and `SyncIngest.ingestImage`
+    /// would write it back into `images/` — while the confirmation dialog says "This
+    /// can't be undone." Same placement as `trashEntry`/`purge`'s own delete hooks above.
+    ///
+    /// Fired unconditionally, matching the method's idempotence: `SyncCoordinator
+    /// .noteLocalDelete` enqueues a CK delete and retires local bookkeeping, both of
+    /// which are no-ops for a name the server never had.
+    ///
+    /// Like `addImage` above, this lives on the LOCAL path only — `ImageStore.ingest`
+    /// and `SyncIngest`'s own removal handling never call it, so an inbound sync write
+    /// can never echo back out as a local mutation.
     func removeImage(_ captureID: String, imageID: String) async {
         await imageStore.removeImage(captureID: captureID, imageID: imageID)
+        await syncHooks?.noteLocalDelete(.image(captureID: captureID, imageID: imageID))
         await rescan()
     }
 
@@ -474,8 +510,20 @@ final class LibraryScreenModel {
     /// reading `SegmentLayout` URLs off disk itself (Task 6 fix round 1: a view must
     /// never do that read directly, same rule `JournalCoverThumbnail` already follows
     /// for journal covers).
+    ///
+    /// **Self-heals a missing/corrupt thumbnail (final-review I4)**, which is the second
+    /// half of the design doc's rule — "missing/corrupt thumbnail at read time degrades
+    /// to a generic image placeholder AND queues a regenerate". A nil read means the
+    /// thumbnail file is absent, unreadable, or not decodable as an image, all of which
+    /// `ImageStore.regenerateThumbnailIfMissing` can repair from the `.orig` that is
+    /// still on disk; only if THAT also fails does the caller get nil and degrade to the
+    /// placeholder. One attempt per read, never a retry loop: an image whose original is
+    /// itself gone returns nil every time, at the cost of one cheap stat per render.
     func thumbnailData(captureID: String, imageID: String) async -> Data? {
-        await imageStore.thumbnailData(captureID: captureID, imageID: imageID)
+        if let data = await imageStore.thumbnailData(captureID: captureID, imageID: imageID) {
+            return data
+        }
+        return await imageStore.regenerateThumbnailIfMissing(captureID: captureID, imageID: imageID)
     }
 
     /// Thin pass-through to `ImageStore.originalData(captureID:imageID:)` — the

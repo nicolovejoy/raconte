@@ -69,6 +69,10 @@ struct InterruptionLogEntry: Codable, Sendable, Equatable {
 struct FinalRef: Codable, Sendable, Equatable {
     var path: String
     var verifiedAt: Date?
+    /// An explicit `0` means "this capture never had audio" — only `BlankEntryMinter`
+    /// writes it, and `EntryListItem.hasAudio`/`SyncRecordExchange.audioRecordToPush`
+    /// both rely on that. `nil` is the anomalous state (a verified `.m4a` with no frame
+    /// count at all), never the blank-entry signal.
     var durationFrames: Int?
 
     init(path: String = "final/recording.m4a", verifiedAt: Date? = nil, durationFrames: Int? = nil) {

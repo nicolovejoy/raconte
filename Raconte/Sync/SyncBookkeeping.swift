@@ -35,6 +35,7 @@ actor SyncBookkeepingStore {
     private static let engineStateFileName = "engine-state.bin"
     private static let systemFieldsDirectoryName = "system-fields"
     private static let ledgerFileName = "ledger.json"
+    private static let environmentTagFileName = "environment"
 
     /// Always `AppContainer.syncRoot(containerRoot:)` in production — this store never
     /// derives it itself, matching `JournalCoverStore`'s pattern of taking the path it
@@ -98,6 +99,27 @@ actor SyncBookkeepingStore {
         try Self.saveLedger(current, root: root)
     }
 
+    // MARK: Environment tag (#90)
+
+    /// Which CloudKit environment wrote this bookkeeping directory. Absent and
+    /// unreadable both answer nil, per the type's governing collapse rule — the
+    /// gate treats nil as "unknown provenance" and wipes if anything else exists.
+    func environmentTag() -> CloudKitEnvironment? {
+        guard let data = Self.read(url: Self.environmentTagURL(root: root)),
+              let raw = String(data: data, encoding: .utf8) else { return nil }
+        return CloudKitEnvironment(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func saveEnvironmentTag(_ environment: CloudKitEnvironment) throws {
+        try Self.write(Data(environment.rawValue.utf8), url: Self.environmentTagURL(root: root))
+    }
+
+    /// Whether any bookkeeping exists on disk at all — the gate's "is there
+    /// anything a stale environment could poison" question.
+    func hasBookkeeping() -> Bool {
+        FileManager.default.fileExists(atPath: root.path)
+    }
+
     // MARK: Wipe
 
     /// Deletes `sync/` wholesale — every engine-state blob, every system-fields file, the
@@ -134,6 +156,10 @@ actor SyncBookkeepingStore {
 
     static func ledgerURL(root: URL) -> URL {
         root.appendingPathComponent(ledgerFileName)
+    }
+
+    static func environmentTagURL(root: URL) -> URL {
+        root.appendingPathComponent(environmentTagFileName)
     }
 
     private static func read(url: URL) -> Data? {

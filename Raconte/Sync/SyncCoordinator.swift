@@ -29,15 +29,20 @@ actor SyncCoordinator: SyncHooks {
     private var lastPushAt: Date?
     /// M4 T12: when this device last asked the engine to fetch (launch or foreground).
     private var lastFetchAt: Date?
+    /// #90: which CloudKit environment this binary talks to — the gate's other
+    /// input, alongside whatever tag `bookkeeping` was last stamped with.
+    private let environment: CloudKitEnvironment
 
     init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync"),
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> Date = { Date() },
+         environment: CloudKitEnvironment = .production) {
         self.bookkeeping = bookkeeping
         self.scanner = scanner
         self.engine = engine
         self.log = log
         self.now = now
+        self.environment = environment
     }
 
     /// Boot: resume the engine from its last state, then reconcile the tree against the
@@ -56,10 +61,37 @@ actor SyncCoordinator: SyncHooks {
     /// `foregrounded()` below is the same idea for scene-active transitions; silent push
     /// is not wired (no APNs receipt path exists in this app).
     func launch() async {
+        await applyEnvironmentGate()
         let state = await bookkeeping.engineState()
         await engine.start(stateData: state)
         await reconcile()
         await fetchNow()
+    }
+
+    /// #90: before the engine resumes from `engine-state.bin`, make sure every
+    /// byte of bookkeeping was written by the environment this binary talks to.
+    /// Wipe-then-tag ordering matters: `wipe()` removes the tag file too, so the
+    /// tag write must follow it. Failures are `try?` by the store's governing
+    /// rule — a failed wipe leaves stale state whose pushes the NOT_FOUND
+    /// self-heal already survives, and a failed tag write just re-runs the gate
+    /// next launch.
+    private func applyEnvironmentGate() async {
+        let tag = await bookkeeping.environmentTag()
+        let exists = await bookkeeping.hasBookkeeping()
+        switch EnvironmentGate.decide(tag: tag, detected: environment, bookkeepingExists: exists) {
+        case .proceed:
+            return
+        case .writeTag:
+            try? await bookkeeping.saveEnvironmentTag(environment)
+            log.notice("sync: environment tag written (\(self.environment.rawValue, privacy: .public))")
+        case .wipeAndWriteTag:
+            try? await bookkeeping.wipe()
+            try? await bookkeeping.saveEnvironmentTag(environment)
+            log.notice("""
+                sync: environment tag \(tag?.rawValue ?? "absent", privacy: .public) vs \
+                \(self.environment.rawValue, privacy: .public) — bookkeeping wiped, full resync
+                """)
+        }
     }
 
     /// M4 T12: the foreground half of design §3's fetch triggers — call when the app's
@@ -246,7 +278,8 @@ extension SyncCoordinator {
         let engine = CloudKitEngineControl(exchange: exchange, persistState: { [bookkeeping] data in
             try? await bookkeeping.saveEngineState(data)
         })
-        let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine)
+        let coordinator = SyncCoordinator(bookkeeping: bookkeeping, scanner: scanner, engine: engine,
+                                          environment: CloudKitEnvironment.detectFromBundle())
         // Wired last, and in this order, because each half needs the other: the stores
         // notify the coordinator, and the coordinator's exchange writes through the
         // stores. See `JournalStore.attach(syncHooks:)`. `exchange.attach(engine:)`

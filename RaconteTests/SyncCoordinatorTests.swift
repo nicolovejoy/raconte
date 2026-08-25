@@ -133,6 +133,10 @@ final class SyncCoordinatorTests: XCTestCase {
             try await store.recordUpload(UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes),
                                          for: artifact.name.rawValue)
         }
+        // #90: the coordinator fixture uses the gate's default `.production` — an
+        // untagged store would otherwise get wiped at `launch()`, which is the gate
+        // doing its job, not a bug in this reconcile test. Tag it to match.
+        try await store.saveEnvironmentTag(.production)
 
         let engine = FakeCloudEngine()
         await coordinator(store, engine).launch()
@@ -155,6 +159,8 @@ final class SyncCoordinatorTests: XCTestCase {
         }
         // One artifact's content moves on disk after that upload.
         try writeJournal(journalID, name: "Practice, renamed")
+        // #90: match the gate's default `.production` — see the sibling test above.
+        try await store.saveEnvironmentTag(.production)
 
         let engine = FakeCloudEngine()
         await coordinator(store, engine).launch()
@@ -402,6 +408,108 @@ final class SyncCoordinatorTests: XCTestCase {
         let status = await coordinator.status()
         XCTAssertEqual(status.accountState, "signed in")
         XCTAssertEqual(status.lastError, "network unavailable")
+    }
+
+    // MARK: #90 environment gate
+
+    /// The money test — the exact stranding this issue exists to fix: a ledger
+    /// claiming "uploaded" (written under dev) must not suppress the production
+    /// re-push. Mismatch ⇒ wipe ⇒ engine starts stateless ⇒ reconcile re-enqueues.
+    func testLaunchWithMismatchedTagWipesAndReenqueues() async throws {
+        try buildArchive()
+        let store = bookkeeping()
+        for artifact in scanner().scan().artifacts {
+            try await store.recordUpload(UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes),
+                                         for: artifact.name.rawValue)
+        }
+        try await store.saveEnvironmentTag(.development)
+        let seededLedger = await store.ledger()
+        XCTAssertFalse(seededLedger.isEmpty)  // adversarial guard: fixture is real
+
+        let engine = FakeCloudEngine()
+        let coordinator = SyncCoordinator(bookkeeping: store, scanner: scanner(),
+                                          engine: engine, environment: .production)
+        await coordinator.launch()
+
+        let started = await engine.startedWith
+        XCTAssertEqual(started, [nil])                       // never resumed stale state
+        let ledgerAfter = await store.ledger()
+        // Reconcile re-enqueued the capture, and recording an upload is the push
+        // path's job — at launch-time the wiped ledger stays empty.
+        XCTAssertTrue(ledgerAfter.isEmpty)
+        let saved = await engine.savedNameSet
+        XCTAssertFalse(saved.isEmpty)                        // the stranded record pushes again
+        let tag = await store.environmentTag()
+        XCTAssertEqual(tag, .production)
+    }
+
+    /// Same seed, matching tag: nothing is wiped, the engine resumes its state.
+    func testLaunchWithMatchingTagPreservesBookkeeping() async throws {
+        try buildArchive()
+        let store = bookkeeping()
+        for artifact in scanner().scan().artifacts {
+            try await store.recordUpload(UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes),
+                                         for: artifact.name.rawValue)
+        }
+        try await store.saveEnvironmentTag(.production)
+        try await store.saveEngineState(Data("blob".utf8))
+        let seededLedger = await store.ledger()
+        XCTAssertFalse(seededLedger.isEmpty)
+
+        let engine = FakeCloudEngine()
+        let coordinator = SyncCoordinator(bookkeeping: store, scanner: scanner(),
+                                          engine: engine, environment: .production)
+        await coordinator.launch()
+
+        let started = await engine.startedWith
+        XCTAssertEqual(started, [Data("blob".utf8)])
+        let ledgerAfter = await store.ledger()
+        XCTAssertEqual(ledgerAfter, seededLedger)
+        let tag = await store.environmentTag()
+        XCTAssertEqual(tag, .production)
+    }
+
+    /// Pre-tag upgrade (today's phones): bookkeeping exists, no tag — wipe.
+    func testLaunchWithUntaggedExistingBookkeepingWipes() async throws {
+        try buildArchive()
+        let store = bookkeeping()
+        for artifact in scanner().scan().artifacts {
+            try await store.recordUpload(UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes),
+                                         for: artifact.name.rawValue)
+        }
+        let seededLedger = await store.ledger()
+        XCTAssertFalse(seededLedger.isEmpty)
+
+        let engine = FakeCloudEngine()
+        let coordinator = SyncCoordinator(bookkeeping: store, scanner: scanner(),
+                                          engine: engine, environment: .production)
+        await coordinator.launch()
+
+        let started = await engine.startedWith
+        XCTAssertEqual(started, [nil])
+        let ledgerAfter = await store.ledger()
+        XCTAssertTrue(ledgerAfter.isEmpty)
+        let tag = await store.environmentTag()
+        XCTAssertEqual(tag, .production)
+    }
+
+    /// Fresh install: nothing on disk — tag written, no wipe path taken, and the
+    /// engine starts stateless because there was never state.
+    func testLaunchFreshInstallWritesTag() async throws {
+        // A store over a root that does NOT exist yet, rather than the class's
+        // `bookkeeping()` fixture (which points at a root the archive fixtures may
+        // already have created).
+        let engine = FakeCloudEngine()
+        let freshRoot = containerRoot.appendingPathComponent("fresh-sync", isDirectory: true)
+        let freshStore = SyncBookkeepingStore(root: freshRoot)
+        let coordinator = SyncCoordinator(bookkeeping: freshStore, scanner: scanner(),
+                                          engine: engine, environment: .development)
+        await coordinator.launch()
+
+        let tag = await freshStore.environmentTag()
+        XCTAssertEqual(tag, .development)
+        let started = await engine.startedWith
+        XCTAssertEqual(started, [nil])
     }
 }
 

@@ -36,3 +36,4 @@ device-pull*/
 *.cer
 *.mobileprovision
 .appstoreconnect/
+.superpowers/

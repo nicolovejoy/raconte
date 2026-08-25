@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Result of finalizing one capture (design §5, transition rows 15–18).
 enum FinalizeStatus: Sendable, Equatable {
@@ -46,6 +47,12 @@ actor FinalizerWorker {
         }
     }
 
+    /// #94 follow-up: launch recovery ran with zero visibility for two whole smoke
+    /// sessions — the heal path must say which guard refused, or a silent `.skipped`
+    /// is indistinguishable from a heal that never ran (the #89 lesson).
+    nonisolated private let log = Logger(subsystem: "org.pianohouseproject.raconte",
+                                         category: "finalize")
+
     nonisolated let capturesRoot: URL
     private let encoder: AudioEncoder
     private let config: Config
@@ -90,6 +97,7 @@ actor FinalizerWorker {
     func finalize(captureID: String) async -> FinalizeOutcome {
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
         guard var manifest = readManifest(dir: dir) else {
+            log.notice("finalize \(captureID, privacy: .public): manifest missing/unreadable — skipped")
             return FinalizeOutcome(captureID: captureID, status: .skipped,
                                    encodedFrameCount: 0, finalizeAttempts: 0, hadGap: false)
         }
@@ -106,13 +114,17 @@ actor FinalizerWorker {
             // every launch and this returns `.skipped` every time, leaving the
             // capture permanently push-ineligible while playing fine locally.
             let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: dir)
-            if !hadGap, manifest.final.verifiedAt == nil,
-               FileManager.default.fileExists(atPath: m4aURL.path) {
+            let m4aPresent = FileManager.default.fileExists(atPath: m4aURL.path)
+            if !hadGap, manifest.final.verifiedAt == nil, m4aPresent {
                 if let verified = try? await encoder.verify(m4aURL: m4aURL),
                    verified.decodable, verified.nonSilent {
                     manifest.final.verifiedAt = now()
                     manifest.final.durationFrames = verified.decodedFrameCount
                     writeManifest(manifest, dir: dir, state: .complete)
+                    log.notice("""
+                        finalize \(captureID, privacy: .public): m4a verified in place — \
+                        verifiedAt stamped, \(verified.decodedFrameCount) frames
+                        """)
                     return FinalizeOutcome(captureID: captureID, status: .completed,
                                            encodedFrameCount: 0,
                                            finalizeAttempts: manifest.finalizeAttempts ?? 0,
@@ -121,6 +133,10 @@ actor FinalizerWorker {
                 // Probe failed with no raw to fall back on: keep every byte,
                 // surface it. NOT the failEncode path — that would delete a
                 // `.part` and burn retry budget on a state retries cannot change.
+                log.error("""
+                    finalize \(captureID, privacy: .public): m4a probe FAILED \
+                    (undecodable or silent) — nothing touched, flagged needsAttention
+                    """)
                 manifest.needsAttention = true
                 writeManifest(manifest, dir: dir, state: manifest.state)
                 return FinalizeOutcome(captureID: captureID, status: .needsAttention,
@@ -128,6 +144,15 @@ actor FinalizerWorker {
                                        finalizeAttempts: manifest.finalizeAttempts ?? 0,
                                        hadGap: false)
             }
+            // The one log line the last two smoke sessions were missing: exactly
+            // which guard kept the heal from running.
+            log.notice("""
+                finalize \(captureID, privacy: .public): nothing to encode and heal \
+                not applicable — state=\(String(describing: manifest.state), privacy: .public) \
+                hadGap=\(hadGap) m4aPresent=\(m4aPresent) \
+                alreadyVerified=\(manifest.final.verifiedAt != nil) \
+                segmentsRead=\(all.count)
+                """)
             if hadGap {
                 manifest.needsAttention = true
                 writeManifest(manifest, dir: dir, state: .captured)

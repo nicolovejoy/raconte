@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import AVFoundation
+import os
 
 /// Wires the pure `CaptureMachine` (T2) to the imperative host: the `SegmentStore`
 /// actor (T3), an `AudioSessionController` (T5), an engine recorder (T6), and the
@@ -233,6 +234,27 @@ final class CaptureCoordinator {
             RecoveredRecording(captureID: $0, durationSeconds: durations[$0] ?? 0)
         }
         quarantinedCaptureIDs = outcome.quarantinedCaptureIDs
+        // #94 follow-up (the #89 lesson): the launch-recovery plan was invisible in
+        // production logs, so a capture silently routed to quarantine or skipped by
+        // the finalizer looked identical to one that healed. One summary line, plus
+        // the two lists that matter when sync-eligibility is being debugged.
+        let recoveryLog = Logger(subsystem: "org.pianohouseproject.raconte", category: "recovery")
+        recoveryLog.notice("""
+            recovery: recovered=\(outcome.recoveredCaptureIDs.count) \
+            finalize=\(outcome.finalizeQueue.count) verify=\(outcome.verifyQueue.count) \
+            quarantined=\(outcome.quarantinedCaptureIDs.count) \
+            deleted=\(outcome.deletedCaptureIDs.count)
+            """)
+        for id in outcome.verifyQueue {
+            recoveryLog.notice("recovery: \(id, privacy: .public) → verifyFinal (m4a present, unverified)")
+        }
+        for id in outcome.quarantinedCaptureIDs {
+            recoveryLog.error("""
+                recovery: \(id, privacy: .public) QUARANTINED — no coherent manifest but \
+                holds irreplaceable artifacts; never enters the finalize queue, so it \
+                can never become sync-eligible without repair
+                """)
+        }
         for id in outcome.finalizeQueue + outcome.verifyQueue { enqueueFinalize(id) }
     }
 

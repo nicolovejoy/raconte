@@ -66,6 +66,63 @@ enum UITestEntrySeed {
     }
 }
 
+/// A pre-made blank entry (mirrors `BlankEntryMinter`'s finalized-from-creation manifest)
+/// WITH one real, ImageIO-decodable image already attached — image capture plan Task 7,
+/// for the library-row-thumbnail and remove-round-trip UI tests. Seeded on disk directly,
+/// synchronously, rather than through `ImageStore.addImage` (an actor method): this runs
+/// from `LibraryScreenModel.live()`, itself synchronous, so there is no `await` to spend
+/// here — same reasoning `UITestEntrySeed`/`UITestVoiceMarkingSeed` give for writing their
+/// fixtures by hand instead of going through the real (async) stores. Hand-replicates
+/// `ImageStore`'s own crash-ordering (orig, then sidecar, then thumbnail) even though a
+/// seed never crashes mid-write — consistency with the real writer, not defensiveness.
+///
+/// Env-gated (`RACONTE_UITEST_SEED_IMAGE_ENTRY`) and idempotent, same shape as the other
+/// two seeds. A separate captureID from every other seed's — the library scan under this
+/// harness sees every seeded entry in the SAME container when more than one env var is
+/// set, and this fixture's whole point is being the library's only image-bearing row.
+enum UITestImageSeed {
+    static let captureID = "01KYX77KK5QM15915EZBVXTQZ3"
+    static let imageID = "01KYX77KK5QM15915EZBVXTQY9"
+
+    /// A 1×1 red PNG — the smallest fixture ImageIO will actually decode (pixel
+    /// dimensions and all), so `ImageThumbnailer.generate`/`EntryDetailView`'s
+    /// `AsyncCaptureImage` see the same real bytes a genuine capture would produce.
+    private static let onePixelRedPNGBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+    static func seedIfRequested(capturesRoot: URL) {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_IMAGE_ENTRY"] != nil else { return }
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let manifestURL = SegmentLayout.manifestURL(captureDirectory: captureDirectory)
+        guard !FileManager.default.fileExists(atPath: manifestURL.path) else { return }
+        guard let data = Data(base64Encoded: onePixelRedPNGBase64) else { return }
+
+        do {
+            try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+            let manifestData = try CaptureCoding.encoder().encode(
+                BlankEntryMinter.manifest(captureID: captureID, createdAt: Date()))
+            try AtomicFile.replace(at: manifestURL, writing: manifestData)
+
+            let sidecar = ImageSidecar(id: imageID, originalExtension: "png", mime: "image/png",
+                                       bytes: data.count, sha256: ImageStore.sha256Hex(data),
+                                       width: 1, height: 1, capturedAt: nil, addedAt: Date())
+            try ImageStore.writeOriginal(data, captureDirectory: captureDirectory, imageID: imageID, ext: "png")
+            try ImageStore.writeSidecar(sidecar, captureDirectory: captureDirectory)
+            if let thumbnail = ImageThumbnailer.generate(from: data) {
+                let thumbnailsDirectory =
+                    SegmentLayout.imageThumbnailsDirectory(captureDirectory: captureDirectory)
+                try FileManager.default.createDirectory(at: thumbnailsDirectory, withIntermediateDirectories: true)
+                try AtomicFile.replace(
+                    at: SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: imageID),
+                    writing: thumbnail)
+            }
+        } catch {
+            // Best-effort, matching the other seeds' `try?` stance: a failed seed just
+            // means the UI test that depends on it fails loudly downstream, not here.
+        }
+    }
+}
+
 /// A pre-made entry with real frame-bounded spans PLUS an existing `markers.jsonl`, for
 /// the mark-voices screen's UI test (T7 Mark Voices, issue #56, Task 6 — was the old
 /// marker-correction screen's fixture, `UITestMarkerCorrectionSeed`, renamed to match;

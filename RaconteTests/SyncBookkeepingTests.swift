@@ -271,6 +271,23 @@ final class SyncBookkeepingTests: XCTestCase {
         XCTAssertNil(read)
     }
 
+    func testUnrecognizedTagIsNil() async throws {
+        // Valid UTF-8, but not a `CloudKitEnvironment` case — distinct from the
+        // invalid-bytes path above: this exercises the `CloudKitEnvironment(rawValue:)`
+        // failure, not the `String(data:encoding:)` failure.
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data("staging".utf8).write(to: SyncBookkeepingStore.environmentTagURL(root: syncRoot))
+        let read = await store().environmentTag()
+        XCTAssertNil(read)
+    }
+
+    func testEnvironmentTagTrimsWhitespaceAndNewlines() async throws {
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data("production\n".utf8).write(to: SyncBookkeepingStore.environmentTagURL(root: syncRoot))
+        let read = await store().environmentTag()
+        XCTAssertEqual(read, .production)
+    }
+
     func testWipeRemovesTag() async throws {
         let s = store()
         try await s.saveEnvironmentTag(.production)

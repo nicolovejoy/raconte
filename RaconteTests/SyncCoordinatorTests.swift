@@ -423,6 +423,7 @@ final class SyncCoordinatorTests: XCTestCase {
                                          for: artifact.name.rawValue)
         }
         try await store.saveEnvironmentTag(.development)
+        try await store.saveEngineState(Data("blob".utf8))
         let seededLedger = await store.ledger()
         XCTAssertFalse(seededLedger.isEmpty)  // adversarial guard: fixture is real
 
@@ -477,6 +478,7 @@ final class SyncCoordinatorTests: XCTestCase {
             try await store.recordUpload(UploadedDigest(sha256: artifact.sha256, bytes: artifact.bytes),
                                          for: artifact.name.rawValue)
         }
+        try await store.saveEngineState(Data("blob".utf8))
         let seededLedger = await store.ledger()
         XCTAssertFalse(seededLedger.isEmpty)
 

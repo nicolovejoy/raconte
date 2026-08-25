@@ -71,10 +71,24 @@ actor SyncCoordinator: SyncHooks {
     /// #90: before the engine resumes from `engine-state.bin`, make sure every
     /// byte of bookkeeping was written by the environment this binary talks to.
     /// Wipe-then-tag ordering matters: `wipe()` removes the tag file too, so the
-    /// tag write must follow it. Failures are `try?` by the store's governing
-    /// rule — a failed wipe leaves stale state whose pushes the NOT_FOUND
-    /// self-heal already survives, and a failed tag write just re-runs the gate
-    /// next launch.
+    /// tag write must follow it. A failed wipe must NOT be followed by the tag
+    /// write — writing the tag over incompletely-wiped (possibly still
+    /// wrong-environment) bookkeeping would make the next launch see tag ==
+    /// detected and proceed, permanently certifying the stranded state; there is
+    /// no downstream self-heal for that (the NOT_FOUND self-heal covers a
+    /// different failure — a record CloudKit no longer has — not stale local
+    /// bookkeeping from the wrong environment). So on a failed wipe we return
+    /// without writing the tag, and the gate retries from scratch next launch.
+    /// A failed TAG write (wipe having succeeded) stays `try?`: at worst the
+    /// next launch wipes an already-empty directory again, which is harmless.
+    ///
+    /// Benign race: `live()`'s composition-time rehydration Task
+    /// (`rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams`) enumerates
+    /// `sync/staging/` concurrently with this wipe. Every interleaving is
+    /// benign — read-before-wipe applies whatever was parked before this method
+    /// clears it, and any staging file re-created after (by the forced refetch
+    /// this wipe triggers) is repopulated by that refetch anyway; read-after-wipe
+    /// simply finds nothing and no-ops.
     private func applyEnvironmentGate() async {
         let tag = await bookkeeping.environmentTag()
         let exists = await bookkeeping.hasBookkeeping()
@@ -85,7 +99,15 @@ actor SyncCoordinator: SyncHooks {
             try? await bookkeeping.saveEnvironmentTag(environment)
             log.notice("sync: environment tag written (\(self.environment.rawValue, privacy: .public))")
         case .wipeAndWriteTag:
-            try? await bookkeeping.wipe()
+            do {
+                try await bookkeeping.wipe()
+            } catch {
+                log.error("""
+                    sync: bookkeeping wipe failed — tag NOT written, gate retries next launch: \
+                    \(String(describing: error), privacy: .public)
+                    """)
+                return
+            }
             try? await bookkeeping.saveEnvironmentTag(environment)
             log.notice("""
                 sync: environment tag \(tag?.rawValue ?? "absent", privacy: .public) vs \

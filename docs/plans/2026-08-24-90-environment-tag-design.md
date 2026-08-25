@@ -21,7 +21,7 @@ build → TestFlight) leaves two failure shapes:
 
 ## Design
 
-### 1. Environment detection (`CloudKitEnvironmentDetector`)
+### 1. Environment detection (`CloudKitEnvironment`)
 
 New file `Raconte/Sync/CloudKitEnvironment.swift`.
 
@@ -62,7 +62,7 @@ untouched — it removes the whole `sync/` root, tag included.
 
 ### 3. Gate (pure decision + wiring in `SyncCoordinator.launch()`)
 
-Pure table, `EnvironmentGateDecision.decide(tag:detected:bookkeepingExists:)`:
+Pure table, `EnvironmentGate.decide(tag:detected:bookkeepingExists:)`:
 
 | tag on disk | bookkeeping exists | decision |
 | --- | --- | --- |
@@ -99,6 +99,18 @@ Log lines (the #89 lesson — this event must be visible in a device log):
   redelivers them.
 - The directory's own doc comment already declares all of it disposable cache;
   this design adds the trigger, not the semantics.
+- **Accepted risk, not mitigated: a queued-but-unsent DELETE.** A pending delete
+  lives only in `engine-state.bin` — `SyncPlanner.reconcile` deliberately never
+  re-derives deletes from artifact absence (see its doc comment), so nothing on
+  disk remembers "this was deleted" once the delete is only pending, not yet
+  sent. A wipe destroys that pending delete along with the rest of
+  `engine-state.bin`, and the forced full refetch that follows re-delivers the
+  server's still-live copy of the record, resurrecting it locally. Window: one
+  unflushed delete at the exact moment of an environment crossing — in practice,
+  the one-time pre-tag migration wipe (row 3 of the table above). Outcome: silent
+  local resurrection of a record the user had deleted, recoverable by deleting it
+  again. Accepted because the window is narrow and one-time, not because it is
+  closed.
 
 Cost of a wipe: one full resync (re-upload dedupe is content-addressed server-side
 only via conflict merge; bytes re-transfer). Acceptable at this archive's size,

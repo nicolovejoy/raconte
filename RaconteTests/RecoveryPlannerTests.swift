@@ -239,6 +239,23 @@ final class RecoveryPlannerTests: XCTestCase {
         XCTAssertEqual(plan(cap), .finishRawDelete(captureID: "cap"))
     }
 
+    /// The anomalous twin of the blank-entry case above, currently unreached by any
+    /// real code path but worth pinning: `complete` + verified + no `.m4a`, but
+    /// `segments/` still holds real, above-floor audio (`.m4a` vanished somehow while
+    /// the raw frames survived). `finishRawDelete` must NOT fire here — that would
+    /// silently discard the only remaining copy of the audio. The fallback must stay
+    /// `enqueueFinalize`, exactly as it was before the blank-entry branch was added
+    /// (fix round 1, reviewer finding: the original `if verified { finishRawDelete }`
+    /// was gated on `verified` alone and would have wrongly deleted this case too).
+    func testCompleteVerifiedNoM4AButRealSegmentDataEnqueuesFinalizeNotDelete() {
+        let s0 = SegmentFileStat(index: 0, pcmByteSize: bytes(frames: 960_000),
+            sidecar: sidecar(index: 0, frameCount: 960_000, offset: 0))
+        let cap = snapshot(
+            manifest: manifest(.complete, verifiedAt: date("2026-07-29T15:10:00.000Z")),
+            segments: [s0])
+        XCTAssertEqual(plan(cap), .enqueueFinalize(captureID: "cap"))
+    }
+
     // MARK: Row — sub-floor total duration → discard
 
     func testSubFloorDurationDiscards() {

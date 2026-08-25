@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// One entry, full detail (M3 T4, phone mockup): both dates clearly labeled, journal,
 /// duration, playback (the same `CapturePlayback` / `PlaybackProgressLine` machinery —
@@ -53,6 +54,17 @@ struct EntryDetailView: View {
     @State private var moveFailed = false
     @State private var backdateFailed = false
 
+    /// image capture plan Task 6. Fetched via `LibraryScreenModel.images(for:)`
+    /// specifically (not `item.images`, which the scan already populates) because an
+    /// unfiled/newly-created entry can fall outside the library's current filter scope
+    /// — see this file's own doc comment on why `item` sometimes goes stale — in which
+    /// case `refresh()`'s `model.item(captureID)` lookup returns nil and `item` is
+    /// never updated at all. A direct `images(for:)` read stays correct regardless.
+    @State private var images: [ImageSidecar] = []
+    @State private var showingImagePicker = false
+    @State private var showingImageViewer = false
+    @State private var viewerIndex = 0
+
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
@@ -73,7 +85,14 @@ struct EntryDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 datesSection
                 journalSection
-                playbackSection
+                // Playback is omitted entirely for an image-only entry (no `.task`-
+                // loaded audio to play), not merely disabled — leaving the images
+                // strip as the first, primary content above the transcript, matching
+                // the design doc's "Entry detail" section exactly.
+                if Self.playbackSectionVisible(hasAudio: item.durationSeconds > 0) {
+                    playbackSection
+                }
+                imagesSection
                 transcriptSection
                 trashSection
             }
@@ -144,6 +163,14 @@ struct EntryDetailView: View {
         // playing entry keeps playing.
         .onDisappear { playback?.stop() }
         .sheet(isPresented: $showingBackdatePicker) { backdateSheet }
+        .sheet(isPresented: $showingImagePicker) { imagePickerSheet }
+        // `fullScreenCover` doesn't exist on macOS — a large `.sheet` is this
+        // platform's equivalent "full-screen" presentation for the viewer.
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showingImageViewer) { imageViewer }
+        #else
+        .sheet(isPresented: $showingImageViewer) { imageViewer }
+        #endif
         .confirmationDialog("Move this entry to the trash?",
                             isPresented: $showingTrashConfirmation,
                             titleVisibility: .visible) {
@@ -212,6 +239,7 @@ struct EntryDetailView: View {
             playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,
                                                   captureID: captureID)
         }
+        images = await model.images(for: captureID)
     }
 
     // MARK: - Dates
@@ -391,6 +419,71 @@ struct EntryDetailView: View {
     private func togglePlayback() {
         guard let playback else { return }
         if playback.isPlaying { playback.pause() } else { playback.play() }
+    }
+
+    // MARK: - Images
+
+    /// Whether `playbackSection` renders at all — pure, no I/O, no `@State` reads
+    /// (image capture plan Task 6 brief's suggested "which section shows first" test
+    /// seam). `durationSeconds == 0` is exactly the blank/image-only-entry signal
+    /// `LibraryScanner.durationSeconds` produces (confirmed in Task 3's report: no
+    /// `segments/` and `final.durationFrames == 0` both fall through to `0`) — reading
+    /// it off `item` directly, rather than waiting on `playback`'s own async `hasAudio`,
+    /// means the play button never has to flash in for one frame on an entry that has
+    /// no audio at all.
+    static func playbackSectionVisible(hasAudio: Bool) -> Bool { hasAudio }
+
+    private var imagesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Images")
+                .font(.headline)
+
+            if images.isEmpty {
+                Text("Nothing captured yet")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("entryDetail.images.empty")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
+                            ImageThumbnailView(capturesRoot: model.capturesRoot, captureID: captureID,
+                                               sidecar: sidecar)
+                                .frame(width: 80, height: 80)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewerIndex = index
+                                    showingImageViewer = true
+                                }
+                                .accessibilityIdentifier("entryDetail.images.thumbnail.\(sidecar.id)")
+                                .accessibilityLabel("Image \(index + 1) of \(images.count)")
+                                .accessibilityAddTraits(.isButton)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("entryDetail.images.strip")
+            }
+
+            Button("Capture Image…") { showingImagePicker = true }
+                .font(.caption)
+                .accessibilityIdentifier("entryDetail.images.captureButton")
+        }
+    }
+
+    private var imagePickerSheet: some View {
+        ImageCapturePickerSheet { data, type in
+            let succeeded = await model.addImage(captureID, data: data, sourceUTType: type.identifier)
+            if succeeded { await refresh() }
+            return succeeded
+        }
+    }
+
+    private var imageViewer: some View {
+        ImageFullScreenViewer(capturesRoot: model.capturesRoot, captureID: captureID, images: images,
+                              selectedIndex: viewerIndex) { sidecar in
+            await model.removeImage(captureID, imageID: sidecar.id)
+            await refresh()
+        }
     }
 
     // MARK: - Transcript
@@ -663,5 +756,41 @@ struct EntryDetailView: View {
             Text(value)
         }
         .font(.subheadline)
+    }
+}
+
+/// One thumbnail in `EntryDetailView`'s images strip — reads `images/thumbnails/
+/// <imageID>.jpg` off disk (image capture plan Task 2's generated-preview file, never
+/// the original). A missing/corrupt thumbnail degrades to a generic placeholder icon
+/// (design doc, "Thumbnails": "degrades to a generic image placeholder") rather than
+/// blocking or erroring the whole strip — regeneration of a missing thumbnail is not
+/// this task's concern.
+private struct ImageThumbnailView: View {
+    let capturesRoot: URL
+    let captureID: String
+    let sidecar: ImageSidecar
+
+    @State private var data: Data?
+
+    var body: some View {
+        Group {
+            if let data, let image = JournalCoverThumbnail.decode(data) {
+                image
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.quaternary)
+            }
+        }
+        .task(id: sidecar.id) { await load() }
+    }
+
+    private func load() async {
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let url = SegmentLayout.imageThumbnailURL(captureDirectory: directory, imageID: sidecar.id)
+        data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
     }
 }

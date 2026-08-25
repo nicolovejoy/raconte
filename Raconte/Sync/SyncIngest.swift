@@ -789,7 +789,86 @@ actor SyncRecordExchange: CloudRecordExchange {
         case .markerStream(let captureID, let streamDeviceID):
             return await markerStreamRecordToPush(captureID: captureID, streamDeviceID: streamDeviceID,
                                                   name: name, zoneID: zoneID)
+        case .image(let captureID, let imageID):
+            return await imageRecordToPush(captureID: captureID, imageID: imageID,
+                                           name: name, zoneID: zoneID)
         }
+    }
+
+    /// The Image push (image-capture design, "Sync mapping") — the `audioRecordToPush`
+    /// sibling for an entry's attached images, gated by the same two guards every
+    /// child record is: the capture must be finalized, and its Entry must already have
+    /// landed or be buildable alongside (`entryCanBePushed` — CloudKit rejects a save
+    /// whose `entryRef` targets a record it does not hold).
+    ///
+    /// Reads the sidecar for the metadata fields, then the `.orig` file for the bytes.
+    /// **The digest is taken fresh from those bytes** and used for BOTH the upload
+    /// ledger and the record's own `sha256`/`bytes` — the identical "hash once, use
+    /// twice" shape `audioRecordToPush`/`revisionRecordToPush` follow, and the reason
+    /// the sidecar handed to the builder carries the fresh digest rather than its own
+    /// stored one. The two agree for every image this app wrote (the sidecar's digest
+    /// is computed from the same bytes at add time), but if they ever disagreed, the
+    /// bytes are the artifact and the sidecar is derived metadata: pushing the file
+    /// under a hash that describes some *other* content would fail verification on the
+    /// receiving device permanently, so the file's own hash wins and the disagreement
+    /// is logged rather than silently shipped.
+    ///
+    /// `nil` — never a partial or stand-in record — when the sidecar is absent or
+    /// undecodable, or the `.orig` file has vanished or gone unreadable between
+    /// enqueue and push. Same disposition as every sibling: nil excludes the record
+    /// from this batch, `CloudKitEngineControl.provideRecord` removes the pending
+    /// change, and reconciliation re-enqueues it once it is buildable again. Nothing
+    /// is ledgered for a record that was never built, so a nil here can never be
+    /// mistaken later for a successful upload.
+    private func imageRecordToPush(captureID: String, imageID: String, name: SyncRecordName,
+                                   zoneID: CKRecordZone.ID) async -> CKRecord? {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — image push skipped")
+            return nil
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        guard FinalizeArtifactPush.isFinalized(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: image \(imageID, privacy: .public) not finalized — push refused")
+            return nil
+        }
+        guard await entryCanBePushed(capturesRoot: capturesRoot, captureID: captureID) else {
+            log.notice("sync: image \(imageID, privacy: .public) held back — its Entry cannot be pushed yet")
+            return nil
+        }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let sidecarURL = SegmentLayout.imageSidecarURL(captureDirectory: directory, imageID: imageID)
+        guard let sidecarData = try? Data(contentsOf: sidecarURL),
+              let sidecar = try? ImageStore.decodeSidecar(sidecarData) else {
+            log.notice("sync: image sidecar for \(imageID, privacy: .public) absent/undecodable at push time")
+            return nil
+        }
+        let fileURL = SegmentLayout.imageOriginalURL(captureDirectory: directory, imageID: imageID,
+                                                      ext: sidecar.originalExtension)
+        guard let bytes = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else {
+            log.notice("sync: image \(imageID, privacy: .public) original unreadable at push time")
+            return nil
+        }
+
+        let digest = SyncTreeScanner.rawDigest(bytes)
+        if digest.sha256 != sidecar.sha256 || digest.bytes != sidecar.bytes {
+            log.error("""
+                sync: image \(imageID, privacy: .public) no longer matches its own sidecar digest — \
+                pushing the file's own hash (the bytes are the artifact; the sidecar is derived)
+                """)
+        }
+        note(build: digest, for: name)
+
+        // The digest of the bytes actually travelling, never the sidecar's stored
+        // claim — see this method's doc comment and `SyncRecordBuilders.imageRecord`'s.
+        var wireSidecar = sidecar
+        wireSidecar.sha256 = digest.sha256
+        wireSidecar.bytes = digest.bytes
+
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
+        return SyncRecordBuilders.imageRecord(captureID: captureID, imageID: imageID,
+                                              sidecar: wireSidecar, fileURL: fileURL,
+                                              entryID: entryID, zoneID: zoneID)
     }
 
     /// M4 T9's push half: find where THIS device currently has `id`'s bytes
@@ -1249,6 +1328,21 @@ actor SyncRecordExchange: CloudRecordExchange {
             await ingestLiveLog(record, captureID: captureID)
         case .revision(let id):
             await ingestRevision(record, revisionID: id)
+        case .image(_, let imageID):
+            // **Placeholder — inbound Image ingest is the NEXT task's whole subject**
+            // (image-capture plan Task 5: land-or-park, `pending-images.json`, the
+            // `pruneUnexpectedStagingContents` allow-list). This task is push-only.
+            //
+            // Logged rather than silently ignored because a consumed-but-unhandled
+            // record is permanently lost — CKSyncEngine never redelivers one
+            // (`inbound-sync-must-land-or-park`). Nothing on this branch can lose an
+            // owner's image TODAY: no shipped build has ever written an Image record,
+            // so the only way one exists on the server is a build that also carries
+            // Task 5. **This branch must not be released without it.**
+            log.error("""
+                sync: fetched an Image record (\(imageID, privacy: .public)) but inbound image ingest \
+                is not wired yet — dropped
+                """)
         case .markerStream(let captureID, let streamDeviceID):
             await ingestMarkerStream(record, captureID: captureID, streamDeviceID: streamDeviceID)
         }

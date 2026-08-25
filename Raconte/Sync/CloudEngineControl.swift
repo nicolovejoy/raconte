@@ -478,7 +478,15 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     await exchange.acceptRemoteJournalDeletion(id: id)
                 case .entry(let captureID):
                     await exchange.acceptRemoteEntryDeletion(captureID: captureID)
-                case .audio, .revision, .liveLog, .markerStream:
+                case .audio, .revision, .liveLog, .markerStream, .image:
+                    // `.image` (image-capture design) sits here on the same cascade
+                    // reasoning as its siblings — an Image record carries the same
+                    // `.deleteSelf` `entryRef`. The one shape that is NOT a cascade,
+                    // a remote removal of ONE image from a still-live entry, has no
+                    // producer yet: nothing in this build ever enqueues an
+                    // image-only delete. Wiring that inbound removal belongs with
+                    // inbound image ingest (plan Task 5), not here.
+                    //
                     // These cascade from the SAME Entry deletion `.entry` above already
                     // handles (design §5: children carry `.deleteSelf`, so purging the
                     // Entry takes them with it server-side) — whatever order their own

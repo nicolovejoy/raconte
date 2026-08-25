@@ -13,6 +13,10 @@ enum SyncRecordType {
     static let liveLog = "LiveLog"
     static let revision = "Revision"
     static let markerStream = "MarkerStream"
+    /// Image-capture design, "Sync mapping". Pinned by a test for the same reason the
+    /// header above gives: a typo here is a second, silently-empty schema in the
+    /// owner's container, not a compile error.
+    static let image = "Image"
 }
 
 /// The Journal record's field names (design §2, plus two as-built additions documented
@@ -97,6 +101,23 @@ enum SyncAudioField {
 /// closes the gap without touching that already-tested shape.
 enum SyncRevisionField {
     static let body = "body"
+}
+
+/// `Image`-only fields, beyond the shared integrity/reference set (`SyncChildAssetField`
+/// — `file`/`sha256`/`bytes`/`entryRef`), exactly as the image-capture design's "Sync
+/// mapping" section names them.
+///
+/// Everything here is metadata a receiving device cannot re-derive from the bytes alone
+/// as cheaply or as faithfully: `originalExtension` is what the file is filed under on
+/// disk (`images/<imageID>.<ext>`) and must survive the round trip verbatim so both
+/// devices agree on the path; `width`/`height`/`capturedAt` are optional because
+/// `ImageSidecar`'s own are (a source with no readable EXIF date has no `capturedAt` at
+/// all, and an absent key is that state, never a fabricated stand-in date).
+enum SyncImageField {
+    static let originalExtension = "originalExtension"
+    static let width = "width"
+    static let height = "height"
+    static let capturedAt = "capturedAt"
 }
 
 /// `MarkerStream`-only field (design §2 table, T10): the device's own marker-log bytes,
@@ -285,6 +306,57 @@ enum SyncRecordBuilders {
         return record
     }
 
+    /// The Image record (image-capture design, "Sync mapping"): immutable,
+    /// write-once, 0..n per Entry. Same shape as `audioRecord`/`liveLogRecord` —
+    /// payload asset + integrity fields + a cascading `entryRef` — because it is the
+    /// same kind of thing: a write-once child of an Entry whose bytes are the captured
+    /// artifact itself. No `base:` parameter, for the same reason those two have none:
+    /// an image is never revised, so a re-push is never a rebuild onto older system
+    /// fields.
+    ///
+    /// `fileURL` is the `.orig` file — the ORIGINAL bytes, never the thumbnail and
+    /// never a re-encode (the design's "original bytes, verbatim, no re-encode"). The
+    /// thumbnail is derived and regenerable, so it does not travel at all; the
+    /// receiver regenerates its own from these bytes.
+    ///
+    /// `sha256`/`bytes` come from `sidecar`, and the caller
+    /// (`SyncRecordExchange.imageRecordToPush`) is responsible for handing over a
+    /// sidecar whose digest describes the bytes at `fileURL` **as they are right now**
+    /// — it hashes the file fresh and substitutes its own answer before calling here,
+    /// so this record's integrity fields can never describe bytes other than the ones
+    /// travelling with it. That matters more here than the usual "hash once, use
+    /// twice" tidiness: the receiver rebuilds its whole sidecar from these fields, so a
+    /// record whose `sha256` disagreed with its own asset would fail verification on
+    /// the other device forever, never landing.
+    ///
+    /// `captureID` is a parameter rather than being recovered from `entryID` (the task
+    /// brief's own signature listed only `imageID`): the record NAME is
+    /// `i.<captureID>.<imageID>`, so this builder cannot mint its own record id
+    /// without the captureID, and parsing it back out of `entryID.recordName` would
+    /// make an unparseable-but-plausible entry id degrade into a silently wrong image
+    /// name. Matches `audioRecord`, which likewise takes both a `captureID` and an
+    /// `entryID`.
+    static func imageRecord(captureID: String, imageID: String, sidecar: ImageSidecar,
+                            fileURL: URL, entryID: CKRecord.ID, zoneID: CKRecordZone.ID) -> CKRecord {
+        let recordID = SyncCloudIdentifiers.recordID(.image(captureID: captureID, imageID: imageID),
+                                                      zoneID: zoneID)
+        let record = CKRecord(recordType: SyncRecordType.image, recordID: recordID)
+
+        record[SyncChildAssetField.file] = CKAsset(fileURL: fileURL)
+        record[SyncChildAssetField.sha256] = sidecar.sha256
+        record[SyncChildAssetField.bytes] = sidecar.bytes
+        record[SyncImageField.originalExtension] = sidecar.originalExtension
+        // Assigned in both directions, like `journalRecord`'s cover: an image whose
+        // dimensions or EXIF date could not be read has NO such key at all, rather
+        // than a zero/epoch stand-in a receiver would have to tell apart from a real
+        // value. `ImageSidecar` models all three as optional for that exact reason.
+        record[SyncImageField.width] = sidecar.width
+        record[SyncImageField.height] = sidecar.height
+        record[SyncImageField.capturedAt] = sidecar.capturedAt
+        record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: entryID, action: .deleteSelf)
+        return record
+    }
+
     /// The MarkerStream record (design §2 table, §7.4, T10): mutable but structurally
     /// conflict-free — `SyncRecordName.markerStream(captureID:deviceID:)` names exactly
     /// one device's own stream, so only that device ever writes this record (design §4,
@@ -402,6 +474,13 @@ enum FinalizeArtifactPush {
     /// testable, and what lets `EntryMetadataStore`'s hook and this file's own
     /// `push(...)` share one answer instead of two).
     ///
+    /// **Every artifact name is conditional except the Entry's own** (image-capture
+    /// design, "Push eligibility"): a finalized capture names its AudioAsset only when
+    /// a readable `final/recording.m4a` is actually there, its LiveLog/MarkerStream
+    /// only when those files are, and one Image per readable sidecar. The Entry alone
+    /// is unconditional — it is the record the others all reference, and a finalized
+    /// capture always has a manifest, which is what `isFinalized` just read.
+    ///
     /// Three-answer honesty, matching `SyncTreeScanner.liveLogArtifact`'s own doc
     /// comment verbatim: **not finalized → no names at all**; **finalized with a
     /// `transcript/live.jsonl`** (the ordinary case) → Entry + AudioAsset + LiveLog;
@@ -442,8 +521,37 @@ enum FinalizeArtifactPush {
     static func namesToPush(capturesRoot: URL, captureID: String,
                             deviceID: String = DeviceIdentity.stable()) -> [SyncRecordName] {
         guard isFinalized(capturesRoot: capturesRoot, captureID: captureID) else { return [] }
-        var names: [SyncRecordName] = [.entry(captureID: captureID), .audio(captureID: captureID)]
+        var names: [SyncRecordName] = [.entry(captureID: captureID)]
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        // **`.audio` is conditional** (image-capture design, "Push eligibility — the
+        // real gap"). It was unconditional for as long as every finalized capture had
+        // a recording; an image-only entry (`BlankEntryMinter` + one image, no audio
+        // at all) is finalized with NO `final/recording.m4a`, and naming `.audio` for
+        // it would enqueue a push that `audioRecordToPush` can only ever answer nil to.
+        //
+        // The probe is `try? Data(contentsOf:, .mappedIfSafe)`, byte-identical to
+        // `SyncTreeScanner.audioArtifact`'s own read — not a bare `fileExists`, and
+        // not a second independently-invented check that happens to agree today. That
+        // alignment is the whole point: reconciliation decides "is there an
+        // AudioAsset here" with exactly this expression, so an existing-but-unreadable
+        // m4a must read the same way at both chokepoints. (`.mappedIfSafe` maps rather
+        // than slurps, so probing the largest file in the container costs no more here
+        // than the scanner already pays.)
+        //
+        // **No behavior change for an audio-bearing entry**: `final.verifiedAt` is
+        // stamped only after a real promotion of a readable `.m4a`
+        // (`FinalizerWorker.finalize`, both the clean and the verified-but-gapped
+        // path), so a genuinely audio-bearing finalized capture passes this probe and
+        // gets the identical list it got before. The only cases newly excluded are the
+        // ones where the push could not have succeeded anyway: no m4a at all
+        // (image-only), or an unreadable one — and for the unreadable case the
+        // outcome is the same as before by a shorter route (previously: enqueued →
+        // `audioRecordToPush` nil → `CloudKitEngineControl.provideRecord` removes the
+        // pending change → re-enqueued by the next launch's `SyncPlanner.reconcile`).
+        let m4aURL = SegmentLayout.finalRecordingURL(captureDirectory: dir)
+        if (try? Data(contentsOf: m4aURL, options: .mappedIfSafe)) != nil {
+            names.append(.audio(captureID: captureID))
+        }
         let liveLogURL = SegmentLayout.liveTranscriptURL(captureDirectory: dir)
         if (try? Data(contentsOf: liveLogURL, options: .mappedIfSafe)) != nil {
             names.append(.liveLog(captureID: captureID))
@@ -451,6 +559,42 @@ enum FinalizeArtifactPush {
         let markerURL = SegmentLayout.markerLogURL(captureDirectory: dir)
         if (try? Data(contentsOf: markerURL, options: .mappedIfSafe)) != nil {
             names.append(.markerStream(captureID: captureID, deviceID: deviceID))
+        }
+        // One `.image` per readable sidecar, ULID order (== the order the owner sees
+        // them in). Appended LAST so an audio-bearing entry with no images produces
+        // byte-for-byte the list it produced before this task — images ride alongside
+        // the existing names, never in between them.
+        //
+        // `ImageStore.sidecarURLs` is the shared directory listing — never a second
+        // hand-rolled enumeration; `SyncRecordFamily.names` reads the same one — and
+        // each name is then held to two conditions this side (and only this side)
+        // needs:
+        //
+        // 1. **The id is the FILENAME stem, and must be a well-formed ULID.** Every
+        //    path `SyncRecordExchange.imageRecordToPush` reads is derived from the id
+        //    in the record name (`images/<id>.json`, `images/<id>.<ext>`), so the
+        //    filename is the identity, not whatever `id` the sidecar's own JSON
+        //    happens to claim. And a non-ULID stem cannot round-trip through
+        //    `SyncRecordName.init?` at all, so a record pushed under it would come
+        //    back unparseable at `noteSaved` — no ledger entry, re-enqueued forever.
+        //    Same guard, same reason, as `SyncTreeScanner.scanCaptures`' own
+        //    `ULID.isWellFormed(captureID)` check.
+        // 2. **The sidecar decodes** — one notch stricter than the `try?
+        //    Data(contentsOf:)` probes above, because `imageRecordToPush` cannot build
+        //    a record from a sidecar it cannot read the fields of. An undecodable
+        //    sidecar therefore has to read exactly like an absent one, which is the
+        //    same rule those probes apply to their own files.
+        //
+        // The `.orig` file's own readability is deliberately NOT probed here: it is
+        // one more large file to touch at finalize, and a missing one already degrades
+        // correctly at push time (nil → pending change dropped → re-enqueued by the
+        // next reconcile).
+        for sidecarURL in ImageStore.sidecarURLs(captureDirectory: dir) {
+            let imageID = sidecarURL.deletingPathExtension().lastPathComponent
+            guard ULID.isWellFormed(imageID),
+                  let sidecarData = try? Data(contentsOf: sidecarURL),
+                  (try? ImageStore.decodeSidecar(sidecarData)) != nil else { continue }
+            names.append(.image(captureID: captureID, imageID: imageID))
         }
         return names
     }

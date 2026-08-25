@@ -148,16 +148,43 @@ actor ImageStore {
     /// the same way for `entry.json`). Never throws: absent/unknown capture/unreadable
     /// sidecar all read as "no images", same stance as `images(captureID:)`.
     static func readSidecars(captureDirectory: URL) -> [ImageSidecar] {
-        let directory = SegmentLayout.imagesDirectory(captureDirectory: captureDirectory)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil) else { return [] }
-        let sidecars: [ImageSidecar] = entries
-            .filter { $0.pathExtension == SegmentLayout.sidecarExtension }
+        let sidecars: [ImageSidecar] = sidecarURLs(captureDirectory: captureDirectory)
             .compactMap { url in
                 guard let data = try? Data(contentsOf: url) else { return nil }
                 return try? decodeSidecar(data)
             }
         return sidecars.sorted { $0.id < $1.id }
+    }
+
+    /// Every `<imageID>.json` sidecar FILE directly under `images/`, filename order
+    /// (== ULID order == display order, since the filename stem is the image's ULID —
+    /// `writeSidecar` files a sidecar under its own `id`, on both the local-add and
+    /// the sync-ingest path).
+    ///
+    /// The one directory listing, shared: `readSidecars` above decodes these, and the
+    /// sync layer's two enumerations (`SyncRecordFamily.names`, which must be
+    /// permissive about a sidecar's CONTENTS, and `FinalizeArtifactPush.namesToPush`,
+    /// which must not be) each apply their own documented probe to the same list
+    /// rather than re-listing the directory a second, independently-written way.
+    /// Never throws: an absent `images/` and an unlistable one both read as no images,
+    /// the same "absent is not an error" stance `readSidecars` takes.
+    static func sidecarURLs(captureDirectory: URL) -> [URL] {
+        let directory = SegmentLayout.imagesDirectory(captureDirectory: captureDirectory)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
+        return entries
+            .filter { $0.pathExtension == SegmentLayout.sidecarExtension }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    /// The image ids of `sidecarURLs`, in the same order — the filename-level sibling
+    /// of `readSidecars`, for the caller that must NOT skip an id merely because its
+    /// sidecar's contents went bad (`SyncRecordFamily.names`, whose whole job is
+    /// retiring local bookkeeping for names that may exist server-side; see that
+    /// type's "best-effort and permissive, never authoritative" doc comment).
+    static func sidecarImageIDs(captureDirectory: URL) -> [String] {
+        sidecarURLs(captureDirectory: captureDirectory)
+            .map { $0.deletingPathExtension().lastPathComponent }
     }
 
     // MARK: Private helpers

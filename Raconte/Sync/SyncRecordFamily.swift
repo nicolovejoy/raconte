@@ -34,6 +34,17 @@ enum SyncRecordFamily {
         if fm.fileExists(atPath: SegmentLayout.markerLogURL(captureDirectory: captureDirectory).path) {
             names.append(.markerStream(captureID: captureID, deviceID: DeviceIdentity.stable()))
         }
+        // Every image ever attached to this capture (image-capture design, "Sync
+        // mapping"): one `.image` name per `images/<imageID>.json` sidecar FILE, by
+        // filename — deliberately NOT `ImageStore.readSidecars`, whose decode step
+        // would skip an id whose sidecar contents went bad. This enumeration is the
+        // permissive half of the pair (see this type's header): retiring a name that
+        // was never pushed costs nothing, while failing to retire one whose sidecar
+        // happens to be unreadable is exactly the stale-record hazard this type
+        // exists to prevent. `FinalizeArtifactPush.namesToPush` applies the strict
+        // probe to the same shared listing.
+        names.append(contentsOf: ImageStore.sidecarImageIDs(captureDirectory: captureDirectory)
+            .map { .image(captureID: captureID, imageID: $0) })
         // Every FOREIGN marker stream materialized here by an earlier ingest
         // (`transcript/markers-<deviceID>.jsonl`).
         let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory)

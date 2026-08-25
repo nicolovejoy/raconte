@@ -13,12 +13,22 @@ import Foundation
 ///     Revision      r.<revisionULID>            (the revision's own id, never its file number)
 ///     LiveLog       l.<captureID>
 ///     MarkerStream  m.<captureID>.<deviceID>
+///     Image         i.<captureID>.<imageID>
 ///
 /// `.audio` always addresses index `0`: the record model keeps the door open to
 /// multiple audio assets per entry (design §0.3, "AudioAsset is its own record, 1..n
 /// capable"), but nothing multi-recording is built (design §9) — so this type has no
 /// index parameter yet, and `init?(rawValue:)` rejects any other index as garbage
 /// rather than silently accepting a shape it doesn't actually model.
+///
+/// `.image` (image-capture design, "Sync mapping") embeds BOTH the captureID and the
+/// image's own ULID, deliberately unlike `.revision(id:)`, which names only its own id:
+/// a revision is independently addressable across a capture move (its `entryRef` is
+/// what recovers the captureID on ingest), while an image is not — there is no
+/// cross-capture image reference whose identity has to survive, so the captureID rides
+/// in the name and no field has to be read back to know which entry an image belongs
+/// to. Shape-identical to `.markerStream`'s two-ULID form, which is why
+/// `init?(rawValue:)` keys them apart on the prefix alone.
 enum SyncRecordName: Equatable, Hashable, Sendable {
     case journal(id: String)
     case entry(captureID: String)
@@ -26,6 +36,7 @@ enum SyncRecordName: Equatable, Hashable, Sendable {
     case revision(id: String)
     case liveLog(captureID: String)
     case markerStream(captureID: String, deviceID: String)
+    case image(captureID: String, imageID: String)
 
     private static let journalPrefix = "j"
     private static let entryPrefix = "e"
@@ -33,6 +44,7 @@ enum SyncRecordName: Equatable, Hashable, Sendable {
     private static let revisionPrefix = "r"
     private static let liveLogPrefix = "l"
     private static let markerStreamPrefix = "m"
+    private static let imagePrefix = "i"
     private static let audioIndexSuffix = "0"
     private static let separator: Character = "."
 
@@ -50,6 +62,8 @@ enum SyncRecordName: Equatable, Hashable, Sendable {
             return "\(Self.liveLogPrefix)\(Self.separator)\(captureID)"
         case .markerStream(let captureID, let deviceID):
             return "\(Self.markerStreamPrefix)\(Self.separator)\(captureID)\(Self.separator)\(deviceID)"
+        case .image(let captureID, let imageID):
+            return "\(Self.imagePrefix)\(Self.separator)\(captureID)\(Self.separator)\(imageID)"
         }
     }
 
@@ -88,6 +102,10 @@ enum SyncRecordName: Equatable, Hashable, Sendable {
             guard components.count == 3, ULID.isWellFormed(components[1]),
                   ULID.isWellFormed(components[2]) else { return nil }
             self = .markerStream(captureID: components[1], deviceID: components[2])
+        case Self.imagePrefix:
+            guard components.count == 3, ULID.isWellFormed(components[1]),
+                  ULID.isWellFormed(components[2]) else { return nil }
+            self = .image(captureID: components[1], imageID: components[2])
         default:
             return nil
         }

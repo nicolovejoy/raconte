@@ -136,4 +136,35 @@ final class SyncRecordNameTests: XCTestCase {
     func testInitRejectsMarkerStreamWithGarbageDeviceID() {
         XCTAssertNil(SyncRecordName(rawValue: "m.\(ulidA).not-a-device-id"))
     }
+
+    // MARK: Image (image-capture plan Task 4)
+
+    func testImageRawValueEmbedsBothTheCaptureIDAndTheImageID() {
+        XCTAssertEqual(SyncRecordName.image(captureID: ulidA, imageID: ulidB).rawValue,
+                       "i.\(ulidA).\(ulidB)")
+    }
+
+    func testRoundTripImage() {
+        let name = SyncRecordName.image(captureID: ulidA, imageID: ulidB)
+        XCTAssertEqual(SyncRecordName(rawValue: name.rawValue), name)
+    }
+
+    /// Same two-ULID shape as `.markerStream`, told apart on the prefix alone — so the
+    /// components must not be swappable and the two shapes must not collide.
+    func testImageAndMarkerStreamShareAShapeButNeverAValue() {
+        let image = SyncRecordName.image(captureID: ulidA, imageID: ulidB)
+        let swapped = SyncRecordName.image(captureID: ulidB, imageID: ulidA)
+        XCTAssertNotEqual(image, swapped)
+        XCTAssertEqual(SyncRecordName(rawValue: swapped.rawValue), swapped)
+        XCTAssertNotEqual(image.rawValue,
+                          SyncRecordName.markerStream(captureID: ulidA, deviceID: ulidB).rawValue)
+    }
+
+    func testInitRejectsImageMissingItsImageID() {
+        XCTAssertNil(SyncRecordName(rawValue: "i.\(ulidA)"))
+    }
+
+    func testInitRejectsImageWithAGarbageImageID() {
+        XCTAssertNil(SyncRecordName(rawValue: "i.\(ulidA).not-a-ulid"))
+    }
 }

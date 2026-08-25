@@ -10,6 +10,7 @@ final class SyncChildHoldbackTests: XCTestCase {
 
     private let zoneID = CKRecordZone.ID(zoneName: "RaconteZoneTest", ownerName: CKCurrentUserDefaultName)
     private let captureID = ULID.make()
+    private let imageID = ULID.make()
     private let deviceID = "device-low"
     private var containerRoot: URL!
 
@@ -81,9 +82,24 @@ final class SyncChildHoldbackTests: XCTestCase {
         return (ex, bookkeeping)
     }
 
+    /// An attached image (image-capture plan Task 4) — a child record exactly like the
+    /// three above: it carries the same `.deleteSelf` `entryRef`, so it is subject to
+    /// the same holdback rule and must not be a separate, untested path.
+    private func writeImage() throws {
+        let bytes = Data("image-bytes".utf8)
+        let sidecar = ImageSidecar(id: imageID, originalExtension: "jpeg", mime: "image/jpeg",
+                                   bytes: bytes.count, sha256: ImageStore.sha256Hex(bytes),
+                                   width: 16, height: 9, capturedAt: nil,
+                                   addedAt: Date(timeIntervalSince1970: 1_700_000_500))
+        try ImageStore.writeOriginal(bytes, captureDirectory: captureDirectory,
+                                     imageID: imageID, ext: "jpeg")
+        try ImageStore.writeSidecar(sidecar, captureDirectory: captureDirectory)
+    }
+
     private func children() -> [SyncRecordName] {
         [.audio(captureID: captureID), .liveLog(captureID: captureID),
-         .markerStream(captureID: captureID, deviceID: deviceID)]
+         .markerStream(captureID: captureID, deviceID: deviceID),
+         .image(captureID: captureID, imageID: imageID)]
     }
 
     /// The defect: Entry build fails (unreadable entry.json), children still built and
@@ -93,6 +109,7 @@ final class SyncChildHoldbackTests: XCTestCase {
         try writeFinalM4a()
         try writeLiveLog()
         try writeMarkerLog()
+        try writeImage()
         try makeEntryMetadataUnreadable()
         let (ex, _) = exchange()
 
@@ -111,6 +128,7 @@ final class SyncChildHoldbackTests: XCTestCase {
         try writeFinalM4a()
         try writeLiveLog()
         try writeMarkerLog()
+        try writeImage()
         try EntryMetadataStore.write(EntryMetadata(journalID: ULID.make()), url: entryURL)
         let (ex, bookkeeping) = exchange()
         let answer = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)
@@ -133,6 +151,7 @@ final class SyncChildHoldbackTests: XCTestCase {
         try writeFinalM4a()
         try writeLiveLog()
         try writeMarkerLog()
+        try writeImage()
         let (ex, _) = exchange()
 
         let entry = await ex.recordToPush(for: .entry(captureID: captureID), zoneID: zoneID)

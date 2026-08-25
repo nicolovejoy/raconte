@@ -48,7 +48,7 @@ targets:
         # That bit us twice in one day (2026-08-24): the TestFlight build number
         # reset 2→1 mid-branch, and PR #93's export-compliance key vanished on the
         # next regen. Version-like keys live HERE, edited here, never in the plist.
-        # Bump CFBundleVersion for every TestFlight upload (next archive: build 3).
+        # Bump CFBundleVersion for every TestFlight upload (scripts/upload_testflight.sh).
         CFBundleVersion: "4"
         # ASC stops asking the export-compliance question per upload (PR #93).
         # Standard iOS crypto only (HTTPS/CloudKit), no proprietary encryption.

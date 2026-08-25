@@ -49,6 +49,17 @@ final class SyncRecordExchangeImagePushTests: XCTestCase {
             .write(to: SegmentLayout.manifestURL(captureDirectory: captureDirectory))
     }
 
+    /// The real thing `BlankEntryMinter` writes for an entry that never had audio:
+    /// verified the instant it lands, `durationFrames = 0`. Used rather than a
+    /// hand-rolled manifest so the scanner is exercised against production's own shape.
+    private func writeBlankEntryManifest() throws {
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        let manifest = BlankEntryMinter.manifest(captureID: captureID,
+                                                  createdAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try CaptureCoding.encoder().encode(manifest)
+            .write(to: SegmentLayout.manifestURL(captureDirectory: captureDirectory))
+    }
+
     private let imageBytes = Data("the-original-image-bytes".utf8)
 
     @discardableResult
@@ -193,6 +204,95 @@ final class SyncRecordExchangeImagePushTests: XCTestCase {
         let record = await ex.recordToPush(for: imageName, zoneID: zoneID)
 
         XCTAssertNil(record)
+    }
+
+    // MARK: Reconciliation — the discovery path an image actually arrives by
+    //
+    // An image is attached LONG AFTER finalize (`LibraryScreenModel.addImage`), so
+    // `FinalizeArtifactPush.namesToPush` — which runs once, at finalize — has already
+    // come and gone. `SyncPlanner.reconcile` is therefore the real producer for a
+    // locally-added image, and it can only see what `SyncTreeScanner` reports. These
+    // exercise the whole chain for real: scan → reconcile → push → ledger → re-scan →
+    // reconcile, with no hand-built artifact fixtures anywhere.
+
+    private func reconcile(bookkeeping: SyncBookkeepingStore) async -> [SyncRecordName] {
+        let scan = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceID).scan()
+        return SyncPlanner.reconcile(scan: scan.artifacts, ledger: await bookkeeping.ledger())
+    }
+
+    /// The gap this fix closes: an image added after finalize must be discoverable by
+    /// reconciliation, through the same generic ledger comparison every other artifact
+    /// uses — no image-specific planner logic.
+    func testReconcileEnqueuesALocallyAddedImageThatWasNeverUploaded() async throws {
+        try writeVerifiedManifest()
+        try writeImage()
+        let (_, bookkeeping) = exchange()
+
+        let planned = await reconcile(bookkeeping: bookkeeping)
+
+        XCTAssertTrue(planned.contains(imageName),
+                      "an image with no ledger entry is new work — reconcile must name it")
+    }
+
+    /// The other half, and the T9 tripwire: once the push has actually landed, the
+    /// SAME image must NOT be enqueued again. That only holds if the scanner's digest
+    /// and the ledgered digest are computed by the identical formula over the identical
+    /// bytes — this drives both sides for real rather than asserting the formula twice.
+    func testAConfirmedImageIsNotReEnqueuedByTheNextReconcile() async throws {
+        try writeVerifiedManifest()
+        try writeImage()
+        let (ex, bookkeeping) = exchange()
+
+        let before = await reconcile(bookkeeping: bookkeeping)
+        XCTAssertTrue(before.contains(imageName), "fixture sanity: it starts as new work")
+
+        let answer = await ex.recordToPush(for: imageName, zoneID: zoneID)
+        await ex.noteSaved(try XCTUnwrap(answer))
+
+        let after = await reconcile(bookkeeping: bookkeeping)
+        XCTAssertFalse(after.contains(imageName),
+                       "scan digest and ledger digest must agree, or this image re-uploads every launch")
+    }
+
+    /// An image-only capture scans as Entry + Image, with no AudioAsset artifact and —
+    /// the cosmetic half — no diagnostic skip for the m4a it never had.
+    func testScanOfAnImageOnlyCaptureReportsAnImageAndNoMissingAudioDiagnostic() async throws {
+        try writeBlankEntryManifest()
+        try writeImage()
+
+        let scan = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceID).scan()
+
+        XCTAssertEqual(scan.artifacts.map(\.name),
+                       [.entry(captureID: captureID), .image(captureID: captureID, imageID: imageID)])
+        XCTAssertEqual(scan.skipped, [],
+                       "an entry that never had audio must not be reported as a missing recording")
+    }
+
+    /// A capture whose manifest DOES claim audio (`durationFrames > 0`) and whose m4a
+    /// is nevertheless gone keeps its diagnostic — the silencing above is scoped to
+    /// entries that never had audio, and must not hide real loss.
+    func testAMissingM4aIsStillReportedWhenTheManifestClaimsAudio() async throws {
+        try writeVerifiedManifest()
+
+        let scan = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceID).scan()
+
+        XCTAssertEqual(scan.skipped, ["\(captureID)/final/recording.m4a"])
+    }
+
+    /// A sidecar that reads but whose original file is gone: no artifact (nothing to
+    /// hash or upload) and a path-qualified diagnostic, exactly as an unreadable
+    /// revision file gets.
+    func testScanReportsAnImageWhoseOriginalIsMissingAndProducesNoArtifact() async throws {
+        try writeBlankEntryManifest()
+        try writeImage()
+        try FileManager.default.removeItem(
+            at: SegmentLayout.imageOriginalURL(captureDirectory: captureDirectory,
+                                                imageID: imageID, ext: "jpeg"))
+
+        let scan = SyncTreeScanner(containerRoot: containerRoot, deviceID: deviceID).scan()
+
+        XCTAssertFalse(scan.artifacts.contains { $0.name == imageName })
+        XCTAssertEqual(scan.skipped, ["\(captureID)/images/\(imageID).jpeg"])
     }
 
     /// The bytes are the artifact; the sidecar is derived metadata. If the two ever

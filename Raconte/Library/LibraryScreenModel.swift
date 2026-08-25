@@ -476,24 +476,40 @@ final class LibraryScreenModel {
     /// Removes one image. Idempotent, matching `ImageStore.removeImage` — already
     /// absent is not an error, so there is nothing to report false about.
     ///
-    /// **Fires `noteLocalDelete(.image(...))` (final-review I1).** `SyncPlanner
-    /// .reconcile` deliberately never infers a delete from an artifact's absence from a
-    /// scan (see its doc comment), so without this explicit verb the server record would
-    /// survive forever: a second device would keep showing the removed image, and a
-    /// wipe/resync or a newly paired device would refetch it and `SyncIngest.ingestImage`
-    /// would write it back into `images/` — while the confirmation dialog says "This
-    /// can't be undone." Same placement as `trashEntry`/`purge`'s own delete hooks above.
+    /// **Fires `noteLocalDelete(.image(...))` (final-review I1) AND
+    /// `noteLocalDeleteFamily([.image(...)])` (residual-review fix — the entry-deletion
+    /// precedent's `noteSyncDelete` pairs the two calls the same way for its own
+    /// record's name).** `SyncPlanner.reconcile` deliberately never infers a delete
+    /// from an artifact's absence from a scan (see its doc comment), so without the
+    /// real delete the server record would survive forever — a wipe/resync or a newly
+    /// paired device would refetch it and `SyncIngest.ingestImage` would write it back
+    /// into `images/`, even though the confirmation dialog says "This can't be undone."
+    /// The family call withdraws any save `addImage` queued moments earlier for this
+    /// same image — an add-then-delete race — never left to an undocumented assumption
+    /// that the engine internally dedupes a queued save against a queued delete for the
+    /// same record.
+    ///
+    /// **This is the narrower, accurate guarantee the delete actually gives: it stops
+    /// the server record from being resurrected by a future refetch/wipe or a newly
+    /// paired device. It does NOT reach a device that is already synced and stays
+    /// live** — there is no producer yet for an inbound single-image-deletion event
+    /// (see `CloudEngineControl`'s `.image` cascade-ignore comment), so an
+    /// already-showing image keeps showing there until that inbound piece is built.
+    /// Same placement as `trashEntry`/`purge`'s own delete hooks above.
     ///
     /// Fired unconditionally, matching the method's idempotence: `SyncCoordinator
-    /// .noteLocalDelete` enqueues a CK delete and retires local bookkeeping, both of
-    /// which are no-ops for a name the server never had.
+    /// .noteLocalDelete`/`.noteLocalDeleteFamily` enqueue a CK delete, drop any pending
+    /// save, and retire local bookkeeping, all of which are no-ops for a name the
+    /// server never had.
     ///
     /// Like `addImage` above, this lives on the LOCAL path only — `ImageStore.ingest`
     /// and `SyncIngest`'s own removal handling never call it, so an inbound sync write
     /// can never echo back out as a local mutation.
     func removeImage(_ captureID: String, imageID: String) async {
         await imageStore.removeImage(captureID: captureID, imageID: imageID)
-        await syncHooks?.noteLocalDelete(.image(captureID: captureID, imageID: imageID))
+        let name = SyncRecordName.image(captureID: captureID, imageID: imageID)
+        await syncHooks?.noteLocalDelete(name)
+        await syncHooks?.noteLocalDeleteFamily([name])
         await rescan()
     }
 

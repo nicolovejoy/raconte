@@ -2,7 +2,7 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-24 pm (laptop — #94 FIXED via full SDD; PR #95 open, CI pending at handoff)
+## Session 2026-08-24 pm (laptop — #94 fixed+merged; CI halved; build-3 smoke: half a win; diagnostics PR #97 open at handoff)
 
 Executed #94 end-to-end with subagent-driven development (plan at
 `docs/plans/2026-08-24-94-stuck-pending-verify-final-plan.md`; per-task reviews, Fable
@@ -43,18 +43,50 @@ version of BOTH files (this branch's docs were built as the final desired state,
   stamps and `not buildable — pending change removed` lines draining dead names out of
   `engine-state.bin`.
 
+**Late session (after the block above was written):** #93, #95, and #96 all MERGED.
+- **PR #96 (merged): CI halved + release trap killed.** Parallel unit/UI jobs (unit
+  2m17s, UI ~25m — wall-clock now bounded by UI alone), `concurrency` cancels
+  superseded PR runs (never main), XcodeGen 2.46.0 pinned+checksummed instead of brew.
+  And proven live twice: `xcodegen generate` deletes ANY Info.plist key not in
+  `project.yml` — it had stripped `CFBundleVersion` AND #93's export-compliance key.
+  Both now live in `project.yml`; `CFBundleVersion` was pre-bumped to 3.
+- **iOS build 3 uploaded + smoked. Half a win:** cause-1 fix VERIFIED on device — the
+  launch log shows every stuck name draining (`not buildable — pending change
+  removed`, including the phantom `r.` revisions); next launch should be quiet. But
+  the 20 entries still log `not finalized — push refused` — **the heal never stamped
+  them**, and neither FinalizerWorker nor launch recovery logged anything, so the
+  refusing guard is unknown (#89's blind spot, third smoke running blind). Prime
+  suspect: manifests missing/corrupt → captures route to QUARANTINE (issue #8 path),
+  which never enters the finalize queue at all. Mac container is no proxy: it lacks
+  the phone's 20 capture IDs entirely (has 7 of its own dev-era ones, unexamined —
+  `cat` of one manifest was asked for but not yet delivered).
+- **PR #97 OPEN (merge → build 4):** diagnostic logging only, zero behavior change.
+  `recovery:` summary + per-capture verifyFinal/QUARANTINED lines
+  (CaptureCoordinator.recoverAtLaunch), `finalize` guard-state line whenever the heal
+  is not applicable (state/hadGap/m4aPresent/alreadyVerified/segmentsRead), stamp and
+  probe-fail lines. Suite green (1795 + 3 provider tests after regen — note: a stale
+  generated project silently DROPS a new test FILE; regen before trusting counts).
+- Cross-device delete propagated iPhone→iPad instantly — live channel healthy both
+  ways for records the server knows.
+- Owner ruling: losing the dev-era entries would be acceptable to him — declined for
+  now (audio is ground truth; they're stuck, not at risk; diagnosis is cheap).
+  **Import/export facility** endorsed as real roadmap work regardless (spec exists in
+  the data-model doc).
+
 **Next steps:**
-1. Nico: merge **PR #93** (export compliance) then **PR #95** (#94 fixes) — docs
-   conflict resolves by taking #95's CLAUDE.md + devlog. Merges are his.
-2. Pin `CFBundleVersion` (bump to 3) surviving `xcodegen generate`, archive iOS build 3
-   from merged main, upload, smoke per the expectations above (all 20 on the iPad).
-3. Confirm the unfiled-journal theory: is the recorded-into journal absent from the
-   iPad's journal list? Then **#90** (env-tag sync bookkeeping — now user-visible) is the
-   next sync fix; #91 (launch-only reconcile latency, scope widened by #94) alongside.
-4. **macOS TestFlight:** rebuild from merged main (`Raconte-macos-tf1.xcarchive`
-   predates all fixes), `asc_regenerate_profile.py --platform macos`, upload.
-5. #89 (About page w/ version + sync status) — would have saved two smoke sessions.
-6. Sonnet batch: #85, #83, #86, backlog #73–78; Nico's calls: #81, #67, #70, #68, #66,
+1. Merge **PR #97**, bump `CFBundleVersion` to 4 in `project.yml`, archive+upload
+   **iOS build 4**, smoke: grep the phone log for `recovery:` and `finalize` lines —
+   they name the exact guard refusing the 20. Then fix that guard (likely quarantine
+   repair or a manifest-shape fix).
+2. Confirm the unfiled-journal theory (is that journal absent from the iPad's journal
+   list?) → **#90** (env-tag bookkeeping, now user-visible) is the next sync fix;
+   #91 (launch-only reconcile latency, scope widened by #94) alongside.
+3. **macOS TestFlight:** rebuild from current main (the old archive predates every
+   fix), `asc_regenerate_profile.py --platform macos`, upload — Nico's Mac app is
+   stale, its journal-image gap expected until then.
+4. #89 (About page w/ version + sync status) — three smoke sessions have now paid for
+   its absence. Import/export facility joins the roadmap (owner-endorsed).
+5. Sonnet batch: #85, #83, #86, backlog #73–78; Nico's calls: #81, #67, #70, #68, #66,
    #63, #60/#59.
 
 ## What Raconte is

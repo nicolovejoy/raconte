@@ -156,6 +156,29 @@ enum AppContainer {
             .appendingPathComponent(syncStagingPendingMarkerStreamsFileName)
     }
 
+    /// Image capture plan Task 5: a sibling of `pending-revisions.json`/
+    /// `pending-marker-streams.json`, same shape and same reasoning —
+    /// `sync/staging/<captureID>/pending-images.json` durably parks a fetched `Image`
+    /// record's bytes + metadata for a captureID this device has not committed yet, or
+    /// one whose sidecar currently reports `trashedAt != nil` (Task 9's ruling extended
+    /// once more). Deliberately a SIBLING file, not folded into `pending.json`: an image
+    /// can arrive before the Entry record itself has, when `pending.json` does not exist
+    /// yet at all, so parking cannot depend on that sidecar's presence.
+    ///
+    /// **Rides `EntryAssembler.assemble`'s commit rename** — it too must be added to
+    /// `pruneUnexpectedStagingContents`'s allow-list or it is swept and lost the instant
+    /// a commit's prune step runs, and `CKSyncEngine` never redelivers a consumed
+    /// record, so that loss is permanent (the branch's standing
+    /// `inbound-sync-must-land-or-park` rule). It survives into
+    /// `captures/<captureID>/pending-images.json` for exactly as long as it takes
+    /// `SyncRecordExchange.ingestParkedImages` to apply and delete it — a committed
+    /// capture directory does not keep it around.
+    static let syncStagingPendingImagesFileName = "pending-images.json"
+    static func syncStagingPendingImagesURL(containerRoot: URL, captureID: String) -> URL {
+        syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
+            .appendingPathComponent(syncStagingPendingImagesFileName)
+    }
+
     /// The container root inferred from a captures root — the inverse of
     /// `capturesRoot(containerRoot:)`. Lets a type that was handed only `capturesRoot`
     /// (everything in M1/M2 was) find the registry without rethreading the composition

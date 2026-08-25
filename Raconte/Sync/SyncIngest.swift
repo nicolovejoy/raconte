@@ -1,5 +1,6 @@
 import Foundation
 import CloudKit
+import UniformTypeIdentifiers
 import os
 #if canImport(Darwin)
 import Darwin
@@ -159,6 +160,139 @@ struct RemoteEntryFields: Equatable, Sendable, Codable {
     }
 }
 
+/// One fetched `Image` record, decoded (image-capture design, "Sync mapping"; plan
+/// Task 5). Mirrors `RemoteEntryFields`'s split exactly: **strict about identity**
+/// (record type, the captureID/imageID pair from the record NAME, the asset the bytes
+/// travel in, and the `sha256` they must be checked against — without any one of those
+/// there is no image to write and no way to verify what did arrive), **lenient about
+/// everything that has a sane default** (`originalExtension`, `width`, `height`,
+/// `capturedAt`), so a damaged optional costs only itself and never the whole picture.
+///
+/// The ids come from the record name, never from a field, for the same reason
+/// `RemoteJournal`/`RemoteEntryFields` do: `SyncRecordName` already guarantees
+/// `i.<well-formed ULID>.<well-formed ULID>`, so a record can never disagree with the
+/// name it is filed under, and every path this ingest writes is derived from those
+/// validated components.
+struct RemoteImageFields: Equatable, Sendable {
+    var captureID: String
+    var imageID: String
+    /// The fetched `CKAsset`'s local file URL. CloudKit has already downloaded the
+    /// bytes by the time the record is handed over; the file is temporary and must be
+    /// read before the event returns (the same contract `RemoteJournal.coverAsset` and
+    /// `ingestAudio`'s asset both work under).
+    var fileURL: URL
+    /// The sender's claimed digest of the bytes at `fileURL`. Never trusted as a
+    /// *description* — `ingestImage` recomputes the hash and refuses on a mismatch
+    /// before one byte is persisted — but recorded verbatim into the local sidecar
+    /// once it has been proven true of the bytes actually received.
+    var sha256: String
+    /// What the file is filed under on disk (`images/<imageID>.<ext>`), already run
+    /// through `sanitizedExtension`.
+    var originalExtension: String
+    var width: Int?
+    var height: Int?
+    var capturedAt: Date?
+
+    /// What an absent, empty, or unusable `originalExtension` degrades to — the same
+    /// literal `ImageStore.decodeImageInfo` falls back to when `UTType` can name
+    /// neither the source type nor what ImageIO detected. Harmless in practice:
+    /// everything that renders one of these files (`ImageThumbnailer`, `ImageEXIF`,
+    /// the library's own display path) goes through ImageIO, which sniffs content and
+    /// ignores the extension entirely.
+    static let fallbackExtension = "bin"
+
+    init?(record: CKRecord) {
+        guard record.recordType == SyncRecordType.image,
+              case .image(let captureID, let imageID)? = SyncCloudIdentifiers.name(of: record.recordID)
+        else { return nil }
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let fileURL = asset.fileURL,
+              let sha256 = record[SyncChildAssetField.sha256] as? String, !sha256.isEmpty
+        else { return nil }
+        self.captureID = captureID
+        self.imageID = imageID
+        self.fileURL = fileURL
+        self.sha256 = sha256
+        self.originalExtension = Self.sanitizedExtension(record[SyncImageField.originalExtension] as? String)
+        // `as? Int` rather than `as? Int64`: CloudKit stores an integer field as an
+        // `NSNumber`, which bridges to either — and the push side assigns a Swift
+        // `Int` (`ImageSidecar.width`/`height`), so this is the exact round trip.
+        self.width = record[SyncImageField.width] as? Int
+        self.height = record[SyncImageField.height] as? Int
+        self.capturedAt = record[SyncImageField.capturedAt] as? Date
+    }
+
+    /// Direct construction, for tests and for anything that already has the decoded
+    /// values. Runs the same `sanitizedExtension` the wire decode does, so there is no
+    /// way to build a value whose extension the record path would have rejected.
+    init(captureID: String, imageID: String, fileURL: URL, sha256: String,
+         originalExtension: String? = nil, width: Int? = nil, height: Int? = nil,
+         capturedAt: Date? = nil) {
+        self.captureID = captureID
+        self.imageID = imageID
+        self.fileURL = fileURL
+        self.sha256 = sha256
+        self.originalExtension = Self.sanitizedExtension(originalExtension)
+        self.width = width
+        self.height = height
+        self.capturedAt = capturedAt
+    }
+
+    /// The extension is the ONE decoded field that becomes part of a filesystem path
+    /// this device then writes (`SegmentLayout.imageOriginalURL` appends
+    /// `"<imageID>.<ext>"`), so it is the one field a lenient decode cannot simply pass
+    /// through. Three refusals, each with a concrete failure behind it, all degrading
+    /// to `fallbackExtension` rather than failing the whole record:
+    ///
+    /// 1. **Anything but ASCII letters/digits.** A `/` or a `..` would escape
+    ///    `images/` entirely and let a fetched record name a write target anywhere in
+    ///    the container — the difference between a lenient field and an arbitrary-path
+    ///    write primitive.
+    /// 2. **Longer than 10 characters**, or empty. No real image format's extension is
+    ///    (`jpeg`/`heic`/`tiff` are the long ones); a 4 KB "extension" is garbage, and
+    ///    a path this device has to be able to find again.
+    /// 3. **The sidecar's own extension (`json`).** `images/<imageID>.json` is where
+    ///    the sidecar is written a line later, so honoring `originalExtension: "json"`
+    ///    would have the original's bytes and its sidecar fight over one path — the
+    ///    image would silently become unreadable AND unlistable.
+    static func sanitizedExtension(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty, raw.count <= 10,
+              raw.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+              raw.lowercased() != SegmentLayout.sidecarExtension
+        else { return fallbackExtension }
+        return raw
+    }
+
+    /// The sidecar this device writes for the image, rebuilt from the wire fields.
+    ///
+    /// Two of `ImageSidecar`'s nine fields are NOT on the wire and are re-derived here
+    /// rather than being invented, because the `Image` record's field list is fixed by
+    /// the design's "Sync mapping" (and already shipped by the push leg):
+    ///
+    /// - **`mime`** is a pure function of `originalExtension` through `UTType`, the
+    ///   same lookup `ImageStore.decodeImageInfo` makes locally, with the same
+    ///   `application/octet-stream` fallback. Nothing is lost by not sending it.
+    /// - **`addedAt`** comes from the imageID's own ULID timestamp — the millisecond
+    ///   the ORIGIN device minted the id, i.e. the instant the owner actually added
+    ///   the image. Deliberately not this device's clock: an arrival-time stamp would
+    ///   make the same image read as "added" days apart on two devices, for a field
+    ///   whose whole meaning is when the owner added it. The `?? Date()` fallback is
+    ///   structurally unreachable — an imageID that reached here parsed as a
+    ///   well-formed ULID inside `SyncRecordName` — and exists only because
+    ///   `ULID.timestamp(from:)` is honest about being total.
+    ///
+    /// `bytes` is the count of what actually arrived, never the record's claim: by the
+    /// time this is called the bytes have been hashed and matched against `sha256`, so
+    /// the count is a fact about them.
+    func sidecar(bytes: Int) -> ImageSidecar {
+        let mime = UTType(filenameExtension: originalExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
+        return ImageSidecar(id: imageID, originalExtension: originalExtension, mime: mime,
+                            bytes: bytes, sha256: sha256, width: width, height: height,
+                            capturedAt: capturedAt,
+                            addedAt: ULID.timestamp(from: imageID) ?? Date())
+    }
+}
+
 /// New-entry ingest, decision half (design §6, T7): "assemble-then-commit". Pure — no
 /// filesystem, no CloudKit beyond the value types `RemoteEntryFields` already decoded —
 /// so the commit-set rule is exercised with plain fixtures, no staged directories at all.
@@ -188,22 +322,67 @@ enum EntryIngest {
         case refuse(String)
     }
 
-    /// Design §6's commit set: manifest + entry (metadata) + the m4a, ALL present, before
-    /// anything is written to `captures/`. `metadata` is never optional here — a capture
-    /// with no decodable Entry record has no `Incoming` to plan for at all (the caller
-    /// never builds one; see `RemoteEntryFields.init?(record:)`), so the two genuinely
-    /// independent pieces this function can find missing are the manifest bytes (a Data
-    /// value truly empty until fetched — never happens once the Entry record itself has
-    /// landed, since `entryRecord` never omits `manifestSnapshot`, but represented
-    /// honestly rather than assumed) and the audio (`AudioAsset`, a SEPARATE record that
-    /// commonly has not arrived yet). `liveLog` is deliberately absent from every check
-    /// below — an optional rider, matching `FinalizeArtifactPush`'s own three-answer
-    /// honesty: a degraded capture with no live.jsonl is exactly as syncable as any other.
+    /// Design §6's commit set: manifest + entry (metadata) + **the m4a if this capture
+    /// has one at all**, ALL present, before anything is written to `captures/`.
+    /// `metadata` is never optional here — a capture with no decodable Entry record has
+    /// no `Incoming` to plan for at all (the caller never builds one; see
+    /// `RemoteEntryFields.init?(record:)`), so the two genuinely independent pieces this
+    /// function can find missing are the manifest bytes (a Data value truly empty until
+    /// fetched — never happens once the Entry record itself has landed, since
+    /// `entryRecord` never omits `manifestSnapshot`, but represented honestly rather
+    /// than assumed) and the audio (`AudioAsset`, a SEPARATE record that commonly has
+    /// not arrived yet). `liveLog` is deliberately absent from every check below — an
+    /// optional rider, matching `FinalizeArtifactPush`'s own three-answer honesty: a
+    /// degraded capture with no live.jsonl is exactly as syncable as any other.
+    ///
+    /// **Image-capture plan Task 5, the confirmed gap.** Until this task, audio was a
+    /// hard requirement for committing ANY new entry — `guard incoming.audio != nil`,
+    /// unconditionally. That was correct for as long as every entry had a recording. It
+    /// is not any more: `BlankEntryMinter` mints an entry with no audio at all (an
+    /// image-only entry — a photographed drawing with nothing else), which finalizes
+    /// with `final.verifiedAt` set and `final.durationFrames == 0` and NO
+    /// `final/recording.m4a`. The origin device pushes its Entry and its Images and, by
+    /// Task 4's now-conditional `.audio`, no AudioAsset — so on the receiving device the
+    /// old guard refused forever, waiting on a record that does not exist and never
+    /// will. The entry would never appear on the second device, at all, permanently.
+    ///
+    /// `expectsAudio` is what closes it, and its whole job is to be a fact rather than a
+    /// judgment: the manifest that travels WITH the Entry record already says whether
+    /// this capture has audio, in exactly the field the reconciliation scanner already
+    /// reads for the same question (`SyncTreeScanner.scanCapture`'s
+    /// `manifest.final.durationFrames != 0` — "the ONE case where a missing m4a is not a
+    /// failure at all"). One locked definition, read at both chokepoints.
     static func plan(incoming: Incoming, captureExists: Bool) -> IngestAction {
         guard !captureExists else { return .applyToExisting }
         guard !incoming.manifestJSON.isEmpty else { return .refuse("manifest not yet fetched") }
-        guard incoming.audio != nil else { return .refuse("m4a not yet fetched") }
+        guard incoming.audio != nil || !expectsAudio(manifestJSON: incoming.manifestJSON) else {
+            return .refuse("m4a not yet fetched")
+        }
         return .assembleNew
+    }
+
+    /// Whether this capture is supposed to HAVE a `final/recording.m4a` at all, read off
+    /// the manifest bytes that arrived on the Entry record itself. Pure — a decode, no
+    /// filesystem — so `plan` stays exactly as testable as it was.
+    ///
+    /// **True (audio expected) is the fail-safe answer, and every uncertain case takes
+    /// it**: an undecodable manifest, and a verified manifest carrying no
+    /// `durationFrames` at all. Only an explicit, decodable `durationFrames == 0` — the
+    /// stamp `BlankEntryMinter` writes and nothing else does — reads as "this entry
+    /// never had audio". Waiting forever for an m4a is a recoverable state (the entry
+    /// simply has not appeared yet, and a later full resync can still deliver it);
+    /// committing a real recording's entry WITHOUT its audio is not, because the
+    /// committed directory then looks complete to every reader and the late AudioAsset
+    /// has nowhere to land.
+    ///
+    /// A nil `durationFrames` deliberately does NOT read as "no audio": the scanner
+    /// calls that state anomalous rather than blank (`audioRecordToPush` refuses to
+    /// push one), so the two agree here too.
+    static func expectsAudio(manifestJSON: Data) -> Bool {
+        guard let manifest = try? CaptureCoding.decoder().decode(Manifest.self, from: manifestJSON) else {
+            return true
+        }
+        return manifest.final.durationFrames != 0
     }
 }
 
@@ -291,6 +470,45 @@ private struct ParkedMarkerStreams: Codable {
     var streams: [PendingMarkerStream]
 }
 
+/// Image-capture plan Task 5: a sibling of `PendingRevision`/`PendingMarkerStream`,
+/// same shape and reasoning. Structurally it is the REVISION's twin, not the marker
+/// stream's: an image is immutable content addressed by its own id (`images/<imageID>`
+/// is written once and never edited — `ImageStore` has no read-modify-write path at
+/// all), so the parked queue is content-addressed by `imageID` and a redelivery of the
+/// same id is a no-op rather than an accumulation, exactly as `mergeIntoParked`'s
+/// "append if absent" rule already gives revisions.
+///
+/// `sidecar` is carried alongside `data` rather than re-derived at rehydration time
+/// because the metadata it holds (`width`/`height`/`capturedAt`/`originalExtension`)
+/// came off the wire and is not all recoverable from the bytes — and `data` is the
+/// exact, already-sha256-verified payload, never re-encoded, so `ImageStore.ingest`'s
+/// "writes fetched bytes verbatim" contract survives the parking round trip the same
+/// way `PendingRevision.body` preserves `ingestForeignRevision`'s.
+private struct PendingImage: Codable, Equatable {
+    var id: String
+    var sidecar: ImageSidecar
+    var data: Data
+}
+
+/// The whole contents of `sync/staging/<captureID>/pending-images.json` — mirrors
+/// `ParkedRevisions`' own doc comment for why `knownToHaveExisted` is recorded rather
+/// than inferred later from a directory check alone (the identical case-A/case-B
+/// disambiguation `rehydrateParkedImages` needs).
+///
+/// **Size note, honestly stated:** an image is orders of magnitude larger than a
+/// revision or a marker log, and `Data` Codables as base64, so this file is roughly
+/// 4/3 the size of everything parked in it and every park is a read-modify-write of
+/// the whole thing. Accepted deliberately: parking is the exceptional path (the
+/// capture has not arrived yet, or is trashed), the queue is one entry deep in the
+/// ordinary case, and inventing a second, sidecar-of-loose-files parking scheme just
+/// for images would mean a third shape for `pruneUnexpectedStagingContents`,
+/// `clearEntryAssemblyStaging` and `discardParkedState` to each learn — the exact
+/// class of omission that made the allow-list a recurring bug.
+private struct ParkedImages: Codable {
+    var knownToHaveExisted: Bool
+    var images: [PendingImage]
+}
+
 /// New-entry ingest, IO half (design §6, T7): commits an already-durably-staged capture
 /// directory with one `rename(2)` into `captures/<captureID>/` — mirroring the `.part` →
 /// rename convention every other atomic write in this codebase uses (`AtomicFile`). By
@@ -333,7 +551,18 @@ enum EntryAssembler {
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot,
                                                              captureID: incoming.captureID)
 
-        guard let audio = incoming.audio else { return false }
+        // **The audio is an optional rider now** (image-capture plan Task 5) — but only
+        // for a capture whose own manifest says it never had any. This re-derives
+        // `EntryIngest.expectsAudio` rather than trusting the caller, exactly as the
+        // sha256 comparisons below re-derive integrity the arrival path already checked:
+        // defense in depth, one shared definition, and a direct caller (a test, a future
+        // call site) gets the same protection production does. Without it, this function
+        // would commit an audio-BEARING entry's directory with the recording missing the
+        // moment someone called it a beat early — a committed directory looks complete
+        // to every reader, so the late AudioAsset would have nowhere to land.
+        guard incoming.audio != nil || !EntryIngest.expectsAudio(manifestJSON: incoming.manifestJSON) else {
+            return false
+        }
 
         do {
             try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
@@ -345,18 +574,20 @@ enum EntryAssembler {
             try entryData.write(
                 to: SegmentLayout.entryMetadataURL(captureDirectory: stagingDir), options: .atomic)
 
-            // `.mappedIfSafe` (final review M1): the same hash-and-check read the
-            // scanner already maps rather than slurping — an m4a is the largest thing
-            // this codebase reads, and there is no reason to hold a whole one resident.
-            let audioBytes = try Data(contentsOf: audio.url, options: .mappedIfSafe)
-            guard SyncTreeScanner.sha256Hex(audioBytes) == audio.sha256 else {
-                try? fm.removeItem(at: stagingDir)
-                return false
+            if let audio = incoming.audio {
+                // `.mappedIfSafe` (final review M1): the same hash-and-check read the
+                // scanner already maps rather than slurping — an m4a is the largest thing
+                // this codebase reads, and there is no reason to hold a whole one resident.
+                let audioBytes = try Data(contentsOf: audio.url, options: .mappedIfSafe)
+                guard SyncTreeScanner.sha256Hex(audioBytes) == audio.sha256 else {
+                    try? fm.removeItem(at: stagingDir)
+                    return false
+                }
+                let finalDir = SegmentLayout.finalDirectory(captureDirectory: stagingDir)
+                try fm.createDirectory(at: finalDir, withIntermediateDirectories: true)
+                try audioBytes.write(
+                    to: SegmentLayout.finalRecordingURL(captureDirectory: stagingDir), options: .atomic)
             }
-            let finalDir = SegmentLayout.finalDirectory(captureDirectory: stagingDir)
-            try fm.createDirectory(at: finalDir, withIntermediateDirectories: true)
-            try audioBytes.write(
-                to: SegmentLayout.finalRecordingURL(captureDirectory: stagingDir), options: .atomic)
 
             // Transcript artifacts are optional riders (design §6): a degraded capture
             // with no live.jsonl assembles exactly like any other.
@@ -378,7 +609,8 @@ enum EntryAssembler {
             try? fm.removeItem(at: AppContainer.syncStagingPendingStateURL(
                 containerRoot: containerRoot, captureID: incoming.captureID))
 
-            pruneUnexpectedStagingContents(stagingDir: stagingDir, hasLiveLog: incoming.liveLog != nil)
+            pruneUnexpectedStagingContents(stagingDir: stagingDir, hasAudio: incoming.audio != nil,
+                                           hasLiveLog: incoming.liveLog != nil)
 
             let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
             try fm.createDirectory(at: capturesRoot, withIntermediateDirectories: true)
@@ -400,27 +632,36 @@ enum EntryAssembler {
     }
 
     /// Removes anything under `stagingDir` that is not part of the canonical committed
-    /// shape (`manifest.json`, `entry.json`, `final/recording.m4a`, and — only when a
-    /// liveLog rider is present — `transcript/live.jsonl`), so nothing else can ride the
-    /// rename into `captures/`. All removals are strictly scoped to paths under
+    /// shape (`manifest.json`, `entry.json`, and — each only when its rider is actually
+    /// present — `final/recording.m4a` and `transcript/live.jsonl`), so nothing else can
+    /// ride the rename into `captures/`. All removals are strictly scoped to paths under
     /// `stagingDir` itself (R3).
-    private static func pruneUnexpectedStagingContents(stagingDir: URL, hasLiveLog: Bool) {
+    private static func pruneUnexpectedStagingContents(stagingDir: URL, hasAudio: Bool, hasLiveLog: Bool) {
         let fm = FileManager.default
         var allowedTop: Set<String> = [SegmentLayout.manifestFileName, SegmentLayout.entryMetadataFileName,
-                                       SegmentLayout.finalDirName,
                                        // M4 T9: `pending-revisions.json` — see its own
                                        // doc comment on `AppContainer` for why it must
                                        // survive this prune and the rename that follows
                                        // it. Allowed unconditionally (not gated by a
-                                       // flag the way `hasLiveLog` gates `transcript/`
-                                       // below): an absent file costs this Set nothing,
-                                       // and a present one must never be swept.
+                                       // flag the way `hasAudio`/`hasLiveLog` gate
+                                       // `final/`/`transcript/` below): an absent file
+                                       // costs this Set nothing, and a present one must
+                                       // never be swept.
                                        AppContainer.syncStagingPendingRevisionsFileName,
                                        // M4 T10: `pending-marker-streams.json` — same
                                        // survive-the-prune requirement as
                                        // `pending-revisions.json` immediately above, see
                                        // that constant's doc comment on `AppContainer`.
-                                       AppContainer.syncStagingPendingMarkerStreamsFileName]
+                                       AppContainer.syncStagingPendingMarkerStreamsFileName,
+                                       // Image-capture plan Task 5: `pending-images.json`
+                                       // — the THIRD file with this exact requirement,
+                                       // and the third time it has had to be added here
+                                       // by hand. Omitting it would silently delete a
+                                       // durably-parked image at the next commit, and
+                                       // `CKSyncEngine` never redelivers a consumed
+                                       // record, so that loss is permanent.
+                                       AppContainer.syncStagingPendingImagesFileName]
+        if hasAudio { allowedTop.insert(SegmentLayout.finalDirName) }
         if hasLiveLog { allowedTop.insert(SegmentLayout.transcriptDirName) }
         if let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) {
             for name in names where !allowedTop.contains(name) {
@@ -428,11 +669,20 @@ enum EntryAssembler {
             }
         }
 
+        // No audio rider at all this commit (an image-only/blank entry, Task 5):
+        // `final/` was never created above and, if some earlier attempt left one
+        // behind, it is entirely unexpected — the same reasoning the `transcript/`
+        // arm below applies, and the reason `finalDirName` is now conditional in the
+        // allow-list rather than unconditional.
         let finalDir = SegmentLayout.finalDirectory(captureDirectory: stagingDir)
-        if let names = try? fm.contentsOfDirectory(atPath: finalDir.path) {
-            for name in names where name != SegmentLayout.finalRecordingName {
-                try? fm.removeItem(at: finalDir.appendingPathComponent(name))
+        if hasAudio {
+            if let names = try? fm.contentsOfDirectory(atPath: finalDir.path) {
+                for name in names where name != SegmentLayout.finalRecordingName {
+                    try? fm.removeItem(at: finalDir.appendingPathComponent(name))
+                }
             }
+        } else {
+            try? fm.removeItem(at: finalDir)
         }
 
         let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: stagingDir)
@@ -697,6 +947,20 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// throwaway one built here, which would be a second, uncoordinated writer over
     /// the same `transcript/` files a local draft close or revert can also be writing.
     private let transcriptRevisionStore: TranscriptRevisionStore?
+    /// Where an inbound Image for an ALREADY-LOCAL, non-trashed capture writes
+    /// (image-capture plan Task 5). Optional for the same reason
+    /// `transcriptRevisionStore` is: every existing test/call site that never exercises
+    /// image sync keeps compiling unchanged, and `SyncCoordinator.live()` is the one
+    /// production caller and always supplies the library's own single shared instance
+    /// (`library.imageStore`) — never a throwaway one built here, which would be a
+    /// second, uncoordinated writer over the same `images/` directory a local add or
+    /// remove can also be writing.
+    ///
+    /// A nil store never DROPS an image: `ingestImage` parks it instead, so the bytes
+    /// survive to a launch that does have a store wired — the `inbound-sync-must-land-
+    /// or-park` rule applied to this actor's own optional dependencies, not only to the
+    /// capture's state.
+    private let imageStore: ImageStore?
     /// Where `captures/` and `sync/staging/` live (T7). Optional so every existing
     /// test/call site that never exercises entry ingest keeps compiling unchanged — a
     /// nil root degrades exactly like the pre-T7 "no builder/ingest yet" cases did,
@@ -751,6 +1015,7 @@ actor SyncRecordExchange: CloudRecordExchange {
          containerRoot: URL? = nil,
          entryMetadataStore: EntryMetadataStore? = nil,
          transcriptRevisionStore: TranscriptRevisionStore? = nil,
+         imageStore: ImageStore? = nil,
          localStoreDidChange: (@Sendable () async -> Void)? = nil,
          journalIsEmptyAfterRescan: (@Sendable (String) async -> Bool)? = nil,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")) {
@@ -761,6 +1026,7 @@ actor SyncRecordExchange: CloudRecordExchange {
         self.containerRoot = containerRoot
         self.entryMetadataStore = entryMetadataStore
         self.transcriptRevisionStore = transcriptRevisionStore
+        self.imageStore = imageStore
         self.localStoreDidChange = localStoreDidChange
         self.journalIsEmptyAfterRescan = journalIsEmptyAfterRescan
         self.log = log
@@ -1328,21 +1594,8 @@ actor SyncRecordExchange: CloudRecordExchange {
             await ingestLiveLog(record, captureID: captureID)
         case .revision(let id):
             await ingestRevision(record, revisionID: id)
-        case .image(_, let imageID):
-            // **Placeholder — inbound Image ingest is the NEXT task's whole subject**
-            // (image-capture plan Task 5: land-or-park, `pending-images.json`, the
-            // `pruneUnexpectedStagingContents` allow-list). This task is push-only.
-            //
-            // Logged rather than silently ignored because a consumed-but-unhandled
-            // record is permanently lost — CKSyncEngine never redelivers one
-            // (`inbound-sync-must-land-or-park`). Nothing on this branch can lose an
-            // owner's image TODAY: no shipped build has ever written an Image record,
-            // so the only way one exists on the server is a build that also carries
-            // Task 5. **This branch must not be released without it.**
-            log.error("""
-                sync: fetched an Image record (\(imageID, privacy: .public)) but inbound image ingest \
-                is not wired yet — dropped
-                """)
+        case .image:
+            await ingestImage(record)
         case .markerStream(let captureID, let streamDeviceID):
             await ingestMarkerStream(record, captureID: captureID, streamDeviceID: streamDeviceID)
         }
@@ -2084,6 +2337,303 @@ actor SyncRecordExchange: CloudRecordExchange {
                                            capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot))
     }
 
+    // MARK: Ingest — images (image-capture plan Task 5, design §6)
+
+    /// An inbound `Image` record. Three shapes, mirroring `ingestMarkerStream`'s own
+    /// three-way split for the identical reasons — and the whole point of this method is
+    /// that NONE of them is "drop it": `CKSyncEngine` advances its change token the
+    /// moment a fetched record is handed over and never redelivers it, so anything this
+    /// function fails to keep is gone permanently, and an image has no second source
+    /// (unlike a transcript, which can be re-derived from audio — an image is ground
+    /// truth in exactly the way the audio is).
+    ///
+    /// - **The capture does not exist yet.** Ordering between fetched record types is
+    ///   not guaranteed (design §6); the Image can easily beat its own Entry. Park
+    ///   durably (never in-memory only — the identical crash/relaunch reasoning
+    ///   `PendingEntryRecord`'s doc comment gives) and prod the ordinary
+    ///   assembly-attempt path, exactly like `ingestRevision`/`ingestMarkerStream`.
+    /// - **The capture exists but is currently soft-trashed** (or its sidecar is
+    ///   unreadable, which reads the same way — this file's standing fail-safe): park
+    ///   with `knownToExist: true` rather than writing into a capture that might be
+    ///   purged before the next launch. `rehydrateParkedImages` is the retry route.
+    /// - **The capture exists and is live**: write straight through `ImageStore.ingest`
+    ///   — never a raw file write (standing branch rule) — which lays down the original
+    ///   bytes verbatim, the sidecar, and a locally-generated thumbnail.
+    ///
+    /// **The sha256 is verified BEFORE anything is persisted or parked**, the same
+    /// discipline `ingestAudio`/`ingestLiveLog`/`ingestRevision` follow and the contract
+    /// `ImageStore.ingest` explicitly delegates to its caller ("writes fetched bytes
+    /// verbatim — sha256-verified by the CALLER"). A mismatched image is refused
+    /// outright: parking it would durably preserve bytes already known to be wrong, and
+    /// they can only ever fail the same check again.
+    private func ingestImage(_ record: CKRecord) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — image ingest skipped")
+            return
+        }
+        guard let fields = RemoteImageFields(record: record) else {
+            log.notice("sync: fetched Image record missing its file/sha256, or unnamed — ignored")
+            return
+        }
+        // A plain, non-mapping read — deliberately NOT `.mappedIfSafe`, which
+        // `ingestAudio` uses and which is right for a possibly-100 MB m4a whose bytes
+        // are hashed and written straight back out. These bytes travel further: into a
+        // struct, across an actor hop into `ImageStore`, and (on the park path) through
+        // a base64 encode. A mapping over a temporary file CloudKit owns is the wrong
+        // thing to be holding for that, and an image is small enough that residency
+        // costs nothing — the same call `ingestLiveLog`/`ingestRevision` already make.
+        guard let bytes = try? Data(contentsOf: fields.fileURL) else {
+            log.error("sync: could not read the fetched Image bytes for \(fields.imageID, privacy: .public)")
+            return
+        }
+        guard SyncTreeScanner.sha256Hex(bytes) == fields.sha256 else {
+            log.error("""
+                sync: Image sha256 mismatch for \(fields.imageID, privacy: .public) — refused, \
+                never persisted
+                """)
+            return
+        }
+        let pending = PendingImage(id: fields.imageID, sidecar: fields.sidecar(bytes: bytes.count),
+                                   data: bytes)
+        let captureID = fields.captureID
+
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let captureExists = FileManager.default.fileExists(atPath: directory.path)
+
+        guard captureExists else {
+            parkImage(captureID: captureID, pending: pending, knownToExist: false,
+                      containerRoot: containerRoot)
+            await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
+            return
+        }
+
+        guard !isTrashedOrUnreadable(captureDirectory: directory) else {
+            parkImage(captureID: captureID, pending: pending, knownToExist: true,
+                      containerRoot: containerRoot)
+            return
+        }
+
+        // No store wired (a build or a test that never composed one). Park rather than
+        // drop — see `imageStore`'s own doc comment: an optional dependency being absent
+        // is not a reason to lose an owner's photograph, and `knownToExist: true` is the
+        // truth here (this device just confirmed the directory is real).
+        guard let imageStore else {
+            log.notice("sync: no image store wired — image \(pending.id, privacy: .public) parked instead")
+            parkImage(captureID: captureID, pending: pending, knownToExist: true,
+                      containerRoot: containerRoot)
+            return
+        }
+        do {
+            try await imageStore.ingest(captureID: captureID, imageID: pending.id,
+                                        sidecar: pending.sidecar, data: pending.data)
+        } catch {
+            // A write failure here (a full disk, a permissions problem) is transient in
+            // exactly the way a trashed capture is: park it, `knownToExist: true`, so
+            // the next launch's rehydration retries rather than the bytes being gone.
+            log.error("""
+                sync: image \(pending.id, privacy: .public) failed to write for \
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public) — parked
+                """)
+            parkImage(captureID: captureID, pending: pending, knownToExist: true,
+                      containerRoot: containerRoot)
+            return
+        }
+        await localStoreDidChange?()
+    }
+
+    /// Durably parks one inbound image — mirrors `parkRevision`/`parkMarkerStream`
+    /// exactly, see `parkRevision`'s doc comment for the full "why a sibling file, why
+    /// `knownToExist`" reasoning. Content-addressed by `imageID`, like a revision and
+    /// unlike a marker stream: an image is written once and never edited, so a
+    /// redelivery of the same id must be a no-op rather than either a duplicate or a
+    /// replacement.
+    private func parkImage(captureID: String, pending: PendingImage, knownToExist: Bool,
+                           containerRoot: URL) {
+        let url = AppContainer.syncStagingPendingImagesURL(containerRoot: containerRoot, captureID: captureID)
+        mergeIntoParkedImages([pending], url: url, knownToHaveExisted: knownToExist)
+    }
+
+    private func readParkedImages(url: URL) -> ParkedImages? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? CaptureCoding.decoder().decode(ParkedImages.self, from: data)
+    }
+
+    private func writeParkedImages(_ parked: ParkedImages, url: URL) {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            let data = try CaptureCoding.encoder().encode(parked)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            log.error("""
+                sync: could not persist parked images for \(url.path, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+        }
+    }
+
+    /// The ADD-side reconciliation primitive, mirroring `mergeIntoParked`: reads `url`
+    /// FRESH at call time (never a pre-await snapshot — the identical fix-round-2
+    /// reasoning `mergeIntoParked`'s own doc comment gives, since this is called both
+    /// from `parkImage`'s single synchronous path and from a leftover re-park that
+    /// follows an `await`), merges `additions` in **by id, append-if-absent**, and
+    /// writes back.
+    private func mergeIntoParkedImages(_ additions: [PendingImage], url: URL, knownToHaveExisted: Bool) {
+        var parked = readParkedImages(url: url) ?? ParkedImages(knownToHaveExisted: false, images: [])
+        parked.knownToHaveExisted = parked.knownToHaveExisted || knownToHaveExisted
+        for addition in additions where !parked.images.contains(where: { $0.id == addition.id }) {
+            parked.images.append(addition)
+        }
+        writeParkedImages(parked, url: url)
+    }
+
+    /// The REMOVE-side reconciliation primitive, mirroring `reconcileParkedWriteback`:
+    /// re-reads `url` fresh, removes exactly the ids this pass resolved, and writes back
+    /// whatever remains (or removes the file entirely once nothing does) — never a write
+    /// computed from a pre-await snapshot, which could silently discard a concurrent
+    /// park for a DIFFERENT image that arrived during the same suspension.
+    private func reconcileParkedImagesWriteback(url: URL, handledIDs: Set<String>) {
+        guard let fresh = readParkedImages(url: url) else { return }
+        let remaining = fresh.images.filter { !handledIDs.contains($0.id) }
+        guard remaining.count != fresh.images.count else { return }
+        if remaining.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            writeParkedImages(ParkedImages(knownToHaveExisted: fresh.knownToHaveExisted, images: remaining),
+                              url: url)
+        }
+    }
+
+    /// Applies every parked image against `ImageStore.ingest`, returning whatever still
+    /// could NOT be applied — mirrors `applyParked`/`applyParkedMarkerStreams`' "never
+    /// drop a leftover on the floor" contract. The trashed/unreadable check is made ONCE
+    /// per call (every image here shares one captureID, so its trashed status cannot
+    /// differ image-to-image), and a write failure keeps that single image parked rather
+    /// than failing the batch.
+    private func applyParkedImages(_ images: [PendingImage], captureID: String, captureDirectory: URL,
+                                   imageStore: ImageStore) async -> [PendingImage] {
+        guard !isTrashedOrUnreadable(captureDirectory: captureDirectory) else { return images }
+        var leftover: [PendingImage] = []
+        for image in images {
+            do {
+                try await imageStore.ingest(captureID: captureID, imageID: image.id,
+                                            sidecar: image.sidecar, data: image.data)
+            } catch {
+                log.error("""
+                    sync: parked image \(image.id, privacy: .public) for \(captureID, privacy: .public) \
+                    failed to write: \(error.localizedDescription, privacy: .public) — kept parked
+                    """)
+                leftover.append(image)
+            }
+        }
+        return leftover
+    }
+
+    /// Applies every image parked for `captureID` — called ONLY right after
+    /// `EntryAssembler.assemble` has just committed that capture into `captures/`
+    /// (`attemptEntryAssembly`'s `.assembleNew` branch), mirroring
+    /// `ingestParkedRevisions`/`ingestParkedMarkerStreams` exactly, including the
+    /// "arrived already trashed" re-park case. `pending-images.json` rode the commit
+    /// rename (allow-listed in `EntryAssembler.pruneUnexpectedStagingContents`) and is
+    /// read from its post-commit location, `captures/<captureID>/pending-images.json`.
+    private func ingestParkedImages(captureID: String, containerRoot: URL) async {
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let postCommitURL = directory.appendingPathComponent(AppContainer.syncStagingPendingImagesFileName)
+        guard let parked = readParkedImages(url: postCommitURL) else { return }
+        // No store wired: leave the post-commit file exactly where it is. It is inside
+        // the committed capture directory rather than `sync/staging/`, which is not
+        // where it ultimately belongs — but a file left in place is recoverable and a
+        // deleted one is not, and `rehydrateParkedImages` picks it up (it checks both
+        // locations for precisely this reason).
+        guard let imageStore else { return }
+
+        let leftover = await applyParkedImages(parked.images, captureID: captureID,
+                                               captureDirectory: directory, imageStore: imageStore)
+        try? FileManager.default.removeItem(at: postCommitURL)
+        if !leftover.isEmpty {
+            let restagedURL = AppContainer.syncStagingPendingImagesURL(containerRoot: containerRoot,
+                                                                        captureID: captureID)
+            mergeIntoParkedImages(leftover, url: restagedURL, knownToHaveExisted: true)
+        }
+    }
+
+    /// The recovery half of the trashed-capture park, mirroring
+    /// `rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams` exactly — see
+    /// `rehydrateParkedRevisions()`'s doc comment for the full three-outcome reasoning
+    /// (`knownToHaveExisted`'s case-A/case-B disambiguation). Called at coordinator
+    /// launch (`SyncCoordinator.live()`), alongside its two siblings.
+    func rehydrateParkedImages() async {
+        guard let containerRoot, let imageStore else { return }
+        let stagingRoot = AppContainer.syncStagingRoot(containerRoot: containerRoot)
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let fm = FileManager.default
+
+        // BOTH locations, unlike the two siblings — see `ingestParkedImages`' no-store
+        // branch: a commit that landed while no `ImageStore` was wired leaves the park
+        // file inside `captures/<captureID>/`, and nothing else would ever look there.
+        // A committed capture's own directory listing is the cheap way to find them,
+        // and applying one is idempotent (the ingest simply rewrites identical bytes),
+        // so the two sweeps overlapping costs nothing.
+        var captureIDs = Set((try? fm.contentsOfDirectory(atPath: stagingRoot.path)) ?? [])
+        for captureID in (try? fm.contentsOfDirectory(atPath: capturesRoot.path)) ?? [] {
+            let postCommitURL = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+                .appendingPathComponent(AppContainer.syncStagingPendingImagesFileName)
+            if fm.fileExists(atPath: postCommitURL.path) { captureIDs.insert(captureID) }
+        }
+
+        for captureID in captureIDs.sorted() {
+            await ingestParkedImages(captureID: captureID, containerRoot: containerRoot)
+            await rehydrateParkedImages(captureID: captureID, containerRoot: containerRoot,
+                                        capturesRoot: capturesRoot, imageStore: imageStore)
+        }
+    }
+
+    /// One captureID's worth of the loop above — extracted for the same reason its two
+    /// siblings were (final review C1): the existing-capture entry-merge path kicks
+    /// exactly the capture whose restore it may have just applied.
+    private func rehydrateParkedImages(captureID: String, containerRoot: URL, capturesRoot: URL,
+                                       imageStore: ImageStore) async {
+        let url = AppContainer.syncStagingPendingImagesURL(containerRoot: containerRoot, captureID: captureID)
+        guard let parked = readParkedImages(url: url) else { return }
+
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let captureExists = FileManager.default.fileExists(atPath: directory.path)
+
+        guard captureExists else {
+            if parked.knownToHaveExisted {
+                log.notice("""
+                    sync: capture \(captureID, privacy: .public) was purged while an image \
+                    was parked for it — discarding the parking (design §5 delete-wins)
+                    """)
+                try? FileManager.default.removeItem(at: url)
+            }
+            // else: an ordinary in-flight "unknown capture" park — leave it for the
+            // assembly-attempt path.
+            return
+        }
+
+        let leftover = await applyParkedImages(parked.images, captureID: captureID,
+                                               captureDirectory: directory, imageStore: imageStore)
+        let handledIDs = Set(parked.images.map(\.id)).subtracting(leftover.map(\.id))
+        guard !handledIDs.isEmpty else { return }
+        // Re-reads `url` fresh — never `parked`, the pre-`applyParkedImages` snapshot
+        // captured above, which a concurrent delivery could have appended to during
+        // that `await` (`SyncRecordExchange` is reentrant across every suspension).
+        reconcileParkedImagesWriteback(url: url, handledIDs: handledIDs)
+        await localStoreDidChange?()
+    }
+
+    /// The entry-merge path's kick (final review C1) — the image twin of the revision
+    /// and marker-stream overloads above.
+    private func rehydrateParkedImages(captureID: String, containerRoot: URL) async {
+        guard let imageStore else { return }
+        await rehydrateParkedImages(captureID: captureID, containerRoot: containerRoot,
+                                    capturesRoot: AppContainer.capturesRoot(containerRoot: containerRoot),
+                                    imageStore: imageStore)
+    }
+
     /// Rereads `sync/staging/<captureID>/pending.json` fresh from disk every time — this
     /// IS the rehydration (fix round): there is no in-memory cache to be stale, because
     /// there is no in-memory cache at all. `nil` means no Entry piece is durably staged:
@@ -2149,6 +2699,10 @@ actor SyncRecordExchange: CloudRecordExchange {
                 // capture is still too trashed (or too unreadable) to accept.
                 await rehydrateParkedRevisions(captureID: captureID, containerRoot: containerRoot)
                 await rehydrateParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot)
+                // Task 5: the third park, same reason — an image parked while this
+                // capture was trashed lands the instant a remote `trashedAt: nil`
+                // restores it, rather than waiting for the next launch.
+                await rehydrateParkedImages(captureID: captureID, containerRoot: containerRoot)
             }
             // Second pass, idempotent: the kicks above may have just emptied the staging
             // directory by applying and removing the last park in it. Re-reads fresh and
@@ -2187,6 +2741,9 @@ actor SyncRecordExchange: CloudRecordExchange {
             await ingestParkedRevisions(captureID: captureID, containerRoot: containerRoot)
             // M4 T10: same idea for marker streams.
             await ingestParkedMarkerStreams(captureID: captureID, containerRoot: containerRoot)
+            // Image-capture plan Task 5: same idea for images — applied in the SAME
+            // commit that made the capture exist, never a later pass.
+            await ingestParkedImages(captureID: captureID, containerRoot: containerRoot)
             await localStoreDidChange?()
         case .applyToExisting:
             // Unreachable in practice — the `guard !captureExists` above already
@@ -2204,8 +2761,9 @@ actor SyncRecordExchange: CloudRecordExchange {
 
     /// Clears exactly the ENTRY-ASSEMBLY artifacts staged under
     /// `sync/staging/<captureID>/` — `pending.json`, the staged `final/`, the staged
-    /// `transcript/`, and any stray cruft — while PRESERVING the two durable parks that
-    /// share that directory (`pending-revisions.json`, `pending-marker-streams.json`).
+    /// `transcript/`, and any stray cruft — while PRESERVING the three durable parks
+    /// that share that directory (`pending-revisions.json`,
+    /// `pending-marker-streams.json`, `pending-images.json`).
     ///
     /// The final review's C1, verbatim: the old code removed the whole directory. That
     /// directory is also where `parkRevision`/`parkMarkerStream` durably park content
@@ -2214,7 +2772,7 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// restore — and `CKSyncEngine` never redelivers a consumed record, making that
     /// permanent silent loss (the branch's standing `inbound-sync-must-land-or-park`
     /// rule). The preserved set is the same allow-list `EntryAssembler
-    /// .pruneUnexpectedStagingContents` already encodes for the same two files.
+    /// .pruneUnexpectedStagingContents` already encodes for the same three files.
     ///
     /// The directory listing is read HERE, not passed in from the caller's pre-`await`
     /// snapshot: `SyncRecordExchange` is reentrant across every suspension, so a
@@ -2229,7 +2787,8 @@ actor SyncRecordExchange: CloudRecordExchange {
         let fm = FileManager.default
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
         let preserved: Set<String> = [AppContainer.syncStagingPendingRevisionsFileName,
-                                      AppContainer.syncStagingPendingMarkerStreamsFileName]
+                                      AppContainer.syncStagingPendingMarkerStreamsFileName,
+                                      AppContainer.syncStagingPendingImagesFileName]
         guard let names = try? fm.contentsOfDirectory(atPath: stagingDir.path) else { return }
         for name in names where !preserved.contains(name) {
             try? fm.removeItem(at: stagingDir.appendingPathComponent(name))
@@ -2472,12 +3031,12 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// left alone to withdraw a queued save at the engine layer; this is the explicit,
     /// app-level guarantee, matching every other name in the family.
     /// Also discards any PARKED sync state left under `sync/staging/<captureID>/` for
-    /// this captureID — parked revisions/marker streams/partial assembly describe
+    /// this captureID — parked revisions/marker streams/images/partial assembly describe
     /// content whose parent is now gone, and nothing after this may ever revive them.
-    /// `rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams` already do the
-    /// launch-time half of this same discard when they find a capture purged out from
-    /// under a park; this is the live-ingest half, run the instant the deletion itself
-    /// is what does the purging.
+    /// `rehydrateParkedRevisions`/`rehydrateParkedMarkerStreams`/`rehydrateParkedImages`
+    /// already do the launch-time half of this same discard when they find a capture
+    /// purged out from under a park; this is the live-ingest half, run the instant the
+    /// deletion itself is what does the purging.
     func acceptRemoteEntryDeletion(captureID: String) async {
         guard let containerRoot else {
             log.debug("sync: no container root wired — entry deletion ingest skipped")
@@ -2528,8 +3087,8 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// unlike `acceptRemoteEntryDeletion` above, which must route the CAPTURE removal
     /// through `StagedRemover` alone. Discards whatever this device was durably
     /// holding for `captureID` under `sync/staging/<captureID>/` (parked revisions,
-    /// parked marker streams, a partial new-entry assembly) now that its parent Entry
-    /// is gone — design §5, delete wins; nothing after this may ever revive them.
+    /// parked marker streams, parked images, a partial new-entry assembly) now that its
+    /// parent Entry is gone — design §5, delete wins; nothing after this may ever revive them.
     private func discardParkedState(captureID: String, containerRoot: URL) {
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
         try? FileManager.default.removeItem(at: stagingDir)

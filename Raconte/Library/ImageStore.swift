@@ -108,6 +108,34 @@ actor ImageStore {
         Self.readSidecars(captureDirectory: captureDirectory(captureID: captureID))
     }
 
+    /// The generated `images/thumbnails/<imageID>.jpg` preview bytes for one image, or
+    /// `nil` when the file is missing/unreadable (a torn write, a pre-thumbnail-code
+    /// image ingested via sync, or thumbnail generation having failed at add-time — see
+    /// `addImage`'s doc comment). The model-mediated read path for the entry detail
+    /// screen's images strip: the view itself must never touch `SegmentLayout`/
+    /// `FileManager` directly, matching `JournalCoverThumbnail`'s convention of only
+    /// ever rendering `Data` handed to it.
+    func thumbnailData(captureID: String, imageID: String) -> Data? {
+        let directory = captureDirectory(captureID: captureID)
+        let url = SegmentLayout.imageThumbnailURL(captureDirectory: directory, imageID: imageID)
+        return try? Data(contentsOf: url)
+    }
+
+    /// One image's original, full-quality bytes — `images/<imageID>.<ext>` — or `nil`
+    /// when missing/unreadable. The model-mediated read path for the full-screen
+    /// viewer, same reasoning as `thumbnailData(captureID:imageID:)` above. Looks the
+    /// sidecar up itself (for `originalExtension`) rather than requiring the caller to
+    /// pass one, since every caller already has the `ImageSidecar` in hand anyway but
+    /// this keeps the accessor self-contained against a caller that doesn't.
+    func originalData(captureID: String, imageID: String) -> Data? {
+        let directory = captureDirectory(captureID: captureID)
+        guard let sidecar = Self.readSidecars(captureDirectory: directory).first(where: { $0.id == imageID })
+        else { return nil }
+        let url = SegmentLayout.imageOriginalURL(captureDirectory: directory, imageID: imageID,
+                                                 ext: sidecar.originalExtension)
+        return try? Data(contentsOf: url)
+    }
+
     /// Removes the `.orig`/`.json`/thumbnail trio for one image. Not an error if
     /// already absent (idempotent, matching `JournalCoverStore.delete`'s convention).
     /// Finds the orig/sidecar pair by filename stem (`<imageID>.*` directly under

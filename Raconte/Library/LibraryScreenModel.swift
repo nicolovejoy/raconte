@@ -465,6 +465,22 @@ final class LibraryScreenModel {
         await imageStore.images(captureID: captureID)
     }
 
+    /// Thin pass-through to `ImageStore.thumbnailData(captureID:imageID:)` — the
+    /// model-mediated read path `EntryDetailView`'s images strip uses instead of
+    /// reading `SegmentLayout` URLs off disk itself (Task 6 fix round 1: a view must
+    /// never do that read directly, same rule `JournalCoverThumbnail` already follows
+    /// for journal covers).
+    func thumbnailData(captureID: String, imageID: String) async -> Data? {
+        await imageStore.thumbnailData(captureID: captureID, imageID: imageID)
+    }
+
+    /// Thin pass-through to `ImageStore.originalData(captureID:imageID:)` — the
+    /// model-mediated read path the full-screen image viewer uses, same reasoning as
+    /// `thumbnailData(captureID:imageID:)` above.
+    func originalData(captureID: String, imageID: String) async -> Data? {
+        await imageStore.originalData(captureID: captureID, imageID: imageID)
+    }
+
     /// Mints a blank entry — no audio at all (design doc "Entry existence with no
     /// audio"). Delegates the actual manifest/sidecar shape and write to
     /// `BlankEntryMinter`, which is not `SegmentStore`/`CaptureCoordinator`-owned: see

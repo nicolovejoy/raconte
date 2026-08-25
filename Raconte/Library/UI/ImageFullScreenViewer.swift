@@ -13,7 +13,7 @@ import SwiftUI
 /// to keep the viewer open on a shrunk, renumbered image list — the caller's strip
 /// picks up the change on its own next refresh.
 struct ImageFullScreenViewer: View {
-    let capturesRoot: URL
+    let model: LibraryScreenModel
     let captureID: String
     let images: [ImageSidecar]
     @State var selectedIndex: Int
@@ -35,16 +35,14 @@ struct ImageFullScreenViewer: View {
                     #if os(iOS)
                     TabView(selection: $selectedIndex) {
                         ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
-                            ImageFullResolutionView(capturesRoot: capturesRoot, captureID: captureID,
-                                                    sidecar: sidecar)
+                            ImageFullResolutionView(model: model, captureID: captureID, sidecar: sidecar)
                                 .tag(index)
                         }
                     }
                     .tabViewStyle(.page)
                     .background(Color.black)
                     #else
-                    ImageFullResolutionView(capturesRoot: capturesRoot, captureID: captureID,
-                                            sidecar: images[safeIndex])
+                    ImageFullResolutionView(model: model, captureID: captureID, sidecar: images[safeIndex])
                     #endif
                 }
             }
@@ -105,32 +103,24 @@ struct ImageFullScreenViewer: View {
 
 /// One image's full-quality bytes, decoded and scaled to fit — the original file, not
 /// the 512px thumbnail the strip uses (design doc, "Thumbnails": derived/regenerable,
-/// never what the owner is actually looking at full-screen).
+/// never what the owner is actually looking at full-screen). Reads through
+/// `LibraryScreenModel.originalData(captureID:imageID:)` (Task 6 fix round 1) rather
+/// than touching disk itself — see `AsyncCaptureImage`'s doc comment.
 private struct ImageFullResolutionView: View {
-    let capturesRoot: URL
+    let model: LibraryScreenModel
     let captureID: String
     let sidecar: ImageSidecar
 
-    @State private var data: Data?
-
     var body: some View {
-        Group {
-            if let data, let image = JournalCoverThumbnail.decode(data) {
-                image
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                ProgressView()
-            }
-        }
+        AsyncCaptureImage(id: sidecar.id, load: {
+            await model.originalData(captureID: captureID, imageID: sidecar.id)
+        }, loaded: { image in
+            image
+                .resizable()
+                .scaledToFit()
+        }, placeholder: {
+            ProgressView()
+        })
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: sidecar.id) { await load() }
-    }
-
-    private func load() async {
-        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        let url = SegmentLayout.imageOriginalURL(captureDirectory: directory, imageID: sidecar.id,
-                                                 ext: sidecar.originalExtension)
-        data = await Task.detached(priority: .userInitiated) { try? Data(contentsOf: url) }.value
     }
 }

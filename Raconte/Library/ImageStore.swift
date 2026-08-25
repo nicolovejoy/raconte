@@ -105,16 +105,7 @@ actor ImageStore {
     /// directory / an unknown captureID — never throws, matching `EntryMetadataStore
     /// .read`'s "absent is not an error" stance for the common case.
     func images(captureID: String) -> [ImageSidecar] {
-        let directory = SegmentLayout.imagesDirectory(captureDirectory: captureDirectory(captureID: captureID))
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil) else { return [] }
-        let sidecars: [ImageSidecar] = entries
-            .filter { $0.pathExtension == SegmentLayout.sidecarExtension }
-            .compactMap { url in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                return try? Self.decodeSidecar(data)
-            }
-        return sidecars.sorted { $0.id < $1.id }
+        Self.readSidecars(captureDirectory: captureDirectory(captureID: captureID))
     }
 
     /// Removes the `.orig`/`.json`/thumbnail trio for one image. Not an error if
@@ -148,6 +139,25 @@ actor ImageStore {
         try Self.writeOriginal(data, captureDirectory: directory, imageID: imageID, ext: sidecar.originalExtension)
         try Self.writeSidecar(sidecar, captureDirectory: directory)
         writeThumbnailIfPossible(data, captureDirectory: directory, imageID: imageID)
+    }
+
+    /// Synchronous, actor-free read of every sidecar for a capture, ULID order — same
+    /// listing `images(captureID:)` returns, but callable from the library scan
+    /// (`LibraryScanner`), which is deliberately synchronous and does not hop the actor
+    /// for its per-capture reads (matches `EntryMetadataStore.read`'s static seam, used
+    /// the same way for `entry.json`). Never throws: absent/unknown capture/unreadable
+    /// sidecar all read as "no images", same stance as `images(captureID:)`.
+    static func readSidecars(captureDirectory: URL) -> [ImageSidecar] {
+        let directory = SegmentLayout.imagesDirectory(captureDirectory: captureDirectory)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil) else { return [] }
+        let sidecars: [ImageSidecar] = entries
+            .filter { $0.pathExtension == SegmentLayout.sidecarExtension }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return try? decodeSidecar(data)
+            }
+        return sidecars.sorted { $0.id < $1.id }
     }
 
     // MARK: Private helpers

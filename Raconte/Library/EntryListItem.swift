@@ -136,6 +136,16 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     }
     var degradations: EntryDegradation
 
+    /// Images attached to this capture (image capture plan Task 3), populated by the
+    /// scan via `ImageStore.readSidecars`, ULID order — same order as `ImageStore
+    /// .images(captureID:)`. Defaulted to `[]` so every pre-existing construction site
+    /// (test fixtures that don't exercise images) keeps compiling unchanged; the one
+    /// production site, `LibraryScanner.item(for:)`, always passes a real scan result.
+    var images: [ImageSidecar]
+    /// The earliest-added image, for the library row's leading thumbnail. `nil` when
+    /// there are no images.
+    var leadingThumbnail: ImageSidecar? { images.first }
+
     init(captureID: String,
          capturedAt: Date,
          durationSeconds: Double = 0,
@@ -143,7 +153,8 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
          journal: Journal? = nil,
          snippet: String? = nil,
          transcript: EntryTranscriptState = .absent,
-         degradations: EntryDegradation = []) {
+         degradations: EntryDegradation = [],
+         images: [ImageSidecar] = []) {
         self.captureID = captureID
         self.capturedAt = capturedAt
         self.durationSeconds = durationSeconds
@@ -152,6 +163,7 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
         self.snippet = snippet
         self.transcript = transcript
         self.degradations = degradations
+        self.images = images
     }
 
     /// The date the library sorts and groups by. Defined once, in

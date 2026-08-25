@@ -59,6 +59,11 @@ final class LibraryScreenModel {
     /// `entryMetadataStore`: `CaptureScreenModel` reads THIS instance rather than
     /// building its own over the same `capturesRoot`.
     let revisionStore: TranscriptRevisionStore
+    /// Image capture plan Task 3. Same "one instance app-wide over `capturesRoot`"
+    /// reasoning as `entryMetadataStore`/`revisionStore` above, though nothing else
+    /// currently builds a second `ImageStore` over the same tree — kept for parity so a
+    /// future caller doesn't reach for its own.
+    let imageStore: ImageStore
 
     private(set) var items: [EntryListItem] = []
     /// The 3 most recently *captured* entries, across every journal, regardless of
@@ -174,6 +179,7 @@ final class LibraryScreenModel {
         self.entryMetadataStore = EntryMetadataStore(capturesRoot: capturesRoot)
         self.journalCoverStore = JournalCoverStore(containerRoot: containerRoot)
         self.revisionStore = TranscriptRevisionStore(capturesRoot: capturesRoot)
+        self.imageStore = ImageStore(capturesRoot: capturesRoot)
     }
 
     /// Live composition root, matching `CaptureScreenModel.live()`'s captures root exactly
@@ -421,6 +427,56 @@ final class LibraryScreenModel {
         }
         await rescan()
         return succeeded
+    }
+
+    // MARK: - Images (image capture plan, Task 3)
+
+    /// Adds one image to a capture. Returns `false` — sidecar/orig/thumbnail
+    /// untouched — on any `ImageStore` failure (`.captureMissing`, `.invalidImage`, or
+    /// a write error), same `Bool`-on-store-failure convention as `setBackdate`/
+    /// `moveEntry`/`trashEntry`. Rescans unconditionally, matching those — a rescan is
+    /// a pure re-read, never a write, so it costs nothing on the failure path and stays
+    /// consistent with concurrent disk changes either way.
+    @discardableResult
+    func addImage(_ captureID: String, data: Data, sourceUTType: String?) async -> Bool {
+        let succeeded: Bool
+        do {
+            _ = try await imageStore.addImage(captureID: captureID, data: data, sourceUTType: sourceUTType)
+            succeeded = true
+        } catch {
+            succeeded = false
+        }
+        await rescan()
+        return succeeded
+    }
+
+    /// Removes one image. Idempotent, matching `ImageStore.removeImage` — already
+    /// absent is not an error, so there is nothing to report false about.
+    func removeImage(_ captureID: String, imageID: String) async {
+        await imageStore.removeImage(captureID: captureID, imageID: imageID)
+        await rescan()
+    }
+
+    /// Thin pass-through to `ImageStore.images(captureID:)` — the async, actor-hopping
+    /// counterpart to `EntryListItem.images` (which comes from the synchronous scan
+    /// seam instead). Exists for a caller that wants a fresh read without waiting on a
+    /// full rescan.
+    func images(for captureID: String) async -> [ImageSidecar] {
+        await imageStore.images(captureID: captureID)
+    }
+
+    /// Mints a blank entry — no audio at all (design doc "Entry existence with no
+    /// audio"). Delegates the actual manifest/sidecar shape and write to
+    /// `BlankEntryMinter`, which is not `SegmentStore`/`CaptureCoordinator`-owned: see
+    /// that type's doc comment. Returns the new captureID, or `nil` on any write
+    /// failure. Rescans on success, same as every other mutator here.
+    @discardableResult
+    func createBlankEntry(journalID: String?) async -> String? {
+        guard let captureID = BlankEntryMinter.create(capturesRoot: capturesRoot, journalID: journalID) else {
+            return nil
+        }
+        await rescan()
+        return captureID
     }
 
     // MARK: - Journal editing (journal-editing IA, Task 6)

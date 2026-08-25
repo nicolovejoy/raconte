@@ -227,6 +227,18 @@ final class RecoveryPlannerTests: XCTestCase {
         XCTAssertEqual(plan(cap), .finishRawDelete(captureID: "cap"))
     }
 
+    /// The blank-entry shape (image capture plan, `BlankEntryMinter`): `complete`,
+    /// `final.verifiedAt` set, but no `.m4a` and no raw segments — never had an audio
+    /// pipeline to begin with. Without the fix this fell to the anomalous branch
+    /// (`hasData` false → `deleteCaptureDirectory`), so a freshly minted blank entry
+    /// with no images yet would be deleted at the very next launch's recovery scan.
+    func testCompleteVerifiedNoM4ANoSegmentsIsNotDeleted() {
+        let cap = snapshot(
+            manifest: manifest(.complete, verifiedAt: date("2026-07-29T15:10:00.000Z")),
+            segments: [])
+        XCTAssertEqual(plan(cap), .finishRawDelete(captureID: "cap"))
+    }
+
     // MARK: Row — sub-floor total duration → discard
 
     func testSubFloorDurationDiscards() {

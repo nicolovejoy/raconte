@@ -2,50 +2,65 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-25 am (laptop — macOS TestFlight build 6 shipped+gate-verified; image-capture feature designed+planned)
+## Session 2026-08-25 pm (laptop — image capture SHIPPED: all 9 SDD tasks + final review fixes, merged to main)
 
-- **macOS TestFlight fully headless:** the missing piece was a "Mac Installer
-  Distribution" certificate (the Mac App Store leg signs a .pkg; Apple Distribution
-  alone can't). Created via ASC API with a locally generated CSR (Nico ran the
-  keychain-import steps via `!`; note: modern openssl p12 needs
-  `-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1` or `security import`
-  rejects it). `scripts/upload_testflight.sh` now takes `ios|macos`;
-  `ExportOptions-macos.plist` names `installerSigningCertificate`. Build 6 uploaded
-  from CLI (PR #100, open at handoff).
-- **#90 gate verified on Mac:** first prod launch logged `environment tag absent vs
-  production — bookkeeping wiped, full resync`; relaunch silent. Gate now confirmed on
-  all three platforms. During first fetch the Mac ignored a stream of shell
-  AudioAsset/Revision/LiveLog records missing file/sha256 — probably pre-heal iPhone
-  leftovers, but it is #85's discard-not-park behavior live in prod (commented on #85).
-- **Stale-build trap bit again:** Spotlight relaunched an ancient Debug copy from
-  DerivedData mid-smoke (harmless — it never ran sync; no subsystem log lines). All
-  macOS Debug Raconte.app bundles in DerivedData + /tmp/raconte-smoke deleted;
-  /Applications/Raconte.app (TestFlight) is now the only Mac copy.
-- **Image capture designed via brainstorm + visual companion** (mocks in
-  `.superpowers/brainstorm/`, now gitignored). Decisions: captured-artifact ground
-  truth generalizes audio→image (originals byte-for-byte, sha256, thumbnails derived);
-  0..n images per entry, image-only = no audio, typed text in the same revision field;
-  blank-entry-first creation ("+ New entry"); "Capture Image" framing; row thumbnails;
-  EXIF taken-date as backdate suggestion; PhotosPicker+camera (iOS), file
-  importer+drag/drop+paste (Mac). Design:
-  `docs/plans/2026-08-25-image-capture-design.md`; plan (9 SDD tasks, Sonnet
-  implementers, Tasks 4+5 flagged for escalation):
-  `docs/plans/2026-08-25-image-capture-plan.md`. Sonnet found the load-bearing
-  pre-existing gap: `DirectorySnapshot.holdsIrreplaceableArtifacts` ignores images, so
-  an image-only entry would be sweepable — fixed first as Task 1.
+Executed the full `docs/plans/2026-08-25-image-capture-plan.md` via subagent-driven
+development, in a git worktree (`worktree-image-capture`). PR #100 (macOS TestFlight
+pipeline, unexpectedly also carrying the image-capture design/plan docs from the prior
+session) merged first to unblock main. Unit suite 1817 → 1944, 0 failures at every
+gate. Merged to `main` locally (not pushed).
+
+- **All 9 tasks landed, each with its own task review; two needed a fix round:**
+  file-layout primitives + a `holdsIrreplaceableArtifacts` correctness fix (Task 1);
+  `ImageStore` actor core — sha256/atomic writes/EXIF/thumbnails (Task 2);
+  model/API layer + blank (no-audio) entries, fix round tightened an over-broad
+  `RecoveryPlanner` delete branch (Task 3); CloudKit push leg, escalated to Opus, plus
+  a controller-mandated fix closing a "wiring no task owns" gap — `SyncTreeScanner`
+  didn't know about images, so a locally-added image would never have synced (Task 4);
+  CloudKit fetch/ingest leg with land-or-park, escalated to Opus — this closed Task 4's
+  hard release gate (inbound Image records would otherwise be dropped forever, per
+  CKSyncEngine's no-redelivery rule) (Task 5); entry detail UI, fix round routed
+  thumbnail/original reads through the model instead of the view doing file I/O
+  (Task 6); library row thumbnails + "+ New entry" + the UI test class, 49/49 passing
+  (Task 7); EXIF backdate suggestion respecting the sticky-backdate rule (Task 8);
+  macOS drag-and-drop + paste sharing Task 6's single write path (Task 9).
+- **Final whole-branch review (Opus) found 4 Important issues no single task could
+  have caught**, all fixed in one wave: `removeImage`/`addImage` fired no sync hooks
+  at all (removed images were permanently unpropagated and resurrectable by a #90 wipe
+  or new device pairing; added images waited for next launch); an audio-bearing entry
+  with a real m4a but nil `durationFrames` (anomalous but reachable) lost its playback
+  UI entirely; corrupt/missing thumbnails degraded but never regenerated, contrary to
+  the design doc.
+- **Fix-wave re-review found 2 more issues in the fix itself** (a genuine "no second
+  fix wave" case per the SDD skill — surfaced to Nico instead of auto-looping):
+  `removeImage` didn't withdraw a pending CloudKit save for the same image
+  (add-then-delete race, same resurrection class as the bug it was fixing), and two
+  code comments overclaimed what was actually fixed. Nico asked for both fixed before
+  merge; one more small dispatch closed both (1944/1944 final).
+- **Backward compatibility explicitly verified** by the final reviewer: a pre-existing
+  audio-only entry behaves identically, with two deliberate safe-direction deltas from
+  Task 3 (a previously-destroyed damaged capture now survives recovery) and the one
+  playback regression above (now fixed).
+- **Known, accepted residual gap** (documented in code, not silently dropped): inbound
+  single-image deletion has no consumer yet — a live second device keeps showing a
+  removed image until it's built. Outbound half (server record actually deleted, so a
+  *new* device pairing or post-wipe resync won't resurrect it) is fixed. This is
+  distinct from #85/#90's existing land-or-park machinery, which this doesn't touch.
 
 **Next steps:**
-1. Merge PR #100 (macOS pipeline + build-6 bump) — Nico's merge.
-2. Close #90 (verified on iPhone/iPad/Mac; point at PR #99 + build-5/6 smokes; note
-   accepted pending-delete resurrection risk, design §4). #94 likewise closeable.
-3. **Build image capture** in a Sonnet session: `/readup`, then SDD on
-   `docs/plans/2026-08-25-image-capture-plan.md`; one Opus/Fable final review.
-4. #89 (About page: version + sync status) — brainstorm context gathered (Explore
-   report 2026-08-25): surface `SyncStatus` fields; no "last full resync" timestamp
-   exists yet (only the `sync/environment` tag mtime); `Place` convention: case always
-   unconditional, only sidebar listing gated.
-5. #85 (land-or-park) rose in urgency — live sighting on Mac first fetch; the
-   image-capture plan builds its fetch leg land-or-park from day one.
+1. **Owner smoke pass** — build to iPhone (primary device), add a photo from camera +
+   library, confirm sync to iPad/Mac, remove one, confirm it stays removed on the
+   originating device (cross-device removal propagation is the known gap above — don't
+   expect it yet).
+2. Push `main` and consider a macOS/iOS TestFlight build once smoked.
+3. Track the inbound single-image-deletion gap as its own issue if the owner wants it
+   closed rather than accepted (low urgency — no data loss, just a stale second-device
+   view until that device's own wipe/resync cycle runs).
+4. #89 (About page: version + sync status) — four smoke sessions have now paid for its
+   absence; brainstorm context already gathered (Explore report 2026-08-25).
+5. #85 (land-or-park generally, beyond images) — still open for the non-image record
+   types; live sighting on Mac's first fetch prompted this branch's images-specific
+   land-or-park build, but the general issue remains.
 
 ## What Raconte is
 

@@ -125,6 +125,28 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     var multiVoice: Bool { metadata.multiVoice }
 
     var durationSeconds: Double
+
+    /// `final/recording.m4a` is present and non-empty (`CaptureSnapshot.finalM4APresent`,
+    /// computed by the scan). Carried onto the row solely so `hasAudio` below can be
+    /// right — nothing displays it.
+    var finalM4APresent: Bool
+
+    /// There is audio to play. **Not `durationSeconds > 0`** (final-review I3):
+    /// `LibraryScanner.durationSeconds` returns `0` when there are no raw segments AND
+    /// `final.durationFrames` is nil, which is anomalous but reachable (a verified
+    /// manifest with no frame count at all — see `SyncTreeScanner`'s comment on it, and
+    /// `SyncRecordExchange.audioRecordToPush`'s refusal to push one). Gating playback on
+    /// the duration would hide the play button for exactly that entry — the one artifact
+    /// this app promises is indestructible — even though the `.m4a` is sitting there and
+    /// would play.
+    ///
+    /// This is the row-level restatement of `PlayableSourceSelector.select` returning
+    /// something other than `.none`: a present final `.m4a` wins, else any raw frames.
+    /// `durationSeconds > 0` covers the raw-segments half exactly (both are
+    /// `PlayableSourceSelector.frameTotal(of: rawSegments) > 0`, modulo the finalized
+    /// case where the m4a flag already answers first).
+    var hasAudio: Bool { finalM4APresent || durationSeconds > 0 }
+
     /// First stretch of committed transcript text, whitespace-collapsed and truncated.
     /// `nil` when there is no readable text — which includes a readable but empty log.
     var snippet: String?
@@ -149,6 +171,11 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     init(captureID: String,
          capturedAt: Date,
          durationSeconds: Double = 0,
+         // Defaulted false so every existing construction site keeps compiling: a
+         // fixture that passes a non-zero `durationSeconds` already reads as
+         // `hasAudio`, and one that passes neither is the no-audio row it always was.
+         // Only the anomalous m4a-present-but-frameless case needs it stated.
+         finalM4APresent: Bool = false,
          metadata: EntryMetadata = .defaults,
          journal: Journal? = nil,
          snippet: String? = nil,
@@ -158,6 +185,7 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
         self.captureID = captureID
         self.capturedAt = capturedAt
         self.durationSeconds = durationSeconds
+        self.finalM4APresent = finalM4APresent
         self.metadata = metadata
         self.journal = journal
         self.snippet = snippet

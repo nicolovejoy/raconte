@@ -98,7 +98,7 @@ struct EntryDetailView: View {
                 // loaded audio to play), not merely disabled — leaving the images
                 // strip as the first, primary content above the transcript, matching
                 // the design doc's "Entry detail" section exactly.
-                if Self.playbackSectionVisible(hasAudio: item.durationSeconds > 0) {
+                if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
                     playbackSection
                 }
                 imagesSection
@@ -469,12 +469,14 @@ struct EntryDetailView: View {
 
     /// Whether `playbackSection` renders at all — pure, no I/O, no `@State` reads
     /// (image capture plan Task 6 brief's suggested "which section shows first" test
-    /// seam). `durationSeconds == 0` is exactly the blank/image-only-entry signal
-    /// `LibraryScanner.durationSeconds` produces (confirmed in Task 3's report: no
-    /// `segments/` and `final.durationFrames == 0` both fall through to `0`) — reading
-    /// it off `item` directly, rather than waiting on `playback`'s own async `hasAudio`,
-    /// means the play button never has to flash in for one frame on an entry that has
-    /// no audio at all.
+    /// seam). Reading the answer off `item` directly, rather than waiting on
+    /// `playback`'s own async load, means the play button never has to flash in for one
+    /// frame on an entry that has no audio at all.
+    ///
+    /// The caller passes `EntryListItem.hasAudio`, **never `durationSeconds > 0`**
+    /// (final-review I3): a verified `.m4a` whose manifest lost its `durationFrames`
+    /// scans as zero seconds but plays fine, and gating on the duration made the play
+    /// button vanish for it. See `EntryListItem.hasAudio` for the full argument.
     static func playbackSectionVisible(hasAudio: Bool) -> Bool { hasAudio }
 
     private var imagesSection: some View {

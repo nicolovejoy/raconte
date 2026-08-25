@@ -2,6 +2,52 @@
 
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
+
+## Session 2026-08-25 am (laptop — macOS TestFlight build 6 shipped+gate-verified; image-capture feature designed+planned)
+
+- **macOS TestFlight fully headless:** the missing piece was a "Mac Installer
+  Distribution" certificate (the Mac App Store leg signs a .pkg; Apple Distribution
+  alone can't). Created via ASC API with a locally generated CSR (Nico ran the
+  keychain-import steps via `!`; note: modern openssl p12 needs
+  `-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1` or `security import`
+  rejects it). `scripts/upload_testflight.sh` now takes `ios|macos`;
+  `ExportOptions-macos.plist` names `installerSigningCertificate`. Build 6 uploaded
+  from CLI (PR #100, open at handoff).
+- **#90 gate verified on Mac:** first prod launch logged `environment tag absent vs
+  production — bookkeeping wiped, full resync`; relaunch silent. Gate now confirmed on
+  all three platforms. During first fetch the Mac ignored a stream of shell
+  AudioAsset/Revision/LiveLog records missing file/sha256 — probably pre-heal iPhone
+  leftovers, but it is #85's discard-not-park behavior live in prod (commented on #85).
+- **Stale-build trap bit again:** Spotlight relaunched an ancient Debug copy from
+  DerivedData mid-smoke (harmless — it never ran sync; no subsystem log lines). All
+  macOS Debug Raconte.app bundles in DerivedData + /tmp/raconte-smoke deleted;
+  /Applications/Raconte.app (TestFlight) is now the only Mac copy.
+- **Image capture designed via brainstorm + visual companion** (mocks in
+  `.superpowers/brainstorm/`, now gitignored). Decisions: captured-artifact ground
+  truth generalizes audio→image (originals byte-for-byte, sha256, thumbnails derived);
+  0..n images per entry, image-only = no audio, typed text in the same revision field;
+  blank-entry-first creation ("+ New entry"); "Capture Image" framing; row thumbnails;
+  EXIF taken-date as backdate suggestion; PhotosPicker+camera (iOS), file
+  importer+drag/drop+paste (Mac). Design:
+  `docs/plans/2026-08-25-image-capture-design.md`; plan (9 SDD tasks, Sonnet
+  implementers, Tasks 4+5 flagged for escalation):
+  `docs/plans/2026-08-25-image-capture-plan.md`. Sonnet found the load-bearing
+  pre-existing gap: `DirectorySnapshot.holdsIrreplaceableArtifacts` ignores images, so
+  an image-only entry would be sweepable — fixed first as Task 1.
+
+**Next steps:**
+1. Merge PR #100 (macOS pipeline + build-6 bump) — Nico's merge.
+2. Close #90 (verified on iPhone/iPad/Mac; point at PR #99 + build-5/6 smokes; note
+   accepted pending-delete resurrection risk, design §4). #94 likewise closeable.
+3. **Build image capture** in a Sonnet session: `/readup`, then SDD on
+   `docs/plans/2026-08-25-image-capture-plan.md`; one Opus/Fable final review.
+4. #89 (About page: version + sync status) — brainstorm context gathered (Explore
+   report 2026-08-25): surface `SyncStatus` fields; no "last full resync" timestamp
+   exists yet (only the `sync/environment` tag mtime); `Place` convention: case always
+   unconditional, only sidebar listing gated.
+5. #85 (land-or-park) rose in urgency — live sighting on Mac first fetch; the
+   image-capture plan builds its fetch leg land-or-park from day one.
+
 ## Session 2026-08-24 late (laptop — #90 SHIPPED via SDD + device-verified; headless TestFlight pipeline; builds 4+5 uploaded from CLI)
 
 Big session: the #94 mystery resolved, #90 designed→shipped→verified, and the release

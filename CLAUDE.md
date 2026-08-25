@@ -58,7 +58,12 @@ gate. Merged to `main` locally (not pushed).
    view until that device's own wipe/resync cycle runs).
 4. #89 (About page: version + sync status) — four smoke sessions have now paid for its
    absence; brainstorm context already gathered (Explore report 2026-08-25).
-5. #85 (land-or-park generally, beyond images) — still open for the non-image record
+5. **Discuss sharing the beta app with another person** (owner raised 2026-08-25, wants
+   to talk through it before acting): current design is explicitly single-user, no
+   accounts, iCloud identity only (CLAUDE.md "Identity"/"Stack") — TestFlight external
+   testing, a second Apple ID on the same CloudKit private container, and multi-user
+   data isolation all need scoping before any invite goes out.
+6. #85 (land-or-park generally, beyond images) — still open for the non-image record
    types; live sighting on Mac's first fetch prompted this branch's images-specific
    land-or-park build, but the general issue remains.
 

@@ -27,9 +27,6 @@ struct DebugMenuView: View {
     // within a process lifetime — compute once in `.task`, never inline in
     // `body` (which re-evaluates on every re-render).
     @State private var buildInfo: String?
-    /// M4 T12: fetched on appear and on demand (Refresh) — unlike `buildInfo`, this can
-    /// genuinely change while the screen is open.
-    @State private var syncStatus: SyncStatus?
 
     var body: some View {
         List {
@@ -43,29 +40,9 @@ struct DebugMenuView: View {
                     .accessibilityIdentifier("debug.buildInfo")
             }
 
-            // M4 T12 (design §8: "status line: last push, last fetch, pending counts,
-            // last error" — debug-only visibility is fine for M4, user-facing
-            // surfacing is later polish).
-            Section("Sync") {
-                if let sync {
-                    if let syncStatus {
-                        LabeledContent("Account", value: syncStatus.accountState)
-                        LabeledContent("Last push",
-                                      value: syncStatus.lastPushAt.map(Self.timestamp(_:)) ?? "never")
-                        LabeledContent("Last fetch",
-                                      value: syncStatus.lastFetchAt.map(Self.timestamp(_:)) ?? "never")
-                        LabeledContent("Pending saves", value: "\(syncStatus.pendingSaveCount)")
-                        LabeledContent("Pending deletes", value: "\(syncStatus.pendingDeleteCount)")
-                        LabeledContent("Last error", value: syncStatus.lastError ?? "none")
-                    } else {
-                        Text("Loading…")
-                    }
-                    Button("Refresh") { Task { syncStatus = await sync.status() } }
-                        .accessibilityIdentifier("debug.sync.refresh")
-                } else {
-                    Text("Sync unavailable in this build")
-                }
-            }
+            // M4 T12 (design §8) — rows extracted to `SyncStatusSectionView` when #89
+            // gave them a second, Release-visible host (the About page).
+            SyncStatusSectionView(sync: sync, idPrefix: "debug")
 
             Section {
                 Button(role: .destructive) {
@@ -97,15 +74,7 @@ struct DebugMenuView: View {
             if buildInfo == nil {
                 buildInfo = await BuildStamp.currentBuildDisplayStringAsync()
             }
-            if let sync, syncStatus == nil {
-                syncStatus = await sync.status()
-            }
         }
-    }
-
-    /// A standard local formatter — this is a debug surface, no special handling needed.
-    private static func timestamp(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .standard)
     }
 
     @ViewBuilder

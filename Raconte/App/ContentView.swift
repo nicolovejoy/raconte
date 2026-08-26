@@ -175,6 +175,8 @@ struct ContentView: View {
                         onCreateEntry: { services.router.detailPath.append(.entry($0)) })
         case .trash:
             TrashView(model: services.library)
+        case .about:
+            AboutView(sync: services.sync)
         case .debug:
             #if DEBUG
             DebugMenuView(sync: services.sync)
@@ -194,7 +196,7 @@ struct ContentView: View {
             return "All Entries"
         case .journal(let id):
             return services.library.journals.first(where: { $0.id == id })?.name ?? "Library"
-        case .capture, .trash, .debug:
+        case .capture, .trash, .about, .debug:
             return "Library"
         }
     }

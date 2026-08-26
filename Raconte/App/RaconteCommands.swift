@@ -36,6 +36,7 @@ struct RaconteCommands: Commands {
             Button("Capture")     { services.router.select(.capture) }.keyboardShortcut("1")
             Button("All Entries") { services.router.select(.allEntries) }.keyboardShortcut("2")
             Button("Trash")       { services.router.select(.trash) }.keyboardShortcut("3")
+            Button("About")       { services.router.select(.about) }
             #if DEBUG
             Button("Debug")       { services.router.select(.debug) }.keyboardShortcut("4")
             #endif

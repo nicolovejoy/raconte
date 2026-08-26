@@ -16,6 +16,7 @@ enum Place: Hashable, Sendable {
     case journal(String)      // journal id
     case allEntries
     case trash
+    case about
     case debug
 }
 
@@ -73,6 +74,16 @@ enum SidebarModel {
                              systemImage: "trash",
                              journalID: nil,
                              accessibilityIdentifier: "sidebar.trash"))
+
+        // #89: Release-visible diagnostics (version, environment, sync status). Listed
+        // in EVERY build — bottom-of-list utility, but Debug stays last where the
+        // owner's muscle memory expects it.
+        rows.append(PlaceRow(place: .about,
+                             title: "About",
+                             subtitle: nil,
+                             systemImage: "info.circle",
+                             journalID: nil,
+                             accessibilityIdentifier: "sidebar.about"))
 
         if includesDebug {
             rows.append(PlaceRow(place: .debug,
@@ -140,7 +151,7 @@ enum PlaceRouting {
         switch place {
         case .journal(let id):
             return journals.contains { $0.id == id } ? place : .capture
-        case .capture, .allEntries, .trash, .debug:
+        case .capture, .allEntries, .trash, .about, .debug:
             return place
         }
     }
@@ -153,7 +164,7 @@ enum PlaceRouting {
             return .all
         case .journal(let id):
             return .journal(id)
-        case .capture, .trash, .debug:
+        case .capture, .trash, .about, .debug:
             return nil
         }
     }

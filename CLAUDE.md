@@ -2,70 +2,59 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-25 pm (laptop — image capture SHIPPED: all 9 SDD tasks + final review fixes, merged to main)
+## Session 2026-08-26 (laptop — smoke pass FAILED: images don't propagate to iPad/Mac; #89 now a blocker)
 
-Executed the full `docs/plans/2026-08-25-image-capture-plan.md` via subagent-driven
-development, in a git worktree (`worktree-image-capture`). PR #100 (macOS TestFlight
-pipeline, unexpectedly also carrying the image-capture design/plan docs from the prior
-session) merged first to unblock main. Unit suite 1817 → 1944, 0 failures at every
-gate. Merged to `main` locally (not pushed).
+The image-capture smoke pass from the last session did not pass. Photos added on the
+iPhone are not reaching iPad or Mac. **No fix was written** — the session stalled in
+Phase 1 of systematic debugging, blocked on evidence the app cannot currently report.
+Full detail in devlog.
 
-- **All 9 tasks landed, each with its own task review; two needed a fix round:**
-  file-layout primitives + a `holdsIrreplaceableArtifacts` correctness fix (Task 1);
-  `ImageStore` actor core — sha256/atomic writes/EXIF/thumbnails (Task 2);
-  model/API layer + blank (no-audio) entries, fix round tightened an over-broad
-  `RecoveryPlanner` delete branch (Task 3); CloudKit push leg, escalated to Opus, plus
-  a controller-mandated fix closing a "wiring no task owns" gap — `SyncTreeScanner`
-  didn't know about images, so a locally-added image would never have synced (Task 4);
-  CloudKit fetch/ingest leg with land-or-park, escalated to Opus — this closed Task 4's
-  hard release gate (inbound Image records would otherwise be dropped forever, per
-  CKSyncEngine's no-redelivery rule) (Task 5); entry detail UI, fix round routed
-  thumbnail/original reads through the model instead of the view doing file I/O
-  (Task 6); library row thumbnails + "+ New entry" + the UI test class, 49/49 passing
-  (Task 7); EXIF backdate suggestion respecting the sticky-backdate rule (Task 8);
-  macOS drag-and-drop + paste sharing Task 6's single write path (Task 9).
-- **Final whole-branch review (Opus) found 4 Important issues no single task could
-  have caught**, all fixed in one wave: `removeImage`/`addImage` fired no sync hooks
-  at all (removed images were permanently unpropagated and resurrectable by a #90 wipe
-  or new device pairing; added images waited for next launch); an audio-bearing entry
-  with a real m4a but nil `durationFrames` (anomalous but reachable) lost its playback
-  UI entirely; corrupt/missing thumbnails degraded but never regenerated, contrary to
-  the design doc.
-- **Fix-wave re-review found 2 more issues in the fix itself** (a genuine "no second
-  fix wave" case per the SDD skill — surfaced to Nico instead of auto-looping):
-  `removeImage` didn't withdraw a pending CloudKit save for the same image
-  (add-then-delete race, same resurrection class as the bug it was fixing), and two
-  code comments overclaimed what was actually fixed. Nico asked for both fixed before
-  merge; one more small dispatch closed both (1944/1944 final).
-- **Backward compatibility explicitly verified** by the final reviewer: a pre-existing
-  audio-only entry behaves identically, with two deliberate safe-direction deltas from
-  Task 3 (a previously-destroyed damaged capture now survives recovery) and the one
-  playback regression above (now fixed).
-- **Known, accepted residual gap** (documented in code, not silently dropped): inbound
-  single-image deletion has no consumer yet — a live second device keeps showing a
-  removed image until it's built. Outbound half (server record actually deleted, so a
-  *new* device pairing or post-wipe resync won't resurrect it) is fixed. This is
-  distinct from #85/#90's existing land-or-park machinery, which this doesn't touch.
+- **Leading hypothesis, UNCONFIRMED — a CloudKit environment split, not an image bug.**
+  Xcode-installed builds talk to CloudKit **Development**; TestFlight builds talk to
+  **Production**. Separate databases; records never cross. iPad and Mac are confirmed
+  TestFlight build 7 (Production). **The iPhone's provenance is the open question** —
+  if it is an Xcode build, its photos are landing in Development and nothing would ever
+  propagate, and the image feature itself may be fine.
+- **Build number cannot disambiguate**: `project.yml` says 7, so an Xcode build off
+  current `main` self-reports build 7 too.
+- **How to tell, without the sidebar** (the ladybug test was inconclusive on iPhone —
+  the sidebar is collapsed behind the back button, so "no ladybug" did not distinguish
+  *absent row* from *never reached the sidebar*): Home Screen **orange dot** next to the
+  app name = TestFlight install; or TestFlight showing "Open" rather than "Install".
+- **Code side, no smoking gun.** Push leg wired (`SyncTreeScanner.scanImages` :304),
+  ingest leg decodes `Image` records (`RemoteImageFields`, SyncIngest.swift :176).
+  Consistent with the environment-split hypothesis over a feature bug.
+- **Lori (therapist beta) — dev-visibility thread is DECIDED and no longer a blocker.**
+  Owner will tell her up front that he may see/hear her entries until he can lock it
+  down and confirm otherwise, and let her opt in knowing that. Honest disclosure rather
+  than a control that does not exist yet. The *sync* failure is still an invite blocker.
 
 **Next steps:**
-1. **Owner smoke pass** — build to iPhone (primary device), add a photo from camera +
-   library, confirm sync to iPad/Mac, remove one, confirm it stays removed on the
-   originating device (cross-device removal propagation is the known gap above — don't
-   expect it yet).
-2. Push `main` and consider a macOS/iOS TestFlight build once smoked.
-3. Track the inbound single-image-deletion gap as its own issue if the owner wants it
-   closed rather than accepted (low urgency — no data loss, just a stale second-device
-   view until that device's own wipe/resync cycle runs).
-4. #89 (About page: version + sync status) — four smoke sessions have now paid for its
-   absence; brainstorm context already gathered (Explore report 2026-08-25).
-5. **Discuss sharing the beta app with another person** (owner raised 2026-08-25, wants
-   to talk through it before acting): current design is explicitly single-user, no
-   accounts, iCloud identity only (CLAUDE.md "Identity"/"Stack") — TestFlight external
-   testing, a second Apple ID on the same CloudKit private container, and multi-user
-   data isolation all need scoping before any invite goes out.
-6. #85 (land-or-park generally, beyond images) — still open for the non-image record
-   types; live sighting on Mac's first fetch prompted this branch's images-specific
-   land-or-park build, but the general issue remains.
+1. **Settle the iPhone build provenance** — orange dot on the Home Screen, or TestFlight
+   showing "Open" vs "Install". This is 30 seconds and decides whether there is a real
+   bug at all. If the iPhone is an Xcode/Development build, reinstall from TestFlight
+   and re-run the smoke pass before debugging anything.
+2. **#89 (About page: version + sync status) — now a blocker, not polish.** Fifth
+   session to pay for its absence and the first where it blocked diagnosis of a live
+   bug: on a TestFlight build the owner cannot read back account state, last push/fetch,
+   pending counts, or last error. **Scope addition beyond the issue text: surface the
+   environment tag (Development/Production)**, which #90 already detects via
+   `CloudKitEnvironment.detectFromBundle` — it would have made today's problem obvious
+   at a glance, and it is what Lori will need when her devices disagree. Debug screen is
+   `#if DEBUG`-gated in four places (SidebarView :99-103, RaconteCommands :39-40,
+   ContentView :177-178, DebugMenuView).
+3. **#101 — next/previous entry navigation within a journal** from the detail screen.
+   Owner wants it "soonish", after #89. Open design questions recorded on the issue
+   (gesture vs. controls, sort-order stability, first/last behavior, All-Entries
+   semantics, commit-before-page-turn).
+4. **Invite Lori once sync is verified working** — TestFlight external testing group,
+   her own Apple ID for TestFlight and iCloud. CloudKit's private database already
+   isolates her data at the app level (Apple server-side, nothing to build). Disclosure
+   decision above is settled.
+5. #85 (land-or-park generally, beyond images) — still open for non-image record types.
+6. Inbound single-image deletion still has no consumer (accepted gap from the image
+   build) — a live second device keeps showing a removed image until its own
+   wipe/resync cycle runs. Track as its own issue if the owner wants it closed.
 
 ## What Raconte is
 

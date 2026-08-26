@@ -3,6 +3,97 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-26 (laptop — smoke pass FAILED: images don't propagate; #89 promoted to blocker; #101 filed)
+
+Short diagnostic session. Owner ran the image-capture smoke pass from the prior
+session's next steps and reported that photos added on the iPhone are **not**
+propagating to iPad or Mac. No fix written — the session ended in Phase 1 of
+systematic debugging, blocked on a piece of evidence the app cannot currently report.
+
+- **Leading hypothesis, unconfirmed: a CloudKit environment split, not an image bug.**
+  An Xcode-installed build talks to CloudKit **Development**; a TestFlight build talks
+  to **Production**. Separate databases, records never cross. iPad and Mac are
+  confirmed TestFlight build 7 (Production). The iPhone's provenance is **unknown** —
+  if it is an Xcode build I pushed onto the device, its photos are landing in
+  Development and nothing would ever propagate, and the image feature may be fine.
+- **Build number cannot disambiguate**: `project.yml` says 7, so an Xcode build off
+  current `main` also self-reports build 7. This is exactly why the two look identical
+  to the owner.
+- **Code side, no smoking gun found.** Push leg is wired — `SyncTreeScanner.scanImages`
+  (:304) emits one artifact per image sidecar, which is what gets a locally-added image
+  uploaded. Ingest leg decodes `Image` records via `RemoteImageFields` (SyncIngest.swift
+  :176). Neither is obviously missing, which is consistent with the environment-split
+  hypothesis over a feature bug.
+- **The ladybug test was inconclusive and is worth remembering**: the Debug row is the
+  natural "is this a DEBUG build" tell, but on iPhone the sidebar is collapsed behind
+  the back button, so "no sidebar, no ladybug" did not distinguish *absent row* from
+  *never reached the sidebar*. Sidebar-free checks: the Home Screen **orange dot** next
+  to the app name (TestFlight installs only), or TestFlight showing "Open" rather than
+  "Install"/"Update".
+- **#89 promoted from polish to blocker.** It is now the fifth session to pay for the
+  absence of Release-build sync visibility, and the first where it blocked diagnosis of
+  a live bug outright — the owner physically cannot read back account state, last
+  push/fetch, pending counts, or last error from a TestFlight build. Scope decision:
+  the About page should also surface the **environment tag** (Development/Production),
+  which #90 already detects (`CloudKitEnvironment.detectFromBundle`) and which would
+  have made today's problem self-evident at a glance. Not in the original issue text.
+- **#101 filed** — next/previous entry navigation within a journal from the detail
+  screen. Owner hit it during the smoke pass: reading a journal one entry at a time
+  currently means backing out to the list and drilling back in every time. Wants it
+  "soonish", after #89. Issue records the open design questions (gesture vs. controls,
+  sort-order stability, first/last behavior, All-Entries semantics, and the
+  commit-before-page-turn hazard shared with the sidebar-pop rule).
+- **Lori (therapist beta) — owner made the call on the dev-visibility thread**: he will
+  tell her up front that he may see or hear her entries until he can lock it down and
+  confirm otherwise, and let her opt in knowing that. Honest disclosure instead of a
+  technical control that does not exist yet. This removes dev-visibility as an invite
+  blocker; the *sync* failure remains one.
+
+## Session 2026-08-25 pm (laptop — image capture SHIPPED: all 9 SDD tasks + final review fixes, merged to main)
+
+Executed the full `docs/plans/2026-08-25-image-capture-plan.md` via subagent-driven
+development, in a git worktree (`worktree-image-capture`). PR #100 (macOS TestFlight
+pipeline, unexpectedly also carrying the image-capture design/plan docs from the prior
+session) merged first to unblock main. Unit suite 1817 → 1944, 0 failures at every
+gate. Merged to `main` locally (not pushed).
+
+- **All 9 tasks landed, each with its own task review; two needed a fix round:**
+  file-layout primitives + a `holdsIrreplaceableArtifacts` correctness fix (Task 1);
+  `ImageStore` actor core — sha256/atomic writes/EXIF/thumbnails (Task 2);
+  model/API layer + blank (no-audio) entries, fix round tightened an over-broad
+  `RecoveryPlanner` delete branch (Task 3); CloudKit push leg, escalated to Opus, plus
+  a controller-mandated fix closing a "wiring no task owns" gap — `SyncTreeScanner`
+  didn't know about images, so a locally-added image would never have synced (Task 4);
+  CloudKit fetch/ingest leg with land-or-park, escalated to Opus — this closed Task 4's
+  hard release gate (inbound Image records would otherwise be dropped forever, per
+  CKSyncEngine's no-redelivery rule) (Task 5); entry detail UI, fix round routed
+  thumbnail/original reads through the model instead of the view doing file I/O
+  (Task 6); library row thumbnails + "+ New entry" + the UI test class, 49/49 passing
+  (Task 7); EXIF backdate suggestion respecting the sticky-backdate rule (Task 8);
+  macOS drag-and-drop + paste sharing Task 6's single write path (Task 9).
+- **Final whole-branch review (Opus) found 4 Important issues no single task could
+  have caught**, all fixed in one wave: `removeImage`/`addImage` fired no sync hooks
+  at all (removed images were permanently unpropagated and resurrectable by a #90 wipe
+  or new device pairing; added images waited for next launch); an audio-bearing entry
+  with a real m4a but nil `durationFrames` (anomalous but reachable) lost its playback
+  UI entirely; corrupt/missing thumbnails degraded but never regenerated, contrary to
+  the design doc.
+- **Fix-wave re-review found 2 more issues in the fix itself** (a genuine "no second
+  fix wave" case per the SDD skill — surfaced to Nico instead of auto-looping):
+  `removeImage` didn't withdraw a pending CloudKit save for the same image
+  (add-then-delete race, same resurrection class as the bug it was fixing), and two
+  code comments overclaimed what was actually fixed. Nico asked for both fixed before
+  merge; one more small dispatch closed both (1944/1944 final).
+- **Backward compatibility explicitly verified** by the final reviewer: a pre-existing
+  audio-only entry behaves identically, with two deliberate safe-direction deltas from
+  Task 3 (a previously-destroyed damaged capture now survives recovery) and the one
+  playback regression above (now fixed).
+- **Known, accepted residual gap** (documented in code, not silently dropped): inbound
+  single-image deletion has no consumer yet — a live second device keeps showing a
+  removed image until it's built. Outbound half (server record actually deleted, so a
+  *new* device pairing or post-wipe resync won't resurrect it) is fixed. This is
+  distinct from #85/#90's existing land-or-park machinery, which this doesn't touch.
+
 ## Session 2026-08-25 am (laptop — macOS TestFlight build 6 shipped+gate-verified; image-capture feature designed+planned)
 
 - **macOS TestFlight fully headless:** the missing piece was a "Mac Installer

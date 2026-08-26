@@ -53,6 +53,12 @@ targets:
         # ASC stops asking the export-compliance question per upload (PR #93).
         # Standard iOS crypto only (HTTPS/CloudKit), no proprietary encryption.
         ITSAppUsesNonExemptEncryption: false
+        # The Mac App Store leg REJECTS a .pkg without this (ASC error 90242, hit on
+        # the build-8 upload 2026-08-26; iOS does not require it). Lives HERE, not in
+        # Info.plist, for the same never-edit-the-generated-plist reason as the keys
+        # above — a plist-only fix is wiped by the next `xcodegen generate`, which is
+        # the likely story of how it was present for build 6 and gone by build 8.
+        LSApplicationCategoryType: public.app-category.lifestyle
         # Defensive (design §6). Measured on the iPhone 17 Pro 2026-08-02: iOS does NOT
         # prompt for this with on-device SpeechAnalyzer — only the mic prompt appeared.
         # Kept so a future cloud/dictation path can't turn into a launch crash.

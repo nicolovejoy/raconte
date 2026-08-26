@@ -21,7 +21,7 @@ final class PlaceRoutingTests: XCTestCase {
                                      dateRanges: ["j1": "1987"],
                                      includesDebug: false)
         XCTAssertEqual(rows.map(\.place),
-                       [.capture, .journal("j1"), .journal("j2"), .allEntries, .trash],
+                       [.capture, .journal("j1"), .journal("j2"), .allEntries, .trash, .about],
                        "j1 (older) must render before j2 (newer) despite arriving second")
         XCTAssertEqual(rows[1].title, "1987")
         XCTAssertEqual(rows[1].subtitle, "1987")
@@ -33,8 +33,10 @@ final class PlaceRoutingTests: XCTestCase {
     func testDebugRowIsLastAndOnlyWhenIncluded() {
         let without = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: false)
         XCTAssertFalse(without.contains { $0.place == .debug })
+        XCTAssertEqual(without.last?.place, .about, "#89: About is last when Debug is not listed")
         let with = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: true)
         XCTAssertEqual(with.last?.place, .debug)
+        XCTAssertEqual(with.dropLast().last?.place, .about, "#89: About sits between Trash and Debug")
     }
 
     func testEveryRowCarriesItsOwnIdentifier() {
@@ -69,11 +71,16 @@ final class PlaceRoutingTests: XCTestCase {
                        .journal("j1"))
     }
 
+    func testAboutResolvesToItself() {
+        XCTAssertEqual(PlaceRouting.resolve(.about, journals: []), .about)
+    }
+
     func testJournalScopePerPlace() {
         XCTAssertEqual(PlaceRouting.journalScope(for: .allEntries), .all)
         XCTAssertEqual(PlaceRouting.journalScope(for: .journal("j1")), .journal("j1"))
         XCTAssertNil(PlaceRouting.journalScope(for: .capture))
         XCTAssertNil(PlaceRouting.journalScope(for: .trash))
+        XCTAssertNil(PlaceRouting.journalScope(for: .about))
         XCTAssertNil(PlaceRouting.journalScope(for: .debug))
     }
 
@@ -140,6 +147,7 @@ final class PlaceRoutingTests: XCTestCase {
             (.capture, "Capture", "mic.circle", "sidebar.capture"),
             (.allEntries, "All Entries", "books.vertical", "sidebar.allEntries"),
             (.trash, "Trash", "trash", "sidebar.trash"),
+            (.about, "About", "info.circle", "sidebar.about"),
             (.debug, "Debug", "ladybug", "sidebar.debug"),
         ]
         for expectation in expected {

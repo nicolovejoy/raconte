@@ -18,6 +18,9 @@ final class AppRouterCommandTests: XCTestCase {
         router.goBack()
         XCTAssertEqual(router.place, .allEntries)
         XCTAssertTrue(router.detailPath.isEmpty)
+
+        router.select(.about)
+        XCTAssertEqual(router.place, .about, "#89: the Go menu's About item routes here")
     }
 
     func testNewJournalRequestIsAFlagTheRootCanSee() {

@@ -44,6 +44,12 @@ AboutUITests 1/1, NavigationUITests 10/10, CI green. PR #102; owner merged.
 - **Repo cleanup**: seven merged local branches and five lingering merged remote
   branches deleted (`fix/94-heal-diagnostics`'s "ahead 2" was only vs its own stale
   upstream; content was in main). `main` is now the only branch, local and remote.
+- **Evening addendum: `Image` is absent from the DEVELOPMENT schema too** (owner
+  checked the Console live). Consistent with the full story — the iPhone was
+  production all along and no Xcode build ever pushed a photo, so the type never
+  materialized in either environment. Next session starts with creating it (by hand
+  with the exact field list, or by materializing from a Mac Debug-build write) and
+  THEN deploying — the two-step recipe is in CLAUDE.md next steps.
 
 ## Session 2026-08-26 (laptop — smoke pass FAILED: images don't propagate; #89 promoted to blocker; #101 filed)
 

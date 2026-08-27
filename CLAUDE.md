@@ -31,12 +31,28 @@ Autonomous SDD session while the owner was out, then live wrap-up. Full detail i
   branch anywhere.
 
 **Next steps:**
-1. **Deploy the CloudKit schema Development → Production** (CloudKit Console →
-   `iCloud.org.pianohouseproject.raconte` → Deploy Schema Changes). Then on the iPhone:
-   About → Refresh — pending saves should drain to 0 and Last error clear. Re-run the
-   image smoke pass (photo on iPhone → appears on iPad/Mac). The rule going forward:
-   **any new CK record type needs a schema deploy before the TestFlight build that
-   writes it.**
+1. **Get `Image` into the CloudKit schema — CHECKED 2026-08-26 evening: the type is
+   absent from Development too** (no Xcode build ever pushed a photo, so it never
+   materialized anywhere). Deploying is step 2 of 2; first the type must exist in
+   Development. Two routes, in order of preference:
+   - **Quick (2 min, no build): create it by hand** in Console → Development → Schema →
+     Record Types → ＋. Name exactly `Image` (a typo mints a second silently-empty
+     type — the string is pinned by a test in `SyncRecordBuilders.swift:19`). Fields,
+     exact names and types: `file` Asset, `sha256` String, `bytes` Int(64),
+     `originalExtension` String, `width` Int(64), `height` Int(64), `capturedAt`
+     Date/Time, `entryRef` Reference. Then bottom-left **Deploy Schema Changes…** (from
+     the Development view — it is greyed out in Production) → confirm the diff → Deploy.
+   - **Exact (if hand-creation misfires with a new field-type error): materialize from
+     a real write.** Mac owner-smoke Debug build (the real-signing recipe in Commands —
+     it talks to Development), add a photo to a scratch entry, wait for the push, see
+     `Image` appear in Dev Record Types, then deploy. Afterwards delete the local smoke
+     build (stale-build trap) — the Mac's TestFlight app will do one #90 wipe/resync
+     when relaunched (designed, safe). **Never put an Xcode build on the iPhone — real
+     data.** A simulator route also works but needs an iCloud sign-in in the sim.
+   - **Verify:** iPhone → About → Refresh — Pending saves 10 → 0, Last error clears
+     (give the engine a minute or bounce the app). Then the real smoke: that photo
+     appears on iPad/Mac. Rule going forward: **any new CK record type needs a schema
+     deploy before the TestFlight build that writes it.**
 2. **Close #89** — verified on device (owner's screenshot). Check the issue for
    consolidated items before closing.
 3. **#101 — hand to a Sonnet session**: execute

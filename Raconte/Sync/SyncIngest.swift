@@ -1647,7 +1647,11 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
         guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
               let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
-            log.notice("sync: fetched AudioAsset record missing its file or sha256 — ignored")
+            let reason = IngestDropReason.childAsset(record) ?? "guard/reason drift"
+            log.notice("""
+                sync: fetched AudioAsset \(record.recordID.recordName, privacy: .public) \
+                dropped — \(reason, privacy: .public)
+                """)
             return
         }
         // `.mappedIfSafe` (final review M1): identical hash-and-check read to
@@ -1689,7 +1693,11 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
         guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
               let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
-            log.notice("sync: fetched LiveLog record missing its file or sha256 — ignored")
+            let reason = IngestDropReason.childAsset(record) ?? "guard/reason drift"
+            log.notice("""
+                sync: fetched LiveLog \(record.recordID.recordName, privacy: .public) \
+                dropped — \(reason, privacy: .public)
+                """)
             return
         }
         guard let bytes = try? Data(contentsOf: url) else {
@@ -1747,7 +1755,11 @@ actor SyncRecordExchange: CloudRecordExchange {
               let claimedSHA256 = record[SyncChildAssetField.sha256] as? String,
               let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference,
               case .entry(let captureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID) else {
-            log.notice("sync: fetched Revision record missing body/sha256/entryRef — ignored")
+            let reason = IngestDropReason.revision(record) ?? "guard/reason drift"
+            log.notice("""
+                sync: fetched Revision \(record.recordID.recordName, privacy: .public) \
+                dropped — \(reason, privacy: .public)
+                """)
             return
         }
         guard let bytes = try? Data(contentsOf: url) else {
@@ -2372,7 +2384,10 @@ actor SyncRecordExchange: CloudRecordExchange {
             return
         }
         guard let fields = RemoteImageFields(record: record) else {
-            log.notice("sync: fetched Image record missing its file/sha256, or unnamed — ignored")
+            log.notice("""
+                sync: fetched Image \(record.recordID.recordName, privacy: .public) \
+                missing its file/sha256, or unnamed — ignored
+                """)
             return
         }
         // A plain, non-mapping read — deliberately NOT `.mappedIfSafe`, which

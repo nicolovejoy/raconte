@@ -3,6 +3,48 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-26 pm (laptop — #89 shipped via autonomous SDD; About page found the real image bug: Image type missing from Production schema)
+
+Owner stepped out mid-readup with "carry on SDD as best you can w/o me"; returned to a
+merged feature and a diagnosis. The autonomous stretch: design doc + 4-task plan for
+#89 committed, executed via subagent-driven development in a worktree (AppVersion pure
+helper; SyncStatusSectionView extracted verbatim from DebugMenuView so both screens
+share one rendering; Place.about wired through all four exhaustive switches + Go menu;
+AboutUITests). Per-task reviews all clean after one fix round (Task 1's RED evidence
+was produced retroactively via git stash). Final whole-branch review (0 Critical /
+0 Important) independently verified a **Release-configuration** compile — the actual
+point of #89 — and both deferred minors were triaged acceptable. 1950 unit tests,
+AboutUITests 1/1, NavigationUITests 10/10, CI green. PR #102; owner merged.
+
+- **TestFlight build 8, both platforms.** iOS uploaded clean. The macOS .pkg was
+  REJECTED by ASC (error 90242): `LSApplicationCategoryType` missing. Third instance
+  of the generated-plist trap — the key had likely been added plist-only for build 6
+  and wiped by a later `xcodegen generate`. Fixed in `project.yml`
+  (`public.app-category.lifestyle`), stale archive deleted, re-upload succeeded.
+- **The About page paid for itself on first open.** Owner's iPhone screenshot: pushes
+  and fetches minutes old (so the phone talks to Production fine — morning's
+  environment-split hypothesis moot), Pending saves 10, Last error
+  `Cannot create new type Image in production schema`. Root cause of the failed image
+  smoke: **the Production schema was never redeployed after image capture introduced
+  the `Image` record type in build 7.** Dev materializes types from first writes;
+  Production needs an explicit deploy. Every device fails the same way server-side;
+  the 10 pending saves are retained by CKSyncEngine and should drain after the deploy
+  with no code change. Fix is a Console action, not code (next steps).
+- **#101 designed + planned for a cheap executor.** Owner answered the design
+  questions live (both swipe and buttons; disable at the ends; All Entries pages the
+  list you came from; TestFlight build 8 go-ahead). Two design calls made and argued
+  in the doc: page turns are expressed as replacing the top `.entry` element of
+  `AppRouter.detailPath` — so the departing screen's onDisappear commit contracts fire
+  exactly as for a sidebar pop — with a mandatory `.id(captureID)` identity pin in the
+  destination builder (init-once sub-models would otherwise go stale); and ⌥⌘↑/⌥⌘↓
+  for the Mac (a menu shortcut beats the responder chain, so bare/⌘ arrows would
+  collide with text editing). Swipe is deliberately not UI-tested (simulator-gesture
+  memory); buttons are the tested path. Docs:
+  `docs/plans/2026-08-26-101-entry-paging-{design,plan}.md`, linked from the issue.
+- **Repo cleanup**: seven merged local branches and five lingering merged remote
+  branches deleted (`fix/94-heal-diagnostics`'s "ahead 2" was only vs its own stale
+  upstream; content was in main). `main` is now the only branch, local and remote.
+
 ## Session 2026-08-26 (laptop — smoke pass FAILED: images don't propagate; #89 promoted to blocker; #101 filed)
 
 Short diagnostic session. Owner ran the image-capture smoke pass from the prior

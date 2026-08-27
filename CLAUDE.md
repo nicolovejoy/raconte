@@ -2,59 +2,50 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-26 (laptop — smoke pass FAILED: images don't propagate to iPad/Mac; #89 now a blocker)
+## Session 2026-08-26 pm (laptop — #89 SHIPPED and it found the image bug: Image type missing from Production schema)
 
-The image-capture smoke pass from the last session did not pass. Photos added on the
-iPhone are not reaching iPad or Mac. **No fix was written** — the session stalled in
-Phase 1 of systematic debugging, blocked on evidence the app cannot currently report.
-Full detail in devlog.
+Autonomous SDD session while the owner was out, then live wrap-up. Full detail in devlog.
 
-- **Leading hypothesis, UNCONFIRMED — a CloudKit environment split, not an image bug.**
-  Xcode-installed builds talk to CloudKit **Development**; TestFlight builds talk to
-  **Production**. Separate databases; records never cross. iPad and Mac are confirmed
-  TestFlight build 7 (Production). **The iPhone's provenance is the open question** —
-  if it is an Xcode build, its photos are landing in Development and nothing would ever
-  propagate, and the image feature itself may be fine.
-- **Build number cannot disambiguate**: `project.yml` says 7, so an Xcode build off
-  current `main` self-reports build 7 too.
-- **How to tell, without the sidebar** (the ladybug test was inconclusive on iPhone —
-  the sidebar is collapsed behind the back button, so "no ladybug" did not distinguish
-  *absent row* from *never reached the sidebar*): Home Screen **orange dot** next to the
-  app name = TestFlight install; or TestFlight showing "Open" rather than "Install".
-- **Code side, no smoking gun.** Push leg wired (`SyncTreeScanner.scanImages` :304),
-  ingest leg decodes `Image` records (`RemoteImageFields`, SyncIngest.swift :176).
-  Consistent with the environment-split hypothesis over a feature bug.
-- **Lori (therapist beta) — dev-visibility thread is DECIDED and no longer a blocker.**
-  Owner will tell her up front that he may see/hear her entries until he can lock it
-  down and confirm otherwise, and let her opt in knowing that. Honest disclosure rather
-  than a control that does not exist yet. The *sync* failure is still an invite blocker.
+- **#89 About page shipped**: design+plan docs, 4 SDD tasks, PR #102 merged, TestFlight
+  build 8 uploaded (iOS + macOS) and device-verified by the owner the same evening.
+- **The About page diagnosed the image-sync failure on its first open.** iPhone's Last
+  error: `Cannot create new type Image in production schema`. The iPhone talks to
+  Production fine — the **CloudKit Production schema was never redeployed after image
+  capture added the `Image` record type** (build 7). Dev schema materializes from first
+  writes; Production only gets new types via an explicit schema deploy. Photos fail
+  server-side on every device; the environment-split hypothesis from the morning is
+  moot. **10 pending saves sit queued on the iPhone — retained, not lost** — and should
+  flush on the next sync after the schema deploy, with no code change.
+- **macOS TestFlight trap, third instance of the generated-plist bite**: ASC rejects a
+  Mac .pkg without `LSApplicationCategoryType` (error 90242; iOS doesn't require it).
+  Now in `project.yml` (the generated source of truth) with a comment; it was probably
+  plist-only for build 6 and wiped by a later `xcodegen generate`.
+- **#101 is fully designed and planned for a cheap session**: owner settled the design
+  questions live (swipe+buttons; disable at ends; All-Entries pages the list you came
+  from; live-order neighbors; ⌥⌘↑/⌥⌘↓ on Mac). Buildable docs:
+  `docs/plans/2026-08-26-101-entry-paging-{design,plan}.md` — hand a Sonnet session
+  "execute the plan via superpowers:subagent-driven-development". The two sharp edges
+  are in the plan: page turns replace the top of `detailPath` (inherits the
+  write-through safety nets) and the destination builder must pin `.id(captureID)`.
+- **Repo cleaned**: all merged local+remote feature branches deleted; `main` is the only
+  branch anywhere.
 
 **Next steps:**
-1. **Settle the iPhone build provenance** — orange dot on the Home Screen, or TestFlight
-   showing "Open" vs "Install". This is 30 seconds and decides whether there is a real
-   bug at all. If the iPhone is an Xcode/Development build, reinstall from TestFlight
-   and re-run the smoke pass before debugging anything.
-2. **#89 (About page: version + sync status) — now a blocker, not polish.** Fifth
-   session to pay for its absence and the first where it blocked diagnosis of a live
-   bug: on a TestFlight build the owner cannot read back account state, last push/fetch,
-   pending counts, or last error. **Scope addition beyond the issue text: surface the
-   environment tag (Development/Production)**, which #90 already detects via
-   `CloudKitEnvironment.detectFromBundle` — it would have made today's problem obvious
-   at a glance, and it is what Lori will need when her devices disagree. Debug screen is
-   `#if DEBUG`-gated in four places (SidebarView :99-103, RaconteCommands :39-40,
-   ContentView :177-178, DebugMenuView).
-3. **#101 — next/previous entry navigation within a journal** from the detail screen.
-   Owner wants it "soonish", after #89. Open design questions recorded on the issue
-   (gesture vs. controls, sort-order stability, first/last behavior, All-Entries
-   semantics, commit-before-page-turn).
-4. **Invite Lori once sync is verified working** — TestFlight external testing group,
-   her own Apple ID for TestFlight and iCloud. CloudKit's private database already
-   isolates her data at the app level (Apple server-side, nothing to build). Disclosure
-   decision above is settled.
-5. #85 (land-or-park generally, beyond images) — still open for non-image record types.
-6. Inbound single-image deletion still has no consumer (accepted gap from the image
-   build) — a live second device keeps showing a removed image until its own
-   wipe/resync cycle runs. Track as its own issue if the owner wants it closed.
+1. **Deploy the CloudKit schema Development → Production** (CloudKit Console →
+   `iCloud.org.pianohouseproject.raconte` → Deploy Schema Changes). Then on the iPhone:
+   About → Refresh — pending saves should drain to 0 and Last error clear. Re-run the
+   image smoke pass (photo on iPhone → appears on iPad/Mac). The rule going forward:
+   **any new CK record type needs a schema deploy before the TestFlight build that
+   writes it.**
+2. **Close #89** — verified on device (owner's screenshot). Check the issue for
+   consolidated items before closing.
+3. **#101 — hand to a Sonnet session**: execute
+   `docs/plans/2026-08-26-101-entry-paging-plan.md` via SDD; end at an open PR.
+4. **Invite Lori once the image smoke passes** — TestFlight external group, her own
+   Apple ID for TestFlight and iCloud. Disclosure decision settled (owner tells her
+   up front he may see/hear entries until locked down).
+5. #85 (land-or-park generally) and the inbound single-image-deletion gap (a live
+   second device keeps showing a removed image until wipe/resync) remain open.
 
 ## What Raconte is
 

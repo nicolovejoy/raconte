@@ -574,14 +574,29 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             switch SaveFailureDisposition.decide(code: failure.error.code,
                                                  hasServerRecord: failure.error.serverRecord != nil) {
             case .mergeConflict:
+                // Logged (2026-08-26 sync investigation): this and the successful
+                // `.recreate` were the only silent dispositions, which made a device
+                // stuck in a resend loop indistinguishable from one not sending at all.
+                log.notice("""
+                    sync: \(recordName, privacy: .public) save rejected — serverRecordChanged; \
+                    merging server copy and re-enqueueing
+                    """)
                 if let server = failure.error.serverRecord {
                     conflicts.append(server)
                 }
             case .recreate:
                 guard let name else { break }
                 if await exchange.resolveUnknownItem(for: name) {
+                    log.notice("""
+                        sync: \(recordName, privacy: .public) save rejected — unknownItem; \
+                        archived server state dropped, re-enqueued as a create
+                        """)
                     toResend.append(name)
                 } else {
+                    log.error("""
+                        sync: \(recordName, privacy: .public) save rejected — unknownItem with \
+                        nothing archived; left for the reconciliation scan
+                        """)
                     lastError = failure.error.localizedDescription
                 }
             case .retry:

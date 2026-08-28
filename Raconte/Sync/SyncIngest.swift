@@ -1187,6 +1187,49 @@ actor SyncRecordExchange: CloudRecordExchange {
                                                  entryID: entryID, zoneID: zoneID)
     }
 
+    /// The LOCAL half of the write-once conflict comparison
+    /// (`WriteOnceConflictGate.decide`): the digest of the exact bytes this device
+    /// would push for `name`, read from the same files the corresponding
+    /// `*RecordToPush` builder reads — one location rule, never a second copy of it.
+    /// `nil` for anything unreadable/absent, and for every mutable type (those resolve
+    /// conflicts by merge, not digest).
+    func localWriteOnceDigest(for name: SyncRecordName) async -> UploadedDigest? {
+        guard let containerRoot else { return nil }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        switch name {
+        case .audio(let captureID):
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            guard let bytes = try? Data(contentsOf: SegmentLayout.finalRecordingURL(captureDirectory: directory),
+                                        options: .mappedIfSafe) else { return nil }
+            return SyncTreeScanner.rawDigest(bytes)
+        case .liveLog(let captureID):
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            guard let bytes = try? Data(contentsOf: SegmentLayout.liveTranscriptURL(captureDirectory: directory),
+                                        options: .mappedIfSafe) else { return nil }
+            return SyncTreeScanner.rawDigest(bytes)
+        case .revision(let id):
+            guard let located = TranscriptRevisionStore.locateRevision(capturesRoot: capturesRoot,
+                                                                        revisionID: id) else { return nil }
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                            captureID: located.captureID)
+            let fileURL = SegmentLayout.canonicalTranscriptURL(captureDirectory: directory,
+                                                                revision: located.fileNumber)
+            guard let bytes = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return nil }
+            return SyncTreeScanner.rawDigest(bytes)
+        case .image(let captureID, let imageID):
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            let sidecarURL = SegmentLayout.imageSidecarURL(captureDirectory: directory, imageID: imageID)
+            guard let sidecarData = try? Data(contentsOf: sidecarURL),
+                  let sidecar = try? ImageStore.decodeSidecar(sidecarData) else { return nil }
+            let fileURL = SegmentLayout.imageOriginalURL(captureDirectory: directory, imageID: imageID,
+                                                          ext: sidecar.originalExtension)
+            guard let bytes = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return nil }
+            return SyncTreeScanner.rawDigest(bytes)
+        case .journal, .entry, .markerStream:
+            return nil
+        }
+    }
+
     /// Reads and decodes one capture's manifest, refusing (nil) unless it reports a
     /// verified final m4a (`FinalizeArtifactPush.isFinalized`'s own predicate, applied
     /// to the SAME read — see that type's doc comment for why `manifest.final

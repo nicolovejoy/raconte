@@ -2,66 +2,35 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-26 pm (laptop — #89 SHIPPED and it found the image bug: Image type missing from Production schema)
+## Session 2026-08-26/27 (laptop — build 9 shipped; sync mystery SOLVED, fix designed for build 10)
 
-Autonomous SDD session while the owner was out, then live wrap-up. Full detail in devlog.
+Full detail in devlog and `docs/2026-08-26-sync-investigation-state.md` (RESOLVED section).
 
-- **#89 About page shipped**: design+plan docs, 4 SDD tasks, PR #102 merged, TestFlight
-  build 8 uploaded (iOS + macOS) and device-verified by the owner the same evening.
-- **The About page diagnosed the image-sync failure on its first open.** iPhone's Last
-  error: `Cannot create new type Image in production schema`. The iPhone talks to
-  Production fine — the **CloudKit Production schema was never redeployed after image
-  capture added the `Image` record type** (build 7). Dev schema materializes from first
-  writes; Production only gets new types via an explicit schema deploy. Photos fail
-  server-side on every device; the environment-split hypothesis from the morning is
-  moot. **10 pending saves sit queued on the iPhone — retained, not lost** — and should
-  flush on the next sync after the schema deploy, with no code change.
-- **macOS TestFlight trap, third instance of the generated-plist bite**: ASC rejects a
-  Mac .pkg without `LSApplicationCategoryType` (error 90242; iOS doesn't require it).
-  Now in `project.yml` (the generated source of truth) with a comment; it was probably
-  plist-only for build 6 and wiped by a later `xcodegen generate`.
-- **#101 is fully designed and planned for a cheap session**: owner settled the design
-  questions live (swipe+buttons; disable at ends; All-Entries pages the list you came
-  from; live-order neighbors; ⌥⌘↑/⌥⌘↓ on Mac). Buildable docs:
-  `docs/plans/2026-08-26-101-entry-paging-{design,plan}.md` — hand a Sonnet session
-  "execute the plan via superpowers:subagent-driven-development". The two sharp edges
-  are in the plan: page turns replace the top of `detailPath` (inherits the
-  write-through safety nets) and the destination builder must pin `.id(captureID)`.
-- **Repo cleaned**: all merged local+remote feature branches deleted; `main` is the only
-  branch anywhere.
+- **Build 9 (TestFlight, both platforms)**: observability — `IngestDropReason` names the
+  record + missing piece on every ingest drop; `handleFailedSaves`' silent dispositions
+  now log. One device capture then solved both open sync problems.
+- **Root cause, confirmed**: ONE loop. The 10 frozen pending saves (5 AudioAsset,
+  4 Revision, 1 LiveLog) are records the server already has; the write-once builders
+  (`audioRecord`/`liveLogRecord`/`revisionRecord`/`imageRecord`) take no `base:`, so
+  re-pushes never carry the archived server change tag → every send is a "create" of an
+  existing record → `serverRecordChanged` forever. The "discarded inbound records" were
+  asset-less conflict copies of that same stuck set — **no data loss**. iPad's 106
+  pending = same loop, bigger set.
+- **Backlog groomed**: owner's nine-item list → #47 existed; filed #103–#109.
 
 **Next steps:**
-1. **Get `Image` into the CloudKit schema — CHECKED 2026-08-26 evening: the type is
-   absent from Development too** (no Xcode build ever pushed a photo, so it never
-   materialized anywhere). Deploying is step 2 of 2; first the type must exist in
-   Development. Two routes, in order of preference:
-   - **Quick (2 min, no build): create it by hand** in Console → Development → Schema →
-     Record Types → ＋. Name exactly `Image` (a typo mints a second silently-empty
-     type — the string is pinned by a test in `SyncRecordBuilders.swift:19`). Fields,
-     exact names and types: `file` Asset, `sha256` String, `bytes` Int(64),
-     `originalExtension` String, `width` Int(64), `height` Int(64), `capturedAt`
-     Date/Time, `entryRef` Reference. Then bottom-left **Deploy Schema Changes…** (from
-     the Development view — it is greyed out in Production) → confirm the diff → Deploy.
-   - **Exact (if hand-creation misfires with a new field-type error): materialize from
-     a real write.** Mac owner-smoke Debug build (the real-signing recipe in Commands —
-     it talks to Development), add a photo to a scratch entry, wait for the push, see
-     `Image` appear in Dev Record Types, then deploy. Afterwards delete the local smoke
-     build (stale-build trap) — the Mac's TestFlight app will do one #90 wipe/resync
-     when relaunched (designed, safe). **Never put an Xcode build on the iPhone — real
-     data.** A simulator route also works but needs an iCloud sign-in in the sim.
-   - **Verify:** iPhone → About → Refresh — Pending saves 10 → 0, Last error clears
-     (give the engine a minute or bounce the app). Then the real smoke: that photo
-     appears on iPad/Mac. Rule going forward: **any new CK record type needs a schema
-     deploy before the TestFlight build that writes it.**
-2. **Close #89** — verified on device (owner's screenshot). Check the issue for
-   consolidated items before closing.
+1. **Sync fix → build 10**: on `serverRecordChanged` for a write-once type, compare local
+   sha256 to the server copy's `sha256` field (present without asset download); match →
+   write upload ledger + remove pending save (done, no re-upload); mismatch → log loudly.
+   TDD; verify on iPhone (10→0) and iPad (106→0) via About. Design recorded in the
+   investigation doc's RESOLVED section.
+2. **Close #89** (device-verified) and probably #86 (superseded by #101).
 3. **#101 — hand to a Sonnet session**: execute
    `docs/plans/2026-08-26-101-entry-paging-plan.md` via SDD; end at an open PR.
-4. **Invite Lori once the image smoke passes** — TestFlight external group, her own
-   Apple ID for TestFlight and iCloud. Disclosure decision settled (owner tells her
-   up front he may see/hear entries until locked down).
-5. #85 (land-or-park generally) and the inbound single-image-deletion gap (a live
-   second device keeps showing a removed image until wipe/resync) remain open.
+4. **#107 image-first entries** — sharpest UX gap of the new batch; needs a design ruling
+   (what is text derived from when there is no audio?).
+5. **Invite Lori once builds 10's sync smoke passes**; capture Schema → History for the
+   three unidentified deployed changes; re-read #94/#91 against the solved loop.
 
 ## What Raconte is
 

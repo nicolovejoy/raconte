@@ -3,6 +3,31 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-26/27 overnight+am (laptop — build 9 observability shipped; sync mystery SOLVED: one serverRecordChanged loop, no data loss)
+
+Evening: executed the investigation doc's plan — TDD'd `IngestDropReason` (pure table:
+which required piece a dropped inbound record was missing, 8 tests), wired record names
++ sub-causes into the four ingest-drop lines and logs into `handleFailedSaves`' silent
+dispositions. Full suite 1958 green. Shipped as TestFlight build 9 (iOS + macOS, headless
+pipeline).
+
+Morning: two log pulls caught the phone still on build 8 (80 more anonymous drops); after
+the real update, ONE build-9 capture cracked both open problems. Exactly 10 named records
+(5 AudioAsset, 4 Revision, 1 LiveLog = the iPhone's frozen "Pending saves 10") cycling
+`serverRecordChanged` → conflict copy dropped ("asset has no fileURL — download failed").
+Root cause: `audioRecord`/`liveLogRecord`/`revisionRecord`/`imageRecord` take no `base:`,
+so re-pushes never carry the archived server change tag — every send is a "create" of an
+existing record, rejected forever. The `.recreate`/unknownItem theory was refuted; the
+"50/80 discarded inbound records" were asset-less conflict copies of the same stuck set —
+NO data loss; #85 severity restored. Full mechanics + agreed fix (sha256 short-circuit,
+build 10) in `docs/2026-08-26-sync-investigation-state.md`'s RESOLVED section.
+
+Also: filed the owner's nine-item backlog list — #47 already existed; new: #103 (stale
+transcript on entry switch), #104 (edit entry date post-hoc), #105 (copy entry text),
+#106 (journal cover full-screen), #107 (image-first entries can't get text/title —
+sharpest of the batch), #108 (opening experience design), #109 (image crop + storage
+review). Session ended for an OS update.
+
 ## Session 2026-08-26 pm (laptop — #89 shipped via autonomous SDD; About page found the real image bug: Image type missing from Production schema)
 
 Owner stepped out mid-readup with "carry on SDD as best you can w/o me"; returned to a

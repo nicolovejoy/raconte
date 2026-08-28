@@ -3,6 +3,34 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-27/28 (laptop — sync loop FIXED and device-verified; #101 paging shipped; builds 10+11)
+
+Resync (light) verified the roadmap against main: closed #89/#90/#94 (code-verified with
+SHAs) and #54 (dup of #101); retrimmed #86 to its distinct sidenav-becomes-entry-list
+scope. Wrote the write-once-conflict plan and executed it via SDD (5 tasks, per-task
+review gates, final whole-branch review on the top model): `WriteOnceConflictGate` pure
+table, `localWriteOnceDigest`, `resolvePushConflicts` → `PushConflictResolution`
+(resend/settled/parked), `state.remove` wiring, and — from the final review's one
+Important finding — divergence surfaced via `parked` + `lastError` so a mass divergence
+can't smoke-pass as success. 1972 unit tests green. PR #110 merged after CI; build 10
+uploaded (headless, both platforms). **Device smoke passed immediately: iPhone pending
+10→0, iPad 106→0.** The sync saga that began 2026-08-23 is closed.
+
+In parallel, a Sonnet worktree agent executed the #101 entry-paging plan end-to-end
+(EntryPager pure core, chevrons + iOS swipe + macOS ⌥⌘ arrows, identity-pinned page
+turns, 1980 unit green + 6-class UI sweep); PR #111 merged. Build 11 (with paging)
+uploaded for the swipe/shortcut smoke, which can't run in a simulator.
+
+Decisions: #107 ruled the purist way — speech remains the ONLY text source; image-first
+entries get text by recording about the image (comment on #107). Lori joins as an
+INTERNAL TestFlight tester (Signal note drafted; needs her Apple Account email — the
+ASC invite must go to the address her devices' App Store uses). #91/#85 re-verified and
+kept, both demoted to hardening now the loop is gone.
+
+Process note: two subagents self-stalled by backgrounding xcodebuild (the documented
+stall mode) — both recovered by a SendMessage nudge to foreground; that recovery now has
+a 13-instance track record.
+
 ## Session 2026-08-26/27 overnight+am (laptop — build 9 observability shipped; sync mystery SOLVED: one serverRecordChanged loop, no data loss)
 
 Evening: executed the investigation doc's plan — TDD'd `IngestDropReason` (pure table:

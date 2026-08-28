@@ -2,37 +2,29 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-26/27 (laptop — build 9 shipped; sync mystery SOLVED, fix designed for build 10)
+## Session 2026-08-27/28 (laptop — sync loop FIXED + device-verified; #101 paging shipped; builds 10+11)
 
-Full detail in devlog and `docs/2026-08-26-sync-investigation-state.md` (RESOLVED section).
-
-- **Build 9 (TestFlight, both platforms)**: observability — `IngestDropReason` names the
-  record + missing piece on every ingest drop; `handleFailedSaves`' silent dispositions
-  now log. One device capture then solved both open sync problems.
-- **Root cause, confirmed**: ONE loop. The 10 frozen pending saves (5 AudioAsset,
-  4 Revision, 1 LiveLog) are records the server already has; the write-once builders
-  (`audioRecord`/`liveLogRecord`/`revisionRecord`/`imageRecord`) take no `base:`, so
-  re-pushes never carry the archived server change tag → every send is a "create" of an
-  existing record → `serverRecordChanged` forever. The "discarded inbound records" were
-  asset-less conflict copies of that same stuck set — **no data loss**. iPad's 106
-  pending = same loop, bigger set.
-- **Backlog groomed**: owner's nine-item list → #47 existed; filed #103–#109.
+Full detail in devlog. The sync saga is CLOSED: the write-once `serverRecordChanged`
+short-circuit (PR #110) settled the stuck sets on first cycle — iPhone 10→0, iPad 106→0.
+Divergence now surfaces via `parked` + `lastError` on the About screen instead of looping
+silently. #101 entry paging (PR #111, Sonnet worktree agent, SDD) merged: chevrons, iOS
+swipe, macOS ⌥⌘↑/↓. Backlog: closed #89/#90/#94/#54, retrimmed #86. Build 11 (paging)
+uploaded to TestFlight, both platforms.
 
 **Next steps:**
-1. **Sync fix → build 10**: on `serverRecordChanged` for a write-once type, compare local
-   sha256 to the server copy's `sha256` field (present without asset download); match →
-   write upload ledger + remove pending save (done, no re-upload); mismatch → log loudly.
-   TDD; verify on iPhone (10→0) and iPad (106→0) via About. Design recorded in the
-   investigation doc's RESOLVED section.
-2. ~~Backlog cleanup~~ done 2026-08-27: closed #89, #90, #94 (code-verified), #54 (dup
-   of #101); #86 retrimmed to just its distinct sidenav-becomes-entry-list scope.
-3. **#101 — hand to a Sonnet session**: execute
-   `docs/plans/2026-08-26-101-entry-paging-plan.md` via SDD; end at an open PR.
-4. **#107 image-first entries** — sharpest UX gap of the new batch; needs a design ruling
-   (what is text derived from when there is no audio?).
-5. **Invite Lori once builds 10's sync smoke passes**; capture Schema → History for the
-   three unidentified deployed changes. (#94/#91 re-read done: #94 fully fixed and closed;
-   #91 still valid — reconcile remains launch-only, `foregrounded()` only fetches.)
+1. **Smoke build 11 paging on device** (simulator can't prove it): iPhone — swipe
+   left/right in an entry; Mac — ⌥⌘↓/⌥⌘↑ in an entry. Watch for lingering transcript
+   from the previous entry (that's #103). Pass → close #101.
+2. **Invite Lori** (internal tester, all devices): Signal note drafted (devlog); get her
+   Apple Account email (Settings → her name), then ASC → Users and Access → add her
+   (Customer Support role) → TestFlight Internal group with automatic distribution.
+3. **#103 stale transcript** — now user-visible with paging shipped; small fix
+   (`.task` without `id:` in EntryDetailView).
+4. **#107 design pass** — ruling recorded on the issue (purist: speech stays the only
+   text source); scope is now attach-image → invite-recording flow.
+5. Remaining sync hardening, both demoted: #91 (reconcile-on-foreground) and #85
+   (park inbound asset failures instead of discarding). Capture Schema → History for
+   the three unidentified deployed CloudKit changes.
 
 ## What Raconte is
 

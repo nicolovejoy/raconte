@@ -205,6 +205,16 @@ final class AppRouter {
 
     var canGoBack: Bool { !detailPath.isEmpty }
 
+    /// #101: a page turn — the top `.entry` element of the path is REPLACED, never
+    /// popped-and-pushed, and never swapped in-place inside the detail view (its
+    /// sub-models are init-once, keyed to captureID). Navigation-expressed paging is
+    /// what makes the departing screen's onDisappear commit contracts fire for free.
+    /// Guarded: a non-entry top (journal editor) or an empty path is a no-op.
+    func replaceTopEntry(with captureID: String) {
+        guard case .entry = detailPath.last else { return }
+        detailPath[detailPath.count - 1] = .entry(captureID)
+    }
+
     /// ⌘N (nav T8): must work from any place, not just the capture screen, so the flag
     /// lives here rather than inside `JournalHeaderView`'s private `@State`. The root
     /// alert on `ContentView` observes `showingNewJournalPrompt` directly.

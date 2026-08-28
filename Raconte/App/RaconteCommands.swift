@@ -44,6 +44,16 @@ struct RaconteCommands: Commands {
             Button("Back") { services.router.goBack() }
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!services.router.canGoBack)
+            Divider()
+            // #101. ⌥⌘ arrows deliberately: a menu shortcut beats the responder
+            // chain (the no-global-Esc lesson above), and bare or ⌘-only arrows
+            // collide with text-editing bindings in any presented editor.
+            Button("Previous Entry") { services.pageEntry(.previous) }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(services.entryPagingTarget(.previous) == nil)
+            Button("Next Entry") { services.pageEntry(.next) }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(services.entryPagingTarget(.next) == nil)
         }
     }
 }

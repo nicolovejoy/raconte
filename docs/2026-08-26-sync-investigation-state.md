@@ -104,3 +104,35 @@ unredact, or adding our own log line in `handleFailedSaves` for the `.mergeConfl
 - #101 entry paging is fully planned and still waiting for a Sonnet session to execute
   `docs/plans/2026-08-26-101-entry-paging-plan.md` via SDD.
 - #86 looks like the parent of #101 and may want closing as superseded.
+
+## RESOLVED 2026-08-27: both open problems are one bug — root cause found via build 9
+
+Build 9 (named drop lines + disposition logging, `IngestDropReason`) made the loop
+legible in one capture (`~/Documents/raconte-evidence/raconte-sync-2026-08-27-build9-take2.logarchive`):
+exactly 10 distinct records — 5 AudioAsset, 4 Revision, 1 LiveLog, matching the iPhone's
+frozen "Pending saves 10" by name — each cycling `save rejected — serverRecordChanged`
+paired with `dropped — asset has no fileURL — asset download failed`, three rounds in
+one session.
+
+The loop: reconcile enqueues records the server already has → every push is rejected
+`serverRecordChanged` (NOT `unknownItem` — the `.recreate` theory above is refuted) →
+`.mergeConflict` runs the server copy through `acceptRemote`, which archives the
+server's change tag and then drops the copy (a push-error `serverRecord` never has its
+assets downloaded, so `fileURL` is nil) → the defect: `audioRecord`/`liveLogRecord`/
+`revisionRecord`/`imageRecord` take no `base:` (unlike journal/entry/markerStream), so
+`recordToPush` mints a fresh record with no system fields and the archived tag is never
+used → next push is another "create" of an existing record, rejected identically,
+forever.
+
+Reframes:
+- **No data loss.** The "50/80 inbound records discarded" were the same ~10 records'
+  asset-less conflict copies, dropped once per send round. The content is local — this
+  device is the pusher. #85's severity drops back to its original assessment.
+- The iPad's 106 pending is almost certainly the same loop, bigger stuck set.
+
+Fix (agreed direction, next session, ship as build 10): **short-circuit** — on
+`serverRecordChanged` for a write-once type, compare local sha256 to the server copy's
+`sha256` field (present without asset download); match → write the upload ledger, remove
+the pending save, done; mismatch → log loudly (a real conflict write-once records must
+not have). Base-threading through the four child builders remains the fallback if some
+record ever legitimately needs a re-push.

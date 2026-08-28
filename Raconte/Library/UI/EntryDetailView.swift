@@ -17,6 +17,16 @@ import UniformTypeIdentifiers
 struct EntryDetailView: View {
     let model: LibraryScreenModel
     let captureID: String
+    /// #101: false for a detail pushed from the Capture place (recent-entry row /
+    /// post-stop receipt) — there is no "list you came from" to page, so the
+    /// controls don't render at all. Computed by ContentView from the CURRENT
+    /// place's journalScope; any sidebar selection clears the path, so the value
+    /// cannot go stale under an open detail.
+    let pagingEnabled: Bool
+    /// #101: the page turn itself — ContentView binds this to
+    /// `router.replaceTopEntry(with:)`. A closure, not the router, following the
+    /// established seam (`LibraryView.onCreateEntry`).
+    let onPage: (String) -> Void
 
     @State private var item: EntryListItem
     @State private var playback: CapturePlayback?
@@ -77,9 +87,12 @@ struct EntryDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
-    init(model: LibraryScreenModel, item: EntryListItem) {
+    init(model: LibraryScreenModel, item: EntryListItem,
+         pagingEnabled: Bool, onPage: @escaping (String) -> Void) {
         self.model = model
         self.captureID = item.captureID
+        self.pagingEnabled = pagingEnabled
+        self.onPage = onPage
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
@@ -109,6 +122,23 @@ struct EntryDetailView: View {
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        #if os(iOS)
+        // #101: swipe left = next (page forward, older), right = previous.
+        // `.simultaneousGesture` because a plain `.gesture` loses to the
+        // ScrollView's own pan; the horizontal-dominance guard keeps ordinary
+        // vertical scrolling from ever paging. NOT UI-tested (repo memory:
+        // simulator gestures ≠ device gestures) — owner-smoked on device;
+        // the buttons above are the tested path through the same page(to:).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30)
+                .onEnded { value in
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > abs(dy) * 1.5 else { return }
+                    page(to: dx < 0 ? nextEntryID : previousEntryID)
+                }
+        )
+        #endif
         // image capture plan Task 9: drag-and-drop onto the whole detail screen, not
         // just the images strip — matches the design doc ("drag-and-drop onto the entry
         // detail screen"). Left cross-platform, ungated by `#if os(macOS)`: SwiftUI's
@@ -146,6 +176,28 @@ struct EntryDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) { navigationTitleView }
+            // #101: chevrons match the vertical list — up = previous (newer),
+            // down = next (older). Rendered only when there is a list to page
+            // (design: scope gate); disabled at the ends (decision 2).
+            if pagingEnabled {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        page(to: previousEntryID)
+                    } label: {
+                        Label("Previous Entry", systemImage: "chevron.up")
+                    }
+                    .disabled(previousEntryID == nil)
+                    .accessibilityIdentifier("detail.previousEntry")
+
+                    Button {
+                        page(to: nextEntryID)
+                    } label: {
+                        Label("Next Entry", systemImage: "chevron.down")
+                    }
+                    .disabled(nextEntryID == nil)
+                    .accessibilityIdentifier("detail.nextEntry")
+                }
+            }
         }
         .task { await refresh() }
         .navigationDestination(isPresented: $showingEditor) {
@@ -284,6 +336,28 @@ struct EntryDetailView: View {
                                                   captureID: captureID)
         }
         images = await model.images(for: captureID)
+    }
+
+    // MARK: #101 paging
+
+    /// Live list order, not a push-time snapshot (design decision 4): identical
+    /// within an unchanged session, and the only truth that never navigates to a
+    /// deleted entry after a rescan.
+    private var pagingOrderedIDs: [String] { model.items.map(\.captureID) }
+
+    private var previousEntryID: String? {
+        guard pagingEnabled else { return nil }
+        return EntryPager.neighborID(of: captureID, in: pagingOrderedIDs, direction: .previous)
+    }
+
+    private var nextEntryID: String? {
+        guard pagingEnabled else { return nil }
+        return EntryPager.neighborID(of: captureID, in: pagingOrderedIDs, direction: .next)
+    }
+
+    private func page(to targetID: String?) {
+        guard let targetID else { return }
+        onPage(targetID)
     }
 
     // MARK: - Dates

@@ -21,6 +21,31 @@ final class AppRouterCommandTests: XCTestCase {
 
         router.select(.about)
         XCTAssertEqual(router.place, .about, "#89: the Go menu's About item routes here")
+
+        // #101: the Go menu's Previous/Next Entry items route through
+        // replaceTopEntry — the same function the detail screen's own controls use.
+        router.detailPath = [.entry("A")]
+        router.replaceTopEntry(with: "B")
+        XCTAssertEqual(router.detailPath, [.entry("B")])
+    }
+
+    /// #101: the menu items' enable/target logic is `EntryPager.pagingTarget`,
+    /// pinned end-to-end in EntryPagerTests — this pins only that the COMMAND-shaped
+    /// inputs (a real router's place + path) reach it correctly.
+    func testEntryPagingTargetGateMatchesTheRouterState() {
+        let router = AppRouter()
+        router.select(.allEntries)
+        router.detailPath = [.entry("middle")]
+        XCTAssertEqual(EntryPager.pagingTarget(place: router.place,
+                                               detailPath: router.detailPath,
+                                               orderedIDs: ["newest", "middle", "oldest"],
+                                               direction: .next),
+                       "oldest")
+        router.select(.capture)   // select clears detailPath — the gate goes dark
+        XCTAssertNil(EntryPager.pagingTarget(place: router.place,
+                                             detailPath: router.detailPath,
+                                             orderedIDs: ["newest", "middle", "oldest"],
+                                             direction: .next))
     }
 
     func testNewJournalRequestIsAFlagTheRootCanSee() {

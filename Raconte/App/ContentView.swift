@@ -35,7 +35,17 @@ struct ContentView: View {
                             // what went wrong. `item` is scope-independent now, which leaves
                             // only the honest cases — a capture that is genuinely gone.
                             if let item = services.library.item(captureID) {
-                                EntryDetailView(model: services.library, item: item)
+                                EntryDetailView(model: services.library,
+                                                item: item,
+                                                pagingEnabled: PlaceRouting.journalScope(
+                                                    for: services.router.place) != nil,
+                                                onPage: { services.router.replaceTopEntry(with: $0) })
+                                    // #101, load-bearing: a page turn REPLACES this path
+                                    // element in place, and a same-depth value change does
+                                    // not reliably re-identify the destination view — the
+                                    // init-once sub-models would stay on the OLD entry.
+                                    // `.id` pins identity to the entry.
+                                    .id(captureID)
                             } else {
                                 ContentUnavailableView(
                                     "Entry Unavailable",

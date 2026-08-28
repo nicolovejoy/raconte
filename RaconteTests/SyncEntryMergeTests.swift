@@ -493,9 +493,9 @@ final class SyncEntryMergeTests: XCTestCase {
             metadata: EntryMetadata(journalID: "Remote-J", modified: ["journalID": stamp(50)]),
             manifestJSON: Data("{}".utf8), at: stamp(0), deviceID: deviceHigh)
 
-        let names = await ex.resolvePushConflicts([serverCopy])
+        let resolution = await ex.resolvePushConflicts([serverCopy])
 
-        XCTAssertEqual(names, [.entry(captureID: captureID)])
+        XCTAssertEqual(resolution.resend, [.entry(captureID: captureID)])
         let merged = try await entryStore.read(captureID: captureID)
         XCTAssertEqual(merged.journalID, "Remote-J", "the server's newer-stamped copy must win the merge")
     }

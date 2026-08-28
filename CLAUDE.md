@@ -24,13 +24,15 @@ Full detail in devlog and `docs/2026-08-26-sync-investigation-state.md` (RESOLVE
    write upload ledger + remove pending save (done, no re-upload); mismatch → log loudly.
    TDD; verify on iPhone (10→0) and iPad (106→0) via About. Design recorded in the
    investigation doc's RESOLVED section.
-2. **Close #89** (device-verified) and probably #86 (superseded by #101).
+2. ~~Backlog cleanup~~ done 2026-08-27: closed #89, #90, #94 (code-verified), #54 (dup
+   of #101); #86 retrimmed to just its distinct sidenav-becomes-entry-list scope.
 3. **#101 — hand to a Sonnet session**: execute
    `docs/plans/2026-08-26-101-entry-paging-plan.md` via SDD; end at an open PR.
 4. **#107 image-first entries** — sharpest UX gap of the new batch; needs a design ruling
    (what is text derived from when there is no audio?).
 5. **Invite Lori once builds 10's sync smoke passes**; capture Schema → History for the
-   three unidentified deployed changes; re-read #94/#91 against the solved loop.
+   three unidentified deployed changes. (#94/#91 re-read done: #94 fully fixed and closed;
+   #91 still valid — reconcile remains launch-only, `foregrounded()` only fetches.)
 
 ## What Raconte is
 

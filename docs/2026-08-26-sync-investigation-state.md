@@ -136,3 +136,9 @@ Fix (agreed direction, next session, ship as build 10): **short-circuit** — on
 the pending save, done; mismatch → log loudly (a real conflict write-once records must
 not have). Base-threading through the four child builders remains the fallback if some
 record ever legitimately needs a re-push.
+
+**Implemented, `fix/sync-write-once-conflict`, build 10.** Settle rule: sha256 match →
+ledger credited with the local digest, pending save retired, no re-upload. Divergent
+rule: loud error logged, pending save retired without a ledger entry so reconcile
+resurfaces the record every launch rather than looping silently. Device verification
+(iPhone 10→0, iPad 106→0 pending saves) still pending — TestFlight build 10.

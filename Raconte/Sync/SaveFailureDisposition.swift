@@ -5,8 +5,13 @@ import CloudKit
 /// method takes `CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave`, which
 /// nothing outside CloudKit can construct.
 enum SaveFailureDisposition: Equatable, Sendable {
-    /// `.serverRecordChanged` with the server's copy attached: design §4's per-field
-    /// LWW merge through `CloudRecordExchange.resolvePushConflicts`, then re-enqueue.
+    /// `.serverRecordChanged` with the server's copy attached, handed to
+    /// `CloudRecordExchange.resolvePushConflicts`. Write-once types (AudioAsset /
+    /// LiveLog / Revision / Image) never merge — `WriteOnceConflictGate` settles them
+    /// (byte-identical server copy: credit the upload ledger, retire from pending) or
+    /// parks them (divergent: loud error, left pending for reconciliation). Mutable
+    /// types (Journal / Entry / MarkerStream) still get design §4's per-field LWW
+    /// merge, then re-enqueue.
     case mergeConflict
     /// `.unknownItem`: the server holds no record with this ID. Drop this device's
     /// archived server state (`CloudRecordExchange.resolveUnknownItem`) so the next

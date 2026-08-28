@@ -3242,7 +3242,7 @@ actor SyncRecordExchange: CloudRecordExchange {
                     server copy (\(reason, privacy: .public)) — refusing to overwrite; pending save \
                     retired, left to reconciliation
                     """)
-                resolution.settled.append(name)
+                resolution.parked.append(name)
             }
         }
         return resolution

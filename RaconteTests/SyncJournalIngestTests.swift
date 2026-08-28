@@ -947,8 +947,8 @@ final class SyncJournalIngestTests: XCTestCase {
                           deviceID: deviceHigh),
             deviceID: deviceHigh)
 
-        let toResave = await ex.resolvePushConflicts([serverCopy])
-        XCTAssertEqual(toResave, [.journal(id: journalID)])
+        let resolution = await ex.resolvePushConflicts([serverCopy])
+        XCTAssertEqual(resolution.resend, [.journal(id: journalID)])
 
         let rebuilt = await ex.recordToPush(for: .journal(id: journalID), zoneID: zoneID)
         let resave = try XCTUnwrap(rebuilt)
@@ -963,8 +963,8 @@ final class SyncJournalIngestTests: XCTestCase {
         let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
         let garbage = CKRecord(recordType: "Journal",
                                recordID: CKRecord.ID(recordName: "not-a-record-name", zoneID: zoneID))
-        let toResave = await exchange(store, covers, deviceID: deviceLow).resolvePushConflicts([garbage])
-        XCTAssertEqual(toResave, [])
+        let resolution = await exchange(store, covers, deviceID: deviceLow).resolvePushConflicts([garbage])
+        XCTAssertEqual(resolution.resend, [])
     }
 
     // MARK: Atomicity of the ingest read-merge-write (review Critical 1)

@@ -26,7 +26,7 @@ final class BatchRecordProviderTests: XCTestCase {
         func noteSaved(_ record: CKRecord) async {}
         func noteSaveFailed(for name: SyncRecordName) async {}
         func resolveUnknownItem(for name: SyncRecordName) async -> Bool { false }
-        func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName] { [] }
+        func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> PushConflictResolution { .init() }
         func acceptRemoteJournalDeletion(id: String) async {}
         func acceptRemoteEntryDeletion(captureID: String) async {}
     }

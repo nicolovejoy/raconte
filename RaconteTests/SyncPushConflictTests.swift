@@ -139,6 +139,7 @@ final class SyncPushConflictTests: XCTestCase {
                                                                            bodyURL: bodyURL)])
 
         XCTAssertEqual(resolution.settled, [.revision(id: revisionID)])
+        XCTAssertTrue(resolution.parked.isEmpty, "a byte-identical record settles, it does not park")
         XCTAssertTrue(resolution.resend.isEmpty, "a settled record must not be re-enqueued")
         let name = SyncRecordName.revision(id: revisionID).rawValue
         let ledgerSHA = await bookkeeping.ledger()[name]?.sha256
@@ -149,7 +150,7 @@ final class SyncPushConflictTests: XCTestCase {
                         "the server change tag must be archived for any future legitimate update")
     }
 
-    func testDivergentServerCopyIsSettledWithoutALedgerEntry() async throws {
+    func testDivergentServerCopyIsParkedWithoutALedgerEntry() async throws {
         try writeFinalizedCapture(m4aBytes: Data("m4a".utf8))
         let store = TranscriptRevisionStore(capturesRoot: capturesRoot)
         let revisionID = ULID.make()
@@ -166,8 +167,9 @@ final class SyncPushConflictTests: XCTestCase {
                                                                            sha256: "not-the-local-sha",
                                                                            bodyURL: bodyURL)])
 
-        XCTAssertEqual(resolution.settled, [.revision(id: revisionID)],
+        XCTAssertEqual(resolution.parked, [.revision(id: revisionID)],
                        "divergence retires the pending save too — loud once per launch, never a hot loop")
+        XCTAssertTrue(resolution.settled.isEmpty, "a divergent record must not be credited to the ledger")
         XCTAssertTrue(resolution.resend.isEmpty)
         let ledgerEntry = await bookkeeping.ledger()[SyncRecordName.revision(id: revisionID).rawValue]
         XCTAssertNil(ledgerEntry,
@@ -186,5 +188,19 @@ final class SyncPushConflictTests: XCTestCase {
         XCTAssertEqual(resolution.resend, [.journal(id: journalID)],
                        "mutable types keep the merge-then-resend path verbatim")
         XCTAssertTrue(resolution.settled.isEmpty)
+        XCTAssertTrue(resolution.parked.isEmpty)
+    }
+
+    // MARK: liveLog digest
+
+    func testLiveLogDigestHashesTheTranscriptFile() async throws {
+        try writeFinalizedCapture(m4aBytes: Data("m4a".utf8))
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.transcriptDirectory(captureDirectory: captureDirectory),
+            withIntermediateDirectories: true)
+        let bytes = Data("live transcript bytes".utf8)
+        try bytes.write(to: SegmentLayout.liveTranscriptURL(captureDirectory: captureDirectory))
+        let digest = await exchange().localWriteOnceDigest(for: .liveLog(captureID: captureID))
+        XCTAssertEqual(digest, SyncTreeScanner.rawDigest(bytes))
     }
 }

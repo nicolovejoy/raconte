@@ -204,6 +204,16 @@ extension SyncHooks {
 /// Both conformers are testable without a server: `CKRecord`, `CKRecord.ID` and `CKAsset`
 /// are all constructible offline. Only `CKSyncEngine` needs an account, which is why the
 /// engine sits behind `CloudEngineControl` and this does not.
+/// `resolvePushConflicts`' two-way answer: `resend` goes back into the engine's
+/// pending saves (mutable types, after their LWW merge); `settled` is REMOVED from
+/// pending — either credited to the upload ledger (byte-identical write-once copy)
+/// or deliberately parked for reconciliation (divergent write-once copy, no ledger
+/// entry). Without the removal the engine retries the name forever across launches.
+struct PushConflictResolution: Equatable, Sendable {
+    var resend: [SyncRecordName] = []
+    var settled: [SyncRecordName] = []
+}
+
 protocol CloudRecordExchange: Sendable {
     /// Build the record to push for `name`, or nil when there is nothing to push (the
     /// artifact is gone, or its kind is not built yet). Nil alone only excludes the record
@@ -256,7 +266,7 @@ protocol CloudRecordExchange: Sendable {
     /// that must be re-enqueued for save — the merged content is produced by the next
     /// `recordToPush`, which by then reads merged local state plus the freshly archived
     /// server system fields.
-    func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName]
+    func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> PushConflictResolution
 
     /// An inbound deletion for a JOURNAL record (#80, B2). Takes a bare journal id, not
     /// a `SyncRecordName`, so a deletion for any other kind is structurally unable to
@@ -611,8 +621,19 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 lastError = failure.error.localizedDescription
             }
         }
+        var settled: [SyncRecordName] = []
         if !conflicts.isEmpty {
-            toResend += await exchange.resolvePushConflicts(conflicts)
+            let resolution = await exchange.resolvePushConflicts(conflicts)
+            toResend += resolution.resend
+            settled = resolution.settled
+        }
+        // The remove is the half that ends the loop: a settled name left pending is
+        // retried on every future send, launch after launch (the exact defect this
+        // fixes). `state.remove` is idempotent for names not pending.
+        if !settled.isEmpty {
+            syncEngine.state.remove(pendingRecordZoneChanges: settled.map {
+                .saveRecord(SyncCloudIdentifiers.recordID($0, zoneID: zoneID))
+            })
         }
         guard !toResend.isEmpty else { return }
         syncEngine.state.add(pendingRecordZoneChanges: toResend.map {

@@ -3199,18 +3199,52 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
     }
 
-    func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> [SyncRecordName] {
-        var names: [SyncRecordName] = []
+    func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> PushConflictResolution {
+        var resolution = PushConflictResolution()
         for record in serverRecords {
             guard let name = SyncCloudIdentifiers.name(of: record.recordID) else { continue }
-            // The server's copy is ingested exactly like a fetched change — same merge,
-            // same rules — and its system fields are archived, so the resave carries the
-            // server's current change tag. The merged CONTENT is not assembled here: the
-            // next `recordToPush` reads it back out of the store, which keeps one and only
-            // one path from local state to a pushed record.
-            await acceptRemote(record)
-            names.append(name)
+            guard WriteOnceConflictGate.isWriteOnce(name) else {
+                // The server's copy is ingested exactly like a fetched change — same
+                // merge, same rules — and its system fields are archived, so the resave
+                // carries the server's current change tag. The merged CONTENT is not
+                // assembled here: the next `recordToPush` reads it back out of the
+                // store, which keeps one and only one path from local state to a
+                // pushed record.
+                await acceptRemote(record)
+                resolution.resend.append(name)
+                continue
+            }
+            // Write-once records (AudioAsset/LiveLog/Revision/Image) never merge: their
+            // builders take no `base:`, so a resend of a write-once record is always a
+            // CREATE of something that, per `WriteOnceConflictGate`, the server already
+            // has. Settle it instead of re-pushing it forever.
+            let serverSHA = record[SyncChildAssetField.sha256] as? String
+            switch WriteOnceConflictGate.decide(serverSHA256: serverSHA,
+                                                local: await localWriteOnceDigest(for: name)) {
+            case .settleAsUploaded(let digest):
+                await archiveSystemFields(of: record, for: name)
+                do {
+                    try await bookkeeping.recordUpload(digest, for: name.rawValue)
+                } catch {
+                    log.error("""
+                        sync: \(name.rawValue, privacy: .public) settled but the ledger write failed: \
+                        \(error.localizedDescription, privacy: .public)
+                        """)
+                }
+                log.notice("""
+                    sync: \(name.rawValue, privacy: .public) already on the server byte-identical — \
+                    settled as uploaded, pending save retired
+                    """)
+                resolution.settled.append(name)
+            case .divergent(let reason):
+                log.error("""
+                    sync: \(name.rawValue, privacy: .public) write-once record DIVERGES from the \
+                    server copy (\(reason, privacy: .public)) — refusing to overwrite; pending save \
+                    retired, left to reconciliation
+                    """)
+                resolution.settled.append(name)
+            }
         }
-        return names
+        return resolution
     }
 }

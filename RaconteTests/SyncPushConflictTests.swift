@@ -99,4 +99,92 @@ final class SyncPushConflictTests: XCTestCase {
         let digest = await exchange().localWriteOnceDigest(for: .journal(id: "J"))
         XCTAssertNil(digest, "mutable types have no single-artifact digest; refuse rather than invent one")
     }
+
+    // MARK: resolvePushConflicts — the short-circuit end to end
+
+    /// A conflict server copy is exactly what CloudKit hands back on a rejected push:
+    /// same sha256 FIELD, but its asset never downloaded. Strip the asset to match.
+    ///
+    /// `revisionID` must be a well-formed ULID, not the brief snippet's human-readable
+    /// "R0": `resolvePushConflicts` reaches this record only through
+    /// `SyncCloudIdentifiers.name(of:)`, which round-trips the recordName through
+    /// `SyncRecordName.init(rawValue:)` — same well-formed-ULID requirement documented
+    /// at `SyncRevisionTests.swift`'s "existing capture" test. "R0" parses to nil and
+    /// the record is silently skipped before the gate ever runs.
+    private func serverRevisionCopy(revisionID: String, sha256: String, bodyURL: URL) -> CKRecord {
+        let entryID = SyncCloudIdentifiers.recordID(.entry(captureID: captureID), zoneID: zoneID)
+        let record = SyncRecordBuilders.revisionRecord(revisionID: revisionID, fileURL: bodyURL,
+                                                       sha256: sha256, bytes: 1,
+                                                       entryID: entryID, zoneID: zoneID)
+        record[SyncRevisionField.body] = nil   // push-error serverRecord has no asset
+        return record
+    }
+
+    func testByteIdenticalServerCopySettlesWritesLedgerAndArchivesTag() async throws {
+        try writeFinalizedCapture(m4aBytes: Data("m4a".utf8))
+        let store = TranscriptRevisionStore(capturesRoot: capturesRoot)
+        let revisionID = ULID.make()
+        let minted = TranscriptRevision(id: revisionID, source: .machineLive, createdAt: stamp(0),
+                                        spans: [TranscriptSpan(text: "hello", anchor: .none)],
+                                        parentID: nil)
+        _ = try await store.append(minted, captureID: captureID)
+        let localSHA = SyncTreeScanner.rawDigest(try CaptureCoding.encoder().encode(minted)).sha256
+        let bookkeeping = makeBookkeeping()
+        let ex = exchange(transcriptRevisionStore: store, bookkeeping: bookkeeping)
+
+        let bodyURL = FileManager.default.temporaryDirectory.appendingPathComponent("stub-body")
+        try Data("x".utf8).write(to: bodyURL)
+        let resolution = await ex.resolvePushConflicts([serverRevisionCopy(revisionID: revisionID,
+                                                                           sha256: localSHA,
+                                                                           bodyURL: bodyURL)])
+
+        XCTAssertEqual(resolution.settled, [.revision(id: revisionID)])
+        XCTAssertTrue(resolution.resend.isEmpty, "a settled record must not be re-enqueued")
+        let name = SyncRecordName.revision(id: revisionID).rawValue
+        let ledgerSHA = await bookkeeping.ledger()[name]?.sha256
+        XCTAssertEqual(ledgerSHA, localSHA,
+                       "the ledger credit is what stops reconcile re-enqueueing it forever")
+        let archivedSystemFields = await bookkeeping.systemFields(for: name)
+        XCTAssertNotNil(archivedSystemFields,
+                        "the server change tag must be archived for any future legitimate update")
+    }
+
+    func testDivergentServerCopyIsSettledWithoutALedgerEntry() async throws {
+        try writeFinalizedCapture(m4aBytes: Data("m4a".utf8))
+        let store = TranscriptRevisionStore(capturesRoot: capturesRoot)
+        let revisionID = ULID.make()
+        let minted = TranscriptRevision(id: revisionID, source: .machineLive, createdAt: stamp(0),
+                                        spans: [TranscriptSpan(text: "hello", anchor: .none)],
+                                        parentID: nil)
+        _ = try await store.append(minted, captureID: captureID)
+        let bookkeeping = makeBookkeeping()
+        let ex = exchange(transcriptRevisionStore: store, bookkeeping: bookkeeping)
+
+        let bodyURL = FileManager.default.temporaryDirectory.appendingPathComponent("stub-body-2")
+        try Data("x".utf8).write(to: bodyURL)
+        let resolution = await ex.resolvePushConflicts([serverRevisionCopy(revisionID: revisionID,
+                                                                           sha256: "not-the-local-sha",
+                                                                           bodyURL: bodyURL)])
+
+        XCTAssertEqual(resolution.settled, [.revision(id: revisionID)],
+                       "divergence retires the pending save too — loud once per launch, never a hot loop")
+        XCTAssertTrue(resolution.resend.isEmpty)
+        let ledgerEntry = await bookkeeping.ledger()[SyncRecordName.revision(id: revisionID).rawValue]
+        XCTAssertNil(ledgerEntry,
+                     "no ledger credit — reconcile must keep resurfacing a divergent record")
+    }
+
+    func testMutableTypeStillResends() async throws {
+        // Same well-formed-ULID requirement as `serverRevisionCopy` above — the brief
+        // snippet's "J-1" would parse to nil and vanish before the mutable branch ever ran.
+        let journalID = ULID.make()
+        let journal = Journal(id: journalID, name: "Server name", createdAt: stamp(0),
+                              voiceLabels: [:], modified: ["name": stamp(10)])
+        let record = SyncRecordBuilders.journalRecord(journal: journal, coverFileURL: nil,
+                                                      deviceID: "device-other", zoneID: zoneID)
+        let resolution = await exchange().resolvePushConflicts([record])
+        XCTAssertEqual(resolution.resend, [.journal(id: journalID)],
+                       "mutable types keep the merge-then-resend path verbatim")
+        XCTAssertTrue(resolution.settled.isEmpty)
+    }
 }

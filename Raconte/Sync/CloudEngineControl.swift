@@ -262,10 +262,16 @@ protocol CloudRecordExchange: Sendable {
     /// ghost, not a loss.
     func resolveUnknownItem(for name: SyncRecordName) async -> Bool
 
-    /// Server copies handed back by failed saves. Merges each one and returns the records
-    /// that must be re-enqueued for save — the merged content is produced by the next
-    /// `recordToPush`, which by then reads merged local state plus the freshly archived
-    /// server system fields.
+    /// Server copies handed back by failed saves. Two-way contract per record, split
+    /// by `WriteOnceConflictGate.isWriteOnce`: mutable types (Journal / Entry /
+    /// MarkerStream) get design §4's per-field LWW merge and land in `resend` — the
+    /// merged content is produced by the next `recordToPush`, which by then reads
+    /// merged local state plus the freshly archived server system fields. Write-once
+    /// types (AudioAsset / LiveLog / Revision / Image) never merge: a byte-identical
+    /// server copy settles (credited to the upload ledger) and a divergent one parks
+    /// (logged loudly, no ledger entry) — either way the name lands in `settled`, not
+    /// `resend`, because the record is retired from pending either as done or as a
+    /// state needing a human, never as something to resend unchanged.
     func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> PushConflictResolution
 
     /// An inbound deletion for a JOURNAL record (#80, B2). Takes a bare journal id, not

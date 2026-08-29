@@ -596,6 +596,22 @@ struct EntryDetailView: View {
     /// there are any.
     static func imagesStripVisible(imageCount: Int) -> Bool { imageCount > 0 }
 
+    /// #107: whether the transcript area should invite the owner to speak, rather than
+    /// show the plain "This entry was not transcribed." string — an image-only entry
+    /// (no audio yet, at least one image) is the one case where there's a picture to
+    /// tell the story of but nothing spoken about it. Pure, same reasoning as
+    /// `imagesStripVisible`/`playbackSectionVisible` above.
+    ///
+    /// Investigation gate (Task 7 brief): the capture stack has no path that records
+    /// audio INTO an existing captureID — `CaptureCoordinator.record()` always mints a
+    /// fresh ULID (`mintCaptureID`), and `BlankEntryMinter.mint` always creates a new
+    /// capture directory. Recording INTO this entry isn't buildable yet, so the caller
+    /// renders TEXT ONLY (`detail.recordInvite.text`) — no button. A record-into-entry
+    /// button is the first task of the deferred #107 creation-flow pass.
+    static func inviteRecordingVisible(hasAudio: Bool, imageCount: Int) -> Bool {
+        !hasAudio && imageCount > 0
+    }
+
     @ViewBuilder
     private var imagesSection: some View {
         if Self.imagesStripVisible(imageCount: images.count) {
@@ -767,9 +783,27 @@ struct EntryDetailView: View {
     /// "select across these siblings" short of a custom text view. Explicitly not fixed
     /// in T7 — noted here so the next reader finds a documented trade, not a bug to
     /// rediscover.
+    /// #107: the image-first invitation, text only — see `inviteRecordingVisible`'s doc
+    /// comment for why there's no record button here yet. `ink` for the headline
+    /// ("No words yet.") so it reads as the entry's own voice, not a secondary caption;
+    /// `inkSecondary` for the invitation line underneath, matching every other
+    /// transcript-area caption on this screen.
+    private var recordInviteSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("No words yet.")
+                .foregroundStyle(InkTone.ink.color)
+            Text("Tell the story of this picture — your voice becomes the entry's words.")
+                .foregroundStyle(InkTone.inkSecondary.color)
+        }
+        .accessibilityIdentifier("detail.recordInvite.text")
+    }
+
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             switch Self.transcriptDisplay(transcript) {
+            case .absent where Self.inviteRecordingVisible(hasAudio: item.hasAudio,
+                                                             imageCount: images.count):
+                recordInviteSection
             case .absent:
                 Text("This entry was not transcribed.")
                     .foregroundStyle(InkTone.inkSecondary.color)

@@ -160,6 +160,17 @@ enum UITestVoiceMarkingSeed {
         ("two", 20_000, 30_000),
         ("three", 40_000, 50_000),
     ]
+    /// #103 regression test (`EntryPagingUITests`): distinct from `words` on purpose.
+    /// `captureID` and `unmarkedCaptureID` are adjacent rows in the marker seed's
+    /// deterministic order, and without this the two entries' transcripts would read
+    /// identically ("one two three" on both) — a test asserting "the transcript
+    /// changed after paging/re-selecting" would pass vacuously (or fail to catch a
+    /// real staleness bug) if both entries said the same thing.
+    static let unmarkedWords: [(text: String, start: Int64, end: Int64)] = [
+        ("alpha", 0, 10_000),
+        ("beta", 20_000, 30_000),
+        ("gamma", 40_000, 50_000),
+    ]
     static let mergeWords: [(text: String, start: Int64, end: Int64)] = [
         ("one", 0, 10_000),
         ("two", 20_000, 30_000),
@@ -197,7 +208,8 @@ enum UITestVoiceMarkingSeed {
         let url = SegmentLayout.canonicalTranscriptURL(captureDirectory: captureDirectory, revision: 0)
         guard !FileManager.default.fileExists(atPath: url.path) else { return }
 
-        writeSpans(captureDirectory: captureDirectory, revisionID: "01KYX77KK5QM15915EZBVXTQZ1")
+        writeSpans(captureDirectory: captureDirectory, revisionID: "01KYX77KK5QM15915EZBVXTQZ1",
+                  words: unmarkedWords)
         // No markers.jsonl written at all — the .absent case.
     }
 

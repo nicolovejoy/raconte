@@ -295,20 +295,21 @@ final class NavigationUITests: XCTestCase {
 
         // A second journal, named distinctly from the auto-created default "Journal".
         //
-        // Queries `capture.journalHeader`, not the Menu's own `capture.journalPicker`
-        // (`JournalHeaderView`, out of scope here — capture-screen internals, design
-        // invariant 8): the accessibility hierarchy at failure showed BOTH the caption
-        // Text and the Menu's synthesized Button carrying the ENCLOSING VStack's
-        // `capture.journalHeader` identifier instead of the Menu's own — a pre-existing
-        // identifier-flattening bug this task's new test is the first to reach (no prior
-        // UI test ever queried `capture.journalPicker`). `capture.journalHeader` is what
-        // actually resolves to the button; filtered to `.buttons` so it cannot also match
-        // the caption's StaticText.
+        // Queries `capture.journalHeader`, not `capture.journalPicker` — Task 10 (#18)
+        // swapped the old Menu for a plain Button, but the container-identifier trap
+        // this comment used to attribute to Menu's AX synthesis turns out to be the
+        // general container-overwrite bug (repo memory): the enclosing VStack's own
+        // `capture.journalHeader` identifier still wins over the Button's
+        // `capture.journalPicker`, confirmed by re-running this test against the
+        // Button and seeing the same "identifier never resolves" failure. Filtered to
+        // `.buttons` so it cannot also match the caption's StaticText. Its tap opens
+        // `JournalPickerSheet`; "New Journal…" is that sheet's `journalPicker.new`
+        // row, not a Menu item.
         let journalPicker = app.buttons["capture.journalHeader"].firstMatch
         XCTAssertTrue(journalPicker.waitForExistence(timeout: 15), "no journal picker on the landing screen")
         press(journalPicker)
-        let newJournalItem = app.buttons["New Journal…"].firstMatch
-        XCTAssertTrue(newJournalItem.waitForExistence(timeout: 10), "no New Journal menu item")
+        let newJournalItem = app.buttons["journalPicker.new"].firstMatch
+        XCTAssertTrue(newJournalItem.waitForExistence(timeout: 10), "no New Journal row in the picker sheet")
         press(newJournalItem)
         // Not queried by `capture.newJournalNameField`: a SwiftUI `.accessibilityIdentifier`
         // on an `.alert`'s `TextField` does not bridge onto the native `UIAlertController`

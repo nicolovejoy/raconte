@@ -115,11 +115,18 @@ final class CaptureLabelTests: XCTestCase {
 
     /// Guards the one assumption every ratio above rests on: that this really is the colour
     /// `CaptureView` paints. If the background is lightened, these tests must be re-derived,
-    /// not silently kept passing.
+    /// not silently kept passing. Since task 2, CaptureView paints via the `InkTone.studio`
+    /// token rather than the raw literal — so the source scan checks for the token reference,
+    /// and the pin to the actual channel value (`CaptureSurface.backgroundWhite`) is asserted
+    /// directly here rather than by grepping a literal that no longer appears in the file.
     func testBackgroundMatchesTheRenderedCaptureBackground() throws {
         XCTAssertTrue(
-            try captureViewSource().contains("Color(white: \(CaptureSurface.backgroundWhite))"),
-            "CaptureView no longer paints Color(white: \(CaptureSurface.backgroundWhite)) — "
+            try captureViewSource().contains("InkTone.studio.color"),
+            "CaptureView no longer paints InkTone.studio.color — "
+            + "every contrast figure in this file is derived from that background")
+        XCTAssertEqual(
+            InkTone.studio.lightColor.red, CaptureSurface.backgroundWhite,
+            "InkTone.studio has drifted from CaptureSurface.backgroundWhite — "
             + "every contrast figure in this file is derived from that background")
     }
 

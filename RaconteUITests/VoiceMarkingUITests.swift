@@ -72,9 +72,14 @@ final class VoiceMarkingUITests: XCTestCase {
         press(row)
     }
 
+    /// Task 6 (#55): "Mark voices" moved from an in-body button to a row in the `⋯`
+    /// info sheet — open the sheet first, then tap its row.
     private func openMarkVoices(_ app: XCUIApplication) {
-        let markVoices = app.buttons["detail.markVoicesButton.legacy"].firstMatch
-        XCTAssertTrue(markVoices.waitForExistence(timeout: 15), "no Mark voices affordance on the detail screen")
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 15), "`⋯` toolbar button missing on detail")
+        press(more)
+        let markVoices = app.buttons["detail.markVoicesButton"].firstMatch
+        XCTAssertTrue(markVoices.waitForExistence(timeout: 15), "no Mark voices row in the info sheet")
         press(markVoices)
     }
 

@@ -12,9 +12,9 @@ import SwiftUI
 /// `Form`/`List` `Section` (repo memory: a `.sheet` attached to a `Section` silently
 /// never presents on iOS 26).
 ///
-/// The old in-body sections stay for one more commit (Task 6 removes them); their
-/// buttons were suffixed `.legacy` there so these new identifiers — the ones future UI
-/// tests use — are unique.
+/// Task 6 removed the old in-body sections this duplicated (journal/backdate/trash rows,
+/// the "Capture Image…"/"Edit transcript…"/"Mark voices…"/"Revision history…" buttons) —
+/// this sheet is now their only home.
 struct EntryInfoSheet: View {
     let item: EntryListItem
     let onJournal: () -> Void

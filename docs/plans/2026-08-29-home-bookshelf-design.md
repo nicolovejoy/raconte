@@ -68,8 +68,9 @@ clean later addition.
   CaptureView's `.task { await model.bootstrap() }`. With Home as launch root that
   never runs until the user visits capture. The scan must run at launch regardless —
   per the standing rule, driven by model-owned observation, not a view's lifecycle.
-  Home renders banner state from the capture model; tapping a banner routes to
-  capture with that recovery active.
+  Home renders the existing `RecoveryBanner`, whose inline Play/Keep/Delete make
+  recovery fully actionable on Home; no tap-to-capture routing (superseded
+  2026-08-29, final review: inline actions are strictly better than routing).
 - No persistence of "last place viewed" — Home is the fixed landing, like capture was.
 
 ## Testing
@@ -78,7 +79,7 @@ clean later addition.
 - Cover/spine split at the 3 boundary (2, 3, 4 journals); activity ordering including
   the backdate-does-not-reorder case and the empty-journal-ranks-last case.
 - Navigation: cover → journal, spine → journal, New entry → capture.
-- Load-bearing: interrupted recording → banner appears on Home at launch; tap →
-  capture with recovery active. (Recovery must not silently depend on visiting
-  capture.)
+- Load-bearing: interrupted recording → banner appears on Home at launch — the
+  relaunch test finds the banner on Home without visiting capture. (Recovery must
+  not silently depend on visiting capture.)
 - Fresh-install empty state renders the invitation, no crash on zero journals.

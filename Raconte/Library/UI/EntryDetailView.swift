@@ -35,6 +35,19 @@ struct EntryDetailView: View {
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
+    /// Task 5 (#55): the `⋯` sheet gathering journal/backdate/add-image/edit/mark-voices/
+    /// revision-history/trash. Task 6 removed the old in-body sections this duplicated —
+    /// it is now their only home.
+    @State private var showingInfoSheet = false
+    @State private var showingJournalPicker = false
+    /// One row's tap dismisses the info sheet and then, once the dismissal actually
+    /// completes, opens the destination that row named — iOS needs the first
+    /// presentation to finish before a second one can begin, so the follow-on flag
+    /// flips in `.sheet`'s `onDismiss:`, never inline in the row's own action.
+    private enum InfoSheetAction {
+        case journal, backdate, addImage, editTranscript, markVoices, revisionHistory, trash
+    }
+    @State private var pendingInfoAction: InfoSheetAction?
     /// The editor is a full-screen push, not a sheet (T7 Task 4, ruling Q9). Its model is
     /// built once, in `init`, rather than inside the destination builder: a builder that
     /// re-mints it on every body evaluation would restart the editing session under the
@@ -105,22 +118,25 @@ struct EntryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                datesSection
-                journalSection
-                // Playback is omitted entirely for an image-only entry (no `.task`-
-                // loaded audio to play), not merely disabled — leaving the images
-                // strip as the first, primary content above the transcript, matching
-                // the design doc's "Entry detail" section exactly.
-                if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
-                    playbackSection
-                }
+                // Task 6 (#55): images strip first (only when non-empty), transcript
+                // immediately after — no header row, no date/journal/trash sections;
+                // all of that now lives in the `⋯` info sheet (`EntryInfoSheet`).
+                // Playback moved out of the scroll entirely (below, pinned via
+                // `.safeAreaInset`), so this VStack no longer decides whether it shows.
                 imagesSection
                 transcriptSection
-                trashSection
             }
             .padding(24)
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Playback is omitted entirely for an image-only entry (no `.task`-loaded
+            // audio to play), not merely disabled — same rule as before, just pinned
+            // to the bottom of the screen instead of living in the scroll content.
+            if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
+                playbackBar
+            }
         }
         #if os(iOS)
         // #101: swipe left = next (page forward, older), right = previous.
@@ -176,6 +192,16 @@ struct EntryDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) { navigationTitleView }
+            // Task 5 (#55): the `⋯` sheet — placed before the paging chevrons so it
+            // reads leading-to-trailing as "more about this entry, then page".
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingInfoSheet = true
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("detail.moreButton")
+            }
             // #101: chevrons match the vertical list — up = previous (newer),
             // down = next (older). Rendered only when there is a list to page
             // (design: scope gate); disabled at the ends (decision 2).
@@ -255,6 +281,35 @@ struct EntryDetailView: View {
         // the pop by however long SwiftUI holds it — without this, backing out of a
         // playing entry keeps playing.
         .onDisappear { playback?.stop() }
+        // Task 5 (#55): outer ScrollView level, never a Form/List Section (repo
+        // memory: a `.sheet` on a Section silently never presents on iOS 26).
+        .sheet(isPresented: $showingInfoSheet, onDismiss: performPendingInfoAction) {
+            EntryInfoSheet(
+                item: item,
+                onJournal: { pendingInfoAction = .journal; showingInfoSheet = false },
+                onBackdate: { pendingInfoAction = .backdate; showingInfoSheet = false },
+                onAddImage: { pendingInfoAction = .addImage; showingInfoSheet = false },
+                onEditTranscript: { pendingInfoAction = .editTranscript; showingInfoSheet = false },
+                onMarkVoices: { pendingInfoAction = .markVoices; showingInfoSheet = false },
+                onRevisionHistory: { pendingInfoAction = .revisionHistory; showingInfoSheet = false },
+                onTrash: { pendingInfoAction = .trash; showingInfoSheet = false }
+            )
+        }
+        // This task keeps the journal choice as a temporary confirmation dialog (brief
+        // step 3, note 1) — the old `journalSection` `Menu`'s content, listed instead
+        // of menued so nothing here trips the macOS Menu+image trap. Task 10 (PR 3)
+        // swaps this for `JournalPickerSheet`.
+        .confirmationDialog("Move to journal", isPresented: $showingJournalPicker, titleVisibility: .visible) {
+            ForEach(model.journals) { journal in
+                Button(journal.name) {
+                    Task {
+                        if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
+                        await refresh()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .sheet(isPresented: $showingBackdatePicker) { backdateSheet }
         .sheet(isPresented: $showingImagePicker) { imagePickerSheet }
         // `fullScreenCover` doesn't exist on macOS — a large `.sheet` is this
@@ -411,28 +466,22 @@ struct EntryDetailView: View {
         }
     }
 
-    private var datesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // M3 issue #15. Shown only while the detected date is still the one in force
-            // — the moment the owner edits it this is his date, not the recording's, and
-            // saying otherwise would be wrong rather than merely stale.
-            if item.backdateWasDetected {
-                Text("Detected from the recording")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("detail.detectedDate")
-            }
-            labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
-                .accessibilityIdentifier("detail.capturedAt")
-
-            // No standalone Clear (owner, 2026-08-02): a set backdate is typed intent,
-            // and one stray tap must not erase it. Clearing lives inside the sheet as
-            // an explicit destructive action.
-            if Self.backdateButtonVisible(for: item) {
-                Button("Backdate this entry…") { openBackdateSheet() }
-                    .accessibilityIdentifier("detail.backdateButton")
-                    .font(.caption)
-            }
+    /// Task 5 (#55): fires from `EntryInfoSheet`'s `onDismiss:`, once the sheet's own
+    /// dismissal has actually completed — SwiftUI on iOS needs that before a second
+    /// presentation (the editor push, the backdate/image sheets, or the trash/journal
+    /// dialogs) can begin. Pushed destinations don't strictly need the wait but go
+    /// through the same switch for one uniform path (brief note).
+    private func performPendingInfoAction() {
+        guard let action = pendingInfoAction else { return }
+        pendingInfoAction = nil
+        switch action {
+        case .journal: showingJournalPicker = true
+        case .backdate: openBackdateSheet()
+        case .addImage: showingImagePicker = true
+        case .editTranscript: showingEditor = true
+        case .markVoices: showingVoiceMarking = true
+        case .revisionHistory: showingRevisionHistory = true
+        case .trash: showingTrashConfirmation = true
         }
     }
 
@@ -489,37 +538,15 @@ struct EntryDetailView: View {
         }
     }
 
-    // MARK: - Journal
-
-    private var journalSection: some View {
-        HStack {
-            Text("Journal")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer()
-            // No "Unfiled" choice, deliberately: the M3 decision is that nil journalID
-            // exists only for legacy/degraded entries, and no UI path creates it. An
-            // already-unfiled entry still *displays* as "Unfiled" until it's filed.
-            Menu {
-                ForEach(model.journals) { journal in
-                    Button(journal.name) {
-                        Task {
-                            if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
-                            await refresh()
-                        }
-                    }
-                }
-            } label: {
-                Text(item.journal?.name ?? "Unfiled")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .accessibilityIdentifier("detail.journalPicker")
-        }
-    }
 
     // MARK: - Playback
 
-    private var playbackSection: some View {
+    /// Task 6 (#55): pinned via `.safeAreaInset(edge: .bottom)` in `body` rather than
+    /// scrolling with the rest of the content — the owner's #55 complaint was that with
+    /// the play bar and images in-flow, the transcript started below the fold. Padded
+    /// like an inset card (`InkTone.paperInset.color`) with a hairline divider on top so
+    /// it reads as a distinct, fixed control strip rather than the last scrolled item.
+    private var playbackBar: some View {
         HStack(spacing: 12) {
             Button(action: togglePlayback) {
                 Image(systemName: (playback?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
@@ -531,6 +558,14 @@ struct EntryDetailView: View {
             if let playback {
                 PlaybackProgressLine(playback: playback, idPrefix: "detail")
             }
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 20)
+        .background(InkTone.paperInset.color)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(InkTone.hairline.color)
+                .frame(height: 1)
         }
     }
 
@@ -553,39 +588,53 @@ struct EntryDetailView: View {
     /// button vanish for it. See `EntryListItem.hasAudio` for the full argument.
     static func playbackSectionVisible(hasAudio: Bool) -> Bool { hasAudio }
 
-    private var imagesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Images")
-                .font(.headline)
+    /// Task 6 (#55): whether the images strip renders at all. Pure, same reasoning as
+    /// `playbackSectionVisible`/`backdateButtonVisible` above — a name a test can call
+    /// directly. "Add Image…" moved to the info sheet, so there is no in-body affordance
+    /// left to keep an empty section around for; an entry with no images now shows
+    /// nothing here at all, and images become the primary, first content the moment
+    /// there are any.
+    static func imagesStripVisible(imageCount: Int) -> Bool { imageCount > 0 }
 
-            if images.isEmpty {
-                Text("Nothing captured yet")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("entryDetail.images.empty")
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
-                            ImageThumbnailView(model: model, captureID: captureID, sidecar: sidecar)
-                                .frame(width: 80, height: 80)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewerIndex = index
-                                    showingImageViewer = true
-                                }
-                                .accessibilityIdentifier("entryDetail.images.thumbnail.\(sidecar.id)")
-                                .accessibilityLabel("Image \(index + 1) of \(images.count)")
-                                .accessibilityAddTraits(.isButton)
-                        }
+    /// #107: whether the transcript area should invite the owner to speak, rather than
+    /// show the plain "This entry was not transcribed." string — an image-only entry
+    /// (no audio yet, at least one image) is the one case where there's a picture to
+    /// tell the story of but nothing spoken about it. Pure, same reasoning as
+    /// `imagesStripVisible`/`playbackSectionVisible` above.
+    ///
+    /// Investigation gate (Task 7 brief): the capture stack has no path that records
+    /// audio INTO an existing captureID — `CaptureCoordinator.record()` always mints a
+    /// fresh ULID (`mintCaptureID`), and `BlankEntryMinter.mint` always creates a new
+    /// capture directory. Recording INTO this entry isn't buildable yet, so the caller
+    /// renders TEXT ONLY (`detail.recordInvite.text`) — no button. A record-into-entry
+    /// button is the first task of the deferred #107 creation-flow pass.
+    static func inviteRecordingVisible(hasAudio: Bool, imageCount: Int) -> Bool {
+        !hasAudio && imageCount > 0
+    }
+
+    @ViewBuilder
+    private var imagesSection: some View {
+        if Self.imagesStripVisible(imageCount: images.count) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
+                        ImageThumbnailView(model: model, captureID: captureID, sidecar: sidecar)
+                            .frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewerIndex = index
+                                showingImageViewer = true
+                            }
+                            .accessibilityIdentifier("entryDetail.images.thumbnail.\(sidecar.id)")
+                            .accessibilityLabel("Image \(index + 1) of \(images.count)")
+                            .accessibilityAddTraits(.isButton)
                     }
                 }
-                .accessibilityIdentifier("entryDetail.images.strip")
             }
-
-            Button("Capture Image…") { showingImagePicker = true }
-                .font(.caption)
-                .accessibilityIdentifier("entryDetail.images.captureButton")
+            .accessibilityIdentifier("entryDetail.images.strip")
+        } else {
+            EmptyView()
         }
     }
 
@@ -734,23 +783,38 @@ struct EntryDetailView: View {
     /// "select across these siblings" short of a custom text view. Explicitly not fixed
     /// in T7 — noted here so the next reader finds a documented trade, not a bug to
     /// rediscover.
+    /// #107: the image-first invitation, text only — see `inviteRecordingVisible`'s doc
+    /// comment for why there's no record button here yet. `ink` for the headline
+    /// ("No words yet.") so it reads as the entry's own voice, not a secondary caption;
+    /// `inkSecondary` for the invitation line underneath, matching every other
+    /// transcript-area caption on this screen.
+    private var recordInviteSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("No words yet.")
+                .foregroundStyle(InkTone.ink.color)
+            Text("Tell the story of this picture — your voice becomes the entry's words.")
+                .foregroundStyle(InkTone.inkSecondary.color)
+        }
+        .accessibilityIdentifier("detail.recordInvite.text")
+    }
+
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Transcript")
-                .font(.headline)
-
             switch Self.transcriptDisplay(transcript) {
+            case .absent where Self.inviteRecordingVisible(hasAudio: item.hasAudio,
+                                                             imageCount: images.count):
+                recordInviteSection
             case .absent:
                 Text("This entry was not transcribed.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.absent")
             case .unreadable:
                 Text("The transcript could not be read.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.unreadable")
             case .empty:
                 Text("No speech was transcribed.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.empty")
             case .plain(let text):
                 Text(text)
@@ -841,30 +905,15 @@ struct EntryDetailView: View {
                 .accessibilityIdentifier("detail.transcript.text")
             }
 
-            // The detail screen stays the reader: it gains an Edit affordance and nothing
-            // else. The transcript above is never editable in place.
-            Button("Edit transcript…") { showingEditor = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.editButton")
-
-            // Its own mode, not inline here (T7 Mark Voices, issue #56, Task 6 — replaces
-            // the old "Correct markers" screen): tap a paragraph to flip its voice, or
-            // drag a range of words to mark it.
-            Button("Mark voices…") { showingVoiceMarking = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.markVoicesButton")
-
-            // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
-            // and no revert button, so this is the only way back.
-            Button("Revision history…") { showingRevisionHistory = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.revisionHistoryButton")
-
+            // Task 6 (#55): edit / mark-voices / revision-history all moved to the `⋯`
+            // info sheet (`EntryInfoSheet`) — the detail screen stays the reader, the
+            // transcript above is never editable in place, and no in-body button is
+            // left here for any of the three.
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "
                      + "finished writing. The recording itself is complete.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.truncated")
             }
         }
@@ -901,16 +950,6 @@ struct EntryDetailView: View {
         VoiceAttributedText.paragraph(paragraph, voiceLabels: voiceLabels)
     }
 
-    // MARK: - Trash
-
-    /// Bottom of the screen, quiet, and behind a confirmation — but present on every
-    /// entry on every platform, per the M3 decision that deletion works anywhere.
-    private var trashSection: some View {
-        Button("Move to Trash", role: .destructive) { showingTrashConfirmation = true }
-            .font(.caption)
-            .accessibilityIdentifier("detail.trashButton")
-    }
-
     /// Stop playback, then await the write and pop only on success. This used to pop
     /// **before** the write, on the theory that `ContentView`'s destination renders this
     /// screen only while `library.item(captureID)` resolves and the rescan inside
@@ -929,15 +968,6 @@ struct EntryDetailView: View {
                 trashFailed = true
             }
         }
-    }
-
-    private func labeledRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-        }
-        .font(.subheadline)
     }
 }
 

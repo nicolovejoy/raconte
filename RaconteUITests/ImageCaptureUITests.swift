@@ -71,9 +71,12 @@ final class ImageCaptureUITests: XCTestCase {
                       "the library screen must offer a + New entry toolbar action")
         press(newEntry)
 
-        let imagesEmpty = app.descendants(matching: .any)
-            .matching(identifier: "entryDetail.images.empty").firstMatch
-        XCTAssertTrue(imagesEmpty.waitForExistence(timeout: 15),
+        // Task 6 (#55): the empty-images placeholder text is gone — an empty images
+        // strip now renders nothing at all (`imagesSection` -> `EmptyView()`). A blank
+        // entry has no audio and no transcript, so "not transcribed" is what actually
+        // proves this landed on the fresh entry's detail screen.
+        let notTranscribed = app.staticTexts["detail.transcript.absent"].firstMatch
+        XCTAssertTrue(notTranscribed.waitForExistence(timeout: 15),
                       "+ New entry did not land on a fresh, image-less entry detail screen")
     }
 
@@ -92,21 +95,32 @@ final class ImageCaptureUITests: XCTestCase {
         XCTAssertTrue(newEntry.waitForExistence(timeout: 15))
         press(newEntry)
 
+        // Task 6 (#55): "Add Image…" moved from an in-body button to a row in the `⋯`
+        // info sheet.
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 15), "`⋯` toolbar button missing on detail")
+        press(more)
+
         let captureButton = app.buttons["entryDetail.images.captureButton"].firstMatch
         XCTAssertTrue(captureButton.waitForExistence(timeout: 15),
-                      "the entry detail screen must offer a Capture Image… affordance")
+                      "the info sheet must offer an Add Image… row")
         press(captureButton)
 
         let choosePhoto = app.buttons["imageCapture.choosePhoto"].firstMatch
         XCTAssertTrue(choosePhoto.waitForExistence(timeout: 15),
-                      "tapping Capture Image… did not present the real image picker sheet")
+                      "tapping Add Image… did not present the real image picker sheet")
 
         let cancel = app.buttons["Cancel"].firstMatch
         XCTAssertTrue(cancel.waitForExistence(timeout: 15))
         press(cancel)
 
+        // Back on the detail screen with the info sheet closed — reopening it and
+        // seeing the same row again proves Cancel dismissed the picker only, not the
+        // whole screen.
+        XCTAssertTrue(more.waitForExistence(timeout: 15))
+        press(more)
         XCTAssertTrue(app.buttons["entryDetail.images.captureButton"].firstMatch.waitForExistence(timeout: 15),
-                      "Cancel should dismiss the sheet back to the still-open detail screen")
+                      "Cancel should dismiss the picker back to the still-open detail screen")
     }
 
     // MARK: - Library row thumbnail + remove round-trip
@@ -158,10 +172,13 @@ final class ImageCaptureUITests: XCTestCase {
                       "removing an image must confirm before deleting")
         press(confirmRemove)
 
-        let imagesEmpty = app.descendants(matching: .any)
-            .matching(identifier: "entryDetail.images.empty").firstMatch
-        XCTAssertTrue(imagesEmpty.waitForExistence(timeout: 15),
-                      "the entry detail screen did not return to the empty images state after removal")
+        // Task 6 (#55): the empty-images placeholder is gone — an empty strip renders
+        // nothing (`imagesSection` -> `EmptyView()`). The strip's own identifier
+        // disappearing is what proves the removal actually took.
+        waitUntil(15, "the entry detail screen still shows an images strip after removal") {
+            !app.descendants(matching: .any)
+                .matching(identifier: "entryDetail.images.strip").firstMatch.exists
+        }
 
         // Pop the detail screen back to the library first: `openPlace`'s reveal step
         // only pops ONE level (detail root → sidebar), and the entry detail screen sits

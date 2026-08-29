@@ -6,6 +6,20 @@ import SwiftUI
 struct CaptureView: View {
     let model: CaptureScreenModel
 
+    /// Task 10 (#18): the picker's presentation state lives here, on the view, not on
+    /// `CaptureScreenModel` — presentation is view-lifecycle-safe (repo invariant:
+    /// nothing that must survive `CaptureView` being navigated away from may live on
+    /// the view). `JournalHeaderView` only flips this flag; the sheet itself is
+    /// attached below at the outer `ZStack` level.
+    @State private var showingJournalPicker = false
+    /// Sheet-then-alert dance (same shape as `EntryDetailView.pendingInfoAction`): a
+    /// tap on `JournalPickerSheet`'s "New Journal…" row sets this while the sheet is
+    /// still dismissing, and the sheet's own `onDismiss:` promotes it into the alert
+    /// once iOS has actually finished tearing the sheet down.
+    @State private var pendingNewJournalPrompt = false
+    @State private var showingNewJournalPrompt = false
+    @State private var draftJournalName = ""
+
     private var control: RecordControlModel {
         RecordControlModel.make(phase: model.coordinator.phase,
                                 canResume: model.coordinator.canResume)
@@ -62,6 +76,42 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
+        // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s
+        // `ScrollView`/`VStack` — repo memory: a `.sheet` attached inside a
+        // Form/List `Section` silently never presents on iOS 26; this generalizes the
+        // same "attach at the screen's outer view" rule to every sheet on this screen.
+        // Presented PLAIN (no `.environment(\.colorScheme, .dark)`) — the sheet renders
+        // on its own system material and follows ambient appearance, unlike the
+        // near-black studio background behind it.
+        .sheet(isPresented: $showingJournalPicker, onDismiss: {
+            guard pendingNewJournalPrompt else { return }
+            pendingNewJournalPrompt = false
+            draftJournalName = ""
+            showingNewJournalPrompt = true
+        }) {
+            JournalPickerSheet(
+                journals: model.journals,
+                covers: model.library.journalCovers,
+                currentJournalID: model.selectedJournalID,
+                dateLine: { model.library.dateLine(forJournal: $0) },
+                entryCount: { id in model.library.allEntries.filter { $0.journalID == id }.count },
+                onSelect: { model.selectJournal($0) },
+                onNewJournal: { pendingNewJournalPrompt = true })
+        }
+        // `.foregroundStyle(Color.primary)` on the field: an alert draws on the
+        // SYSTEM's own light material, but its content is a SwiftUI builder nested
+        // inside `CaptureView`, which sets `.foregroundStyle(.white)` for the
+        // near-black capture surface. That white is inherited straight into the text
+        // field — owner smoke, 2026-08-15: "the 'new folder' text field is white on
+        // white, can't read what I type. but it does work." Exactly that: the binding
+        // was fine, the text was invisible.
+        .alert("New Journal", isPresented: $showingNewJournalPrompt) {
+            TextField("Journal name", text: $draftJournalName)
+                .foregroundStyle(Color.primary)
+                .accessibilityIdentifier("capture.newJournalNameField")
+            Button("Create") { Task { await model.createJournal(name: draftJournalName) } }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything
@@ -80,7 +130,7 @@ struct CaptureView: View {
     private var setupRegion: some View {
         if layout.usesCompactBackdateField {
             VStack(alignment: .leading, spacing: 12) {
-                JournalHeaderView(model: model)
+                JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
                 CompactBackdateSummary(model: model)
                 // Not DEBUG-gated: a wireless install is exactly when you can't tell
                 // which build you're holding, and TestFlight has the same problem.
@@ -94,7 +144,7 @@ struct CaptureView: View {
         } else {
             ScrollView {
                 VStack(spacing: 28) {
-                    JournalHeaderView(model: model)
+                    JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
                     BackdateField(model: model)
 
                     if layout.showsMultiVoiceField {
@@ -387,39 +437,27 @@ struct CaptureView: View {
     }
 }
 
-/// "Recording into: <journal>" (M3 T3, phone mockup). A `Menu` doubles as the switcher
-/// — tap to pick any existing journal — plus "New Journal…", taken through an `.alert`
-/// text field so this stays a menu-and-alert screen, no navigation push, matching
-/// M1/M2's quiet-chrome style. Selection and creation only (spec ruling 6, #69) —
-/// renaming, cover photo, and voice labels moved to the journal editor.
+/// "Recording into: <journal>" (M3 T3, phone mockup). Task 10 (#18) replaced the old
+/// `Menu` switcher with a plain `Button` that opens `JournalPickerSheet`, presented
+/// from `CaptureView`'s own root ZStack level — the sheet's presentation state is
+/// `CaptureView`'s, not this view's, since `CaptureView` can be navigated away from at
+/// any time (repo invariant: nothing view-lifecycle-scoped may own state that must
+/// survive that). "New Journal…" still ends in an `.alert` text field, also lifted to
+/// `CaptureView` so the sheet-then-alert dance follows the established
+/// dismiss-then-present pattern (`EntryDetailView`'s `pendingInfoAction`). Selection and
+/// creation only (spec ruling 6, #69) — renaming, cover photo, and voice labels moved to
+/// the journal editor.
 struct JournalHeaderView: View {
     let model: CaptureScreenModel
-
-    @State private var showingNewJournalPrompt = false
-    @State private var draftName = ""
+    @Binding var showingJournalPicker: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Recording into")
                 .captureLabel(.journalHeaderCaption)
 
-            Menu {
-                ForEach(model.journals) { journal in
-                    Button {
-                        model.selectJournal(journal.id)
-                    } label: {
-                        if journal.id == model.selectedJournalID {
-                            Label(menuTitle(for: journal), systemImage: "checkmark")
-                        } else {
-                            Text(menuTitle(for: journal))
-                        }
-                    }
-                }
-                Divider()
-                Button("New Journal…") {
-                    draftName = ""
-                    showingNewJournalPrompt = true
-                }
+            Button {
+                showingJournalPicker = true
             } label: {
                 HStack(spacing: 6) {
                     Text(model.selectedJournalName)
@@ -430,27 +468,28 @@ struct JournalHeaderView: View {
                 }
                 .foregroundStyle(.white)
             }
+            .buttonStyle(.plain)
             // #65: the container identifier was overwriting its descendants', which made
             // `capture.journalPicker` invisible to XCUITest (confirmed in a live AX dump).
             // `.combine` flattens the label into ONE element that keeps both an explicit
-            // label and this identifier, instead of the identifier being swallowed.
+            // label and this identifier, instead of the identifier being swallowed. Kept
+            // after the Menu→Button switch (Task 10) since a plain `Button` label is
+            // still more than one child element (`Text` + `Image`).
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Recording into \(model.selectedJournalName)")
             .accessibilityIdentifier("capture.journalPicker")
             // This control had NO color-scheme pin at all before (issue #58) — its
-            // label was already explicit `.white`/gray, but nothing pinned the menu's
+            // label was already explicit `.white`/gray, but nothing pinned the button's
             // own rendering. `.environment(\.colorScheme, .dark)`, never
             // `.preferredColorScheme`: `CaptureView` is the app's one permanently-
             // mounted NavigationStack root (`ContentView.swift`), with no sheet/popover
             // boundary around it, so `preferredColorScheme` here would resolve to the
             // whole window — forcing Library/Detail/Trash dark for every macOS
-            // light-mode user, not just this menu (fix-round-1 finding). Scoped to the
-            // `Menu` only, not the enclosing `VStack` below, which also anchors this
-            // view's `.alert` presentation (new journal prompt) — that must keep
-            // following the system's normal appearance. The menu's own dropdown
-            // *content* (journal list, New Journal item) is a transient popup and out
-            // of scope for #58 — it renders on its own material background, not the
-            // near-black screen.
+            // light-mode user, not just this button (fix-round-1 finding). Scoped to the
+            // `Button` only, not the enclosing `VStack` below. `JournalPickerSheet`
+            // itself renders on system material and must NOT inherit this pin (Task 10
+            // brief note) — it is presented from `CaptureView`, entirely outside this
+            // scope.
             .environment(\.colorScheme, .dark)
 
             // The one honest case where nothing is selected. Says what it costs — the
@@ -464,32 +503,6 @@ struct JournalHeaderView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityIdentifier("capture.journalHeader")
-        // `.foregroundStyle(Color.primary)` on the field: an alert draws on the
-        // SYSTEM's own light material, but its content is a SwiftUI builder nested
-        // inside `CaptureView`, which sets `.foregroundStyle(.white)` for the
-        // near-black capture surface. That white is inherited straight into the text
-        // field — owner smoke, 2026-08-15: "the 'new folder' text field is white on
-        // white, can't read what I type. but it does work." Exactly that: the binding
-        // was fine, the text was invisible.
-        .alert("New Journal", isPresented: $showingNewJournalPrompt) {
-            TextField("Journal name", text: $draftName)
-                .foregroundStyle(Color.primary)
-                .accessibilityIdentifier("capture.newJournalNameField")
-            Button("Create") { Task { await model.createJournal(name: draftName) } }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    /// Journal name plus its date line in parentheses (issue #14 part 2; spec ruling 3),
-    /// e.g. "1987 (1987)" or "Trip to France (March – July 1998)". Routed through the
-    /// shared `dateLine(forJournal:)` — never `dateRange(forJournal:)` directly — so this
-    /// menu, the sidebar row and the journal editor cannot disagree about what a journal
-    /// covers (a stored span outranks the range derived from when its entries were
-    /// captured). Omitted for a journal with neither a stored span nor any entries —
-    /// appending "()" to one nobody has recorded into yet is noise.
-    private func menuTitle(for journal: Journal) -> String {
-        guard let line = model.library.dateLine(forJournal: journal.id) else { return journal.name }
-        return "\(journal.name) (\(line))"
     }
 }
 

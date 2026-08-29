@@ -40,6 +40,11 @@ struct EntryDetailView: View {
     /// it is now their only home.
     @State private var showingInfoSheet = false
     @State private var showingJournalPicker = false
+    /// Task 10 (#18): sheet-then-alert dance for `JournalPickerSheet`'s "New Journal…"
+    /// row — same shape as `pendingInfoAction` below, one step down.
+    @State private var pendingNewJournalPrompt = false
+    @State private var showingNewJournalPrompt = false
+    @State private var draftJournalName = ""
     /// One row's tap dismisses the info sheet and then, once the dismissal actually
     /// completes, opens the destination that row named — iOS needs the first
     /// presentation to finish before a second one can begin, so the follow-on flag
@@ -295,17 +300,47 @@ struct EntryDetailView: View {
                 onTrash: { pendingInfoAction = .trash; showingInfoSheet = false }
             )
         }
-        // This task keeps the journal choice as a temporary confirmation dialog (brief
-        // step 3, note 1) — the old `journalSection` `Menu`'s content, listed instead
-        // of menued so nothing here trips the macOS Menu+image trap. Task 10 (PR 3)
-        // swaps this for `JournalPickerSheet`.
-        .confirmationDialog("Move to journal", isPresented: $showingJournalPicker, titleVisibility: .visible) {
-            ForEach(model.journals) { journal in
-                Button(journal.name) {
+        // Task 10 (#18): `JournalPickerSheet` replaces the temporary confirmation
+        // dialog Task 5 left here. Outer ScrollView level, same as `showingInfoSheet`
+        // above — never a Form/List Section (repo memory: a `.sheet` on a Section
+        // silently never presents on iOS 26).
+        .sheet(isPresented: $showingJournalPicker, onDismiss: {
+            guard pendingNewJournalPrompt else { return }
+            pendingNewJournalPrompt = false
+            draftJournalName = ""
+            showingNewJournalPrompt = true
+        }) {
+            JournalPickerSheet(
+                journals: model.journals,
+                covers: model.journalCovers,
+                currentJournalID: item.journalID,
+                dateLine: { model.dateLine(forJournal: $0) },
+                entryCount: { id in model.allEntries.filter { $0.journalID == id }.count },
+                onSelect: { journalID in
                     Task {
-                        if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
+                        if !(await model.moveEntry(captureID, toJournal: journalID)) { moveFailed = true }
                         await refresh()
                     }
+                },
+                onNewJournal: { pendingNewJournalPrompt = true })
+        }
+        // Sheet-then-alert dance, same shape as `performPendingInfoAction`: a tap on
+        // "New Journal…" inside `JournalPickerSheet` sets `pendingNewJournalPrompt`
+        // while the sheet is still dismissing; `onDismiss:` above promotes it into
+        // this alert once iOS has actually finished tearing the sheet down. Creates
+        // through `model.journalStore` directly (already a public `let` on
+        // `LibraryScreenModel`) rather than adding new model API for this one path,
+        // then `model.rescan()` before moving the entry so the new journal is durable
+        // first — same ordering `CaptureScreenModel.createJournal` uses.
+        .alert("New Journal", isPresented: $showingNewJournalPrompt) {
+            TextField("Journal name", text: $draftJournalName)
+                .accessibilityIdentifier("detail.newJournalNameField")
+            Button("Create") {
+                Task {
+                    guard let created = try? await model.journalStore.create(name: draftJournalName) else { return }
+                    await model.rescan()
+                    if !(await model.moveEntry(captureID, toJournal: created.id)) { moveFailed = true }
+                    await refresh()
                 }
             }
             Button("Cancel", role: .cancel) {}

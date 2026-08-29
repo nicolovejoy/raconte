@@ -386,14 +386,17 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
 
-        // Not `capture.journalPicker` (the Menu's own identifier) — the enclosing
-        // VStack's `capture.journalHeader` is what actually resolves to a queryable
-        // button, per the container-identifier-flattening trap `NavigationUITests`
-        // already documents for this exact control.
+        // Not `capture.journalPicker` — Task 10 (#18) swapped the old Menu for a plain
+        // Button, but the enclosing VStack's `capture.journalHeader` identifier still
+        // wins over the Button's own (repo memory: container-identifier trap; verified
+        // this remains true for a Button, not just a Menu's AX synthesis, by re-running
+        // this test against `capture.journalPicker` directly and watching it never
+        // resolve). Its tap opens `JournalPickerSheet`; "New Journal…" is that sheet's
+        // `journalPicker.new` row, not a Menu item.
         let journalPicker = app.buttons["capture.journalHeader"].firstMatch
         XCTAssertTrue(journalPicker.waitForExistence(timeout: 15))
         press(journalPicker)
-        let newJournalItem = app.buttons["New Journal…"].firstMatch
+        let newJournalItem = app.buttons["journalPicker.new"].firstMatch
         XCTAssertTrue(newJournalItem.waitForExistence(timeout: 10))
         press(newJournalItem)
 

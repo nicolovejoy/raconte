@@ -42,16 +42,12 @@ enum InkTone: CaseIterable, Sendable {
 
 enum InkSurface {
     /// Contrast of a tone against light-mode paper — same WCAG 2.1 math as
-    /// `CaptureSurface.contrastOnSurface`, different ground.
+    /// `CaptureSurface.contrastOnSurface`, different ground. Luminance itself is
+    /// `CaptureSurface.relativeLuminance(_:)` — not reimplemented here, so the two
+    /// surfaces can never drift apart on the underlying formula.
     static func contrastOnPaper(_ color: CaptureLabelColor) -> Double {
-        let a = relativeLuminance(color)
-        let b = relativeLuminance(InkTone.paper.lightColor)
+        let a = CaptureSurface.relativeLuminance(color)
+        let b = CaptureSurface.relativeLuminance(InkTone.paper.lightColor)
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
-    }
-
-    static func relativeLuminance(_ color: CaptureLabelColor) -> Double {
-        0.2126 * CaptureSurface.relativeLuminance(white: color.red)
-            + 0.7152 * CaptureSurface.relativeLuminance(white: color.green)
-            + 0.0722 * CaptureSurface.relativeLuminance(white: color.blue)
     }
 }

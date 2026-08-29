@@ -17,4 +17,16 @@ final class EntryDetailViewImagesSectionTests: XCTestCase {
     func testPlaybackSectionHiddenForImageOnlyEntry() {
         XCTAssertFalse(EntryDetailView.playbackSectionVisible(hasAudio: false))
     }
+
+    /// Task 6 (#55): the images strip is now the whole `imagesSection` — no header, no
+    /// empty-state text, no in-body "Capture Image…" button. `imagesStripVisible` is the
+    /// pure decision the view is a thin `if` over.
+    func testImagesStripVisibleWithImages() {
+        XCTAssertTrue(EntryDetailView.imagesStripVisible(imageCount: 1))
+        XCTAssertTrue(EntryDetailView.imagesStripVisible(imageCount: 3))
+    }
+
+    func testImagesStripHiddenWithNoImages() {
+        XCTAssertFalse(EntryDetailView.imagesStripVisible(imageCount: 0))
+    }
 }

@@ -36,7 +36,8 @@ struct EntryDetailView: View {
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
     /// Task 5 (#55): the `⋯` sheet gathering journal/backdate/add-image/edit/mark-voices/
-    /// revision-history/trash. Task 6 removes the old in-body sections this duplicates.
+    /// revision-history/trash. Task 6 removed the old in-body sections this duplicated —
+    /// it is now their only home.
     @State private var showingInfoSheet = false
     @State private var showingJournalPicker = false
     /// One row's tap dismisses the info sheet and then, once the dismissal actually
@@ -117,22 +118,25 @@ struct EntryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                datesSection
-                journalSection
-                // Playback is omitted entirely for an image-only entry (no `.task`-
-                // loaded audio to play), not merely disabled — leaving the images
-                // strip as the first, primary content above the transcript, matching
-                // the design doc's "Entry detail" section exactly.
-                if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
-                    playbackSection
-                }
+                // Task 6 (#55): images strip first (only when non-empty), transcript
+                // immediately after — no header row, no date/journal/trash sections;
+                // all of that now lives in the `⋯` info sheet (`EntryInfoSheet`).
+                // Playback moved out of the scroll entirely (below, pinned via
+                // `.safeAreaInset`), so this VStack no longer decides whether it shows.
                 imagesSection
                 transcriptSection
-                trashSection
             }
             .padding(24)
             .frame(maxWidth: 560, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .safeAreaInset(edge: .bottom) {
+            // Playback is omitted entirely for an image-only entry (no `.task`-loaded
+            // audio to play), not merely disabled — same rule as before, just pinned
+            // to the bottom of the screen instead of living in the scroll content.
+            if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
+                playbackBar
+            }
         }
         #if os(iOS)
         // #101: swipe left = next (page forward, older), right = previous.
@@ -462,31 +466,6 @@ struct EntryDetailView: View {
         }
     }
 
-    private var datesSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // M3 issue #15. Shown only while the detected date is still the one in force
-            // — the moment the owner edits it this is his date, not the recording's, and
-            // saying otherwise would be wrong rather than merely stale.
-            if item.backdateWasDetected {
-                Text("Detected from the recording")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("detail.detectedDate.legacy")
-            }
-            labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
-                .accessibilityIdentifier("detail.capturedAt")
-
-            // No standalone Clear (owner, 2026-08-02): a set backdate is typed intent,
-            // and one stray tap must not erase it. Clearing lives inside the sheet as
-            // an explicit destructive action.
-            if Self.backdateButtonVisible(for: item) {
-                Button("Backdate this entry…") { openBackdateSheet() }
-                    .accessibilityIdentifier("detail.backdateButton.legacy")
-                    .font(.caption)
-            }
-        }
-    }
-
     /// Task 5 (#55): fires from `EntryInfoSheet`'s `onDismiss:`, once the sheet's own
     /// dismissal has actually completed — SwiftUI on iOS needs that before a second
     /// presentation (the editor push, the backdate/image sheets, or the trash/journal
@@ -559,37 +538,15 @@ struct EntryDetailView: View {
         }
     }
 
-    // MARK: - Journal
-
-    private var journalSection: some View {
-        HStack {
-            Text("Journal")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer()
-            // No "Unfiled" choice, deliberately: the M3 decision is that nil journalID
-            // exists only for legacy/degraded entries, and no UI path creates it. An
-            // already-unfiled entry still *displays* as "Unfiled" until it's filed.
-            Menu {
-                ForEach(model.journals) { journal in
-                    Button(journal.name) {
-                        Task {
-                            if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
-                            await refresh()
-                        }
-                    }
-                }
-            } label: {
-                Text(item.journal?.name ?? "Unfiled")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .accessibilityIdentifier("detail.journalPicker.legacy")
-        }
-    }
 
     // MARK: - Playback
 
-    private var playbackSection: some View {
+    /// Task 6 (#55): pinned via `.safeAreaInset(edge: .bottom)` in `body` rather than
+    /// scrolling with the rest of the content — the owner's #55 complaint was that with
+    /// the play bar and images in-flow, the transcript started below the fold. Padded
+    /// like an inset card (`InkTone.paperInset.color`) with a hairline divider on top so
+    /// it reads as a distinct, fixed control strip rather than the last scrolled item.
+    private var playbackBar: some View {
         HStack(spacing: 12) {
             Button(action: togglePlayback) {
                 Image(systemName: (playback?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
@@ -601,6 +558,14 @@ struct EntryDetailView: View {
             if let playback {
                 PlaybackProgressLine(playback: playback, idPrefix: "detail")
             }
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 20)
+        .background(InkTone.paperInset.color)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(InkTone.hairline.color)
+                .frame(height: 1)
         }
     }
 
@@ -623,39 +588,37 @@ struct EntryDetailView: View {
     /// button vanish for it. See `EntryListItem.hasAudio` for the full argument.
     static func playbackSectionVisible(hasAudio: Bool) -> Bool { hasAudio }
 
-    private var imagesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Images")
-                .font(.headline)
+    /// Task 6 (#55): whether the images strip renders at all. Pure, same reasoning as
+    /// `playbackSectionVisible`/`backdateButtonVisible` above — a name a test can call
+    /// directly. "Add Image…" moved to the info sheet, so there is no in-body affordance
+    /// left to keep an empty section around for; an entry with no images now shows
+    /// nothing here at all, and images become the primary, first content the moment
+    /// there are any.
+    static func imagesStripVisible(imageCount: Int) -> Bool { imageCount > 0 }
 
-            if images.isEmpty {
-                Text("Nothing captured yet")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("entryDetail.images.empty")
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
-                            ImageThumbnailView(model: model, captureID: captureID, sidecar: sidecar)
-                                .frame(width: 80, height: 80)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewerIndex = index
-                                    showingImageViewer = true
-                                }
-                                .accessibilityIdentifier("entryDetail.images.thumbnail.\(sidecar.id)")
-                                .accessibilityLabel("Image \(index + 1) of \(images.count)")
-                                .accessibilityAddTraits(.isButton)
-                        }
+    @ViewBuilder
+    private var imagesSection: some View {
+        if Self.imagesStripVisible(imageCount: images.count) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(images.enumerated()), id: \.element.id) { index, sidecar in
+                        ImageThumbnailView(model: model, captureID: captureID, sidecar: sidecar)
+                            .frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                viewerIndex = index
+                                showingImageViewer = true
+                            }
+                            .accessibilityIdentifier("entryDetail.images.thumbnail.\(sidecar.id)")
+                            .accessibilityLabel("Image \(index + 1) of \(images.count)")
+                            .accessibilityAddTraits(.isButton)
                     }
                 }
-                .accessibilityIdentifier("entryDetail.images.strip")
             }
-
-            Button("Capture Image…") { showingImagePicker = true }
-                .font(.caption)
-                .accessibilityIdentifier("entryDetail.images.captureButton.legacy")
+            .accessibilityIdentifier("entryDetail.images.strip")
+        } else {
+            EmptyView()
         }
     }
 
@@ -806,21 +769,18 @@ struct EntryDetailView: View {
     /// rediscover.
     private var transcriptSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Transcript")
-                .font(.headline)
-
             switch Self.transcriptDisplay(transcript) {
             case .absent:
                 Text("This entry was not transcribed.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.absent")
             case .unreadable:
                 Text("The transcript could not be read.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.unreadable")
             case .empty:
                 Text("No speech was transcribed.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.empty")
             case .plain(let text):
                 Text(text)
@@ -911,30 +871,15 @@ struct EntryDetailView: View {
                 .accessibilityIdentifier("detail.transcript.text")
             }
 
-            // The detail screen stays the reader: it gains an Edit affordance and nothing
-            // else. The transcript above is never editable in place.
-            Button("Edit transcript…") { showingEditor = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.editButton.legacy")
-
-            // Its own mode, not inline here (T7 Mark Voices, issue #56, Task 6 — replaces
-            // the old "Correct markers" screen): tap a paragraph to flip its voice, or
-            // drag a range of words to mark it.
-            Button("Mark voices…") { showingVoiceMarking = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.markVoicesButton.legacy")
-
-            // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
-            // and no revert button, so this is the only way back.
-            Button("Revision history…") { showingRevisionHistory = true }
-                .font(.caption)
-                .accessibilityIdentifier("detail.revisionHistoryButton.legacy")
-
+            // Task 6 (#55): edit / mark-voices / revision-history all moved to the `⋯`
+            // info sheet (`EntryInfoSheet`) — the detail screen stays the reader, the
+            // transcript above is never editable in place, and no in-body button is
+            // left here for any of the three.
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "
                      + "finished writing. The recording itself is complete.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.truncated")
             }
         }
@@ -971,16 +916,6 @@ struct EntryDetailView: View {
         VoiceAttributedText.paragraph(paragraph, voiceLabels: voiceLabels)
     }
 
-    // MARK: - Trash
-
-    /// Bottom of the screen, quiet, and behind a confirmation — but present on every
-    /// entry on every platform, per the M3 decision that deletion works anywhere.
-    private var trashSection: some View {
-        Button("Move to Trash", role: .destructive) { showingTrashConfirmation = true }
-            .font(.caption)
-            .accessibilityIdentifier("detail.trashButton.legacy")
-    }
-
     /// Stop playback, then await the write and pop only on success. This used to pop
     /// **before** the write, on the theory that `ContentView`'s destination renders this
     /// screen only while `library.item(captureID)` resolves and the rescan inside
@@ -999,15 +934,6 @@ struct EntryDetailView: View {
                 trashFailed = true
             }
         }
-    }
-
-    private func labeledRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-        }
-        .font(.subheadline)
     }
 }
 

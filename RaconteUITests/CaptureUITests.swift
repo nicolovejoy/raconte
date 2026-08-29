@@ -248,12 +248,18 @@ final class CaptureUITests: XCTestCase {
         let position = app.staticTexts["detail.position"].firstMatch
         XCTAssertTrue(position.waitForExistence(timeout: 5))
 
-        scrubber.adjust(toNormalizedSliderPosition: 0.5)
-
-        // Where the handle actually landed — XCUI's normalized drag is coarse on a
-        // narrow slider, so assert the label tracks the handle, not the midpoint.
-        let handleSeconds = try XCTUnwrap(Self.number(scrubber.value),
+        // XCUI's normalized drag is coarse on a narrow slider: a request for 0.5 can land
+        // within the end-guard band and fail the run on drag imprecision alone (three
+        // first-attempt CI failures, 2026-08-29: 3.54–3.72s of ~4s). The test's claim is
+        // "scrubbing moves the position", not "lands at 50%": walk earlier targets until
+        // the handle lands inside the assertable band.
+        var handleSeconds = 0.0
+        for target in [0.5, 0.35, 0.25] {
+            scrubber.adjust(toNormalizedSliderPosition: target)
+            handleSeconds = try XCTUnwrap(Self.number(scrubber.value),
                                           "unreadable slider value \(String(describing: scrubber.value))")
+            if handleSeconds > 0.5 && handleSeconds < totalSeconds - 0.5 { break }
+        }
         XCTAssertGreaterThan(handleSeconds, 0.5, "the drag barely moved the handle")
         XCTAssertLessThan(handleSeconds, totalSeconds - 0.5,
                           "the handle must land short of the end, or a still-running "

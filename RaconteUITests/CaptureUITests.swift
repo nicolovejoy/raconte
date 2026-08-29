@@ -266,7 +266,7 @@ final class CaptureUITests: XCTestCase {
 
         press(recentRows(app).firstMatch)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        let trashButton = app.buttons["detail.trashButton.legacy"].firstMatch
         XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
         press(trashButton)
         let confirm = app.buttons["detail.confirmTrash"].firstMatch
@@ -320,7 +320,7 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: 30), "the post-stop receipt never appeared")
         press(open)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        let trashButton = app.buttons["detail.trashButton.legacy"].firstMatch
         XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
         press(trashButton)
         let confirm = app.buttons["detail.confirmTrash"].firstMatch
@@ -358,7 +358,7 @@ final class CaptureUITests: XCTestCase {
 
         press(recentRows(app).firstMatch)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        let trashButton = app.buttons["detail.trashButton.legacy"].firstMatch
         XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
         press(trashButton)
         let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
@@ -427,7 +427,7 @@ final class CaptureUITests: XCTestCase {
             waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
             press(recentRows(app).firstMatch)
-            let trashButton = app.buttons["detail.trashButton"].firstMatch
+            let trashButton = app.buttons["detail.trashButton.legacy"].firstMatch
             XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
             press(trashButton)
             let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
@@ -496,7 +496,7 @@ final class CaptureUITests: XCTestCase {
         // frame it was requested — the device report was mid-playback, not mid-tap.
         Thread.sleep(forTimeInterval: 1)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        let trashButton = app.buttons["detail.trashButton.legacy"].firstMatch
         XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
         press(trashButton)
         let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch

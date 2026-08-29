@@ -35,6 +35,18 @@ struct EntryDetailView: View {
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
     @State private var showingTrashConfirmation = false
+    /// Task 5 (#55): the `⋯` sheet gathering journal/backdate/add-image/edit/mark-voices/
+    /// revision-history/trash. Task 6 removes the old in-body sections this duplicates.
+    @State private var showingInfoSheet = false
+    @State private var showingJournalPicker = false
+    /// One row's tap dismisses the info sheet and then, once the dismissal actually
+    /// completes, opens the destination that row named — iOS needs the first
+    /// presentation to finish before a second one can begin, so the follow-on flag
+    /// flips in `.sheet`'s `onDismiss:`, never inline in the row's own action.
+    private enum InfoSheetAction {
+        case journal, backdate, addImage, editTranscript, markVoices, revisionHistory, trash
+    }
+    @State private var pendingInfoAction: InfoSheetAction?
     /// The editor is a full-screen push, not a sheet (T7 Task 4, ruling Q9). Its model is
     /// built once, in `init`, rather than inside the destination builder: a builder that
     /// re-mints it on every body evaluation would restart the editing session under the
@@ -176,6 +188,16 @@ struct EntryDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .principal) { navigationTitleView }
+            // Task 5 (#55): the `⋯` sheet — placed before the paging chevrons so it
+            // reads leading-to-trailing as "more about this entry, then page".
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingInfoSheet = true
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("detail.moreButton")
+            }
             // #101: chevrons match the vertical list — up = previous (newer),
             // down = next (older). Rendered only when there is a list to page
             // (design: scope gate); disabled at the ends (decision 2).
@@ -255,6 +277,35 @@ struct EntryDetailView: View {
         // the pop by however long SwiftUI holds it — without this, backing out of a
         // playing entry keeps playing.
         .onDisappear { playback?.stop() }
+        // Task 5 (#55): outer ScrollView level, never a Form/List Section (repo
+        // memory: a `.sheet` on a Section silently never presents on iOS 26).
+        .sheet(isPresented: $showingInfoSheet, onDismiss: performPendingInfoAction) {
+            EntryInfoSheet(
+                item: item,
+                onJournal: { pendingInfoAction = .journal; showingInfoSheet = false },
+                onBackdate: { pendingInfoAction = .backdate; showingInfoSheet = false },
+                onAddImage: { pendingInfoAction = .addImage; showingInfoSheet = false },
+                onEditTranscript: { pendingInfoAction = .editTranscript; showingInfoSheet = false },
+                onMarkVoices: { pendingInfoAction = .markVoices; showingInfoSheet = false },
+                onRevisionHistory: { pendingInfoAction = .revisionHistory; showingInfoSheet = false },
+                onTrash: { pendingInfoAction = .trash; showingInfoSheet = false }
+            )
+        }
+        // This task keeps the journal choice as a temporary confirmation dialog (brief
+        // step 3, note 1) — the old `journalSection` `Menu`'s content, listed instead
+        // of menued so nothing here trips the macOS Menu+image trap. Task 10 (PR 3)
+        // swaps this for `JournalPickerSheet`.
+        .confirmationDialog("Move to journal", isPresented: $showingJournalPicker, titleVisibility: .visible) {
+            ForEach(model.journals) { journal in
+                Button(journal.name) {
+                    Task {
+                        if !(await model.moveEntry(captureID, toJournal: journal.id)) { moveFailed = true }
+                        await refresh()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .sheet(isPresented: $showingBackdatePicker) { backdateSheet }
         .sheet(isPresented: $showingImagePicker) { imagePickerSheet }
         // `fullScreenCover` doesn't exist on macOS — a large `.sheet` is this
@@ -420,7 +471,7 @@ struct EntryDetailView: View {
                 Text("Detected from the recording")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("detail.detectedDate")
+                    .accessibilityIdentifier("detail.detectedDate.legacy")
             }
             labeledRow("Recorded", item.capturedAt.formatted(date: .long, time: .shortened))
                 .accessibilityIdentifier("detail.capturedAt")
@@ -430,9 +481,28 @@ struct EntryDetailView: View {
             // an explicit destructive action.
             if Self.backdateButtonVisible(for: item) {
                 Button("Backdate this entry…") { openBackdateSheet() }
-                    .accessibilityIdentifier("detail.backdateButton")
+                    .accessibilityIdentifier("detail.backdateButton.legacy")
                     .font(.caption)
             }
+        }
+    }
+
+    /// Task 5 (#55): fires from `EntryInfoSheet`'s `onDismiss:`, once the sheet's own
+    /// dismissal has actually completed — SwiftUI on iOS needs that before a second
+    /// presentation (the editor push, the backdate/image sheets, or the trash/journal
+    /// dialogs) can begin. Pushed destinations don't strictly need the wait but go
+    /// through the same switch for one uniform path (brief note).
+    private func performPendingInfoAction() {
+        guard let action = pendingInfoAction else { return }
+        pendingInfoAction = nil
+        switch action {
+        case .journal: showingJournalPicker = true
+        case .backdate: openBackdateSheet()
+        case .addImage: showingImagePicker = true
+        case .editTranscript: showingEditor = true
+        case .markVoices: showingVoiceMarking = true
+        case .revisionHistory: showingRevisionHistory = true
+        case .trash: showingTrashConfirmation = true
         }
     }
 
@@ -513,7 +583,7 @@ struct EntryDetailView: View {
                 Text(item.journal?.name ?? "Unfiled")
                     .font(.subheadline.weight(.semibold))
             }
-            .accessibilityIdentifier("detail.journalPicker")
+            .accessibilityIdentifier("detail.journalPicker.legacy")
         }
     }
 
@@ -585,7 +655,7 @@ struct EntryDetailView: View {
 
             Button("Capture Image…") { showingImagePicker = true }
                 .font(.caption)
-                .accessibilityIdentifier("entryDetail.images.captureButton")
+                .accessibilityIdentifier("entryDetail.images.captureButton.legacy")
         }
     }
 
@@ -845,20 +915,20 @@ struct EntryDetailView: View {
             // else. The transcript above is never editable in place.
             Button("Edit transcript…") { showingEditor = true }
                 .font(.caption)
-                .accessibilityIdentifier("detail.editButton")
+                .accessibilityIdentifier("detail.editButton.legacy")
 
             // Its own mode, not inline here (T7 Mark Voices, issue #56, Task 6 — replaces
             // the old "Correct markers" screen): tap a paragraph to flip its voice, or
             // drag a range of words to mark it.
             Button("Mark voices…") { showingVoiceMarking = true }
                 .font(.caption)
-                .accessibilityIdentifier("detail.markVoicesButton")
+                .accessibilityIdentifier("detail.markVoicesButton.legacy")
 
             // The whole undo story (T7 Task 8, ruling Q1) — the editor has no discard
             // and no revert button, so this is the only way back.
             Button("Revision history…") { showingRevisionHistory = true }
                 .font(.caption)
-                .accessibilityIdentifier("detail.revisionHistoryButton")
+                .accessibilityIdentifier("detail.revisionHistoryButton.legacy")
 
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "
@@ -908,7 +978,7 @@ struct EntryDetailView: View {
     private var trashSection: some View {
         Button("Move to Trash", role: .destructive) { showingTrashConfirmation = true }
             .font(.caption)
-            .accessibilityIdentifier("detail.trashButton")
+            .accessibilityIdentifier("detail.trashButton.legacy")
     }
 
     /// Stop playback, then await the write and pop only on success. This used to pop

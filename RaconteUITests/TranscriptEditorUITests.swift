@@ -50,7 +50,7 @@ final class TranscriptEditorUITests: XCTestCase {
         let app = launchApp()
         openSeededEntry(app)
 
-        let edit = app.buttons["detail.editButton"].firstMatch
+        let edit = app.buttons["detail.editButton.legacy"].firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 10))
         press(edit)
 
@@ -89,7 +89,7 @@ final class TranscriptEditorUITests: XCTestCase {
         XCTAssertTrue(transcript.label.contains("the machine heard these words"),
                       "unexpected seeded transcript: \(transcript.label)")
 
-        let edit = app.buttons["detail.editButton"].firstMatch
+        let edit = app.buttons["detail.editButton.legacy"].firstMatch
         XCTAssertTrue(edit.waitForExistence(timeout: 10), "no Edit affordance on the detail screen")
         press(edit)
 

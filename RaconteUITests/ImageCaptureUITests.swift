@@ -92,7 +92,7 @@ final class ImageCaptureUITests: XCTestCase {
         XCTAssertTrue(newEntry.waitForExistence(timeout: 15))
         press(newEntry)
 
-        let captureButton = app.buttons["entryDetail.images.captureButton"].firstMatch
+        let captureButton = app.buttons["entryDetail.images.captureButton.legacy"].firstMatch
         XCTAssertTrue(captureButton.waitForExistence(timeout: 15),
                       "the entry detail screen must offer a Capture Image… affordance")
         press(captureButton)
@@ -105,7 +105,7 @@ final class ImageCaptureUITests: XCTestCase {
         XCTAssertTrue(cancel.waitForExistence(timeout: 15))
         press(cancel)
 
-        XCTAssertTrue(app.buttons["entryDetail.images.captureButton"].firstMatch.waitForExistence(timeout: 15),
+        XCTAssertTrue(app.buttons["entryDetail.images.captureButton.legacy"].firstMatch.waitForExistence(timeout: 15),
                       "Cancel should dismiss the sheet back to the still-open detail screen")
     }
 

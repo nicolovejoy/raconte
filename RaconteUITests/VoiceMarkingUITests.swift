@@ -73,7 +73,7 @@ final class VoiceMarkingUITests: XCTestCase {
     }
 
     private func openMarkVoices(_ app: XCUIApplication) {
-        let markVoices = app.buttons["detail.markVoicesButton"].firstMatch
+        let markVoices = app.buttons["detail.markVoicesButton.legacy"].firstMatch
         XCTAssertTrue(markVoices.waitForExistence(timeout: 15), "no Mark voices affordance on the detail screen")
         press(markVoices)
     }

@@ -34,7 +34,7 @@ struct CaptureView: View {
     /// rules per phase are `CaptureLayoutModel`'s.
     var body: some View {
         ZStack {
-            Color(white: 0.05).ignoresSafeArea()
+            InkTone.studio.color.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 if let receipt = model.receipt, layout.showsReceipt {
@@ -192,7 +192,7 @@ struct CaptureView: View {
         .padding(.top, CaptureControlBarMetrics.topPadding)
         .padding(.bottom, CaptureControlBarMetrics.bottomPadding)
         .frame(maxWidth: .infinity)
-        .background(Color(white: 0.05))
+        .background(InkTone.studio.color)
         // Deliberately NO accessibilityIdentifier on this container. Putting one here
         // turns the bar into a single accessibility element that absorbs its children,
         // and `capture.record` / `capture.voiceSwitch` / `capture.paragraph` stop being

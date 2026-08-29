@@ -172,6 +172,12 @@ struct ContentView: View {
 
     @ViewBuilder private var detailRoot: some View {
         switch services.router.place {
+        case .home:
+            HomeView(library: services.library,
+                     onOpenJournal: { services.router.select(.journal($0)) },
+                     onNewEntry: { services.router.select(.capture) })
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .capture:
             CaptureView(model: services.capture)
         case .allEntries:
@@ -214,7 +220,7 @@ struct ContentView: View {
             return "All Entries"
         case .journal(let id):
             return services.library.journals.first(where: { $0.id == id })?.name ?? "Library"
-        case .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .about, .debug:
             return "Library"
         }
     }

@@ -75,12 +75,18 @@ final class HomeShelfModelTests: XCTestCase {
     }
 
     func testBackdatingDoesNotReorder() {
-        let t = Date(timeIntervalSince1970: 1_000_000)
+        // Both journals' capturedAt live in the same modern range (2026) so the
+        // backdate below actively OPPOSES capture order — an implementation that
+        // (wrongly) ranked by effectiveDate would flip to [B, A] here, catching the
+        // bug a same-decade backdate would miss.
+        let t = Date(timeIntervalSince1970: 1_770_000_000) // ~2026
         let a = makeJournal("A", createdAt: t)
         let b = makeJournal("B", createdAt: t + 1)
 
-        // A's entry captured t+20 but with originalDate set to a year ago;
-        // B's entry captured t+10, no backdate. A still outranks B.
+        // A's entry captured t+20 (2026) but with originalDate backdated to 2020 —
+        // EARLIER than B's own capturedAt. B's entry captured t+10 (2026), no
+        // backdate. Capture-time ranking keeps A first; effectiveDate ranking would
+        // put B first.
         var aEntry = makeItem(journalID: a.id, capturedAt: t + 20)
         aEntry.originalDate = PartialDate(year: 2020, month: 1, day: 1)
         let bEntry = makeItem(journalID: b.id, capturedAt: t + 10)

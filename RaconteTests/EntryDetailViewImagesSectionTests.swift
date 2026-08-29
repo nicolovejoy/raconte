@@ -29,4 +29,34 @@ final class EntryDetailViewImagesSectionTests: XCTestCase {
     func testImagesStripHiddenWithNoImages() {
         XCTAssertFalse(EntryDetailView.imagesStripVisible(imageCount: 0))
     }
+
+    // MARK: - #107: image-first invitation to speak, not type
+
+    /// An image-only entry (no audio, at least one image) invites the owner to speak
+    /// about the picture instead of showing the plain "not transcribed" line.
+    func testInviteRecordingVisibleForImageOnlyEntry() {
+        XCTAssertTrue(EntryDetailView.inviteRecordingVisible(hasAudio: false, imageCount: 1))
+    }
+
+    /// An entry that already has audio never shows the invitation, regardless of images —
+    /// there is already a recording; the invitation is only for entries with none.
+    func testInviteRecordingHiddenWhenAudioExists() {
+        XCTAssertFalse(EntryDetailView.inviteRecordingVisible(hasAudio: true, imageCount: 1))
+    }
+
+    /// No audio and no images is the plain absent-transcript case, not an invitation —
+    /// there is nothing (yet) to invite speaking about.
+    func testInviteRecordingHiddenWithNoImagesAndNoAudio() {
+        XCTAssertFalse(EntryDetailView.inviteRecordingVisible(hasAudio: false, imageCount: 0))
+    }
+
+    /// The invitation and the plain ".absent" transcript string are mutually exclusive:
+    /// `transcriptDisplay` still reports `.absent` for an image-only entry (there really
+    /// is no transcript), but the invitation flag tells the view to render the invitation
+    /// block INSTEAD of the "This entry was not transcribed." text, never both.
+    func testInviteReplacesAbsentStringNeverBoth() {
+        let transcript = EntryTranscript(state: .absent, text: nil, degradations: [])
+        XCTAssertEqual(EntryDetailView.transcriptDisplay(transcript), .absent)
+        XCTAssertTrue(EntryDetailView.inviteRecordingVisible(hasAudio: false, imageCount: 1))
+    }
 }

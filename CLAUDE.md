@@ -17,18 +17,28 @@ the UX feels really pieced together" — on iOS the entry detail's top third is 
 date-recorded + journal title; with play bar and images the transcript starts below the
 fold (recorded on #55).
 
+**UX redesign execution (2026-08-29, SDD with Sonnet worktree agents):** PR #112
+(ink tokens, accent #916438) and PR #113 (entry detail: EntryInfoSheet, transcript-first
+body + pinned play bar, image-first invitation) merged — #55, #103, #107 (detail scope)
+closed. In flight at reboot time: **#18 JournalPickerSheet** in worktree
+`.claude/worktrees/ux-redesign` on `feat/ux-journals` — commit 63088fad plus
+uncommitted UI-test fixes, agent was re-running `JournalEditorUITests` split against
+the 10-min cap. Branch is NOT pushed.
+
 **Next steps:**
-1. **UX exploration session (owner + design pass): landing page → capture page →
-   viewing entries.** Anchor issues: #108 (abrupt opening), #55 (detail hierarchy +
-   header economy / transcript below the fold), #18 (journal switcher), #103 (stale
-   transcript on page turn — fix rides along). Start from the owner's words on #55.
-2. **Invite Lori** (internal tester, all devices): Signal note sent; when her Apple
+1. **Land #18**: resume/redispatch the ux-journals worker — finish the split UI-test
+   runs (`JournalEditorUITests`, `NavigationUITests`), commit, push, PR, merge on green.
+2. **UX pass remainder**: #108 (abrupt opening / landing experience) — the one anchor
+   issue from the owner's "pieced together" verdict still open. Then a TestFlight
+   build 12 with the whole UX branch set for owner device smoke.
+3. **Invite Lori** (internal tester, all devices): Signal note sent; when her Apple
    Account email arrives → ASC Users and Access → Customer Support role → TestFlight
    Internal group, automatic distribution on.
-3. **#107 design pass** — ruling recorded on the issue (speech stays the only text
-   source); scope: attach-image → invite-recording flow. Fits inside the UX session.
 4. Remaining sync hardening, demoted: #91 (reconcile-on-foreground), #85 (park inbound
    asset failures). Capture Schema → History for the three unidentified deployed changes.
+5. Housekeeping: delete merged local branches (`feat/101-entry-paging`,
+   `feat/ux-ink-tokens`) and the stale locked worktree
+   `.claude/worktrees/agent-acaa1f33aed0e5214`.
 
 ## What Raconte is
 

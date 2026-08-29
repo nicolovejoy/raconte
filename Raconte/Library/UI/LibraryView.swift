@@ -257,6 +257,8 @@ struct LibraryView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(InkTone.paper.color)
             .accessibilityIdentifier("library.list")
         }
     }

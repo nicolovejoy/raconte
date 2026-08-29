@@ -177,16 +177,24 @@ struct ContentView: View {
         case .allEntries:
             LibraryView(model: services.library, title: "All Entries", journal: nil,
                         onCreateEntry: { services.router.detailPath.append(.entry($0)) })
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .journal(let id):
             LibraryView(model: services.library,
                         title: libraryTitle,
                         journal: services.library.journals.first { $0.id == id },
                         onEditJournal: { services.router.detailPath.append(.journalEditor($0)) },
                         onCreateEntry: { services.router.detailPath.append(.entry($0)) })
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .trash:
             TrashView(model: services.library)
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .about:
             AboutView(sync: services.sync)
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .debug:
             #if DEBUG
             DebugMenuView(sync: services.sync)

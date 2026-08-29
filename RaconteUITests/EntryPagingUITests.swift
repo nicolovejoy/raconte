@@ -151,7 +151,10 @@ final class EntryPagingUITests: XCTestCase {
     /// `ContentView.swift` — so both routes are covered by the same `.id(captureID)`
     /// pin), but through a fresh push rather than `onPage`'s in-place path replacement,
     /// which is worth pinning independently since it is a structurally different
-    /// SwiftUI code path (a full pop + a new push, not a path-element replace).
+    /// SwiftUI code path (a full pop + a new push, not a path-element replace). Back
+    /// navigation goes through `openPlace(app, "sidebar.allEntries")`, not a hard-coded
+    /// nav-bar tap — see `UITestNavigation.swift`'s doc comment for why that matters on
+    /// iPhone's collapsed split view vs. Mac/iPad's two-column layout.
     func testTranscriptDoesNotLingerAfterListBackAndReselect() {
         let app = launchApp()
         openPlace(app, "sidebar.allEntries")
@@ -163,9 +166,10 @@ final class EntryPagingUITests: XCTestCase {
         let firstLabel = transcriptParagraphLabel(app)
         XCTAssertTrue(firstLabel.contains("one"), "row 0's transcript should read \"one two three\", got \(firstLabel)")
 
-        // Back to the list — the nav bar's leading button, same idiom
-        // `VoiceMarkingUITests` uses to exit a pushed screen.
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // Back to the list — through `openPlace`, not a hard-coded nav-bar tap: it
+        // already handles the iPhone-collapsed-vs-Mac/iPad-both-columns difference
+        // (back-button vs. straight tap) in one place (project convention).
+        openPlace(app, "sidebar.allEntries")
 
         let rowsAgain = app.descendants(matching: .any).matching(identifier: "library.entryLink")
         XCTAssertTrue(rowsAgain.element(boundBy: 1).waitForExistence(timeout: 20),

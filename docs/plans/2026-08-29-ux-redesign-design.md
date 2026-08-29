@@ -40,7 +40,7 @@ SwiftUI adapter file, tests pin contrast — but for the whole app:
     ground); `hairline` #E5DFD4.
   - `ink` #211D18 / off-white; `inkSecondary` #8B8478; both held to ≥ 4.5:1
     on `paper`, pinned by test like `CaptureLabelColorTests`.
-  - `accent` warm amber #96683A (links, active states, scrubber) —
+  - `accent` warm amber #916438 (darkened from the mock's #96683A to clear 4.5:1 on paper) (links, active states, scrubber) —
     replaces default blue accent on reading surfaces.
   - `record` red #E5484D — the app's one loud color, shared by capture and
     the floating record button.

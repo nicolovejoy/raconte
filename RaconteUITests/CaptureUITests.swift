@@ -168,6 +168,11 @@ final class CaptureUITests: XCTestCase {
         openCapture(relaunched)
         let rows = recentRows(relaunched)
         waitUntil(20, "entry lost across relaunch") { rows.count == 1 }
+        // Re-check after bootstrap/scan has definitely completed (the entry row
+        // wait above proves the scan finished), not just at the racy moment
+        // right after relaunch.
+        XCTAssertFalse(recoveryBanner(relaunched).exists,
+                       "spurious recovery banner on idle relaunch (post-scan check)")
     }
 
     // MARK: doc test 22 (flow) — repeated record/stop cycles, one entry each

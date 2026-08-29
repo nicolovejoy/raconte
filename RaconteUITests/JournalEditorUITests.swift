@@ -87,7 +87,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -117,7 +117,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -170,7 +170,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -217,7 +217,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -253,7 +253,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         openPlace(app, "sidebar.allEntries")
         XCTAssertFalse(app.descendants(matching: .any)
@@ -439,7 +439,7 @@ final class JournalEditorUITests: XCTestCase {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         revealSidebar(app)
         let journalRowsBefore = app.descendants(matching: .any)
@@ -499,7 +499,7 @@ final class JournalEditorUITests: XCTestCase {
         openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }

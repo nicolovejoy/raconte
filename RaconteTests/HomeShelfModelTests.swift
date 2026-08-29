@@ -140,4 +140,18 @@ final class HomeShelfModelTests: XCTestCase {
         let shelf = HomeShelf.make(journals: [a, b], entries: entries, faceOutLimit: 3)
         XCTAssertEqual(shelf.faceOut.map(\.name), ["A", "B"])
     }
+
+    func testZeroJournalsProducesEmptyShelf() {
+        let t = Date(timeIntervalSince1970: 1_000_000)
+        // Fresh install / all-journals-deleted edge case: an entry can still exist
+        // with a journalID that matches no journal (same fallback as the
+        // dangling-journalID case above) — must not crash, must produce an empty
+        // shelf in every dimension.
+        let entries = [makeItem(journalID: ULID.make(), capturedAt: t)]
+
+        let shelf = HomeShelf.make(journals: [], entries: entries, faceOutLimit: 3)
+        XCTAssertEqual(shelf.faceOut, [])
+        XCTAssertEqual(shelf.spines, [])
+        XCTAssertTrue(shelf.lastActivity.isEmpty)
+    }
 }

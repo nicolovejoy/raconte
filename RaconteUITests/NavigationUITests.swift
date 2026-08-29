@@ -163,8 +163,9 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
                       "the app did not launch into the capture screen")
 
-        // Straight from Capture — the launch place — to the bare sidebar, with NO
-        // intermediate place change in between. `router.place` never left `.capture`,
+        // Navigate to Capture first (Home is the launch place since #108, not Capture),
+        // then to the bare sidebar, with NO intermediate place change in between.
+        // `router.place` never left `.capture`,
         // so tapping the Capture row writes the exact value a naive binding's getter
         // already reports as selected — this is what makes Capture uniquely stranded
         // (every other place still has a DIFFERENT row to fall back on first; going via

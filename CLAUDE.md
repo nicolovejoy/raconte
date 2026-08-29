@@ -11,20 +11,24 @@ silently. #101 entry paging (PR #111, Sonnet worktree agent, SDD) merged: chevro
 swipe, macOS ⌥⌘↑/↓. Backlog: closed #89/#90/#94/#54, retrimmed #86. Build 11 (paging)
 uploaded to TestFlight, both platforms.
 
+**Build 11 smoke passed** (2026-08-28): paging works on device — swipe, chevrons,
+⌥⌘ arrows, ends disabled; #101 closed. Owner verdict on the broader experience: "all of
+the UX feels really pieced together" — on iOS the entry detail's top third is date +
+date-recorded + journal title; with play bar and images the transcript starts below the
+fold (recorded on #55).
+
 **Next steps:**
-1. **Smoke build 11 paging on device** (simulator can't prove it): iPhone — swipe
-   left/right in an entry; Mac — ⌥⌘↓/⌥⌘↑ in an entry. Watch for lingering transcript
-   from the previous entry (that's #103). Pass → close #101.
-2. **Invite Lori** (internal tester, all devices): Signal note drafted (devlog); get her
-   Apple Account email (Settings → her name), then ASC → Users and Access → add her
-   (Customer Support role) → TestFlight Internal group with automatic distribution.
-3. **#103 stale transcript** — now user-visible with paging shipped; small fix
-   (`.task` without `id:` in EntryDetailView).
-4. **#107 design pass** — ruling recorded on the issue (purist: speech stays the only
-   text source); scope is now attach-image → invite-recording flow.
-5. Remaining sync hardening, both demoted: #91 (reconcile-on-foreground) and #85
-   (park inbound asset failures instead of discarding). Capture Schema → History for
-   the three unidentified deployed CloudKit changes.
+1. **UX exploration session (owner + design pass): landing page → capture page →
+   viewing entries.** Anchor issues: #108 (abrupt opening), #55 (detail hierarchy +
+   header economy / transcript below the fold), #18 (journal switcher), #103 (stale
+   transcript on page turn — fix rides along). Start from the owner's words on #55.
+2. **Invite Lori** (internal tester, all devices): Signal note sent; when her Apple
+   Account email arrives → ASC Users and Access → Customer Support role → TestFlight
+   Internal group, automatic distribution on.
+3. **#107 design pass** — ruling recorded on the issue (speech stays the only text
+   source); scope: attach-image → invite-recording flow. Fits inside the UX session.
+4. Remaining sync hardening, demoted: #91 (reconcile-on-foreground), #85 (park inbound
+   asset failures). Capture Schema → History for the three unidentified deployed changes.
 
 ## What Raconte is
 

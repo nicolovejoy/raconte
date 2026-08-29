@@ -5,6 +5,7 @@ import SwiftUI
 /// Design doc: docs/plans/2026-08-29-home-bookshelf-design.md.
 struct HomeView: View {
     let library: LibraryScreenModel
+    let capture: CaptureScreenModel
     let onOpenJournal: (String) -> Void
     let onNewEntry: () -> Void
 
@@ -17,10 +18,12 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             if library.journals.isEmpty {
+                recoveryBanners
                 emptyInvitation
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
+                        recoveryBanners
                         faceOutRow
                         spineList
                     }
@@ -32,6 +35,28 @@ struct HomeView: View {
         }
         .background(InkTone.paper.color)
         .navigationTitle("Raconte")
+    }
+
+    /// #108: the crash-recovery banners CaptureView shows, mirrored here since Home is
+    /// now the launch root and recovery must not depend on ever visiting capture. Same
+    /// call site arguments as `CaptureView.setupRegion` (`visibleRecovered`,
+    /// `capturesRoot`, `keep`/`delete`). `RecoveryBanner` is styled for the near-black
+    /// studio (white text, `.orange` tint) — illegible on paper — so it is wrapped in a
+    /// dark card here rather than restyled at the shared-view level (spec ruling). No
+    /// auto-jump to capture: the banner is the whole treatment.
+    @ViewBuilder
+    private var recoveryBanners: some View {
+        ForEach(capture.visibleRecovered) { rec in
+            RecoveryBanner(recording: rec,
+                           capturesRoot: capture.capturesRoot,
+                           onKeep: { capture.keep(rec.captureID) },
+                           onDelete: { capture.delete(rec.captureID) })
+                .padding(12)
+                .background(InkTone.studio.color,
+                           in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .environment(\.colorScheme, .dark)
+                .padding(.horizontal, 24)
+        }
     }
 
     private var faceOutRow: some View {

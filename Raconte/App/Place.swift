@@ -136,7 +136,7 @@ struct CaptureSidebarRow: Equatable, Sendable {
 }
 
 enum PlaceRouting {
-    static let launchPlace: Place = .capture
+    static let launchPlace: Place = .home
 
     /// Selecting any place — including the one you're already in — resets the detail
     /// path to root. Different place: obviously clears it. Same place: pops to root

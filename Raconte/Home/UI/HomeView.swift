@@ -105,7 +105,7 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("home.spine.\(journal.id)")
                     .overlay(alignment: .bottom) {
-                        Divider().background(InkTone.hairline.color)
+                        Divider().overlay(InkTone.hairline.color)
                     }
                 }
             }

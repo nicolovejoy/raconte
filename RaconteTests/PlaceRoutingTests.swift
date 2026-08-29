@@ -84,8 +84,9 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertNil(PlaceRouting.journalScope(for: .debug))
     }
 
-    func testRouterLaunchesOnCapture() {
-        XCTAssertEqual(AppRouter().place, .capture)
+    func testRouterLaunchesOnHome() {
+        // #108: Home replaces Capture as PlaceRouting.launchPlace.
+        XCTAssertEqual(AppRouter().place, .home)
         XCTAssertTrue(AppRouter().detailPath.isEmpty)
     }
 

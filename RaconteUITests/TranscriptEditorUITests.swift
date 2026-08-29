@@ -73,6 +73,9 @@ final class TranscriptEditorUITests: XCTestCase {
     }
 
     private func openSeededEntry(_ app: XCUIApplication) {
+        // #108: launch now lands on Home, and `capture.recentRow` only exists on the
+        // capture screen — visit it before looking for the seeded entry's row.
+        openCapture(app)
         let recentRow = app.descendants(matching: .any)
             .matching(identifier: "capture.recentRow").firstMatch
         XCTAssertTrue(recentRow.waitForExistence(timeout: 20), "seeded entry never appeared")

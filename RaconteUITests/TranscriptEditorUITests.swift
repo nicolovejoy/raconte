@@ -50,8 +50,7 @@ final class TranscriptEditorUITests: XCTestCase {
         let app = launchApp()
         openSeededEntry(app)
 
-        let edit = app.buttons["detail.editButton"].firstMatch
-        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        let edit = openEditRow(app)
         press(edit)
 
         let textView = app.textViews["editor.text"].firstMatch
@@ -80,6 +79,17 @@ final class TranscriptEditorUITests: XCTestCase {
         press(recentRow)
     }
 
+    /// Task 6 (#55): "Edit transcript" moved from an in-body button to a row in the `⋯`
+    /// info sheet — open the sheet first, then hand back its edit row.
+    private func openEditRow(_ app: XCUIApplication) -> XCUIElement {
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "`⋯` toolbar button missing on detail")
+        press(more)
+        let edit = app.buttons["detail.editButton"].firstMatch
+        XCTAssertTrue(edit.waitForExistence(timeout: 10), "Edit transcript row missing from the info sheet")
+        return edit
+    }
+
     func testEditTranscriptThenDoneShowsTheEditedTextOnTheDetailScreen() throws {
         let app = launchApp()
         openSeededEntry(app)
@@ -89,8 +99,7 @@ final class TranscriptEditorUITests: XCTestCase {
         XCTAssertTrue(transcript.label.contains("the machine heard these words"),
                       "unexpected seeded transcript: \(transcript.label)")
 
-        let edit = app.buttons["detail.editButton"].firstMatch
-        XCTAssertTrue(edit.waitForExistence(timeout: 10), "no Edit affordance on the detail screen")
+        let edit = openEditRow(app)
         press(edit)
 
         let textView = app.textViews["editor.text"].firstMatch

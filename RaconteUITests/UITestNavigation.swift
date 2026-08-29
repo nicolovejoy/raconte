@@ -23,12 +23,25 @@ func openPlace(_ app: XCUIApplication,
                file: StaticString = #filePath,
                line: UInt = #line) {
     let row = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
-    if !row.waitForExistence(timeout: 3) {
+    // Looped, not a single conditional tap (#103 fix round 1): a caller sitting two
+    // pushes deep in the detail stack — e.g. a paging test popping from a pushed
+    // `EntryDetailView` back to the sidebar — needs more than one reveal/back tap on
+    // iPhone's collapsed split view to reach a sidebar row at all. Bounded at 5 so a
+    // genuinely unreachable identifier still fails loudly via the assertion below
+    // rather than looping forever. A caller already one hop away (the common case
+    // every existing use of this helper was written against) still resolves on the
+    // very first `waitForExistence` check, so this is a pure generalization —
+    // zero behavior change for anyone already reachable in one tap.
+    var attempts = 0
+    while !row.waitForExistence(timeout: 3) && attempts < 5 {
         if app.buttons["Show Sidebar"].firstMatch.exists {
             app.buttons["Show Sidebar"].firstMatch.tap()
         } else if app.navigationBars.buttons.firstMatch.exists {
             app.navigationBars.buttons.firstMatch.tap()
+        } else {
+            break
         }
+        attempts += 1
     }
     XCTAssertTrue(row.waitForExistence(timeout: 15),
                   "could not reach \(identifier)", file: file, line: line)

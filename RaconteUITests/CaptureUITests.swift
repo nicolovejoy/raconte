@@ -42,6 +42,18 @@ final class CaptureUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "capture.recentRow")
     }
 
+    /// Task 6 (#55): the trash affordance moved from an in-body button to a row in the
+    /// `⋯` info sheet — open the sheet first, then hand back its trash row, same
+    /// identifier as before minus the `.legacy` suffix.
+    private func openTrashRow(_ app: XCUIApplication) -> XCUIElement {
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "`⋯` toolbar button missing on detail")
+        press(more)
+        let trashButton = app.buttons["detail.trashButton"].firstMatch
+        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "Move to Trash row missing from the info sheet")
+        return trashButton
+    }
+
     /// Wait for the post-stop receipt and dismiss it.
     ///
     /// Added 2026-08-15. Finishing a capture used to drop straight back to the landing
@@ -266,8 +278,7 @@ final class CaptureUITests: XCTestCase {
 
         press(recentRows(app).firstMatch)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
-        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        let trashButton = openTrashRow(app)
         press(trashButton)
         let confirm = app.buttons["detail.confirmTrash"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
@@ -320,8 +331,7 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(open.waitForExistence(timeout: 30), "the post-stop receipt never appeared")
         press(open)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
-        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        let trashButton = openTrashRow(app)
         press(trashButton)
         let confirm = app.buttons["detail.confirmTrash"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
@@ -358,8 +368,7 @@ final class CaptureUITests: XCTestCase {
 
         press(recentRows(app).firstMatch)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
-        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        let trashButton = openTrashRow(app)
         press(trashButton)
         let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
         XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
@@ -427,8 +436,7 @@ final class CaptureUITests: XCTestCase {
             waitUntil(15, "screen never reset to idle") { record.label == "Record" }
 
             press(recentRows(app).firstMatch)
-            let trashButton = app.buttons["detail.trashButton"].firstMatch
-            XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+            let trashButton = openTrashRow(app)
             press(trashButton)
             let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
             XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
@@ -496,8 +504,7 @@ final class CaptureUITests: XCTestCase {
         // frame it was requested — the device report was mid-playback, not mid-tap.
         Thread.sleep(forTimeInterval: 1)
 
-        let trashButton = app.buttons["detail.trashButton"].firstMatch
-        XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "no Move to Trash button")
+        let trashButton = openTrashRow(app)
         press(trashButton)
         let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
         XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")

@@ -16,6 +16,11 @@ can't smoke-pass as success. 1972 unit tests green. PR #110 merged after CI; bui
 uploaded (headless, both platforms). **Device smoke passed immediately: iPhone pending
 10→0, iPad 106→0.** The sync saga that began 2026-08-23 is closed.
 
+Late addendum: build 11 paging smoke PASSED on device; #101 closed. Owner's verdict
+kicks off the next arc: the UX "feels really pieced together" — entry detail's top third
+is metadata chrome and the transcript starts below the fold (captured on #55); next
+session is a landing→capture→viewing design pass.
+
 In parallel, a Sonnet worktree agent executed the #101 entry-paging plan end-to-end
 (EntryPager pure core, chevrons + iOS swipe + macOS ⌥⌘ arrows, identity-pinned page
 turns, 1980 unit green + 6-class UI sweep); PR #111 merged. Build 11 (with paging)

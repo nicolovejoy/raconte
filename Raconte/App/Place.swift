@@ -12,6 +12,7 @@ import Observation
 /// which is exactly the silent-fallback hazard the no-`default` convention exists to
 /// prevent.
 enum Place: Hashable, Sendable {
+    case home
     case capture
     case journal(String)      // journal id
     case allEntries
@@ -32,12 +33,14 @@ struct PlaceRow: Identifiable, Equatable, Sendable {
 }
 
 enum SidebarModel {
-    /// Row order and titles (locked): Capture, then one row per journal in DISPLAY
-    /// order (`Array<Journal>.displayOrdered` — createdAt ascending, id tie-break), then
-    /// All Entries, then Trash, then Debug when `includesDebug`. Superseded 2026-08-21
-    /// (owner report, issue #79): this used to say "registry order", but registry order
-    /// is per-device insertion history and differs between devices — the sidebar showed
-    /// a different journal order on every device and surface as a result.
+    /// Row order and titles (locked): Home, Capture, then one row per journal in
+    /// DISPLAY order (`Array<Journal>.displayOrdered` — createdAt ascending, id
+    /// tie-break), then All Entries, then Trash, then About, then Debug when
+    /// `includesDebug`. Superseded 2026-08-21 (owner report, issue #79): this used to
+    /// say "registry order", but registry order is per-device insertion history and
+    /// differs between devices — the sidebar showed a different journal order on every
+    /// device and surface as a result. Home prepended 2026-08-29 (#108): the bookshelf
+    /// landing, sidebar-reachable ahead of the launch-place flip in Task 3.
     ///
     /// `dateRanges` is journalID → formatted range (or absent). Caller supplies it from
     /// `LibraryScreenModel.dateRange(forJournal:)` so this stays pure.
@@ -45,6 +48,15 @@ enum SidebarModel {
                      dateRanges: [String: String],
                      includesDebug: Bool) -> [PlaceRow] {
         var rows: [PlaceRow] = [
+            // "house", not "books.vertical.fill" (controller ruling, #108 task 2):
+            // the filled-books variant read as too confusable with All Entries'
+            // "books.vertical" at sidebar size.
+            PlaceRow(place: .home,
+                     title: "Home",
+                     subtitle: nil,
+                     systemImage: "house",
+                     journalID: nil,
+                     accessibilityIdentifier: "sidebar.home"),
             PlaceRow(place: .capture,
                      title: "Capture",
                      subtitle: nil,
@@ -151,7 +163,7 @@ enum PlaceRouting {
         switch place {
         case .journal(let id):
             return journals.contains { $0.id == id } ? place : .capture
-        case .capture, .allEntries, .trash, .about, .debug:
+        case .home, .capture, .allEntries, .trash, .about, .debug:
             return place
         }
     }
@@ -164,7 +176,7 @@ enum PlaceRouting {
             return .all
         case .journal(let id):
             return .journal(id)
-        case .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .about, .debug:
             return nil
         }
     }

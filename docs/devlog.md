@@ -3,6 +3,28 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-29 (laptop — #18 merged; #108 designed AND shipped: Home bookshelf landing, PR #115)
+
+**#18 landed** (PR #114 — the ux-journals worker had already committed its UI-test fixes
+and opened the PR; merged on green). **#108 went design-session → owner-picked mocks →
+spec → SDD build → merged in one session**: the app now launches onto **Home** — 3
+face-out journal covers ranked by capture activity (backdates never reorder), remaining
+journals as quiet serif spines, one New-entry button (owner ruled: one tap to record is
+fine; quiet-list spines over the literal shelf; corners squared 8/12pt). Crash recovery
+rehomed to the root (`bootstrap()` kicks from ContentView; banners render on Home in a
+pinned-dark card, inline Play/Keep/Delete — tap-to-capture routing superseded). Rider:
+de-flaked `testScrubbingAFinishedEntryMovesThePosition` (was red-on-first-attempt on 3
+consecutive main runs post-#113). Design/plan docs:
+`docs/plans/2026-08-29-home-bookshelf-{design,plan}.md`; mock canvas
+https://claude.ai/code/artifact/e7f3285c-e0dd-4d39-949a-c49956c486f6. 2009 unit /
+57 UI green. Housekeeping done: stale worktrees + merged branches removed.
+Stall #12 recorded: Bash's 120s DEFAULT timeout auto-backgrounds longer test runs —
+dispatches must say explicit `timeout: 600000` (memory updated).
+
+Note, in hindsight (recorded next session): shipping #108 as a new Home screen rather
+than the planned capture-landing re-skin quietly orphaned PR 4 of the UX redesign. See
+#118.
+
 ## Session 2026-08-27/28 (laptop — sync loop FIXED and device-verified; #101 paging shipped; builds 10+11)
 
 Resync (light) verified the roadmap against main: closed #89/#90/#94 (code-verified with

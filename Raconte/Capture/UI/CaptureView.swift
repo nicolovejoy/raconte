@@ -202,7 +202,18 @@ struct CaptureView: View {
     /// scroll nested inside the page scroll, which is its own source of confused gestures.
     @ViewBuilder
     private var transcriptRegion: some View {
-        if let transcription = model.transcription, !transcription.displayText.isEmpty {
+        // `layout.showsLiveTranscript` FIRST, not just "is there text". The transcription
+        // session deliberately holds the finished text after a capture ends (so the panel
+        // doesn't blank the instant you stop) and a fresh coordinator does not clear it —
+        // it belongs to the session, not the coordinator. On the ordinary path the receipt
+        // covers this region, so the stale text was never seen. Discard sets `receipt =
+        // nil`, which uncovered it: owner smoke 2026-08-30, "the transcription stays,
+        // though not in the journal is it visible" — the words stranded on the landing
+        // screen, belonging to a recording that no longer exists. That is precisely the
+        // #53-era defect `showsLiveTranscript` was added to prevent; this view was simply
+        // not asking it.
+        if layout.showsLiveTranscript,
+           let transcription = model.transcription, !transcription.displayText.isEmpty {
             ScrollView {
                 Text(transcription.displayText)
                     .font(.callout)

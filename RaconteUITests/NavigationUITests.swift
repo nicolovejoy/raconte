@@ -356,6 +356,25 @@ final class NavigationUITests: XCTestCase {
         }
     }
 
+    // MARK: - Task 11 (#117): the floating record button
+
+    /// `library.record`: tap it and land on the capture screen — the smoke the brief
+    /// calls for. All Entries (not a journal) exercises the "records into the current
+    /// journal unchanged" path; the journal-scoped preselect path reuses the exact
+    /// `CaptureScreenModel.selectJournal` call the capture screen's own picker already
+    /// has thorough coverage for (`testSelectingAJournalPlaceScopesTheEntryList` and
+    /// `JournalEditorUITests`), so this smoke doesn't re-prove that call works — only
+    /// that the button reaches capture from the library screen at all.
+    func testFloatingRecordButtonRoutesToCapture() {
+        let app = launchApp()
+        openPlace(app, "sidebar.allEntries")
+        let record = app.buttons["library.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "no floating record button on the library screen")
+        press(record)
+        XCTAssertTrue(recordButton(app).waitForExistence(timeout: 15),
+                      "tapping the library's floating record button did not reach the capture screen")
+    }
+
     // MARK: - Design §5: recording survives navigation
 
     /// The sidebar's live indicator (`CaptureSidebarRow`, T6) is the visibility guarantee

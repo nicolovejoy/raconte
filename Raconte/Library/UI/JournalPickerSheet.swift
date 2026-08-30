@@ -53,6 +53,11 @@ struct JournalPickerSheet: View {
         #if os(iOS)
         .presentationDetents([.medium, .large])
         #endif
+        #if os(macOS)
+        // An unsized macOS sheet collapses to its intrinsic height — a clipped card
+        // showing barely one row (owner smoke, 2026-08-29). Give it a real reading size.
+        .frame(minWidth: 400, minHeight: 460)
+        #endif
     }
 
     private func row(for journal: Journal) -> some View {
@@ -96,14 +101,9 @@ struct JournalPickerSheet: View {
                 .resizable()
                 .scaledToFill()
         }, placeholder: {
-            // Coverless is the ordinary case, not a broken/error state — a neutral
-            // tile with a book glyph, never a "photo failed to load" icon.
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(InkTone.paperInset.color)
-                .overlay {
-                    Image(systemName: "book.closed")
-                        .foregroundStyle(InkTone.inkSecondary.color)
-                }
+            // Coverless is the ordinary case, not a broken/error state — the shared
+            // neutral tile (#117), never a "photo failed to load" icon.
+            NeutralCoverTile(size: 52, monogram: journal.name)
         })
         .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

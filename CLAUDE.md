@@ -2,43 +2,39 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-27/28 (laptop — sync loop FIXED + device-verified; #101 paging shipped; builds 10+11)
+## Session 2026-08-29 (laptop — #18 merged; #108 designed AND shipped: Home bookshelf landing, PR #115)
 
-Full detail in devlog. The sync saga is CLOSED: the write-once `serverRecordChanged`
-short-circuit (PR #110) settled the stuck sets on first cycle — iPhone 10→0, iPad 106→0.
-Divergence now surfaces via `parked` + `lastError` on the About screen instead of looping
-silently. #101 entry paging (PR #111, Sonnet worktree agent, SDD) merged: chevrons, iOS
-swipe, macOS ⌥⌘↑/↓. Backlog: closed #89/#90/#94/#54, retrimmed #86. Build 11 (paging)
-uploaded to TestFlight, both platforms.
-
-**Build 11 smoke passed** (2026-08-28): paging works on device — swipe, chevrons,
-⌥⌘ arrows, ends disabled; #101 closed. Owner verdict on the broader experience: "all of
-the UX feels really pieced together" — on iOS the entry detail's top third is date +
-date-recorded + journal title; with play bar and images the transcript starts below the
-fold (recorded on #55).
-
-**UX redesign execution (2026-08-29, SDD with Sonnet worktree agents):** PR #112
-(ink tokens, accent #916438) and PR #113 (entry detail: EntryInfoSheet, transcript-first
-body + pinned play bar, image-first invitation) merged — #55, #103, #107 (detail scope)
-closed. In flight at reboot time: **#18 JournalPickerSheet** in worktree
-`.claude/worktrees/ux-redesign` on `feat/ux-journals` — commit 63088fad plus
-uncommitted UI-test fixes, agent was re-running `JournalEditorUITests` split against
-the 10-min cap. Branch is NOT pushed.
+Full detail in devlog. **#18 landed** (PR #114 — the ux-journals worker had already
+committed its UI-test fixes and opened the PR; merged on green). **#108 went
+design-session → owner-picked mocks → spec → SDD build → merged in one session**:
+the app now launches onto **Home** — 3 face-out journal covers ranked by capture
+activity (backdates never reorder), remaining journals as quiet serif spines, one
+New-entry button (owner ruled: one tap to record is fine; quiet-list spines over the
+literal shelf; corners squared 8/12pt). Crash recovery rehomed to the root
+(`bootstrap()` kicks from ContentView; banners render on Home in a pinned-dark card,
+inline Play/Keep/Delete — tap-to-capture routing superseded). Rider: de-flaked
+`testScrubbingAFinishedEntryMovesThePosition` (was red-on-first-attempt on 3
+consecutive main runs post-#113). Design/plan docs:
+`docs/plans/2026-08-29-home-bookshelf-{design,plan}.md`; mock canvas
+https://claude.ai/code/artifact/e7f3285c-e0dd-4d39-949a-c49956c486f6. 2009 unit /
+57 UI green. Housekeeping done: stale worktrees + merged branches removed.
+Stall #12 recorded: Bash's 120s DEFAULT timeout auto-backgrounds longer test runs —
+dispatches must say explicit `timeout: 600000` (memory updated).
 
 **Next steps:**
-1. **Land #18**: resume/redispatch the ux-journals worker — finish the split UI-test
-   runs (`JournalEditorUITests`, `NavigationUITests`), commit, push, PR, merge on green.
-2. **UX pass remainder**: #108 (abrupt opening / landing experience) — the one anchor
-   issue from the owner's "pieced together" verdict still open. Then a TestFlight
-   build 12 with the whole UX branch set for owner device smoke.
-3. **Invite Lori** (internal tester, all devices): Signal note sent; when her Apple
+1. **TestFlight build 12** (both platforms) with the whole UX set (#112/#113/#114/#115)
+   → owner device smoke. Eyeball specifically: Home shelf with real covers, and the
+   dark recovery-banner card on paper (never visually verified).
+2. **Invite Lori** (internal tester, all devices): Signal note sent; when her Apple
    Account email arrives → ASC Users and Access → Customer Support role → TestFlight
-   Internal group, automatic distribution on.
+   Internal group, automatic distribution on. Fresh-install path: bootstrap mints a
+   default "Journal", so her Home starts with one coverless card.
+3. **Home follow-ups** (parked at #115's final review, listed in the PR body): gate
+   recovery-banner Play on live capture phase (mirror `CaptureSidebarRow.isLive`);
+   spine-tap UI test (4-journal seed); last spine row draws a trailing hairline;
+   deleted-journal fallback `.capture` → maybe `.home`.
 4. Remaining sync hardening, demoted: #91 (reconcile-on-foreground), #85 (park inbound
    asset failures). Capture Schema → History for the three unidentified deployed changes.
-5. Housekeeping: delete merged local branches (`feat/101-entry-paging`,
-   `feat/ux-ink-tokens`) and the stale locked worktree
-   `.claude/worktrees/agent-acaa1f33aed0e5214`.
 
 ## What Raconte is
 

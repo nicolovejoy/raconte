@@ -67,6 +67,14 @@ struct CaptureView: View {
                     // transcribed yet.
                     Spacer(minLength: 0)
                 }
+                // Displaces the transcript/setup band above it, same as `errorBanner`
+                // below — or the `Spacer(minLength: 0)` fallback when neither band is
+                // stretching — so the control bar itself never moves.
+                // `discardNotice` is set by plain property mutation on the model — no
+                // `withAnimation` there, deliberately (animation is a view concern, not
+                // the model's) — so the `.animation(value:)` below is what actually makes
+                // the `.transition` run; without it the notice would pop in and out
+                // instantly despite the transition declaration.
                 if let notice = model.discardNotice {
                     Text(notice)
                         .captureLabel(.receiptSavedChip)
@@ -80,6 +88,11 @@ struct CaptureView: View {
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity)
+            // Makes the discard notice's `.transition(.opacity)` real. `discardNotice`
+            // changes via plain property mutation (no `withAnimation` on the model side,
+            // deliberately — animation stays a view concern); this is what turns that
+            // mutation into an animated diff instead of an instant pop.
+            .animation(.easeInOut, value: model.discardNotice)
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
@@ -289,11 +302,17 @@ struct CaptureView: View {
             // with it for the eye. No confirmation dialog — recoverable from the trash
             // for 30 days, so a confirm would cost a tap for nothing. Identifier on the
             // leaf button only (repo trap: a container identifier flattens the bar).
+            //
+            // `.captureLabel(.discardButton)`, not a raw `.font` — fix-round-1 (task 3
+            // review): a raw `.callout` renders at 16 pt on iOS but only 12 pt on macOS,
+            // 4 pt under `CaptureSurface.minimumControlPointSize`, and a raw font also
+            // sits outside `CaptureLabelTests`' floor sweep entirely, the same miss
+            // `errorBanner`'s own comment already records for `.footnote` + `.red`.
             if layout.showsDiscardButton {
                 Button("Discard") { Task { await model.discardCurrentCapture() } }
                     .buttonStyle(.plain)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.75))
+                    .captureLabel(.discardButton)
+                    .fontWeight(.semibold)
                     .accessibilityIdentifier("capture.discard")
                     .accessibilityLabel("Discard recording")
             }

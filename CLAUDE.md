@@ -24,7 +24,9 @@ toggle is DELETED and the BN/LN switch goes live in every recording with a lazy 
 opener; the live transcript is New York serif with the hypothesis dimmed per-run; backdate
 appears on BOTH ready and recording; **"Record another" is deleted** — it duplicated the
 bar's own record button — and the receipt's entry becomes a tappable view/edit card
-(*"Open isn't super clear here"*).
+(*"Open isn't super clear here"*). **The record button stays WHITE with a black mic glyph** —
+owner ruled 2026-08-30 (*"keep the mic as is, it's nice"*); the earlier "should it be red?"
+question is closed, and the design's red is only the live dot and the Discard-free status row.
 
 **Owner smoke, 5 steps — item 1 CLOSED as no-bug.** The "previous transcript text" was the
 **Last entry card** doing its job, not a stale transcript region; `allEntries` excludes
@@ -63,9 +65,11 @@ About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
    the opposite of the screen's job. Needs real speech; the simulator won't produce it.
 4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
    Support role → TestFlight Internal group. Next TestFlight build should carry #119+#124.
-5. **Undecided, raised but not ruled:** should the main record button be **red**? It is white
-   with a black mic glyph today. Nico asked for a red mic on "Record another", which the design
-   deletes — so a red record control generally is a separate call he has not made.
+5. **TestFlight build 13 is teed up but NOT uploaded.** `CFBundleVersion` bumped 12 → 13
+   (`project.yml`); run `scripts/upload_testflight.sh ios` then `... macos`. Needs the Xcode
+   GUI session awake (the archive leg cannot cloud-sign with an API key) and CI green on
+   `82c81d42`, the only code commit since the last green. Carries #119 + #124 + the About
+   rewrite.
 6. **Parked** (unchanged): #122/#123 from the record-flow branch; #125 current-week times;
    #86 back-destination from an entry; NeutralCoverTile non-square overload;
    `EntryMonthGroup.id` salt; cache the month formatter; "Add Cover" pill routes to editor;

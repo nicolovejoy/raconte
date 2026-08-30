@@ -17,7 +17,6 @@ final class CaptureScreenModel {
     private(set) var coordinator: CaptureCoordinator
     private(set) var recovered: [RecoveredRecording] = []
     private var dismissed: Set<String> = []
-    private var didBootstrap = false
     private var finishing = false
     /// Tail of the sidecar-write chain — see `enqueueEntryMetadataWrite`.
     private var pendingMetadataWrite: Task<Void, Never>?
@@ -307,9 +306,31 @@ final class CaptureScreenModel {
 
     // MARK: intents
 
+    /// The one bootstrap, shared by every caller.
+    ///
+    /// Was a plain `didBootstrap` boolean flipped synchronously at the top, which made a
+    /// second caller return immediately while `recoverAtLaunch()` and the trash sweep were
+    /// still running. That was harmless while `CaptureView.task` was the only caller;
+    /// `beginCapture(inJournal:)` (record-flow plan, Task 5) starts a recording as soon as
+    /// this returns, and starting one on top of an in-flight recovery pass over the same
+    /// directory is not harmless. A stored `Task` runs the work once and lets everyone
+    /// await the same completion.
+    private var bootstrapTask: Task<Void, Never>?
+
     func bootstrap() async {
-        guard !didBootstrap else { return }
-        didBootstrap = true
+        if let bootstrapTask {
+            await bootstrapTask.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performBootstrap()
+        }
+        bootstrapTask = task
+        await task.value
+    }
+
+    private func performBootstrap() async {
         await resolveCurrentJournal()
         await coordinator.recoverAtLaunch()
         recovered = coordinator.recoveredRecordings

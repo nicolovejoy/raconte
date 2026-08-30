@@ -620,4 +620,33 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertEqual(model.library.items.count, 1,
                        "an idle-phase discard must not trash the next capture")
     }
+
+    // MARK: bootstrap is await-once (record-flow plan, Task 4)
+
+    /// Two concurrent callers must both come back to a FINISHED bootstrap, not merely a
+    /// started one. `beginCapture` (the library's floating record button) awaits this before
+    /// it starts recording, and the thing it is waiting for is the launch-recovery scan: a
+    /// second caller told "done" early would start a capture while recovery is still walking
+    /// the same directory.
+    func testConcurrentBootstrapCallersAllWaitForTheRealWork() async throws {
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { ModelFakeRecorder() },
+            encoder: FakeAudioEncoder())
+
+        async let first: Void = model.bootstrap()
+        async let second: Void = model.bootstrap()
+        _ = await (first, second)
+
+        // `resolveCurrentJournal()` — bootstrap's first await — mints and selects the default
+        // journal. Both are empty/nil on a model that has not finished bootstrapping, so a
+        // caller that returned early observes them unset. This is the signal precisely
+        // because it is false before the work and true after it; see the RED step below,
+        // which proves it can fail.
+        XCTAssertFalse(model.journals.isEmpty,
+                       "a bootstrap caller must not return before the journal registry resolved")
+        XCTAssertNotNil(model.selectedJournalID,
+                        "a bootstrap caller must not return before a journal is selected")
+    }
 }

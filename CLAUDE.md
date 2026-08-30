@@ -2,70 +2,74 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-30 late (laptop — PR #124 merged; #118 capture design brainstormed, not yet written)
+## Session 2026-08-30 late (laptop — PR #124 merged; #118 capture design WRITTEN and committed)
 
-**PR #124 merged by Nico; main is green on the merge commit `a917b278`.** The record flow,
-Discard, and the About tutorial are all on main. A leftover CI watch from the prior session
-confirmed the branch tip passed both jobs (UI 37m57s, unit 3m30s).
+**PR #124 merged by Nico; main green on the merge commit `a917b278`.** Record flow, Discard
+and the About tutorial are all on main. Three docs commits pushed this session: the handoff
+(`82c81d42`), the #118 design (`eea2d4ff`), a second cloud-task prompt (`0234979b`).
 
-**Owner smoke ran, 5 steps, 4.5 passes.** Results, in his words:
-1. Discard — "almost a pass, but when I land on the capture screen, there's the previous
-   transcript text… don't want that there." **UNRESOLVED whether this is a live bug on main
-   or the old build.** The `8edb3db3` fix gates `transcriptRegion` on
-   `layout.showsLiveTranscript`, which is false in the landing state, so the text should be
-   impossible. Ask him for the build stamp (`built Aug 30, 9:14 AM PT` = the fixed
-   `5E1BAC32`) and whether the text was loose on the dark screen or inside a receipt card.
-   The #118 redesign makes it moot by construction — the transcript region will exist only
-   while recording — but main may still be wrong today.
-2. Trash — pass.
-3. Reading after a discard — pass, **but "Record another" must START recording**: red, mic
-   glyph. Folded into #118.
-4. Home's New entry — pass, **but back from an entry lands on capture**; should be the
-   journal's entry list. His call: nav issue, not this one. Added to #86.
-5. About — he rewrote the copy himself; proofread and committed this session.
+**Design of record: `docs/plans/2026-08-30-118-capture-screen-design.md`** — every decision
+owner-ratified at smoke. It supersedes the capture half of `2026-08-29-ux-redesign-design.md`.
+Mockup, updated to match: https://claude.ai/code/artifact/d62b442d-7ecf-497b-b5c5-42b87ee0c391
 
-**#118 design decisions, all owner-ratified this session** (design doc NOT yet written):
-- `.setup` becomes a **thin ready state**: journal name + 76 pt record button + "tap to
-  record". Backdate, two-voices, recovery banners, last entry and build stamp all leave.
-- **Two voices stops being a toggle.** The BN/LN switch shows in every recording; its first
-  tap writes the frame-0 opener lazily (`didWriteOpeningVoice` already makes that
-  idempotent). Carry-over goes with it.
-- Live transcript: **New York serif**, committed text full strength, **live hypothesis
-  dimmed** — per-run, not tail-dimmed.
-- Backdate keeps its compact one-line summary during recording.
+**The load-bearing ruling: the record control NEVER moves, in any state.** An earlier draft
+centred it in a 96 pt halo on the idle screen — a front-door idea that does not survive
+capture no longer being the front door. Ready and Recording now differ only in the middle
+band (empty vs. transcript) and in what the status row says. Owner's own words: *"why not
+just keep it at the bottom?"*
 
-**Three things the code contradicted, each caught by checking rather than trusting:**
+Other ratified decisions: `.setup` becomes a thin ready state (journal header + backdate line
++ bar; two-voices, recovery banners, last entry and build stamp all leave); the two-voices
+toggle is DELETED and the BN/LN switch goes live in every recording with a lazy frame-0
+opener; the live transcript is New York serif with the hypothesis dimmed per-run; backdate
+appears on BOTH ready and recording; **"Record another" is deleted** — it duplicated the
+bar's own record button — and the receipt's entry becomes a tappable view/edit card
+(*"Open isn't super clear here"*).
+
+**Owner smoke, 5 steps — item 1 CLOSED as no-bug.** The "previous transcript text" was the
+**Last entry card** doing its job, not a stale transcript region; `allEntries` excludes
+trashed, so a discarded entry cannot appear there. The `8edb3db3` fix is sound. The card is
+removed by the design anyway. Build stamp on the smoked app reads `built Aug 30, 9:24 AM PT`
+(the 9:14 in the prior handoff was a directory mtime, not a build time — `dwarfdump --uuid`
+remains the only identity worth quoting). Also learned: the sidebar has **All Entries**, not
+"Library".
+
+**Four things the code contradicted, each caught by checking rather than trusting:**
 (1) `metadata.multiVoice` is a **synced, LWW-merged CloudKit field** with a per-field
-`modified` stamp, read by `CaptureReceipt` — so it gets *written* at a different moment,
-never redefined. (2) `BuildInfo.stamp` exists **only in `CaptureView`**; PR 4's "build stamp
-moves to About" was never done, and About shows the version *number*, a different fact.
-Removing it from capture without adding it to About deletes it from the app. (3) The old
-PR-4 spec's "current sentence full-white" is **unbuildable** — nothing tracks sentence
-boundaries; the real seam is `TranscriptConsolidator`'s `committed` vs `provisional`, and
-the merge is by frame position, so a hypothesis is NOT reliably a trailing suffix.
+`modified` stamp, read by `CaptureReceipt` — written at a different moment, never redefined.
+(2) `BuildInfo.stamp` exists **only in `CaptureView`**; the 2026-08-29 doc's "moves to About"
+never ran, and About shows the version *number*, a different fact. (3) Per-sentence transcript
+emphasis is **unbuildable** — nothing tracks sentence boundaries; the real seam is
+`TranscriptConsolidator`'s `committed` vs `provisional`, merged by frame position, so the
+hypothesis is NOT reliably a trailing suffix. (4) The backdate audit trail Nico asked for
+**already exists** — `EntryLogRecord` stores `from`/`to`/`cause` per field including
+`originalDate`, and capture's writes go through the same chokepoint that produces that diff.
 
-**Mockup published** (three states, app tokens, phone proportions):
-https://claude.ai/code/artifact/d62b442d-7ecf-497b-b5c5-42b87ee0c391
-**One question is still open on it: the record button MOVES between Ready (centred, haloed)
-and Recording (Stop in the bottom bar).** That is a reflow of the primary control, which #53
-exists to forbid. Justified only because Ready is now nearly unreachable. Owner has not
-answered.
+**Two cloud sessions were started at end of session** from `docs/cloud-tasks/`:
+`73-74-dead-code.txt` (#73 + #74 dead code) and `118-prep-corrections.txt` (build stamp →
+About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
 
 **Next steps:**
-1. **Answer the mockup's open question** (record button reflow), then write
-   `docs/plans/2026-08-30-118-capture-screen-design.md`, review it, and hand to
-   writing-plans → SDD. Every other #118 decision is already made.
-2. **Settle smoke item 1** — build stamp + where the text appeared. Live bug on main, or
-   stale build?
-3. **Cloud session ready to fire: #73 + #74 dead code.** Prompt is at
-   `docs/cloud-tasks/73-74-dead-code.txt`; `pbcopy < docs/cloud-tasks/73-74-dead-code.txt`.
-4. **File the current-week time-of-day issue** — entry rows in the current week should show
-   the time, not just the date (owner, smoke step 2). Library date formatting, not capture.
-5. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+1. **Review and merge the two cloud PRs** when they land. The #118-prep one has a known trap:
+   adding a row to About pushes the diagnostic rows below the single `swipeUp()`
+   `AboutUITests` relies on — a failure there is an under-scrolled test, not a broken feature.
+2. **Write the #118 implementation plan** from the committed design, then SDD it. Deliberately
+   NOT delegated: reviews on this project catch more defects in plans than in implementations,
+   and §5's dimming spec is exactly the shape that ships an untestable assertion. It needs a
+   proof-of-RED step and an adversarial reviewer.
+3. **Measure before building §5.** Instrument `TranscriptConsolidator` and record a minute of
+   real speech to see how long text stays provisional. If the window is short, the transcript's
+   tail changes brightness continuously while reading aloud — motion in peripheral vision,
+   the opposite of the screen's job. Needs real speech; the simulator won't produce it.
+4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
    Support role → TestFlight Internal group. Next TestFlight build should carry #119+#124.
-6. **Parked** (unchanged): #122/#123 from the record-flow branch; NeutralCoverTile
-   non-square overload; `EntryMonthGroup.id` salt; cache the month formatter; "Add Cover"
-   pill routes to editor not picker; sync hardening #91/#85; dark recovery-banner smoke.
+5. **Undecided, raised but not ruled:** should the main record button be **red**? It is white
+   with a black mic glyph today. Nico asked for a red mic on "Record another", which the design
+   deletes — so a red record control generally is a separate call he has not made.
+6. **Parked** (unchanged): #122/#123 from the record-flow branch; #125 current-week times;
+   #86 back-destination from an entry; NeutralCoverTile non-square overload;
+   `EntryMonthGroup.id` salt; cache the month formatter; "Add Cover" pill routes to editor;
+   sync hardening #91/#85; dark recovery-banner smoke.
 
 ## What Raconte is
 

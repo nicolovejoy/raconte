@@ -121,19 +121,35 @@ struct SidebarRowView: View {
     @ViewBuilder private var titleGroup: some View {
         HStack(spacing: 10) {
             if row.journalID != nil {
-                JournalCoverThumbnail(data: cover, size: 30)
+                journalThumb
             } else if let systemImage = row.systemImage {
                 Image(systemName: systemImage)
-                    .frame(width: 30, height: 30)
+                    .frame(width: Self.thumbSize, height: Self.thumbSize)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title)
                 if let subtitle = row.subtitle {
                     Text(subtitle)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                 }
             }
+        }
+    }
+
+    private static let thumbSize: CGFloat = 28
+
+    /// The row anatomy (#117): cover thumb, or the shared neutral tile — same tile
+    /// `JournalPickerSheet` and the library entry rows use, echoed at sidebar scale.
+    @ViewBuilder private var journalThumb: some View {
+        if let cover, let image = JournalCoverThumbnail.decode(cover) {
+            image
+                .resizable()
+                .scaledToFill()
+                .frame(width: Self.thumbSize, height: Self.thumbSize)
+                .clipShape(RoundedRectangle(cornerRadius: Self.thumbSize / 4, style: .continuous))
+        } else {
+            NeutralCoverTile(size: Self.thumbSize, monogram: row.title, cornerRadius: Self.thumbSize / 4)
         }
     }
 

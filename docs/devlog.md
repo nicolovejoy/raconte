@@ -3,6 +3,134 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-30 (laptop — PR #119 merged; record flow + Discard + About tutorial, PR #124 open)
+
+**PR #119 merged** (#117 closed). Then the record-flow build shipped via SDD from
+`docs/plans/2026-08-29-record-flow.md`, 8 tasks, **PR #124 open and unmerged — merging is
+Nico's.** https://github.com/nicolovejoy/raconte/pull/124
+
+**Owner rulings this session:** (1) record-flow **option 1** — the library's floating button
+and Home's "New entry" now START recording on arrival (`CaptureScreenModel.beginCapture(inJournal:)`),
+instead of preselecting + routing to capture's idle screen; (2) discard semantics **trash,
+not hard delete** — a mis-tap goes to Trash, restorable 30 days, same rule `delete(_:)`
+refuses to except; (3) About gains a short "what this is / how it works" for a first-time
+TestFlight user (Lori) — copy is written to be rewritten.
+
+**`Discard` stops through the ORDINARY `done()` path** and lets the capture finalize
+normally — the m4a is verified and promoted exactly as for a kept reading, nothing is left
+half-written — then the entry is trashed. Supporting change: `bootstrap()` is now
+**await-once** (a stored `Task`), so a caller arriving from the library waits for the
+launch-recovery scan instead of racing it.
+
+**The finding worth remembering: never infer WHICH capture an intent refers to from
+`finalizeQueue`.** The plan trashed every id in it; fix round 1 narrowed that to `.last`
+(matching `buildReceipt`); the final fix wave PROVED both wrong, 3/3 runs — on a launch that
+healed an orphaned capture, an early drain makes `transcribed == [recoveredID]`, so a discard
+trashed the RECOVERED reading and kept the mis-tap. `discardCurrentCapture()` now snapshots
+`coordinator.activeCaptureID` at arm time and trashes THAT id. Removes the dependency on
+#122's race and made the regression test landable (it had been blocked all branch).
+Also fixed: an armed discard could survive a dropped `done()` (no `(.resuming, .done)` row in
+`CaptureMachine`) and trash a later, longer reading; the Discard button rendered 12pt on
+macOS, under the 16pt floor, because it used a raw font instead of `captureLabel`.
+
+**Process note: the reviews caught more defects in the PLAN than in the implementations** —
+three test specs that could not fail (two at pre-flight, one caught by an implementer that
+instrumented the code rather than shrugging), plus two wrong implementations the plan
+mandated. Unit 2032 green; `NavigationUITests` 14/14; `AboutUITests` needed a `swipeUp` once
+the tutorial pushed the diagnostics below the fold (CI caught it — Task 8 only ran
+`NavigationUITests`).
+
+**Owner smoke is PARTIALLY DONE and must be resumed.** Step 1 (floating button arrives
+already recording) PASSED. Step 2 (Discard) FAILED and was fixed: *"the transcription stays,
+though not in the journal is it visible."* `CaptureView.transcriptRegion` rendered on "is
+there text" alone and never asked `CaptureLayoutModel.showsLiveTranscript`. The transcription
+session deliberately holds the finished text after a stop, and a fresh coordinator does not
+clear it — it belongs to the session. On the ordinary path the receipt covers that region, so
+nobody ever saw the stale text; discard nils the receipt and uncovered it, stranding the
+words of a recording that no longer exists on the landing screen. That is the #53-era defect
+`showsLiveTranscript` exists to prevent; the view was simply not asking. Fixed in `8edb3db3`
+(one condition). **Latent since the receipt landed — not introduced by this branch.**
+
+**No automated test pins that fix.** The simulator does not reliably produce transcription
+text, so a UI test asserting "no transcript after discard" would very likely pass without
+ever having had text to leave behind — vacuous, which this plan hit three times already.
+Decide after the re-smoke: file the coverage gap, or find a seam that makes it real.
+
+**Next steps:**
+1. **Resume owner smoke** on `~/Desktop/Raconte.app` — REBUILT after the fix, debug dylib
+   UUID `5E1BAC32` (the failed pass was `FE06F091`; quit the old app first). Re-run step 2,
+   then steps 3-7, from the bottom of `docs/plans/2026-08-29-record-flow.md`. Step 6 is the
+   known swallowed-tap gap: if it reads as broken rather than merely slow, fix it instead of
+   filing it. Step 7 is the About copy — read it as Lori would; it is meant to be rewritten.
+2. **Merge PR #124** once CI is green and the smoke passes (Nico). CI was in flight on
+   `8edb3db3` at handoff; earlier runs on this branch show `cancelled` because each push
+   supersedes the last, not because anything failed.
+3. **#118 — capture screen design pass** (what is capture now that it isn't the front door,
+   and now that arriving there means you are already recording?).
+4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+   Support role → TestFlight Internal group. Next TestFlight build should include #119+#124.
+5. **New issues from this branch:** #122 (phase flips before `enqueueFinalize`, so a finish
+   can drain a stale queue and strand the real capture — the branch no longer depends on it),
+   #123 (a disk-full inside the ~300ms stop flush can resurrect a capture with its discard
+   still armed). Both fail in the keep-the-audio direction.
+6. **Parked polish** (unchanged from last session): NeutralCoverTile non-square overload +
+   migrate `HomeView.faceOutCover`; `EntryMonthGroup.id` salt; cache the month formatter;
+   "Add Cover" pill routes to editor not picker. Plus sync hardening #91/#85, dark
+   recovery-banner smoke still unverified.
+
+## Session 2026-08-29 late (laptop — #117 shipped: library + sidebar restyle, PR #119 open)
+
+**#117 built end-to-end via SDD resume** of `docs/plans/2026-08-29-ux-redesign-implementation.md`
+(its Tasks 11–12 — the half PR #114 dropped; the old ledger proved Tasks 1–10 shipped, and
+Tasks 13–15 stay superseded by #118). **PR #119 is open against main, unmerged — merging is
+Nico's.** https://github.com/nicolovejoy/raconte/pull/119. Library: 190-pt cover band
+(3-stop scrim), 56-pt entry-own-image thumbs, month sub-headers, floating 60-pt record
+button (`library.record`, wired via existing `CaptureScreenModel.selectJournal` +
+`router.select(.capture)`). Sidebar rows: cover thumbs + `inkSecondary` subtitles.
+`NeutralCoverTile` extracted from the picker as the one shared coverless tile;
+`JournalHeaderCard` deleted. 2017 unit green; Navigation 11/11, ImageCapture 3/3,
+JournalEditor 10/10, EntryPaging 3/3.
+
+**Final whole-branch review (opus) caught a real bug the task reviews missed**: month
+headers fabricated "January" for `.year`-precision backdates (the `anchorDate` month-fill
+trap, one file over from `weekdayText`'s own refusal). Fixed: nil-month groups render no
+header. Also fixed from review: stronger band scrim, bottom `safeAreaInset` so the
+floating button can't hide the last row.
+
+**Owner smoke on the branch build drove three more fixes** (all on PR #119): the macOS
+Choose Journal sheet was an unsized clipped card → `minWidth 400/minHeight 460`; imageless
+entry thumbs showed a mic glyph → plain quiet tile; coverless journal tiles' `book.closed`
+read as "a paper-towel dispenser" → serif first-letter monogram (`NeutralCoverTile.monogramText`,
+unit-pinned). Trap re-learned: a NEW test file silently doesn't run until `xcodegen generate`
+— the suite reported green at the old count first.
+
+**Owner smoke also surfaced a flow gap, undecided**: browsing a journal doesn't follow you
+to capture, and the floating record button lands on capture's idle screen where the
+"Last entry" card reads as noise. Three options were laid out; owner hasn't picked.
+Recommendation on file: option 1 — the journal page's record button *starts recording
+immediately* (what the design doc's "starting capture into that journal" says), sidebar
+navigation keeps its own current journal; anything fancier belongs in #118's redesign.
+Filed down-the-road: #120 (choose the cover slice the band shows), #121 (crop tool at
+image capture).
+
+**Next steps:**
+1. **Merge PR #119** once CI is green (Nico). The owner smoke passed on the final build.
+2. **Record-flow build (good first task for an opus agent):** confirm option 1 with the
+   owner, then: floating `library.record` starts recording on arrival (today it only
+   preselects + routes); check the Home "New entry" button for the same idle-screen
+   detour. The three options and the owner's complaints are in this section above.
+3. **#118 — capture screen design pass** (what is capture now that it isn't the front
+   door?). The record-flow decision feeds this.
+4. **Invite Lori** (unchanged): when her Apple Account email arrives → ASC Users and
+   Access → Customer Support role → TestFlight Internal group. Build 12 is up; next
+   TestFlight build should include #119.
+5. **Parked polish** (post-#119, from reviews): NeutralCoverTile non-square overload +
+   migrate `HomeView.faceOutCover`; JournalPickerSheet coverless tile → monogram is done
+   but its `cover(for:)` still hand-rolls on main until #119 merges; `EntryMonthGroup.id`
+   salt against duplicate keys; cache the month formatter; "Add Cover" pill routes to
+   editor not picker (disclosed deviation). Plus prior parked: Home follow-ups (#115 PR
+   body), sync hardening #91/#85, dark recovery-banner smoke still unverified.
+
 ## Session 2026-08-29 pm (laptop — TestFlight build 12 shipped; CI cost fixed; two redesign gaps filed)
 
 **Build 12 is on TestFlight, both platforms** (`EXPORT SUCCEEDED` for iOS and macOS),

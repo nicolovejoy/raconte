@@ -26,30 +26,24 @@ struct AboutView: View {
         List {
             Section("What this is") {
                 Text("""
-                Raconte is a private journal you speak into. Press record, say what you \
-                want to remember, and it is kept — the recording first, the words second.
-
-                Everything stays on your own devices and your own iCloud. There is no \
-                account and no server.
+                Raconte is a private audio journaling app. It syncs across your devices \
+                through your own iCloud account, so no one else can read what you record.
                 """)
                 .accessibilityIdentifier("about.whatItIs")
             }
 
             Section("How it works") {
                 Text("""
-                1. Pick a journal. A journal is just a book to file this reading in.
+                I built this to bring my old paper journals into one place. I have kept \
+                them for decades. For each one I wanted three things held together: the \
+                audio of me reading it aloud, a transcript of those words, and a photo of \
+                the original page.
 
-                2. Tap the red button and talk. The timer and the moving bar mean it is \
-                listening.
+                So entries are filed into journals. An entry can be backdated to when it \
+                was really written, and you can attach pictures to it.
 
-                3. Tap Stop when you are done. The recording is safe on disk before \
-                anything else happens to it.
-
-                4. The words are written out for you afterwards. If one comes out wrong, \
-                the recording is still the real thing — you can always listen again.
-
-                5. Started one by accident? Tap Discard. It goes to Trash, where it can be \
-                restored for thirty days.
+                The audio is the record that matters, and it is always preserved. The \
+                transcript is written from it.
                 """)
                 .accessibilityIdentifier("about.howItWorks")
             }

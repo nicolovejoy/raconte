@@ -295,4 +295,29 @@ final class EntryListItemTests: XCTestCase {
         let groups = EntryListItem.monthGroups(of: items, calendar: utc)
         XCTAssertEqual(groups.map(\.month), ["July", "June", "July"])
     }
+
+    /// Final-review finding 1: a `.year`-precision backdate has no month of its own —
+    /// `PartialDate.anchorDate` fills the absent month with January, and formatting
+    /// that anchor would fabricate a "January" header the entry's own row (which reads
+    /// "1998", no month) does not claim. It must land in its own nil-header group, not
+    /// merge into an adjacent named month nor split one — same contiguous-run rule as
+    /// every other key here.
+    func testMonthGroupsYearPrecisionEntryProducesNilHeaderNotFabricatedMonth() {
+        let items = [
+            item("A", year: 2026, month: 7, day: 20),
+            item("B", capturedAt: 1_000, originalDate: PartialDate(year: 1998)),
+            item("C", year: 2026, month: 6, day: 15),
+        ]
+        let groups = EntryListItem.monthGroups(of: items, calendar: utc)
+        XCTAssertEqual(groups.map(\.month), ["July", nil, "June"])
+        XCTAssertEqual(groups[1].items.map(\.captureID), ["B"])
+    }
+
+    /// `.yearMonth` precision names a real month — only `.year` (no month at all) must
+    /// suppress the header.
+    func testMonthGroupsYearMonthPrecisionGetsRealMonthHeader() {
+        let backdated = item("A", capturedAt: 1_000, originalDate: PartialDate(year: 1998, month: 3))
+        let groups = EntryListItem.monthGroups(of: [backdated], calendar: utc)
+        XCTAssertEqual(groups.map(\.month), ["March"])
+    }
 }

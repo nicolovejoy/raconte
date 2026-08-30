@@ -241,12 +241,17 @@ struct LibraryView: View {
                         // nested `Section`: SwiftUI's `List` does not support nesting a
                         // `Section` inside another `Section`'s content.
                         ForEach(EntryListItem.monthGroups(of: group.items)) { monthGroup in
-                            Text(monthGroup.month)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(InkTone.inkSecondary.color)
-                                .listRowSeparator(.hidden)
-                                .listRowBackground(InkTone.paper.color)
-                                .accessibilityIdentifier("library.monthHeader")
+                            // A `.year`-precision backdate's group has no month name
+                            // (final-review finding 1) — no header row for it; the
+                            // year `Section` header above already covers those rows.
+                            if let month = monthGroup.month {
+                                Text(month)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(InkTone.inkSecondary.color)
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(InkTone.paper.color)
+                                    .accessibilityIdentifier("library.monthHeader")
+                            }
 
                             ForEach(monthGroup.items) { item in
                                 NavigationLink(value: LibraryDestination.entry(item.captureID)) {
@@ -305,6 +310,11 @@ struct LibraryView: View {
             .scrollContentBackground(.hidden)
             .background(InkTone.paper.color)
             .accessibilityIdentifier("library.list")
+            // Final-review finding 3: the floating record button (60 pt + 20 pt
+            // padding) overlays the list, and a `List` can't scroll past its own
+            // content — without this the last row's trailing side sits permanently
+            // under the button. Clearance, not decoration.
+            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 84) }
         }
     }
 
@@ -529,9 +539,17 @@ struct LibraryCoverBand: View {
                         .frame(height: Self.height)
                         .clipped()
                     // Bottom scrim so white title/subtitle text stays legible over any
-                    // photograph, regardless of its own tones.
-                    LinearGradient(colors: [.black.opacity(0), .black.opacity(0.7)],
-                                   startPoint: .center, endPoint: .bottom)
+                    // photograph, regardless of its own tones. Final-review finding 2:
+                    // a flat 0→0.7 ramp from `.center` left only ~0.15–0.35 alpha where
+                    // the 26-pt title actually sits, under the 3.0 large-text contrast
+                    // floor over a pale photo. Explicit stops rising faster and higher
+                    // (0.55 at the midpoint, 0.9 at the bottom) keep the top of the band
+                    // clear while giving the text itself real ink behind it.
+                    LinearGradient(stops: [
+                        .init(color: .black.opacity(0), location: 0.0),
+                        .init(color: .black.opacity(0.55), location: 0.6),
+                        .init(color: .black.opacity(0.9), location: 1.0),
+                    ], startPoint: .top, endPoint: .bottom)
                         .frame(height: Self.height)
                     coverTitleBlock
                 } else {

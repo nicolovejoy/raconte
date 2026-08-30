@@ -53,6 +53,11 @@ struct JournalPickerSheet: View {
         #if os(iOS)
         .presentationDetents([.medium, .large])
         #endif
+        #if os(macOS)
+        // An unsized macOS sheet collapses to its intrinsic height — a clipped card
+        // showing barely one row (owner smoke, 2026-08-29). Give it a real reading size.
+        .frame(minWidth: 400, minHeight: 460)
+        #endif
     }
 
     private func row(for journal: Journal) -> some View {

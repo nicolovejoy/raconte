@@ -428,7 +428,7 @@ struct LibraryEntryRow: View {
                     .resizable()
                     .scaledToFill()
             }, placeholder: {
-                NeutralCoverTile(size: 56, glyph: "mic", cornerRadius: 8)
+                NeutralCoverTile(size: 56, glyph: nil, cornerRadius: 8)
             })
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -442,7 +442,7 @@ struct LibraryEntryRow: View {
             // (in:)` uses for the duration text.
             .accessibilityLabel("Entry photo")
         } else {
-            NeutralCoverTile(size: 56, glyph: "mic", cornerRadius: 8)
+            NeutralCoverTile(size: 56, glyph: nil, cornerRadius: 8)
         }
     }
 

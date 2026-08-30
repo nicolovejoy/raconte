@@ -1,0 +1,55 @@
+Two mechanical corrections from the #118 capture design, in nicolovejoy/raconte.
+Read docs/plans/2026-08-30-118-capture-screen-design.md section 7 first — it states
+both, and the reasoning behind them. Do NOT implement any other part of that design;
+its implementation plan does not exist yet.
+
+TASK 1 — move the build stamp to About.
+
+BuildInfo.stamp currently renders only in CaptureView, in BOTH branches of
+setupRegion (around lines 156 and 188). The #118 design removes it from capture.
+Add it to AboutView's "App" section beside the existing Version row, then delete
+both CaptureView occurrences.
+
+It is a DIFFERENT fact from AppVersion.current(). Version reads "1.0 (12)";
+BuildInfo.stamp reads "built Aug 30, 9:24 AM PT". Keep both rows. The build time is
+what identifies a wireless or TestFlight install, which is the whole reason it
+exists — do not "consolidate" them.
+
+Give the new row an accessibilityIdentifier following the file's convention
+("about.version" / "about.environment" → "about.buildStamp").
+
+CAREFUL: AboutUITests.testAboutScreenShowsVersionEnvironmentAndSyncRows reaches the
+diagnostic rows with a single app.swipeUp(), because they sit below the fold. Adding
+a row pushes them further down. Run that test and, if it fails, fix it the way the
+file's own comment describes — a directional scroll, never a fixed distance. A
+failure here is the test being under-scrolled, not the feature being broken.
+
+TASK 2 — correct three stale doc comments.
+
+BackdateField, MultiVoiceField and JournalHeaderView (all in CaptureView.swift)
+justify their `.environment(\.colorScheme, .dark)` pins by describing CaptureView as
+"the app's one permanently-mounted NavigationStack root (ContentView.swift)". The
+navigation redesign made that false — CaptureView can be navigated away from at any
+time, which CLAUDE.md states as a standing invariant.
+
+The pins themselves are CORRECT and must not change. Only the justification is
+stale. Rewrite each comment so it still explains why `.environment` is used rather
+than `.preferredColorScheme`, without the false premise. Do not delete the comments;
+they encode a real trap.
+
+Project rules that will bite you:
+
+- The Xcode project is GENERATED from project.yml. Run `xcodegen generate` after
+  adding or removing ANY file, including test files.
+- Verify the executed test count CHANGED. An exit code of 0 is not evidence.
+- macOS unit tests, exactly this command. Never CODE_SIGNING_ALLOWED=NO — that
+  unsandboxes the app-hosted tests onto the owner's real journal archive:
+
+  xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' \
+    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements test
+
+- The RaconteUI suite exceeds a 10-minute command cap. Split it by test class with
+  -only-testing and run each in the FOREGROUND. Never background it.
+- Branch from main. End at an OPEN PR with a --body-file body. Do NOT merge; merges
+  are the owner's. No close-verb plus #N in the PR body unless auto-close is intended.

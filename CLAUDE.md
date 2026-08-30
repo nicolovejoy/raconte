@@ -39,12 +39,31 @@ mandated. Unit 2032 green; `NavigationUITests` 14/14; `AboutUITests` needed a `s
 the tutorial pushed the diagnostics below the fold (CI caught it — Task 8 only ran
 `NavigationUITests`).
 
+**Owner smoke is PARTIALLY DONE and must be resumed.** Step 1 (floating button arrives
+already recording) PASSED. Step 2 (Discard) FAILED and was fixed: *"the transcription stays,
+though not in the journal is it visible."* `CaptureView.transcriptRegion` rendered on "is
+there text" alone and never asked `CaptureLayoutModel.showsLiveTranscript`. The transcription
+session deliberately holds the finished text after a stop, and a fresh coordinator does not
+clear it — it belongs to the session. On the ordinary path the receipt covers that region, so
+nobody ever saw the stale text; discard nils the receipt and uncovered it, stranding the
+words of a recording that no longer exists on the landing screen. That is the #53-era defect
+`showsLiveTranscript` exists to prevent; the view was simply not asking. Fixed in `8edb3db3`
+(one condition). **Latent since the receipt landed — not introduced by this branch.**
+
+**No automated test pins that fix.** The simulator does not reliably produce transcription
+text, so a UI test asserting "no transcript after discard" would very likely pass without
+ever having had text to leave behind — vacuous, which this plan hit three times already.
+Decide after the re-smoke: file the coverage gap, or find a seam that makes it real.
+
 **Next steps:**
-1. **Owner smoke** on `~/Desktop/Raconte.app` (built from `feat/record-flow`, real signing,
-   debug dylib UUID `FE06F091`). Steps are at the bottom of
-   `docs/plans/2026-08-29-record-flow.md`. Read the About copy as Lori would and say what is
-   wrong with it — it is meant to be rewritten.
-2. **Merge PR #124** once CI is green and the smoke passes (Nico).
+1. **Resume owner smoke** on `~/Desktop/Raconte.app` — REBUILT after the fix, debug dylib
+   UUID `5E1BAC32` (the failed pass was `FE06F091`; quit the old app first). Re-run step 2,
+   then steps 3-7, from the bottom of `docs/plans/2026-08-29-record-flow.md`. Step 6 is the
+   known swallowed-tap gap: if it reads as broken rather than merely slow, fix it instead of
+   filing it. Step 7 is the About copy — read it as Lori would; it is meant to be rewritten.
+2. **Merge PR #124** once CI is green and the smoke passes (Nico). CI was in flight on
+   `8edb3db3` at handoff; earlier runs on this branch show `cancelled` because each push
+   supersedes the last, not because anything failed.
 3. **#118 — capture screen design pass** (what is capture now that it isn't the front door,
    and now that arriving there means you are already recording?).
 4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer

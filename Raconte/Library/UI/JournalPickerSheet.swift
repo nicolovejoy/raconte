@@ -96,14 +96,9 @@ struct JournalPickerSheet: View {
                 .resizable()
                 .scaledToFill()
         }, placeholder: {
-            // Coverless is the ordinary case, not a broken/error state — a neutral
-            // tile with a book glyph, never a "photo failed to load" icon.
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(InkTone.paperInset.color)
-                .overlay {
-                    Image(systemName: "book.closed")
-                        .foregroundStyle(InkTone.inkSecondary.color)
-                }
+            // Coverless is the ordinary case, not a broken/error state — the shared
+            // neutral tile (#117), never a "photo failed to load" icon.
+            NeutralCoverTile(size: 52)
         })
         .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

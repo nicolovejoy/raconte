@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// directly rather than as a push nested under the library screen.
 enum LibraryDestination: Hashable {
     case entry(String)
-    /// The journal editor (Task 6), pushed from `JournalHeaderCard.onEdit`. Journal id.
+    /// The journal editor (Task 6), pushed from `LibraryCoverBand.onEdit`. Journal id.
     case journalEditor(String)
 }
 
@@ -31,6 +31,12 @@ struct LibraryView: View {
     /// entry (image capture plan Task 7, "+ New entry" toolbar action) — same
     /// no-op-default-for-previews shape as `onEditJournal` above.
     var onCreateEntry: (String) -> Void = { _ in }
+    /// The floating record button (Task 11, #117): selects this journal as current and
+    /// routes to capture. Wired in `ContentView` — for a scoped journal, selects it via
+    /// `CaptureScreenModel.selectJournal` first; for All Entries (not a journal), records
+    /// into whatever journal is already current. Same no-op-default-for-previews shape as
+    /// `onEditJournal`/`onCreateEntry` above.
+    var onRecord: () -> Void = {}
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
     /// trash or move, if any. Held here rather than per-row `@State` because the
@@ -54,15 +60,17 @@ struct LibraryView: View {
             // created journal has zero entries and would otherwise show `emptyState`
             // with no header at all — an owner-created journal with nothing recorded
             // yet must still be reachable for editing (spec ruling 5 doesn't carve out
-            // an exception for an empty one).
+            // an exception for an empty one). Full-bleed (no horizontal padding): the
+            // cover band spans edge to edge per spec.
             journalHeader
-                .padding(.horizontal, 16)
             content
             #if DEBUG
             skippedNote
             sweepNote
             #endif
         }
+        .background(InkTone.paper.color)
+        .overlay(alignment: .bottomTrailing) { floatingRecordButton }
         .navigationTitle(title)
         .toolbar {
             ToolbarItem {
@@ -183,16 +191,38 @@ struct LibraryView: View {
     }
 
     /// The journal itself, above its entries (spec ruling 5) — `nil` (renders nothing)
-    /// for All Entries, which is not a journal.
+    /// for All Entries, which is not a journal. `LibraryCoverBand` (below) replaces the
+    /// old `JournalHeaderCard` row (#117 — the dropped half of PR 3).
     @ViewBuilder
     private var journalHeader: some View {
         if let journal {
-            JournalHeaderCard(name: journal.name,
-                              cover: model.journalCovers[journal.id],
-                              dateLine: model.dateLine(forJournal: journal.id),
-                              entryCount: model.items.count,
-                              onEdit: { onEditJournal(journal.id) })
+            LibraryCoverBand(name: journal.name,
+                             cover: model.journalCovers[journal.id],
+                             subtitle: JournalPickerSheet.rowSubtitle(
+                                 dateLine: model.dateLine(forJournal: journal.id),
+                                 entryCount: model.items.count),
+                             onEdit: { onEditJournal(journal.id) })
         }
+    }
+
+    /// 60 pt, bottom-trailing, `InkTone.record.color` — starts capture into this journal
+    /// (Task 11). Shown for both a scoped journal and All Entries (spec: "for the All
+    /// Entries scope it records into the current journal unchanged" — the button itself
+    /// doesn't disappear, only what `onRecord` does behind it differs, and that decision
+    /// is made by the caller, not this view).
+    private var floatingRecordButton: some View {
+        Button(action: onRecord) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 60, height: 60)
+                .background(InkTone.record.color, in: Circle())
+                .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+        }
+        .buttonStyle(.plain)
+        .padding(20)
+        .accessibilityIdentifier("library.record")
+        .accessibilityLabel("Record")
     }
 
     @ViewBuilder
@@ -206,50 +236,65 @@ struct LibraryView: View {
             List {
                 ForEach(model.yearGroups) { group in
                     Section(String(group.year)) {
-                        ForEach(group.items) { item in
-                            NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                                LibraryEntryRow(model: model, item: item)
-                            }
-                            // On the LINK, not on the row inside it. A `NavigationLink`
-                            // merges its label's children into one accessibility element,
-                            // so `LibraryEntryRow`'s own `library.row` identifier is not
-                            // independently queryable — the same flattening `capture
-                            // .recentRow` exists to work around, and which silently made
-                            // every library row unqueryable from a UI test until the
-                            // capture screen stopped listing three recents and the tests
-                            // had to come here instead.
-                            .accessibilityIdentifier("library.entryLink")
-                            // Trailing swipe (trash first, so a full swipe trashes —
-                            // platform convention) plus a Mac-convention right-click
-                            // context menu with the same two handlers, reusing
-                            // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
-                            // detail screen does — no second delete or move path.
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    pendingTrashCaptureID = item.captureID
-                                } label: {
-                                    Label("Trash", systemImage: "trash")
-                                }
-                                .accessibilityIdentifier("library.row.trashSwipe")
+                        // Month sub-headers within the year section (Task 11 spec) — a
+                        // second `ForEach` nested in the same `Section`'s content, not a
+                        // nested `Section`: SwiftUI's `List` does not support nesting a
+                        // `Section` inside another `Section`'s content.
+                        ForEach(EntryListItem.monthGroups(of: group.items)) { monthGroup in
+                            Text(monthGroup.month)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(InkTone.inkSecondary.color)
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(InkTone.paper.color)
+                                .accessibilityIdentifier("library.monthHeader")
 
-                                Button {
-                                    pendingMoveCaptureID = item.captureID
-                                } label: {
-                                    Label("Move", systemImage: "folder")
+                            ForEach(monthGroup.items) { item in
+                                NavigationLink(value: LibraryDestination.entry(item.captureID)) {
+                                    LibraryEntryRow(model: model, item: item,
+                                                    showsJournalName: journal == nil)
                                 }
-                                .tint(.blue)
-                                .accessibilityIdentifier("library.row.moveSwipe")
-                            }
-                            .contextMenu {
-                                Button {
-                                    pendingMoveCaptureID = item.captureID
-                                } label: {
-                                    Label("Move to Journal…", systemImage: "folder")
+                                // On the LINK, not on the row inside it. A `NavigationLink`
+                                // merges its label's children into one accessibility element,
+                                // so `LibraryEntryRow`'s own `library.row` identifier is not
+                                // independently queryable — the same flattening `capture
+                                // .recentRow` exists to work around, and which silently made
+                                // every library row unqueryable from a UI test until the
+                                // capture screen stopped listing three recents and the tests
+                                // had to come here instead.
+                                .accessibilityIdentifier("library.entryLink")
+                                .listRowBackground(InkTone.paper.color)
+                                // Trailing swipe (trash first, so a full swipe trashes —
+                                // platform convention) plus a Mac-convention right-click
+                                // context menu with the same two handlers, reusing
+                                // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
+                                // detail screen does — no second delete or move path.
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) {
+                                        pendingTrashCaptureID = item.captureID
+                                    } label: {
+                                        Label("Trash", systemImage: "trash")
+                                    }
+                                    .accessibilityIdentifier("library.row.trashSwipe")
+
+                                    Button {
+                                        pendingMoveCaptureID = item.captureID
+                                    } label: {
+                                        Label("Move", systemImage: "folder")
+                                    }
+                                    .tint(.blue)
+                                    .accessibilityIdentifier("library.row.moveSwipe")
                                 }
-                                Button(role: .destructive) {
-                                    pendingTrashCaptureID = item.captureID
-                                } label: {
-                                    Label("Move to Trash", systemImage: "trash")
+                                .contextMenu {
+                                    Button {
+                                        pendingMoveCaptureID = item.captureID
+                                    } label: {
+                                        Label("Move to Journal…", systemImage: "folder")
+                                    }
+                                    Button(role: .destructive) {
+                                        pendingTrashCaptureID = item.captureID
+                                    } label: {
+                                        Label("Move to Trash", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
@@ -292,6 +337,12 @@ struct LibraryEntryRow: View {
     /// field on this row comes from `item` alone, same as before that task.
     let model: LibraryScreenModel
     let item: EntryListItem
+    /// `false` when this list is scoped to one journal — the journal is already named by
+    /// `LibraryCoverBand` above, so repeating it on every row is noise (Task 11 spec:
+    /// "drop the per-row journal-name caption when the list is scoped to a journal").
+    /// `true` for All Entries, where the caption is the only place a row says which
+    /// journal it belongs to.
+    var showsJournalName: Bool = true
 
     /// image capture plan Task 9: row-level drag-and-drop target, design doc's "the
     /// entry list row" alongside the detail screen's own `.onDrop`
@@ -305,31 +356,7 @@ struct LibraryEntryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            if let thumbnail = item.leadingThumbnail {
-                AsyncCaptureImage(id: thumbnail.id, load: {
-                    await model.thumbnailData(captureID: item.captureID, imageID: thumbnail.id)
-                }, loaded: { image in
-                    image
-                        .resizable()
-                        .scaledToFill()
-                }, placeholder: {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(.quaternary)
-                })
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .accessibilityIdentifier("library.row.thumbnail")
-                // A `NavigationLink`'s label flattens every child into ONE accessibility
-                // element (this row's own doc comment, and `library.row.duration`'s —
-                // see `CaptureUITests.recentRows`), so `library.row.thumbnail` is not
-                // independently queryable from a UI test; only the merged element's
-                // LABEL is. This label is the thing a thumbnail-presence UI test can
-                // actually assert on, same technique `CaptureUITests.durationSeconds
-                // (in:)` uses for the duration text.
-                .accessibilityLabel("Entry photo")
-            }
+            thumbnail
 
             rowContent
         }
@@ -377,11 +404,45 @@ struct LibraryEntryRow: View {
         return true
     }
 
+    /// 56 pt (Task 11 spec) — the entry's own first image when it has one, else the
+    /// shared `NeutralCoverTile` (#117), never the old broken-image `photo` glyph.
+    /// **Never the journal cover** (Image lifecycle rule: "Entry-row thumbs use the
+    /// entry's own first image, never the cover").
+    @ViewBuilder
+    private var thumbnail: some View {
+        if let leadingThumbnail = item.leadingThumbnail {
+            AsyncCaptureImage(id: leadingThumbnail.id, load: {
+                await model.thumbnailData(captureID: item.captureID, imageID: leadingThumbnail.id)
+            }, loaded: { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            }, placeholder: {
+                NeutralCoverTile(size: 56, glyph: "mic", cornerRadius: 8)
+            })
+            .frame(width: 56, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityIdentifier("library.row.thumbnail")
+            // A `NavigationLink`'s label flattens every child into ONE accessibility
+            // element (this row's own doc comment, and `library.row.duration`'s —
+            // see `CaptureUITests.recentRows`), so `library.row.thumbnail` is not
+            // independently queryable from a UI test; only the merged element's
+            // LABEL is. This label is the thing a thumbnail-presence UI test can
+            // actually assert on, same technique `CaptureUITests.durationSeconds
+            // (in:)` uses for the duration text.
+            .accessibilityLabel("Entry photo")
+        } else {
+            NeutralCoverTile(size: 56, glyph: "mic", cornerRadius: 8)
+        }
+    }
+
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // Date + weekday · duration, one line (Task 11 spec).
             HStack(spacing: 6) {
                 Text(dateText)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(InkTone.ink.color)
                     .accessibilityIdentifier("library.row.date")
 
                 // Weekday only at day precision (issue #48) — see
@@ -390,14 +451,14 @@ struct LibraryEntryRow: View {
                 if let weekday = item.weekdayText() {
                     Text(weekday)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityIdentifier("library.row.weekday")
                 }
 
                 if item.isBackdated {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityLabel("Backdated. Recorded \(recordedDateText).")
                         .accessibilityIdentifier("library.row.backdatedMarker")
                 }
@@ -405,7 +466,7 @@ struct LibraryEntryRow: View {
                 if !item.degradations.isEmpty {
                     Image(systemName: "questionmark.circle")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityLabel(item.degradations.accessibilityReasons.joined(separator: ", "))
                         .accessibilityIdentifier("library.row.degradedMarker")
                 }
@@ -414,22 +475,24 @@ struct LibraryEntryRow: View {
 
                 Text(durationText)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("library.row.duration")
             }
 
             if let snippet = item.snippet, !snippet.isEmpty {
                 Text(snippet)
                     .font(.system(.body, design: .serif))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(InkTone.ink.color)
                     .lineLimit(2)
                     .accessibilityIdentifier("library.row.snippet")
             }
 
-            if let journalName = item.journal?.name {
+            // Dropped when scoped to one journal — the journal is already named by
+            // `LibraryCoverBand` above (Task 11 spec).
+            if showsJournalName, let journalName = item.journal?.name {
                 Text(journalName)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("library.row.journal")
             }
         }
@@ -438,4 +501,90 @@ struct LibraryEntryRow: View {
     private var dateText: String { item.formattedEffectiveDate() }
     private var recordedDateText: String { item.capturedAt.formatted(date: .abbreviated, time: .shortened) }
     private var durationText: String { CaptureCoordinator.formatDuration(item.durationSeconds) }
+}
+
+/// The journal's cover header band (Task 11, #117 — the dropped half of PR 3). Replaces
+/// `JournalHeaderCard`. The whole band is the edit affordance, same "no separate Edit
+/// button" rule `JournalHeaderCard` shipped with: cover, title and subtitle are one
+/// button, and tapping anywhere on the band — including the "Add Cover" pill in the
+/// coverless state — routes to the journal editor.
+struct LibraryCoverBand: View {
+    let name: String
+    let cover: Data?
+    /// `JournalPickerSheet.rowSubtitle`'s "range · N entries" string, already formatted —
+    /// reused rather than re-deriving the same "date line · count" join here.
+    let subtitle: String
+    let onEdit: () -> Void
+
+    static let height: CGFloat = 190
+
+    var body: some View {
+        Button(action: onEdit) {
+            ZStack(alignment: .bottomLeading) {
+                if let cover, let image = JournalCoverThumbnail.decode(cover) {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Self.height)
+                        .clipped()
+                    // Bottom scrim so white title/subtitle text stays legible over any
+                    // photograph, regardless of its own tones.
+                    LinearGradient(colors: [.black.opacity(0), .black.opacity(0.7)],
+                                   startPoint: .center, endPoint: .bottom)
+                        .frame(height: Self.height)
+                    coverTitleBlock
+                } else {
+                    InkTone.paperInset.color
+                        .frame(height: Self.height)
+                    coverlessTitleBlock
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(height: Self.height)
+        .clipped()
+        .accessibilityIdentifier("journal.header")
+        .accessibilityLabel(subtitle.isEmpty ? name : "\(name), \(subtitle)")
+        .accessibilityHint("Edit this journal")
+    }
+
+    /// Cover-present state: white serif title over the scrim, no separate affordance —
+    /// the whole photograph is already the button.
+    private var coverTitleBlock: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(name)
+                .font(.system(size: 26, weight: .semibold, design: .serif))
+                .foregroundStyle(.white)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+        }
+        .padding(20)
+    }
+
+    /// Coverless state: ink title on quiet paper, plus the explicit "Add Cover" pill the
+    /// spec calls for. The pill is decorative, not a second `Button` — the whole band is
+    /// already one, and a nested control here would fire two actions on one tap.
+    private var coverlessTitleBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(name)
+                .font(.system(size: 26, weight: .semibold, design: .serif))
+                .foregroundStyle(InkTone.ink.color)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(InkTone.inkSecondary.color)
+            }
+            Text("Add Cover")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(InkTone.accent.color)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(InkTone.paper.color, in: Capsule())
+        }
+        .padding(20)
+    }
 }

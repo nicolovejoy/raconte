@@ -188,16 +188,28 @@ struct ContentView: View {
         case .capture:
             CaptureView(model: services.capture)
         case .allEntries:
+            // Not a journal (spec ruling 5) — the floating record button starts capture
+            // into whatever journal is already current, unchanged (Task 11 drift ruling).
             LibraryView(model: services.library, title: "All Entries", journal: nil,
-                        onCreateEntry: { services.router.detailPath.append(.entry($0)) })
+                        onCreateEntry: { services.router.detailPath.append(.entry($0)) },
+                        onRecord: { services.router.select(.capture) })
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .journal(let id):
+            // Preselects THIS journal on the capture model before routing — same
+            // `CaptureScreenModel.selectJournal` call the capture screen's own journal
+            // switcher (`JournalPickerSheet` via `CaptureView`) uses, so the floating
+            // record button and the capture-screen picker never disagree about how a
+            // journal gets chosen.
             LibraryView(model: services.library,
                         title: libraryTitle,
                         journal: services.library.journals.first { $0.id == id },
                         onEditJournal: { services.router.detailPath.append(.journalEditor($0)) },
-                        onCreateEntry: { services.router.detailPath.append(.entry($0)) })
+                        onCreateEntry: { services.router.detailPath.append(.entry($0)) },
+                        onRecord: {
+                            services.capture.selectJournal(id)
+                            services.router.select(.capture)
+                        })
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .trash:

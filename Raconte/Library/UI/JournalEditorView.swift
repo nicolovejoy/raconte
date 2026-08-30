@@ -106,7 +106,7 @@ struct JournalEditorView: View {
                     // the derived range is a fact about the entries, not a setting. Routes
                     // through the model's own derived-range primitive rather than
                     // recomputing `JournalDateRange` here — `dateLine(forJournal:)` is
-                    // the span-first blend `SidebarView`/`JournalHeaderCard` show; this
+                    // the span-first blend `SidebarView`/`LibraryCoverBand` show; this
                     // row is deliberately the OTHER half, since Task 7's span section is
                     // the one place the stored span itself becomes editable.
                     Text(derivedSummary)

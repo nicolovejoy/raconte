@@ -103,7 +103,7 @@ struct JournalPickerSheet: View {
         }, placeholder: {
             // Coverless is the ordinary case, not a broken/error state — the shared
             // neutral tile (#117), never a "photo failed to load" icon.
-            NeutralCoverTile(size: 52)
+            NeutralCoverTile(size: 52, monogram: journal.name)
         })
         .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))

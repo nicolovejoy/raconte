@@ -149,7 +149,7 @@ struct SidebarRowView: View {
                 .frame(width: Self.thumbSize, height: Self.thumbSize)
                 .clipShape(RoundedRectangle(cornerRadius: Self.thumbSize / 4, style: .continuous))
         } else {
-            NeutralCoverTile(size: Self.thumbSize, cornerRadius: Self.thumbSize / 4)
+            NeutralCoverTile(size: Self.thumbSize, monogram: row.title, cornerRadius: Self.thumbSize / 4)
         }
     }
 

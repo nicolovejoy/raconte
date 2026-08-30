@@ -379,6 +379,7 @@ final class CaptureScreenModel {
         receipt = nil
         discardNoticeTask?.cancel()
         discardNotice = nil
+        pendingDiscard = false
         await coordinator.record()
     }
     func done() async { await coordinator.done() }
@@ -701,6 +702,14 @@ final class CaptureScreenModel {
         // Snapshotted and cleared HERE, before any await: the flag is about the capture
         // that is finishing right now, and a launch-recovery drain through this same
         // method must never inherit it.
+        //
+        // The `guard !finishing` above returns before this line, so a discard armed
+        // while an earlier finish is still in flight would in principle carry into the
+        // NEXT finish rather than being consumed by the one it was meant for. Unreachable
+        // today: while a finish is running the live coordinator's phase is `.captured`,
+        // which `discardCurrentCapture`'s own phase guard already rejects, so nothing can
+        // arm `pendingDiscard` in that window. Left as a comment, not a restructure, since
+        // there is no failing state to fix.
         let discarding = pendingDiscard
         pendingDiscard = false
         // The queue, NOT `activeCaptureID`: teardown runs `resetCaptureWiring()` before
@@ -741,14 +750,27 @@ final class CaptureScreenModel {
         // the entry, so it cannot be assembled until the scan has seen it. Also after
         // `detectSpokenDate`, or a receipt could name a date the sidecar is about to
         // change under it.
-        if discarding {
+        // The LAST id only, not the whole queue — same rule and same reason as
+        // `buildReceipt` below: `finalizeQueue` is append-only and shared with launch
+        // recovery, so a discard that lands while a recovered backlog is also finishing
+        // sees `transcribed == [recoveredA, recoveredB, currentID]`. Trashing the lot
+        // would silently bin readings the owner never touched — he discarded the one he
+        // was just holding open, not his backlog. The recovered ids still ran the full
+        // finalize/push/promote pipeline above and stay in the library untouched.
+        if discarding, let captureID = transcribed.last {
             // After the rescan, deliberately: `trashEntry` writes the tombstone through
             // `EntryMetadataStore`, which needs the entry to exist, and it rescans itself
             // afterwards — so the library's visible list is correct without a second
             // rescan here.
-            for id in transcribed { _ = await library.trashEntry(id) }
-            receipt = nil
-            showDiscardNotice()
+            let trashed = await library.trashEntry(captureID)
+            if trashed {
+                receipt = nil
+                showDiscardNotice()
+            } else {
+                // The notice must not claim a trash that didn't happen — show the owner
+                // the entry he still has instead of telling him it's gone.
+                await buildReceipt(for: transcribed)
+            }
         } else {
             await buildReceipt(for: transcribed)
         }

@@ -572,8 +572,16 @@ final class CaptureScreenModelTests: XCTestCase {
         model.handleFinalizeQueue()
         await waitUntil({ model.coordinator !== live }, "no coordinator reset (discarded capture)")
 
+        // Assert the notice immediately, before the second capture's four `waitUntil`
+        // loops below can eat into its 3-second auto-clear on a loaded runner — a check
+        // made only at the very end would pass whether or not `record()` actually clears
+        // anything (fix round 1, Minor 3).
+        XCTAssertEqual(model.discardNotice, "Discarded to Trash",
+                       "the first capture's discard notice must be showing right after its finish")
+
         live = model.coordinator
         await model.record()
+        XCTAssertNil(model.discardNotice, "starting the next reading must retire the discard notice")
         recorder.feed(frames: 1000)
         await model.done()
         await waitUntil({ live.finalizeQueue.isEmpty == false }, "no commit (kept capture)")
@@ -583,7 +591,7 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertEqual(model.library.items.count, 1,
                        "the capture after a discard must be kept")
         XCTAssertNotNil(model.receipt, "a kept capture still gets its receipt")
-        XCTAssertNil(model.discardNotice, "starting a new reading retires the discard notice")
+        XCTAssertNil(model.discardNotice, "the notice must still be gone once the kept capture finishes")
     }
 
     /// Discard is only meaningful while the owner is holding a capture open. From idle it is

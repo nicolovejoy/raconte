@@ -2,62 +2,58 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-29 pm (laptop — TestFlight build 12 shipped; CI cost fixed; two redesign gaps filed)
+## Session 2026-08-29 late (laptop — #117 shipped: library + sidebar restyle, PR #119 open)
 
-**Build 12 is on TestFlight, both platforms** (`EXPORT SUCCEEDED` for iOS and macOS),
-carrying the whole UX set (#112/#113/#114/#115). 2009 unit / 57 UI green on that tree —
-the UI suite ran as four `-only-testing` splits (13+16+13+15), since even six classes
-blows the Bash 10-minute cap. PR #116 merged: the version bump, plus two fixes found
-along the way.
+**#117 built end-to-end via SDD resume** of `docs/plans/2026-08-29-ux-redesign-implementation.md`
+(its Tasks 11–12 — the half PR #114 dropped; the old ledger proved Tasks 1–10 shipped, and
+Tasks 13–15 stay superseded by #118). **PR #119 is open against main, unmerged — merging is
+Nico's.** https://github.com/nicolovejoy/raconte/pull/119. Library: 190-pt cover band
+(3-stop scrim), 56-pt entry-own-image thumbs, month sub-headers, floating 60-pt record
+button (`library.record`, wired via existing `CaptureScreenModel.selectJournal` +
+`router.select(.capture)`). Sidebar rows: cover thumbs + `inkSecondary` subtitles.
+`NeutralCoverTile` extracted from the picker as the one shared coverless tile;
+`JournalHeaderCard` deleted. 2017 unit green; Navigation 11/11, ImageCapture 3/3,
+JournalEditor 10/10, EntryPaging 3/3.
 
-**CI cost, found from a $273 GitHub billing alarm.** raconte is a PUBLIC repo, so Actions
-on standard runners is 100% discounted and *nothing was actually charged* — the panel
-shows gross metered usage next to a matching discount. But it was $251.91 of gross usage
-in August: 222 runs, each spawning TWO `macos-26` runners for ~30 min. **93 of 180 main
-runs were docs-only commits** (devlog, handoff, plan docs), cold-building Xcode twice to
-prove a markdown file didn't break the app — over half the spend. Added `paths-ignore`
-on `docs/**` and `**/*.md` to both triggers. Safe because main has no branch protection
-and no rulesets (verified); with a required check, a path-filtered skip sits "expected"
-forever and blocks docs-only PRs — the workflow comment records the skipped-inner-job
-alternative. Also: the unit job is only ~2 min; the iOS-simulator UI job is essentially
-the entire bill.
+**Final whole-branch review (opus) caught a real bug the task reviews missed**: month
+headers fabricated "January" for `.year`-precision backdates (the `anchorDate` month-fill
+trap, one file over from `weekdayText`'s own refusal). Fixed: nil-month groups render no
+header. Also fixed from review: stronger band scrim, bottom `safeAreaInset` so the
+floating button can't hide the last row.
 
-**Owner device smoke on build 12: Home looks right, nav bar and capture screen still look
-like the old app.** Diagnosed by grepping the token layer — exactly four files consume
-ink & paper tokens (`HomeView`, `EntryDetailView`, `EntryInfoSheet`, `JournalPickerSheet`);
-`LibraryView`, `SidebarView`, `ContentView`, `CaptureView` use zero. Two distinct causes,
-now filed:
-- **#117** — the library + sidebar restyle was the *other half of PR 3* (`ux-redesign-design.md`
-  specified "journal picker **+ library**"); PR #114 shipped only the picker sheet and the
-  rest was never filed. Straight unfinished work; the issue carries the full spec.
-- **#118** — the capture re-skin was PR 4, consciously replaced when #108 became the Home
-  bookshelf, and never re-planned. Needs a *design* pass, not a build: the old mocks assumed
-  capture was the landing screen, so the idle state, the demoted-controls pull-up, and the
-  recovery banners are all moot. Only the recording-state design plausibly survives.
+**Owner smoke on the branch build drove three more fixes** (all on PR #119): the macOS
+Choose Journal sheet was an unsized clipped card → `minWidth 400/minHeight 460`; imageless
+entry thumbs showed a mic glyph → plain quiet tile; coverless journal tiles' `book.closed`
+read as "a paper-towel dispenser" → serif first-letter monogram (`NeutralCoverTile.monogramText`,
+unit-pinned). Trap re-learned: a NEW test file silently doesn't run until `xcodegen generate`
+— the suite reported green at the old count first.
 
-Doc fix: `docs/testflight-deploy.md` told you to bump `CFBundleVersion` in
-`Raconte/Info.plist`, which XcodeGen GENERATES — the exact trap that reset the build
-number 2→1 on 2026-08-24. Now points at `project.yml`.
+**Owner smoke also surfaced a flow gap, undecided**: browsing a journal doesn't follow you
+to capture, and the floating record button lands on capture's idle screen where the
+"Last entry" card reads as noise. Three options were laid out; owner hasn't picked.
+Recommendation on file: option 1 — the journal page's record button *starts recording
+immediately* (what the design doc's "starting capture into that journal" says), sidebar
+navigation keeps its own current journal; anything fancier belongs in #118's redesign.
+Filed down-the-road: #120 (choose the cover slice the band shows), #121 (crop tool at
+image capture).
 
 **Next steps:**
-1. **Invite Lori** (internal tester, all devices): invite email sent 2026-08-29; when her
-   Apple Account email arrives → ASC Users and Access → Customer Support role → TestFlight
-   Internal group, automatic distribution on. Build 12 is already up and waiting.
-   Fresh-install path: bootstrap mints a default "Journal", so her Home starts with one
-   coverless card.
-2. **Finish build-12 smoke.** Home shelf with real covers confirmed good on device. Still
-   unverified: **the dark recovery-banner card on paper** — force-quit mid-capture, relaunch,
-   check it's legible in BOTH light and dark mode (dark-on-dark is the known trap).
-3. **#117 — library + sidebar restyle.** The dropped half of PR 3; spec is in the issue.
-   This is the visible seam the owner noticed, and the cheapest of the two to close.
-4. **#118 — capture screen.** Needs a short design pass first (what is capture now that
-   it isn't the front door?), not a straight build.
-5. **Home follow-ups** (parked at #115's final review, listed in the PR body): gate
-   recovery-banner Play on live capture phase (mirror `CaptureSidebarRow.isLive`);
-   spine-tap UI test (4-journal seed); last spine row draws a trailing hairline;
-   deleted-journal fallback `.capture` → maybe `.home`.
-6. Remaining sync hardening, demoted: #91 (reconcile-on-foreground), #85 (park inbound
-   asset failures). Capture Schema → History for the three unidentified deployed changes.
+1. **Merge PR #119** once CI is green (Nico). The owner smoke passed on the final build.
+2. **Record-flow build (good first task for an opus agent):** confirm option 1 with the
+   owner, then: floating `library.record` starts recording on arrival (today it only
+   preselects + routes); check the Home "New entry" button for the same idle-screen
+   detour. The three options and the owner's complaints are in this section above.
+3. **#118 — capture screen design pass** (what is capture now that it isn't the front
+   door?). The record-flow decision feeds this.
+4. **Invite Lori** (unchanged): when her Apple Account email arrives → ASC Users and
+   Access → Customer Support role → TestFlight Internal group. Build 12 is up; next
+   TestFlight build should include #119.
+5. **Parked polish** (post-#119, from reviews): NeutralCoverTile non-square overload +
+   migrate `HomeView.faceOutCover`; JournalPickerSheet coverless tile → monogram is done
+   but its `cover(for:)` still hand-rolls on main until #119 merges; `EntryMonthGroup.id`
+   salt against duplicate keys; cache the month formatter; "Add Cover" pill routes to
+   editor not picker (disclosed deviation). Plus prior parked: Home follow-ups (#115 PR
+   body), sync hardening #91/#85, dark recovery-banner smoke still unverified.
 
 ## What Raconte is
 

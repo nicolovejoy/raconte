@@ -3,6 +3,64 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-29 pm (laptop — TestFlight build 12 shipped; CI cost fixed; two redesign gaps filed)
+
+**Build 12 is on TestFlight, both platforms** (`EXPORT SUCCEEDED` for iOS and macOS),
+carrying the whole UX set (#112/#113/#114/#115). 2009 unit / 57 UI green on that tree —
+the UI suite ran as four `-only-testing` splits (13+16+13+15), since even six classes
+blows the Bash 10-minute cap. PR #116 merged: the version bump, plus two fixes found
+along the way.
+
+**CI cost, found from a $273 GitHub billing alarm.** raconte is a PUBLIC repo, so Actions
+on standard runners is 100% discounted and *nothing was actually charged* — the panel
+shows gross metered usage next to a matching discount. But it was $251.91 of gross usage
+in August: 222 runs, each spawning TWO `macos-26` runners for ~30 min. **93 of 180 main
+runs were docs-only commits** (devlog, handoff, plan docs), cold-building Xcode twice to
+prove a markdown file didn't break the app — over half the spend. Added `paths-ignore`
+on `docs/**` and `**/*.md` to both triggers. Safe because main has no branch protection
+and no rulesets (verified); with a required check, a path-filtered skip sits "expected"
+forever and blocks docs-only PRs — the workflow comment records the skipped-inner-job
+alternative. Also: the unit job is only ~2 min; the iOS-simulator UI job is essentially
+the entire bill.
+
+**Owner device smoke on build 12: Home looks right, nav bar and capture screen still look
+like the old app.** Diagnosed by grepping the token layer — exactly four files consume
+ink & paper tokens (`HomeView`, `EntryDetailView`, `EntryInfoSheet`, `JournalPickerSheet`);
+`LibraryView`, `SidebarView`, `ContentView`, `CaptureView` use zero. Two distinct causes,
+now filed:
+- **#117** — the library + sidebar restyle was the *other half of PR 3* (`ux-redesign-design.md`
+  specified "journal picker **+ library**"); PR #114 shipped only the picker sheet and the
+  rest was never filed. Straight unfinished work; the issue carries the full spec.
+- **#118** — the capture re-skin was PR 4, consciously replaced when #108 became the Home
+  bookshelf, and never re-planned. Needs a *design* pass, not a build: the old mocks assumed
+  capture was the landing screen, so the idle state, the demoted-controls pull-up, and the
+  recovery banners are all moot. Only the recording-state design plausibly survives.
+
+Doc fix: `docs/testflight-deploy.md` told you to bump `CFBundleVersion` in
+`Raconte/Info.plist`, which XcodeGen GENERATES — the exact trap that reset the build
+number 2→1 on 2026-08-24. Now points at `project.yml`.
+
+**Next steps:**
+1. **Invite Lori** (internal tester, all devices): invite email sent 2026-08-29; when her
+   Apple Account email arrives → ASC Users and Access → Customer Support role → TestFlight
+   Internal group, automatic distribution on. Build 12 is already up and waiting.
+   Fresh-install path: bootstrap mints a default "Journal", so her Home starts with one
+   coverless card.
+2. **Finish build-12 smoke.** Home shelf with real covers confirmed good on device. Still
+   unverified: **the dark recovery-banner card on paper** — force-quit mid-capture, relaunch,
+   check it's legible in BOTH light and dark mode (dark-on-dark is the known trap).
+3. **#117 — library + sidebar restyle.** The dropped half of PR 3; spec is in the issue.
+   This is the visible seam the owner noticed, and the cheapest of the two to close.
+4. **#118 — capture screen.** Needs a short design pass first (what is capture now that
+   it isn't the front door?), not a straight build.
+5. **Home follow-ups** (parked at #115's final review, listed in the PR body): gate
+   recovery-banner Play on live capture phase (mirror `CaptureSidebarRow.isLive`);
+   spine-tap UI test (4-journal seed); last spine row draws a trailing hairline;
+   deleted-journal fallback `.capture` → maybe `.home`.
+6. Remaining sync hardening, demoted: #91 (reconcile-on-foreground), #85 (park inbound
+   asset failures). Capture Schema → History for the three unidentified deployed changes.
+
+
 ## Session 2026-08-29 (laptop — #18 merged; #108 designed AND shipped: Home bookshelf landing, PR #115)
 
 **#18 landed** (PR #114 — the ux-journals worker had already committed its UI-test fixes

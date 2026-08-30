@@ -154,11 +154,28 @@ final class CaptureLayoutModelTests: XCTestCase {
     /// exactly the moment the owner is trying to resume is the same class of defect as #53
     /// itself, and `MarkerControlsModel` already keeps the controls *shown* through these
     /// phases for this reason — the two models have to agree or the bar would still jump.
+    ///
+    /// `.resuming` is compared field-by-field, not with `==`: since Task 1 it deliberately
+    /// hides Discard (a machine-busy phase, per `showsDiscardButton`'s doc), which is the
+    /// one field this test is not about — everything that actually occupies screen space
+    /// must still match `.recording`.
     func testLayoutDoesNotChangeAcrossAnInterruption() {
         XCTAssertEqual(layout(.interrupted), layout(.recording),
                        "layout changes when a call interrupts a reading")
-        XCTAssertEqual(layout(.resuming), layout(.recording),
-                       "layout changes while resuming after an interruption")
+
+        let resuming = layout(.resuming)
+        let recording = layout(.recording)
+        XCTAssertEqual(resuming.mode, recording.mode)
+        XCTAssertEqual(resuming.showsLastEntry, recording.showsLastEntry)
+        XCTAssertEqual(resuming.showsMultiVoiceField, recording.showsMultiVoiceField)
+        XCTAssertEqual(resuming.showsLiveTranscript, recording.showsLiveTranscript)
+        XCTAssertEqual(resuming.showsReceipt, recording.showsReceipt)
+        XCTAssertEqual(resuming.usesCompactBackdateField, recording.usesCompactBackdateField)
+        XCTAssertEqual(resuming.showsRecoveryBanners, recording.showsRecoveryBanners)
+        XCTAssertEqual(resuming.transcriptFillsAvailableHeight,
+                       recording.transcriptFillsAvailableHeight)
+        XCTAssertFalse(resuming.showsDiscardButton,
+                       "resuming is machine-busy — Discard must not race the resume")
     }
 
     /// Every phase must be classified deliberately. `CaseIterable` means a newly added
@@ -170,5 +187,36 @@ final class CaptureLayoutModelTests: XCTestCase {
                           "\(phase) is not classified by these tests — decide whether a "
                           + "capture is under way in that phase")
         }
+    }
+
+    // MARK: Discard button (record-flow plan, Task 1)
+
+    /// Discard exists to undo a mis-tap of the library's floating record button, so it is
+    /// offered exactly while there is a capture the owner could still be stopping himself.
+    func testDiscardIsOfferedWhileRecording() {
+        XCTAssertTrue(CaptureLayoutModel.make(phase: .recording).showsDiscardButton)
+    }
+
+    /// An interrupted capture is still the owner's to abandon — the same reason
+    /// `RecordControlModel` offers Done there.
+    func testDiscardIsOfferedWhileInterrupted() {
+        XCTAssertTrue(CaptureLayoutModel.make(phase: .interrupted).showsDiscardButton)
+    }
+
+    /// The machine-busy phases. The primary control is already disabled in all three; a
+    /// Discard racing the start or the stop is a defect, not a feature.
+    func testDiscardIsHiddenInMachineBusyPhases() {
+        for phase in [CaptureState.preparing, .resuming, .stopping] {
+            XCTAssertFalse(CaptureLayoutModel.make(phase: phase).showsDiscardButton,
+                           "\(phase) must not offer Discard")
+        }
+    }
+
+    /// Nothing in flight: the landing screen, the receipt, and the terminal phases.
+    func testDiscardIsHiddenWhenNothingIsInFlight() {
+        XCTAssertFalse(CaptureLayoutModel.make(phase: .idle).showsDiscardButton)
+        XCTAssertFalse(CaptureLayoutModel.make(phase: .captured, hasReceipt: true).showsDiscardButton)
+        XCTAssertFalse(CaptureLayoutModel.make(phase: .finalizing).showsDiscardButton)
+        XCTAssertFalse(CaptureLayoutModel.make(phase: .complete).showsDiscardButton)
     }
 }

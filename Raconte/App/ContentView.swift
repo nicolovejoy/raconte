@@ -68,8 +68,8 @@ struct ContentView: View {
         // #108: capture's bootstrap (the crash-recovery scan) used to ride CaptureView's
         // own `.task`, which was fine while capture was the launch root. Home is now the
         // root, and recovery must not depend on the owner ever visiting capture — kick it
-        // here too. `bootstrap()` is `didBootstrap`-guarded, so the CaptureView copy (kept,
-        // as a belt for previews/tests that mount CaptureView directly) never double-runs.
+        // here too. `bootstrap()` is await-once, so the CaptureView copy (kept, as a belt
+        // for previews/tests that mount CaptureView directly) never double-runs.
         .task { await services.capture.bootstrap() }
         #if os(macOS)
         .frame(minWidth: 720, minHeight: 560)
@@ -182,7 +182,10 @@ struct ContentView: View {
             HomeView(library: services.library,
                      capture: services.capture,
                      onOpenJournal: { services.router.select(.journal($0)) },
-                     onNewEntry: { services.router.select(.capture) })
+                     onNewEntry: {
+                         services.router.select(.capture)
+                         Task { await services.capture.beginCapture() }
+                     })
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .capture:
@@ -192,23 +195,27 @@ struct ContentView: View {
             // into whatever journal is already current, unchanged (Task 11 drift ruling).
             LibraryView(model: services.library, title: "All Entries", journal: nil,
                         onCreateEntry: { services.router.detailPath.append(.entry($0)) },
-                        onRecord: { services.router.select(.capture) })
+                        onRecord: {
+                            services.router.select(.capture)
+                            Task { await services.capture.beginCapture() }
+                        })
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .journal(let id):
-            // Preselects THIS journal on the capture model before routing — same
-            // `CaptureScreenModel.selectJournal` call the capture screen's own journal
-            // switcher (`JournalPickerSheet` via `CaptureView`) uses, so the floating
-            // record button and the capture-screen picker never disagree about how a
-            // journal gets chosen.
+            // Routes and starts the reading in one motion (owner ruling 2026-08-29,
+            // option 1): `beginCapture(inJournal:)` selects THIS journal through the
+            // same `CaptureScreenModel.selectJournal` call the capture screen's own
+            // journal switcher (`JournalPickerSheet` via `CaptureView`) uses, so the
+            // floating record button and the capture-screen picker never disagree
+            // about how a journal gets chosen — then starts recording.
             LibraryView(model: services.library,
                         title: libraryTitle,
                         journal: services.library.journals.first { $0.id == id },
                         onEditJournal: { services.router.detailPath.append(.journalEditor($0)) },
                         onCreateEntry: { services.router.detailPath.append(.entry($0)) },
                         onRecord: {
-                            services.capture.selectJournal(id)
                             services.router.select(.capture)
+                            Task { await services.capture.beginCapture(inJournal: id) }
                         })
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)

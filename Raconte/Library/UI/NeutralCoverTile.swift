@@ -11,20 +11,25 @@ import SwiftUI
 /// implementation drifting from it.
 struct NeutralCoverTile: View {
     var size: CGFloat
-    var glyph: String = "book.closed"
+    /// `nil` = a plain quiet tile, no glyph at all — the right shape for an imageless
+    /// ENTRY thumb (owner ruling 2026-08-29: a mic glyph there reads as "audio icon",
+    /// not "no image"). Journal covers keep the default `book.closed`.
+    var glyph: String? = "book.closed"
     var cornerRadius: CGFloat = 10
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(InkTone.paperInset.color)
             .overlay {
-                // Decorative only — `.accessibilityHidden` so the SF Symbol's own
-                // synthesized label (e.g. "microphone") never leaks into a merged
-                // `NavigationLink` label a UI test reads (`library.entryLink`'s "Entry
-                // photo" check, `CaptureUITests.durationSeconds(in:)`'s technique).
-                Image(systemName: glyph)
-                    .foregroundStyle(InkTone.inkSecondary.color)
-                    .accessibilityHidden(true)
+                if let glyph {
+                    // Decorative only — `.accessibilityHidden` so the SF Symbol's own
+                    // synthesized label (e.g. "microphone") never leaks into a merged
+                    // `NavigationLink` label a UI test reads (`library.entryLink`'s "Entry
+                    // photo" check, `CaptureUITests.durationSeconds(in:)`'s technique).
+                    Image(systemName: glyph)
+                        .foregroundStyle(InkTone.inkSecondary.color)
+                        .accessibilityHidden(true)
+                }
             }
             .frame(width: size, height: size)
     }

@@ -77,8 +77,7 @@ struct CaptureView: View {
                 // instantly despite the transition declaration.
                 if let notice = model.discardNotice {
                     Text(notice)
-                        .captureLabel(.receiptSavedChip)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .captureLabel(.discardNotice)
                         .accessibilityIdentifier("capture.discardNotice")
                         .transition(.opacity)
                 }

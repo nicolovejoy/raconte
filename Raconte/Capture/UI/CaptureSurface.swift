@@ -180,6 +180,13 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case receiptDate
     case receiptSummary
     case receiptSavedChip
+    /// The "Discarded to Trash" line (Task 3, record-flow). Its own case rather than a
+    /// borrowed `.receiptSavedChip`: the roles differ, and the borrow came with an ad-hoc
+    /// `.foregroundStyle(.white.opacity(0.7))` override on top — an unswept colour on the
+    /// one surface this model exists to keep them off, the same shape as the raw `.callout`
+    /// caught on `discardButton` a round earlier. A transient status line is secondary, not
+    /// the receipt date's full white, so it takes the secondary grey and says so here.
+    case discardNotice
     /// The Discard button (Task 3, record-flow). Quiet on purpose — it sits beside the
     /// live red record control and must not compete with it — but "quiet" still has to
     /// clear the same floors as everything else on this screen; fix-round-1 caught a raw
@@ -210,7 +217,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
              .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .receiptSummary, .discardButton: .grey(0.78)
+             .recentHeader, .receiptSummary, .discardButton, .discardNotice: .grey(0.78)
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
         // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the
@@ -234,7 +241,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
-                 .discardButton,
+                 .discardButton, .discardNotice,
                  .errorBanner: .callout    // 16
             }
         case .macOS:
@@ -245,7 +252,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
-                 .discardButton,
+                 .discardButton, .discardNotice,
                  .errorBanner: .title2     // 17
             }
         }

@@ -37,6 +37,20 @@ final class CaptureScreenModel {
     /// vanishes on its own vanishes unseen.
     private(set) var receipt: CaptureReceipt?
 
+    /// One line saying a capture was just discarded, shown for a few seconds and then
+    /// cleared. The mic meter falling still and the timer resetting are the real feedback
+    /// that the recording stopped; this is what distinguishes "stopped and kept" from
+    /// "stopped and thrown away", which otherwise look identical.
+    private(set) var discardNotice: String?
+
+    /// Armed by `discardCurrentCapture()` and consumed by `finishCurrentCapture()` — the
+    /// one place that knows which capture ids actually committed. Per-capture: it is
+    /// snapshotted and cleared at the top of the finish, so it can never leak into the
+    /// next reading.
+    private var pendingDiscard = false
+
+    private var discardNoticeTask: Task<Void, Never>?
+
     /// Dismiss the receipt and return to the landing screen. The "Record another" action,
     /// and also what "Open" does on its way to the entry — coming back from the detail
     /// screen to a receipt for an entry you have just been reading would be a loop.
@@ -363,10 +377,39 @@ final class CaptureScreenModel {
     /// build of the new one fails.
     func record() async {
         receipt = nil
+        discardNoticeTask?.cancel()
+        discardNotice = nil
         await coordinator.record()
     }
     func done() async { await coordinator.done() }
     func resume() async { await coordinator.resume() }
+
+    /// Stop this capture and throw it away (record-flow plan, Task 2).
+    ///
+    /// Option 1 makes the library's floating record button start recording on arrival, so
+    /// a mis-tap now costs real audio instead of a screen change; this is the one tap that
+    /// undoes it.
+    ///
+    /// It stops through the ORDINARY `done()` path and lets the capture finalize normally.
+    /// Nothing here aborts a recording mid-flight: there is no second teardown path to
+    /// keep correct, the m4a is verified and promoted exactly as for a kept reading, and
+    /// nothing is left half-written on disk. The entry is trashed afterwards, in
+    /// `finishCurrentCapture`, once it exists.
+    ///
+    /// Trash, not a hard delete — owner ruling 2026-08-29. "Delete anywhere, recoverable
+    /// 30 days" has no exception for this one either (same reasoning as `delete(_:)`), and
+    /// the failure mode that matters is a fat-fingered discard forty minutes into a real
+    /// reading, which must not be unrecoverable.
+    ///
+    /// Only from `.recording`/`.interrupted` — the phases where the owner is the one
+    /// holding the capture open, matching `CaptureLayoutModel.showsDiscardButton`. From
+    /// idle it does nothing at all: arming the flag with no capture in flight would trash
+    /// whatever the next reading turned out to be.
+    func discardCurrentCapture() async {
+        guard coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
+        pendingDiscard = true
+        await done()
+    }
 
     /// Called when the coordinator's finalize queue changes. Keyed off the queue, NOT
     /// the phase: `phase` flips to `.captured` before that transition's effects run
@@ -655,6 +698,11 @@ final class CaptureScreenModel {
     private func finishCurrentCapture() async {
         guard !finishing else { return }
         finishing = true
+        // Snapshotted and cleared HERE, before any await: the flag is about the capture
+        // that is finishing right now, and a launch-recovery drain through this same
+        // method must never inherit it.
+        let discarding = pendingDiscard
+        pendingDiscard = false
         // The queue, NOT `activeCaptureID`: teardown runs `resetCaptureWiring()` before
         // this point and nils the id out, so reading it here silently skipped the ref
         // write on every capture. The queue holds exactly the ids that just committed.
@@ -693,9 +741,32 @@ final class CaptureScreenModel {
         // the entry, so it cannot be assembled until the scan has seen it. Also after
         // `detectSpokenDate`, or a receipt could name a date the sidecar is about to
         // change under it.
-        await buildReceipt(for: transcribed)
+        if discarding {
+            // After the rescan, deliberately: `trashEntry` writes the tombstone through
+            // `EntryMetadataStore`, which needs the entry to exist, and it rescans itself
+            // afterwards — so the library's visible list is correct without a second
+            // rescan here.
+            for id in transcribed { _ = await library.trashEntry(id) }
+            receipt = nil
+            showDiscardNotice()
+        } else {
+            await buildReceipt(for: transcribed)
+        }
         coordinator = spawn()
         finishing = false
+    }
+
+    /// Three seconds, then gone. Unstructured `Task`, cancelled and replaced by the next
+    /// discard so two in quick succession do not leave the first one's timer to blank the
+    /// second one's notice early.
+    private func showDiscardNotice() {
+        discardNotice = "Discarded to Trash"
+        discardNoticeTask?.cancel()
+        discardNoticeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.discardNotice = nil
+        }
     }
 
     /// Assemble the post-stop receipt for the capture that just committed.

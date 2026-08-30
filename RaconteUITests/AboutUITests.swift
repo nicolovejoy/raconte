@@ -21,30 +21,49 @@ final class AboutUITests: XCTestCase {
         return app
     }
 
+    /// Reveals a diagnostic row and returns it, scrolling only as far as it has to.
+    ///
+    /// The diagnostic rows sit below the fold: About gained its "What this is" / "How it
+    /// works" sections (record-flow branch, owner request — About is the only
+    /// Release-built screen that can tell a first-time user what this app is), and an
+    /// offscreen `List` row is absent from the accessibility tree until it is scrolled
+    /// into view. Without scrolling, a present row reads as MISSING rather than merely
+    /// off-screen, which is exactly how this test once failed on CI.
+    ///
+    /// A single `swipeUp()` used to be enough. It is not a durable assumption: #118 §7
+    /// added the Build row to this very section, pushing everything below it down by one
+    /// row, and the next row added will do it again. So: directional swipes (never a
+    /// fixed distance, so this survives other device sizes) repeated until the row
+    /// appears (never a fixed COUNT, so this survives rows being added above it). Swipes
+    /// past the end of the list are no-ops, so the bound only caps a genuine miss.
+    ///
+    /// Call these in top-to-bottom document order — the scroll only ever goes down, so a
+    /// row checked after a lower one may have left the tree off the top by then.
+    private func revealRow(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        let row = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        for _ in 0..<6 {
+            if row.exists { return row }
+            app.swipeUp()
+        }
+        _ = row.waitForExistence(timeout: 10)
+        return row
+    }
+
     func testAboutScreenShowsVersionEnvironmentAndSyncRows() {
         let app = launchApp()
         openPlace(app, "sidebar.about")
 
-        // The three diagnostic rows moved below the fold when About gained its
-        // "What this is" / "How it works" sections (record-flow branch, owner request:
-        // About is the only Release-built screen that can tell a first-time user what
-        // this app is). An offscreen `List` row is absent from the accessibility tree
-        // until it is scrolled into view, so without this the rows read as MISSING
-        // rather than merely off-screen — which is exactly how this test failed on CI.
-        // Directional, not a fixed distance, so it survives other device sizes.
-        app.swipeUp()
+        XCTAssertTrue(revealRow(app, "about.version").exists, "version row missing")
 
-        let version = app.descendants(matching: .any)
-            .matching(identifier: "about.version").firstMatch
-        XCTAssertTrue(version.waitForExistence(timeout: 10), "version row missing")
+        // #118 §7: the build TIME, moved here off the capture screen. A different fact
+        // from Version — "1.0 (12)" is the same on every install of one build, while
+        // "built Aug 30, 9:24 AM PT" is what identifies the binary in your hand after a
+        // wireless or TestFlight install.
+        XCTAssertTrue(revealRow(app, "about.buildStamp").exists, "build stamp row missing")
 
-        let environment = app.descendants(matching: .any)
-            .matching(identifier: "about.environment").firstMatch
-        XCTAssertTrue(environment.waitForExistence(timeout: 10), "environment row missing")
+        XCTAssertTrue(revealRow(app, "about.environment").exists, "environment row missing")
 
-        let syncDegraded = app.descendants(matching: .any)
-            .matching(identifier: "about.sync.unavailable").firstMatch
-        XCTAssertTrue(syncDegraded.waitForExistence(timeout: 10),
+        XCTAssertTrue(revealRow(app, "about.sync.unavailable").exists,
                       "harness builds have no sync coordinator — the Sync section must "
                       + "degrade to its explanatory row, never hide")
     }

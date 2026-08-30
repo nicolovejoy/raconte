@@ -133,14 +133,15 @@ struct CaptureView: View {
         }
     }
 
-    /// Journal, backdate, two-voices, recovery banners, recents, build stamp — everything
-    /// that is setup or browsing rather than operating the recorder.
+    /// Journal, backdate, two-voices, recovery banners, recents — everything that is
+    /// setup or browsing rather than operating the recorder. (The build stamp used to sit
+    /// here too; #118 §7 moved it to About, the one Release-visible diagnostic screen.)
     ///
     /// Two different renderings by design (approach 2 of the 2026-08-16 IA discussion —
     /// owner: "there's two scrollable sections above [the bar]... I would rather have
     /// none, especially during the recording"). Idle is a browsing screen, so one honest
     /// scroll region is fine. While capturing, nothing left in this band is unbounded —
-    /// journal name, backdate, build stamp — so nothing here scrolls at all;
+    /// journal name and backdate — so nothing here scrolls at all;
     /// `CaptureLayoutModel.usesCompactBackdateField`/`showsRecoveryBanners` strip the band
     /// down to that bounded content instead of squeezing the full band into a fixed-height
     /// box that then had to scroll internally, which is what stacked a second scroll view
@@ -151,12 +152,6 @@ struct CaptureView: View {
             VStack(alignment: .leading, spacing: 12) {
                 JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
                 CompactBackdateSummary(model: model)
-                // Not DEBUG-gated: a wireless install is exactly when you can't tell
-                // which build you're holding, and TestFlight has the same problem.
-                Text(BuildInfo.stamp)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.35))
-                    .accessibilityIdentifier("capture.buildStamp")
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,13 +177,6 @@ struct CaptureView: View {
                     if layout.showsLastEntry {
                         lastEntrySection
                     }
-
-                    // Not DEBUG-gated: a wireless install is exactly when you can't tell
-                    // which build you're holding, and TestFlight has the same problem.
-                    Text(BuildInfo.stamp)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.35))
-                        .accessibilityIdentifier("capture.buildStamp")
                 }
                 .padding(24)
             }
@@ -530,15 +518,17 @@ struct JournalHeaderView: View {
             // This control had NO color-scheme pin at all before (issue #58) — its
             // label was already explicit `.white`/gray, but nothing pinned the button's
             // own rendering. `.environment(\.colorScheme, .dark)`, never
-            // `.preferredColorScheme`: `CaptureView` is the app's one permanently-
-            // mounted NavigationStack root (`ContentView.swift`), with no sheet/popover
-            // boundary around it, so `preferredColorScheme` here would resolve to the
-            // whole window — forcing Library/Detail/Trash dark for every macOS
-            // light-mode user, not just this button (fix-round-1 finding). Scoped to the
-            // `Button` only, not the enclosing `VStack` below. `JournalPickerSheet`
-            // itself renders on system material and must NOT inherit this pin (Task 10
-            // brief note) — it is presented from `CaptureView`, entirely outside this
-            // scope.
+            // `.preferredColorScheme`: that modifier governs "the nearest enclosing
+            // presentation, such as a popover or window" (Apple's own wording), and
+            // `CaptureView` is pushed inline into the app's navigation — there is no
+            // sheet or popover boundary between this button and the window — so a
+            // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW, forcing
+            // Library/Detail/Trash dark for every macOS light-mode user, not just this
+            // button (fix-round-1 finding). `.environment` has no such reach: it stops at
+            // this subtree. Scoped to the `Button` only, not the enclosing `VStack` below.
+            // `JournalPickerSheet` itself renders on system material and must NOT inherit
+            // this pin (Task 10 brief note) — it is presented from `CaptureView`, entirely
+            // outside this scope.
             .environment(\.colorScheme, .dark)
 
             // The one honest case where nothing is selected. Says what it costs — the
@@ -624,8 +614,8 @@ struct BackdateField: View {
             // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
             // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
             // presentation, such as a popover or window" (Apple's own wording): this view
-            // lives inside `CaptureView`, the app's one permanently-mounted NavigationStack
-            // root (`ContentView.swift`), with no sheet/popover boundary around it, so a
+            // lives inside `CaptureView`, which is pushed inline into the app's navigation
+            // with no sheet or popover boundary between it and the window, so a
             // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
             // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
             // scoped `.environment` pin has no such reach; a control's own transient popup
@@ -721,9 +711,8 @@ struct MultiVoiceField: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
         // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding):
-        // `CaptureView` is the app's permanently-mounted NavigationStack root with no
-        // sheet/popover boundary, so `preferredColorScheme` here would resolve to the
-        // whole window, not this subtree.
+        // there is no sheet or popover boundary between `CaptureView` and the window, so
+        // `preferredColorScheme` here would resolve to the whole window, not this subtree.
         .environment(\.colorScheme, .dark)
     }
 }
@@ -886,9 +875,9 @@ struct RecordControlsRow<Center: View>: View {
         .buttonStyle(.bordered)
         .controlSize(.large)
         // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-        // see the matching comment on `BackdateField` (issue #58 fix-round-1
-        // finding: `CaptureView` is the permanently-mounted NavigationStack root,
-        // so `preferredColorScheme` here would resolve to the whole window).
+        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding:
+        // nothing presents `CaptureView` as a sheet or popover, so `preferredColorScheme`
+        // here would resolve to the whole window).
         .environment(\.colorScheme, .dark)
         // The owner is reading a page, not watching the screen: confirmation has to
         // be felt (design §5). Watching `markerCount`, which counts what reached

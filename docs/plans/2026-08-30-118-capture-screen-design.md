@@ -161,10 +161,17 @@ that never ran. About shows `AppVersion.current()` ("1.0 (12)"), a different fac
 "built Aug 30, 9:24 AM PT"; the build *time* is what identifies a wireless or TestFlight
 install.
 
-**A stale justification.** `BackdateField`, `MultiVoiceField` and `JournalHeaderView`
-defend their `.environment(\.colorScheme, .dark)` pins by calling `CaptureView` "the app's
-one permanently-mounted NavigationStack root". The nav redesign made that false. The pins
-stay correct; the stated reason does not, and a reader will act on it.
+**A stale justification, in FOUR places — not three.** `JournalHeaderView` (:533),
+`BackdateField` (:627), `MultiVoiceField` (:724) and **`RecordControlsRow` (:890)** defend
+their `.environment(\.colorScheme, .dark)` pins by calling `CaptureView` "the app's one
+permanently-mounted NavigationStack root". The nav redesign made that false. The pins stay
+correct; the stated reason does not, and a reader will act on it.
+
+This list originally said three and omitted `RecordControlsRow` — corrected 2026-08-30
+after the cloud session working this task found the fourth. `grep -n permanently` finds
+all four; a grep for the full phrase `permanently-mounted` finds only three, because
+`JournalHeaderView`'s copy is hyphenated across a line break. **Grep the distinctive word,
+not the phrase.**
 
 ## 8. Token pass
 

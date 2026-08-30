@@ -68,6 +68,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// outside every scroll view, so a scroll gesture cannot touch it.
     func testScrollingThePageDoesNotMoveTheRecordButton() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -86,6 +87,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// the same defect wearing a different hat.
     func testRecordButtonDoesNotMoveWhenRecordingStarts() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -106,6 +108,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// that it remains hittable, which "scrolled off the bottom of the screen" is not.
     func testVoiceSwitchStaysPutAndHittableWhileRecording() throws {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -159,6 +162,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// merely content overflowing it.
     func testOnlyOneScrollableRegionExistsWhileRecording() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -186,6 +190,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// recording underneath.
     func testTappingTheCompactBackdateSummaryOpensTheEditorWithoutInterruptingTheRecording() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -224,6 +229,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// there would satisfy a weaker test and leave the defect in place.
     func testStoppingRaisesAReceiptAndClearsTheLiveTranscript() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -270,6 +276,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// that "obvious link", reachable from every screen rather than only the landing one.
     func testLandingScreenShowsExactlyOneRecentEntryAndAReachableLibrary() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -347,6 +354,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// backdate field, Two voices and Recent all have to be reachable without scrolling.
     func testControlBarTakesAtMostAThirdOfTheScreenWhenIdle() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -357,6 +365,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// bar is at its fullest (live timer, marks shown, Done reserved).
     func testControlBarTakesAtMostAThirdOfTheScreenWhileRecording() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -383,6 +392,7 @@ final class CaptureControlsUITests: XCTestCase {
     /// This is #53's failure mode rotated 90°, and nothing else in the suite would see it.
     func testMarkingAVoiceDoesNotMoveTheRecordButtonSideways() throws {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 

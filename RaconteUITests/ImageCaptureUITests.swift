@@ -61,8 +61,9 @@ final class ImageCaptureUITests: XCTestCase {
     /// to its (mostly empty) detail screen — no picker-first flow.
     func testNewEntryCreatesABlankEntryAndLandsOnItsDetailScreen() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         openPlace(app, "sidebar.allEntries")
 
@@ -87,8 +88,9 @@ final class ImageCaptureUITests: XCTestCase {
     /// "Capture Image…" button and is dismissible, without driving an actual pick.
     func testCapturingAnImageOpensTheRealPickerSheet() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         openPlace(app, "sidebar.allEntries")
         let newEntry = app.buttons["library.newEntry"].firstMatch
@@ -136,8 +138,9 @@ final class ImageCaptureUITests: XCTestCase {
     /// `PhotosPicker` add.
     func testImageThumbnailAppearsOnLibraryRowAndDisappearsAfterRemoval() {
         let app = launchApp(seedImageEntry: true)
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         openPlace(app, "sidebar.allEntries")
 

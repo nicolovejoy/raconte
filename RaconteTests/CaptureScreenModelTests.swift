@@ -492,4 +492,124 @@ final class CaptureScreenModelTests: XCTestCase {
                       "a launch-healed capture must sync this launch, not the next one")
         XCTAssertTrue(names.contains(.audio(captureID: id)))
     }
+
+    // MARK: Discard (record-flow plan, Task 2)
+
+    /// A discarded capture still finalizes — the audio is committed and verified on disk —
+    /// and is then trashed. Trash, not a hard delete: owner ruling 2026-08-29, the same
+    /// "delete anywhere, recoverable 30 days" rule `delete(_:)` refuses to make an exception
+    /// to. The library therefore ends with nothing visible and exactly one trashed entry.
+    func testDiscardFinalizesTheCaptureAndThenTrashesIt() async throws {
+        let recorder = ModelFakeRecorder()
+        let encoder = FakeAudioEncoder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: encoder)
+        await model.bootstrap()
+        let liveCoordinator = model.coordinator
+
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.discardCurrentCapture()
+
+        await waitUntil({ liveCoordinator.finalizeQueue.isEmpty == false },
+                        "capture never committed to finalizeQueue")
+        model.handleFinalizeQueue()
+
+        await waitUntil({ model.coordinator !== liveCoordinator },
+                        "model should reset to a fresh idle coordinator after the commit")
+        XCTAssertEqual(encoder.calls.count, 1,
+                       "a discarded capture must still finalize — the audio is trashed, not abandoned")
+        XCTAssertTrue(model.library.items.isEmpty,
+                      "a discarded capture must not be visible in the library")
+        XCTAssertEqual(model.library.trashed.count, 1,
+                       "the discarded capture belongs in the trash, recoverable")
+    }
+
+    /// No receipt. The receipt says "here is the reading you just made" — for a mis-tap that
+    /// is exactly the cruft the owner asked not to be left with.
+    func testDiscardLeavesNoReceipt() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        let liveCoordinator = model.coordinator
+
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.discardCurrentCapture()
+        await waitUntil({ liveCoordinator.finalizeQueue.isEmpty == false }, "no commit")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.coordinator !== liveCoordinator }, "no coordinator reset")
+
+        XCTAssertNil(model.receipt, "a discarded capture must not produce a receipt")
+        XCTAssertEqual(model.discardNotice, "Discarded to Trash",
+                       "the screen must say what just happened")
+    }
+
+    /// The very next reading is an ordinary one. The discard flag is per-capture: if it
+    /// survived, the next entry would silently trash itself — a data-loss bug, and the one
+    /// this test exists to prevent.
+    func testTheCaptureAfterADiscardIsKeptNormally() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+
+        var live = model.coordinator
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.discardCurrentCapture()
+        await waitUntil({ live.finalizeQueue.isEmpty == false }, "no commit (discarded capture)")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.coordinator !== live }, "no coordinator reset (discarded capture)")
+
+        live = model.coordinator
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.done()
+        await waitUntil({ live.finalizeQueue.isEmpty == false }, "no commit (kept capture)")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.coordinator !== live }, "no coordinator reset (kept capture)")
+
+        XCTAssertEqual(model.library.items.count, 1,
+                       "the capture after a discard must be kept")
+        XCTAssertNotNil(model.receipt, "a kept capture still gets its receipt")
+        XCTAssertNil(model.discardNotice, "starting a new reading retires the discard notice")
+    }
+
+    /// Discard is only meaningful while the owner is holding a capture open. From idle it is
+    /// a no-op — it must never arm the flag and trash whatever the NEXT reading turns out to
+    /// be.
+    func testDiscardFromIdleIsANoOp() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+
+        await model.discardCurrentCapture()
+        XCTAssertNil(model.discardNotice, "discard from idle must do nothing at all")
+
+        let live = model.coordinator
+        await model.record()
+        recorder.feed(frames: 1000)
+        await model.done()
+        await waitUntil({ live.finalizeQueue.isEmpty == false }, "no commit")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.coordinator !== live }, "no coordinator reset")
+
+        XCTAssertEqual(model.library.items.count, 1,
+                       "an idle-phase discard must not trash the next capture")
+    }
 }

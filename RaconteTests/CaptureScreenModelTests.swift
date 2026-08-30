@@ -655,4 +655,81 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertFalse(sawUnresolved,
                        "a bootstrap caller returned before the journal registry resolved")
     }
+
+    // MARK: beginCapture (record-flow plan, Task 5)
+
+    /// Option 1, owner ruling 2026-08-29: the library's floating record button starts
+    /// recording on arrival. Two taps to make a recording was the complaint; this is the fix.
+    func testBeginCaptureStartsRecordingImmediately() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+
+        await model.beginCapture()
+
+        await waitUntil({ model.coordinator.phase == .recording },
+                        "beginCapture must leave the machine recording")
+        XCTAssertTrue(recorder.isRunning, "the engine must actually be running")
+    }
+
+    /// It selects the journal first, so the sidecar written at `.recording` names the journal
+    /// the owner was looking at — not whichever one the capture screen happened to hold.
+    func testBeginCaptureRecordsIntoTheJournalItWasGiven() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        guard let target = await model.createJournal(name: "Letters") else {
+            return XCTFail("could not create the target journal")
+        }
+        // Move off it, so the assertion cannot pass by accident. Bootstrap mints the default
+        // "Journal", so there is always another one to move to — if there is not, the test has
+        // lost its adversary and must fail loudly rather than pass vacuously.
+        guard let other = model.journals.first(where: { $0.id != target.id }) else {
+            return XCTFail("no second journal to select — the test would pass vacuously")
+        }
+        model.selectJournal(other.id)
+        XCTAssertNotEqual(model.selectedJournalID, target.id, "precondition: not on the target")
+
+        await model.beginCapture(inJournal: target.id)
+
+        await waitUntil({ model.coordinator.phase == .recording }, "never started recording")
+        XCTAssertEqual(model.selectedJournalID, target.id,
+                       "the capture must be filed in the journal the record button came from")
+    }
+
+    /// The safety property. A second tap — or arriving from the library while a reading is
+    /// already under way — must never restart, and must never re-file a live capture into a
+    /// different journal underneath the owner.
+    func testBeginCaptureNeverDisturbsACaptureAlreadyRunning() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        guard let other = await model.createJournal(name: "Elsewhere") else {
+            return XCTFail("could not create the second journal")
+        }
+
+        await model.record()
+        await waitUntil({ model.coordinator.phase == .recording }, "never started recording")
+        let live = model.coordinator
+        let journalBefore = model.selectedJournalID
+
+        await model.beginCapture(inJournal: other.id)
+
+        XCTAssertTrue(model.coordinator === live,
+                      "a live capture must not be restarted by a second record tap")
+        XCTAssertEqual(model.coordinator.phase, .recording)
+        XCTAssertEqual(model.selectedJournalID, journalBefore,
+                       "a live capture must not be re-filed into another journal mid-reading")
+    }
 }

@@ -180,6 +180,12 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case receiptDate
     case receiptSummary
     case receiptSavedChip
+    /// The Discard button (Task 3, record-flow). Quiet on purpose — it sits beside the
+    /// live red record control and must not compete with it — but "quiet" still has to
+    /// clear the same floors as everything else on this screen; fix-round-1 caught a raw
+    /// `.callout` here (16 pt iOS, 12 pt macOS — 4 pt under the floor), the same shape of
+    /// bug `errorBanner`'s comment already records for the raw `.footnote` it replaced.
+    case discardButton
     /// Capture errors above the control bar (owner ruling 2026-08-16). Previously raw
     /// `.footnote` + `.red` — 10 pt on the Mac, below the size floor, and dark-mode
     /// system red only manages ~5.7:1 on this surface, below the contrast floor too.
@@ -204,7 +210,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
              .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .receiptSummary: .grey(0.78)
+             .recentHeader, .receiptSummary, .discardButton: .grey(0.78)
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
         // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the
@@ -228,6 +234,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
+                 .discardButton,
                  .errorBanner: .callout    // 16
             }
         case .macOS:
@@ -238,6 +245,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
                  .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
+                 .discardButton,
                  .errorBanner: .title2     // 17
             }
         }

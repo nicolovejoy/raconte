@@ -249,4 +249,50 @@ final class EntryListItemTests: XCTestCase {
         XCTAssertNil(item("A", capturedAt: 100,
                           originalDate: PartialDate(year: 1998)).weekdayText())
     }
+
+    // MARK: monthGroups (Task 11: library month sub-headers within a year section)
+
+    private var utc: Calendar {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        return cal
+    }
+
+    private func item(_ captureID: String, year: Int, month: Int, day: Int) -> EntryListItem {
+        var comps = DateComponents()
+        comps.year = year; comps.month = month; comps.day = day; comps.timeZone = utc.timeZone
+        let date = utc.date(from: comps)!
+        return EntryListItem(captureID: captureID, capturedAt: date)
+    }
+
+    func testMonthGroupsEmptyInputProducesNoGroups() {
+        XCTAssertEqual(EntryListItem.monthGroups(of: [], calendar: utc), [])
+    }
+
+    /// Entries spanning two months, already in the descending order the library screen
+    /// always hands `monthGroups` (same input-order assumption as `groupedByYear`):
+    /// one group per month, in the order encountered, items preserved within each.
+    func testMonthGroupsSpanningTwoMonthsProducesOneGroupEach() {
+        let items = [
+            item("A", year: 2026, month: 7, day: 20),
+            item("B", year: 2026, month: 7, day: 3),
+            item("C", year: 2026, month: 6, day: 15),
+        ]
+        let groups = EntryListItem.monthGroups(of: items, calendar: utc)
+        XCTAssertEqual(groups.map(\.month), ["July", "June"])
+        XCTAssertEqual(groups[0].items.map(\.captureID), ["A", "B"])
+        XCTAssertEqual(groups[1].items.map(\.captureID), ["C"])
+    }
+
+    /// Non-contiguous input (unsorted) splits into separate groups rather than merging —
+    /// mirrors `EntryYearGroupTests.testNonContiguousSameYearSplitsIntoSeparateGroups`.
+    func testMonthGroupsNonContiguousSameMonthSplitsIntoSeparateGroups() {
+        let items = [
+            item("A", year: 2026, month: 7, day: 1),
+            item("B", year: 2026, month: 6, day: 1),
+            item("C", year: 2026, month: 7, day: 2),
+        ]
+        let groups = EntryListItem.monthGroups(of: items, calendar: utc)
+        XCTAssertEqual(groups.map(\.month), ["July", "June", "July"])
+    }
 }

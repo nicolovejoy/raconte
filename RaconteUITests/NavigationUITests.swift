@@ -437,4 +437,44 @@ final class NavigationUITests: XCTestCase {
         finishReceipt(app)
         XCTAssertEqual(recentRows(app).count, 1, "the recording did not commit")
     }
+
+    // MARK: - Task 7 (record-flow): option 1 end-to-end
+
+    /// Option 1 (owner ruling 2026-08-29): the floating record button records. Before this
+    /// it preselected the journal and left you on capture's idle screen needing a second tap.
+    /// The tell is the primary control's label — "Record" while idle, "Stop" while recording.
+    func testLibraryRecordButtonArrivesAlreadyRecording() {
+        let app = launchApp()
+        openPlace(app, "sidebar.allEntries")
+        let record = app.buttons["library.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "no floating record button on the library screen")
+        press(record)
+
+        let primary = recordButton(app)
+        XCTAssertTrue(primary.waitForExistence(timeout: 15), "never landed on the capture screen")
+        waitUntil(10, "the floating record button reached capture but did not start recording") {
+            primary.label == "Stop"
+        }
+    }
+
+    /// The mis-tap round trip. Discard stops the reading and leaves the screen idle with no
+    /// receipt — the entry is in the trash, not on the landing screen.
+    func testDiscardEndsTheCaptureAndLeavesNoReceipt() {
+        let app = launchApp()
+        openPlace(app, "sidebar.allEntries")
+        let record = app.buttons["library.record"].firstMatch
+        XCTAssertTrue(record.waitForExistence(timeout: 15), "no floating record button on the library screen")
+        press(record)
+
+        let discard = app.buttons["capture.discard"].firstMatch
+        XCTAssertTrue(discard.waitForExistence(timeout: 15), "Discard must be offered while recording")
+        press(discard)
+
+        let primary = recordButton(app)
+        waitUntil(15, "discard did not return the capture screen to idle") {
+            primary.label == "Record"
+        }
+        XCTAssertFalse(app.buttons["capture.receipt.open"].exists,
+                       "a discarded capture must not leave a receipt")
+    }
 }

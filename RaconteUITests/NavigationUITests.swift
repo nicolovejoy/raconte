@@ -455,6 +455,10 @@ final class NavigationUITests: XCTestCase {
         waitUntil(10, "the floating record button reached capture but did not start recording") {
             primary.label == "Stop"
         }
+        // Deliberately ends here with the recording still in flight, unlike the other
+        // tests in this file — this one only needs to prove the button starts it, not
+        // that a capture can finish. Harmless: RACONTE_UITEST_ID gives every test its own
+        // throwaway container, so nothing leaks. Don't "fix" this by adding a stop.
     }
 
     /// The mis-tap round trip. Discard stops the reading and leaves the screen idle with no

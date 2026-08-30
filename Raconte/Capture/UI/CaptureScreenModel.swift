@@ -315,6 +315,12 @@ final class CaptureScreenModel {
     /// this returns, and starting one on top of an in-flight recovery pass over the same
     /// directory is not harmless. A stored `Task` runs the work once and lets everyone
     /// await the same completion.
+    ///
+    /// Must never be called from within `performBootstrap()` itself: `bootstrapTask` is
+    /// assigned synchronously before the body below can acquire the main actor, so a
+    /// re-entrant call would see it already set, take the `await bootstrapTask.value`
+    /// branch, and deadlock forever waiting on itself. Currently unreachable — nothing in
+    /// `performBootstrap()` calls back into `bootstrap()` — but undocumented otherwise.
     private var bootstrapTask: Task<Void, Never>?
 
     func bootstrap() async {
@@ -405,6 +411,35 @@ final class CaptureScreenModel {
     }
     func done() async { await coordinator.done() }
     func resume() async { await coordinator.resume() }
+
+    /// Start a reading from outside the capture screen — the library's floating record
+    /// button and Home's "New entry" (record-flow plan, Task 5).
+    ///
+    /// Owner ruling 2026-08-29, option 1: those buttons used to preselect the journal and
+    /// route to capture's IDLE screen, where a second tap was needed and the "Last entry"
+    /// card read as noise. A big red mic button should record.
+    ///
+    /// Lives here rather than in the call site's closure because of the repo invariant:
+    /// nothing that must happen while a capture is running may hang off a view's
+    /// lifecycle. The caller routes and fires this; it does not matter whether, or when,
+    /// `CaptureView` mounts.
+    ///
+    /// `bootstrap()` is awaited, not fired: on a launch that went straight to the library,
+    /// `CaptureView` has never mounted and the launch-recovery scan has not run. Starting
+    /// a capture on top of an in-flight recovery pass over the same directory is the race
+    /// Task 4 made this method able to avoid.
+    ///
+    /// The `.idle` guard is the safety property, and it sits BEFORE the journal select on
+    /// purpose: a second tap of the floating button, or arriving from the library while a
+    /// reading is already under way, must leave that reading exactly alone — including
+    /// which journal it is filed in. Selecting first and then bailing out would re-file a
+    /// live capture underneath the owner, which is the worse half of the bug.
+    func beginCapture(inJournal journalID: String? = nil) async {
+        await bootstrap()
+        guard coordinator.phase == .idle else { return }
+        if let journalID { selectJournal(journalID) }
+        await record()
+    }
 
     /// Stop this capture and throw it away (record-flow plan, Task 2).
     ///

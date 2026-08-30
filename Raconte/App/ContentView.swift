@@ -68,8 +68,8 @@ struct ContentView: View {
         // #108: capture's bootstrap (the crash-recovery scan) used to ride CaptureView's
         // own `.task`, which was fine while capture was the launch root. Home is now the
         // root, and recovery must not depend on the owner ever visiting capture — kick it
-        // here too. `bootstrap()` is `didBootstrap`-guarded, so the CaptureView copy (kept,
-        // as a belt for previews/tests that mount CaptureView directly) never double-runs.
+        // here too. `bootstrap()` is await-once, so the CaptureView copy (kept, as a belt
+        // for previews/tests that mount CaptureView directly) never double-runs.
         .task { await services.capture.bootstrap() }
         #if os(macOS)
         .frame(minWidth: 720, minHeight: 560)

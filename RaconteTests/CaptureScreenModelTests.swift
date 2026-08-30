@@ -726,6 +726,15 @@ final class CaptureScreenModelTests: XCTestCase {
 
         await model.beginCapture(inJournal: other.id)
 
+        // Load-bearing for THIS task's guard: only this assertion would fail if
+        // beginCapture's `.idle` check were deleted — selectJournal would then run
+        // unconditionally and re-file the live capture into `other`. The two assertions
+        // above are defense-in-depth, not evidence of the model-level guard: they'd both
+        // still pass even with beginCapture's guard removed entirely, because
+        // CaptureCoordinator.record() has its own `guard machineState.phase == .idle`
+        // (CaptureCoordinator.swift:266) that independently no-ops the restart one layer
+        // down. Do not delete the selectedJournalID assertion thinking the other two
+        // cover the same ground — they don't.
         XCTAssertTrue(model.coordinator === live,
                       "a live capture must not be restarted by a second record tap")
         XCTAssertEqual(model.coordinator.phase, .recording)

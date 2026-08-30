@@ -434,6 +434,16 @@ final class CaptureScreenModel {
     /// reading is already under way, must leave that reading exactly alone — including
     /// which journal it is filed in. Selecting first and then bailing out would re-file a
     /// live capture underneath the owner, which is the worse half of the bug.
+    ///
+    /// Two concurrent taps cannot both start a recording, but that safety is not this
+    /// method's own — it rests on an unstated invariant one layer down. This is
+    /// `@MainActor`, and nothing between `coordinator.record()`'s own `guard
+    /// machineState.phase == .idle` and `send(_:)`'s synchronous `phase = next.phase`
+    /// commit (`CaptureCoordinator.swift`) suspends, so a second call can never observe
+    /// `.idle` in the gap. If anything in that chain becomes `async` and starts
+    /// suspending before the phase commit — `mintCaptureID()`, say — that window reopens
+    /// and this method's `.idle` guard alone would not close it, since both callers could
+    /// still read `.idle` before either commits.
     func beginCapture(inJournal journalID: String? = nil) async {
         await bootstrap()
         guard coordinator.phase == .idle else { return }

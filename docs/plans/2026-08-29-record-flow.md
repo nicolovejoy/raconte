@@ -591,12 +591,15 @@ func testConcurrentBootstrapCallersAllWaitForTheRealWork() async throws {
     async let second: Void = model.bootstrap()
     _ = await (first, second)
 
-    // `recoverAtLaunch` populates this; a caller that returned early would observe the
-    // pre-bootstrap value. Both callers are past it here.
-    XCTAssertEqual(model.recovered, model.coordinator.recoveredRecordings,
-                   "a bootstrap caller must not return before recovery has published")
-    XCTAssertFalse(model.library.isLoading,
-                   "a bootstrap caller must not return before the library scan has landed")
+    // `resolveCurrentJournal()` — bootstrap's first await — mints and selects the default
+    // journal. Both are empty/nil on a model that has not finished bootstrapping, so a
+    // caller that returned early observes them unset. This is the signal precisely
+    // because it is false before the work and true after it; see the RED step below,
+    // which proves it can fail.
+    XCTAssertFalse(model.journals.isEmpty,
+                   "a bootstrap caller must not return before the journal registry resolved")
+    XCTAssertNotNil(model.selectedJournalID,
+                    "a bootstrap caller must not return before a journal is selected")
 }
 ```
 
@@ -609,12 +612,15 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
   -only-testing:RaconteTests/CaptureScreenModelTests/testConcurrentBootstrapCallersAllWaitForTheRealWork test
 ```
 
-Expected: FAIL — the second caller returns before the library scan has landed.
+Expected: FAIL — the second caller returns while the first is still bootstrapping, so it
+observes no journals.
 
-If it passes on the first run, do not shrug and move on: the timing may be hiding the race.
-Confirm the test is meaningful by temporarily adding `try? await Task.sleep(for:
-.milliseconds(200))` immediately after `didBootstrap = true` in the current `bootstrap()`
-and re-running — it must fail then. Remove the sleep before Step 3.
+The race may not reproduce every run. **You must prove the test is meaningful before
+implementing:** temporarily add `try? await Task.sleep(for: .milliseconds(200))`
+immediately after `didBootstrap = true` in the current `bootstrap()` and re-run. It must
+FAIL, with the message about the journal registry — that is the test watching the second
+caller return early. Remove the sleep before Step 3. Do not proceed to Step 3 until you
+have seen that failure; a test that never went red is not a test.
 
 - [ ] **Step 3: Implement**
 
@@ -720,10 +726,14 @@ func testBeginCaptureRecordsIntoTheJournalItWasGiven() async throws {
     guard let target = await model.createJournal(name: "Letters") else {
         return XCTFail("could not create the target journal")
     }
-    // Move off it, so the assertion cannot pass by accident.
-    if let other = model.journals.first(where: { $0.id != target.id }) {
-        model.selectJournal(other.id)
+    // Move off it, so the assertion cannot pass by accident. Bootstrap mints the default
+    // "Journal", so there is always another one to move to — if there is not, the test has
+    // lost its adversary and must fail loudly rather than pass vacuously.
+    guard let other = model.journals.first(where: { $0.id != target.id }) else {
+        return XCTFail("no second journal to select — the test would pass vacuously")
     }
+    model.selectJournal(other.id)
+    XCTAssertNotEqual(model.selectedJournalID, target.id, "precondition: not on the target")
 
     await model.beginCapture(inJournal: target.id)
 
@@ -795,10 +805,11 @@ In `Raconte/Capture/UI/CaptureScreenModel.swift`, next to `record()`:
     /// a capture on top of an in-flight recovery pass over the same directory is the race
     /// Task 4 made this method able to avoid.
     ///
-    /// The `.idle` guard is the safety property. A second tap of the floating button, or
-    /// arriving from the library while a reading is already under way, must leave that
-    /// reading exactly alone — including its journal, which is why the guard sits AFTER
-    /// the select would have happened and the select is guarded with it.
+    /// The `.idle` guard is the safety property, and it sits BEFORE the journal select on
+    /// purpose: a second tap of the floating button, or arriving from the library while a
+    /// reading is already under way, must leave that reading exactly alone — including
+    /// which journal it is filed in. Selecting first and then bailing out would re-file a
+    /// live capture underneath the owner, which is the worse half of the bug.
     func beginCapture(inJournal journalID: String? = nil) async {
         await bootstrap()
         guard coordinator.phase == .idle else { return }

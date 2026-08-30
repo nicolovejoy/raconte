@@ -635,18 +635,24 @@ final class CaptureScreenModelTests: XCTestCase {
             makeRecorder: { ModelFakeRecorder() },
             encoder: FakeAudioEncoder())
 
+        // The first caller does the real work. The second must not be told "done" until
+        // that work has actually finished — `beginCapture(inJournal:)` starts a recording
+        // the instant this returns, and starting one on top of an in-flight
+        // launch-recovery pass over the same directory is the race this exists to
+        // prevent.
         async let first: Void = model.bootstrap()
-        async let second: Void = model.bootstrap()
-        _ = await (first, second)
+        // What the SECOND caller sees AT ITS OWN RETURN. Asserting after joining both
+        // callers is the trap: the join waits for the first caller regardless, so the
+        // early return becomes invisible and the test passes against the bug.
+        async let secondSawUnresolvedRegistry: Bool = { @MainActor () async -> Bool in
+            await model.bootstrap()
+            return model.journals.isEmpty || model.selectedJournalID == nil
+        }()
 
-        // `resolveCurrentJournal()` — bootstrap's first await — mints and selects the default
-        // journal. Both are empty/nil on a model that has not finished bootstrapping, so a
-        // caller that returned early observes them unset. This is the signal precisely
-        // because it is false before the work and true after it; see the RED step below,
-        // which proves it can fail.
-        XCTAssertFalse(model.journals.isEmpty,
-                       "a bootstrap caller must not return before the journal registry resolved")
-        XCTAssertNotNil(model.selectedJournalID,
-                        "a bootstrap caller must not return before a journal is selected")
+        let sawUnresolved = await secondSawUnresolvedRegistry
+        await first
+
+        XCTAssertFalse(sawUnresolved,
+                       "a bootstrap caller returned before the journal registry resolved")
     }
 }

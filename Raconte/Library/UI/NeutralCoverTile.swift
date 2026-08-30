@@ -18,8 +18,13 @@ struct NeutralCoverTile: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(InkTone.paperInset.color)
             .overlay {
+                // Decorative only — `.accessibilityHidden` so the SF Symbol's own
+                // synthesized label (e.g. "microphone") never leaks into a merged
+                // `NavigationLink` label a UI test reads (`library.entryLink`'s "Entry
+                // photo" check, `CaptureUITests.durationSeconds(in:)`'s technique).
                 Image(systemName: glyph)
                     .foregroundStyle(InkTone.inkSecondary.color)
+                    .accessibilityHidden(true)
             }
             .frame(width: size, height: size)
     }

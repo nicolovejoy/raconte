@@ -67,6 +67,13 @@ struct CaptureView: View {
                     // transcribed yet.
                     Spacer(minLength: 0)
                 }
+                if let notice = model.discardNotice {
+                    Text(notice)
+                        .captureLabel(.receiptSavedChip)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .accessibilityIdentifier("capture.discardNotice")
+                        .transition(.opacity)
+                }
                 errorBanner
                 controlBar
             }
@@ -277,6 +284,19 @@ struct CaptureView: View {
                 .opacity(control.showsDoneButton ? 1 : 0)
                 .disabled(!control.showsDoneButton)
                 .accessibilityHidden(!control.showsDoneButton)
+
+            // Quiet, not red: sits beside a live red record control and must not compete
+            // with it for the eye. No confirmation dialog — recoverable from the trash
+            // for 30 days, so a confirm would cost a tap for nothing. Identifier on the
+            // leaf button only (repo trap: a container identifier flattens the bar).
+            if layout.showsDiscardButton {
+                Button("Discard") { Task { await model.discardCurrentCapture() } }
+                    .buttonStyle(.plain)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .accessibilityIdentifier("capture.discard")
+                    .accessibilityLabel("Discard recording")
+            }
         }
         .frame(height: CaptureControlBarMetrics.statusRowHeight)
         .padding(.horizontal, CaptureControlBarMetrics.horizontalPadding)

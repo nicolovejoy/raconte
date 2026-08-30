@@ -1,0 +1,31 @@
+Fix issues #73 and #74 in nicolovejoy/raconte — both are dead code left behind by
+PR #72, which made the capture journal picker selection-only.
+
+#74: delete the four orphaned CaptureScreenModel methods (renameCurrentJournal,
+setCurrentJournalVoiceLabels, setCurrentJournalCover, removeCurrentJournalCover)
+AND the tests that cover them — those green tests assert behaviour no UI can reach,
+which is the false coverage signal the issue is actually about, not merely unused
+code. Read the issue for the exact file:line list of both the methods and the tests.
+
+#73: delete JournalVoiceLabelsSheet. Confirm zero call sites first; the journal
+editor uses an extracted inline section, not this sheet.
+
+Project rules that will bite you:
+
+- The Xcode project is GENERATED from project.yml. Run `xcodegen generate` after
+  adding or removing ANY file, including test files. A removed test file otherwise
+  leaves the suite running at the OLD count and reporting green.
+- Verify the executed test count CHANGED. An exit code of 0 is not evidence here.
+- macOS unit tests, exactly this command. Never CODE_SIGNING_ALLOWED=NO — that
+  unsandboxes the app-hosted tests onto the owner's real journal archive:
+
+  xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' \
+    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements test
+
+- The RaconteUI suite exceeds a 10-minute command cap. Split it by test class with
+  -only-testing and run each in the FOREGROUND. Never background it — a backgrounded
+  run never delivers its completion notification and reads exactly like a hang.
+- Branch from main. End at an OPEN PR with a --body-file body. Do NOT merge; merges
+  are the owner's. Do not put a close-verb plus #N in the PR body unless you intend
+  GitHub to auto-close that issue on merge.

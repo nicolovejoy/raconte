@@ -25,6 +25,15 @@ final class AboutUITests: XCTestCase {
         let app = launchApp()
         openPlace(app, "sidebar.about")
 
+        // The three diagnostic rows moved below the fold when About gained its
+        // "What this is" / "How it works" sections (record-flow branch, owner request:
+        // About is the only Release-built screen that can tell a first-time user what
+        // this app is). An offscreen `List` row is absent from the accessibility tree
+        // until it is scrolled into view, so without this the rows read as MISSING
+        // rather than merely off-screen — which is exactly how this test failed on CI.
+        // Directional, not a fixed distance, so it survives other device sizes.
+        app.swipeUp()
+
         let version = app.descendants(matching: .any)
             .matching(identifier: "about.version").firstMatch
         XCTAssertTrue(version.waitForExistence(timeout: 10), "version row missing")

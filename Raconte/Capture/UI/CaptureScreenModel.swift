@@ -476,6 +476,37 @@ final class CaptureScreenModel {
         guard coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
         pendingDiscard = true
         await done()
+        // Disarm unless the stop actually took. `done()` reports nothing back, and there
+        // are two ways it can fail to stop anything:
+        //
+        //   1. The machine DROPS the event. `CaptureMachine` has rows for `.done` only
+        //      from `.recording` (row 12) and `.interrupted` (row 14) — `.resuming` has
+        //      none, so a `.done` reduced there is silently a no-op.
+        //   2. A stop that did take is knocked back off. The detached PCM pump raises
+        //      `.diskFull` from off-actor, and row 19 moves `.stopping` straight back to
+        //      `.interrupted` — reachable while this very call is suspended inside
+        //      `store(setState: .stopping)`. The `.tailDrained` that follows is then
+        //      dropped too, and the capture is simply live again.
+        //
+        // Either way the reading survives with `pendingDiscard` still armed. The owner is
+        // forty minutes into a paper journal, an interruption (a phone call) or a full
+        // disk lands, he taps Discard, the capture comes back to life, he reads for
+        // another half hour and taps Stop — and `finishCurrentCapture` trashes the whole
+        // thing, announced only by a three-second "Discarded to Trash" chip naming
+        // nothing. Recoverable from Trash, but he is never told what went. An intent that
+        // did not take must not linger.
+        //
+        // The phases below are exactly the ones a capture passes through on its way to
+        // committing (`CaptureMachine`: `.stopping` → `.captured`, then the finalize rows
+        // `.finalizing` → `.complete`). `.stopping` is the ORDINARY phase here, not an
+        // edge case: `beginFlushWindow` schedules `.tailDrained` 300 ms out, so `done()`
+        // returns long before `.captured`.
+        switch coordinator.phase {
+        case .stopping, .captured, .finalizing, .complete:
+            break
+        case .idle, .preparing, .recording, .interrupted, .resuming:
+            pendingDiscard = false
+        }
     }
 
     /// Called when the coordinator's finalize queue changes. Keyed off the queue, NOT

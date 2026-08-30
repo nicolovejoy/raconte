@@ -594,6 +594,88 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertNil(model.discardNotice, "the notice must still be gone once the kept capture finishes")
     }
 
+    /// The founding-principle regression: an armed discard whose stop never took must not
+    /// follow the owner into the NEXT half hour of reading.
+    ///
+    /// `discardCurrentCapture()` arms `pendingDiscard` and then `await done()` — and
+    /// `done()` reports nothing back. Two ways it can leave the capture alive:
+    /// `CaptureMachine` has no `(.resuming, .done)` row, so a `.done` reduced there is
+    /// dropped outright; and row 19 moves `.stopping` straight back to `.interrupted` on
+    /// `.diskFull`, which the detached PCM pump raises from OFF the main actor — reachable
+    /// while `done()` is suspended inside `store(setState: .stopping)`. That second path is
+    /// the one this test drives, because it is the one the seams can reach deterministically.
+    ///
+    /// Construction, in order: park the discard's own `done()` in the DEBUG transition gate
+    /// at `.stopping`; while it is parked, make the segments directory unwritable and feed
+    /// past the 20 s rotation threshold, so `closeCurrentSegment`'s `rename` fails, `append`
+    /// throws, and the pump sends `.diskFull`; release the gate. `done()` then returns with
+    /// the machine back at `.interrupted` and the capture still live — exactly the shape of
+    /// the phone-call-then-auto-resume scenario, minus the timing race.
+    ///
+    /// The owner then stops for real. Without the disarm, that stop trashes a reading he
+    /// never discarded, announced only by a three-second chip that names nothing.
+    func testADiscardWhoseStopNeverTookDoesNotTrashTheReadingThatFollows() async throws {
+        let recorder = ModelFakeRecorder()
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: FakeAudioEncoder())
+        await model.bootstrap()
+        let live = model.coordinator
+
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        guard let captureID = live.activeCaptureID else { return XCTFail("no active capture") }
+        let segments = SegmentLayout.segmentsDirectory(
+            captureDirectory: SegmentLayout.captureDirectory(capturesRoot: root, captureID: captureID))
+
+        // One clean rotation FIRST, so the capture owns a promoted `000000.pcm` and its
+        // sidecar. Without it the failure below would leave the capture with no finished
+        // segment at all and the "kept in the library" assertion could pass or fail for
+        // reasons that have nothing to do with the discard flag. 20 s at 48 kHz.
+        let framesPerRotation = 20 * 48_000
+        recorder.feed(frames: framesPerRotation)
+        await waitUntil({ FileManager.default.fileExists(
+            atPath: SegmentLayout.pcmURL(segmentsDirectory: segments, index: 0).path) },
+                        "the first segment never rotated cleanly")
+
+        // Park the discard inside its own `await done()`, at `.stopping`.
+        TransitionBreakpointController.shared.arm(.stopping)
+        defer { TransitionBreakpointController.shared.disarmAll() }
+        let discard = Task { @MainActor in await model.discardCurrentCapture() }
+        await waitUntil({ TransitionBreakpointController.shared.isWaiting(.stopping) },
+                        "the discard never reached the .stopping gate")
+
+        // Knock the machine back off the stop while it is parked there. A read-only
+        // segments directory fails `closeCurrentSegment`'s `rename`, which is what a full
+        // disk does to a rotation; the pump turns that throw into `.diskFull`, and row 19
+        // takes `.stopping` back to `.interrupted`.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: segments.path)
+        recorder.feed(frames: framesPerRotation)
+        await waitUntil({ live.phase == .interrupted },
+                        "the pump never knocked the stop back off — the premise of this test is gone")
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: segments.path)
+
+        TransitionBreakpointController.shared.disarm(.stopping)
+        await discard.value
+        XCTAssertEqual(live.phase, .interrupted,
+                       "precondition: the stop must NOT have taken, or this test proves nothing")
+
+        // The reading the owner actually keeps. He stops it himself, later.
+        await model.done()
+        await waitUntil({ live.finalizeQueue.isEmpty == false }, "no commit")
+        model.handleFinalizeQueue()
+        await waitUntil({ model.coordinator !== live }, "no coordinator reset")
+
+        XCTAssertEqual(model.library.items.count, 1,
+                       "a discard whose stop never took must not trash the reading that followed it")
+        XCTAssertTrue(model.library.trashed.isEmpty,
+                      "nothing was discarded — the trash must be empty")
+        XCTAssertNil(model.discardNotice,
+                     "the screen must not claim a discard that never happened")
+    }
+
     /// Discard is only meaningful while the owner is holding a capture open. From idle it is
     /// a no-op — it must never arm the flag and trash whatever the NEXT reading turns out to
     /// be.

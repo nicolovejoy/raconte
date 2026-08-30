@@ -103,6 +103,7 @@ final class CaptureUITests: XCTestCase {
 
     func testRecordStopProducesFinishedEntry() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -124,6 +125,7 @@ final class CaptureUITests: XCTestCase {
 
     func testTerminateMidRecordingRecoversOnRelaunch() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15))
 
@@ -132,6 +134,9 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)    // ~2 s of synthetic audio on disk
         app.terminate()                     // kill mid-recording, no clean stop
 
+        // #108: no `openCapture` here — the relaunched app lands on Home, and the
+        // banner must be found THERE without ever visiting capture (load-bearing spec
+        // claim: recovery does not depend on visiting capture).
         let relaunched = launchApp()        // same RACONTE_UITEST_ID → same disk
         let banner = recoveryBanner(relaunched)
         XCTAssertTrue(banner.waitForExistence(timeout: 20),
@@ -143,6 +148,7 @@ final class CaptureUITests: XCTestCase {
 
     func testIdleRelaunchShowsNoBannerAndKeepsEntry() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15))
 
@@ -155,16 +161,25 @@ final class CaptureUITests: XCTestCase {
         app.terminate()                     // idle now — a clean-ish quit
 
         let relaunched = launchApp()
-        let rows = recentRows(relaunched)
-        waitUntil(20, "entry lost across relaunch") { rows.count == 1 }
+        // No spurious banner: check on Home, where relaunch now lands, before navigating
+        // to capture for the Recent-row check below.
         XCTAssertFalse(recoveryBanner(relaunched).exists,
                        "spurious recovery banner on idle relaunch")
+        openCapture(relaunched)
+        let rows = recentRows(relaunched)
+        waitUntil(20, "entry lost across relaunch") { rows.count == 1 }
+        // Re-check after bootstrap/scan has definitely completed (the entry row
+        // wait above proves the scan finished), not just at the racy moment
+        // right after relaunch.
+        XCTAssertFalse(recoveryBanner(relaunched).exists,
+                       "spurious recovery banner on idle relaunch (post-scan check)")
     }
 
     // MARK: doc test 22 (flow) — repeated record/stop cycles, one entry each
 
     func testRepeatedRecordStopCyclesProduceSeparateEntries() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15))
 
@@ -207,6 +222,7 @@ final class CaptureUITests: XCTestCase {
     /// T4.5), so this test now taps the recent row to push detail before scrubbing.
     func testScrubbingAFinishedEntryMovesThePosition() throws {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -237,12 +253,18 @@ final class CaptureUITests: XCTestCase {
         let position = app.staticTexts["detail.position"].firstMatch
         XCTAssertTrue(position.waitForExistence(timeout: 5))
 
-        scrubber.adjust(toNormalizedSliderPosition: 0.5)
-
-        // Where the handle actually landed — XCUI's normalized drag is coarse on a
-        // narrow slider, so assert the label tracks the handle, not the midpoint.
-        let handleSeconds = try XCTUnwrap(Self.number(scrubber.value),
+        // XCUI's normalized drag is coarse on a narrow slider: a request for 0.5 can land
+        // within the end-guard band and fail the run on drag imprecision alone (three
+        // first-attempt CI failures, 2026-08-29: 3.54–3.72s of ~4s). The test's claim is
+        // "scrubbing moves the position", not "lands at 50%": walk earlier targets until
+        // the handle lands inside the assertable band.
+        var handleSeconds = 0.0
+        for target in [0.5, 0.35, 0.25] {
+            scrubber.adjust(toNormalizedSliderPosition: target)
+            handleSeconds = try XCTUnwrap(Self.number(scrubber.value),
                                           "unreadable slider value \(String(describing: scrubber.value))")
+            if handleSeconds > 0.5 && handleSeconds < totalSeconds - 0.5 { break }
+        }
         XCTAssertGreaterThan(handleSeconds, 0.5, "the drag barely moved the handle")
         XCTAssertLessThan(handleSeconds, totalSeconds - 0.5,
                           "the handle must land short of the end, or a still-running "
@@ -265,6 +287,7 @@ final class CaptureUITests: XCTestCase {
     /// three lists (`items`, `recent`, `trashed`) all republish off one scan.
     func testTrashAndRestoreAnEntry() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -318,6 +341,7 @@ final class CaptureUITests: XCTestCase {
     /// user-visible bug.
     func testTrashingTheReceiptsEntryRetiresTheReceipt() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -355,6 +379,7 @@ final class CaptureUITests: XCTestCase {
     /// catch but a relaunch-then-rescan will.
     func testDeleteNowPermanentlyRemovesEntry() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -402,8 +427,8 @@ final class CaptureUITests: XCTestCase {
         // in the in-memory list this process happened to be holding.
         app.terminate()
         let relaunched = launchApp()
-        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15)
-                      || relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
+        openCapture(relaunched)             // #108: launch now lands on Home
+        XCTAssertTrue(relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
         XCTAssertEqual(recentRows(relaunched).count, 0,
                        "permanently-deleted entry reappeared in Recent after relaunch")
 
@@ -422,6 +447,7 @@ final class CaptureUITests: XCTestCase {
     /// happened on disk.
     func testEmptyTrashPermanentlyRemovesAllTrashedEntries() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -466,6 +492,7 @@ final class CaptureUITests: XCTestCase {
         // in-memory list.
         app.terminate()
         let relaunched = launchApp()
+        openCapture(relaunched)             // #108: launch now lands on Home
         XCTAssertTrue(relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
 
         openPlace(relaunched, "sidebar.trash")
@@ -484,6 +511,7 @@ final class CaptureUITests: XCTestCase {
     /// conclusion `testDeleteNowPermanentlyRemovesEntry` reached for its own bug).
     func testMoveToTrashWhilePlaybackIsRunningStillTrashesTheEntry() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -536,6 +564,7 @@ final class CaptureUITests: XCTestCase {
     /// here stops them: press `capture.record` again and poll its label.
     func testVoiceControlsFollowTheMultiVoiceToggle() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 

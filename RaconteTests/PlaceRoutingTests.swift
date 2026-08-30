@@ -21,13 +21,13 @@ final class PlaceRoutingTests: XCTestCase {
                                      dateRanges: ["j1": "1987"],
                                      includesDebug: false)
         XCTAssertEqual(rows.map(\.place),
-                       [.capture, .journal("j1"), .journal("j2"), .allEntries, .trash, .about],
+                       [.home, .capture, .journal("j1"), .journal("j2"), .allEntries, .trash, .about],
                        "j1 (older) must render before j2 (newer) despite arriving second")
-        XCTAssertEqual(rows[1].title, "1987")
-        XCTAssertEqual(rows[1].subtitle, "1987")
-        XCTAssertNil(rows[2].subtitle, "a journal with no entries shows no range, not an empty one")
-        XCTAssertEqual(rows[1].journalID, "j1")
-        XCTAssertNil(rows[0].journalID, "only journal rows draw a cover")
+        XCTAssertEqual(rows[2].title, "1987")
+        XCTAssertEqual(rows[2].subtitle, "1987")
+        XCTAssertNil(rows[3].subtitle, "a journal with no entries shows no range, not an empty one")
+        XCTAssertEqual(rows[2].journalID, "j1")
+        XCTAssertNil(rows[1].journalID, "only journal rows draw a cover")
     }
 
     func testDebugRowIsLastAndOnlyWhenIncluded() {
@@ -84,8 +84,9 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertNil(PlaceRouting.journalScope(for: .debug))
     }
 
-    func testRouterLaunchesOnCapture() {
-        XCTAssertEqual(AppRouter().place, .capture)
+    func testRouterLaunchesOnHome() {
+        // #108: Home replaces Capture as PlaceRouting.launchPlace.
+        XCTAssertEqual(AppRouter().place, .home)
         XCTAssertTrue(AppRouter().detailPath.isEmpty)
     }
 
@@ -141,9 +142,27 @@ final class PlaceRoutingTests: XCTestCase {
     // Table-driven over every fixed (non-journal) row so a single-field typo or a
     // whole-row corruption anywhere in the locked list is caught in one assertion,
     // rather than relying on scattered single-field checks elsewhere in this file.
+    // #108: Home is the first row, ahead of Capture — reachable via the sidebar this
+    // task, launch place itself flips in Task 3.
+    func testSidebarRowsListHomeFirst() {
+        let rows = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: false)
+        XCTAssertEqual(rows.first?.place, .home)
+        XCTAssertEqual(rows.first?.accessibilityIdentifier, "sidebar.home")
+        XCTAssertEqual(rows.map(\.place).prefix(2), [.home, .capture])
+    }
+
+    func testResolveHomeIsIdentity() {
+        XCTAssertEqual(PlaceRouting.resolve(.home, journals: []), .home)
+    }
+
+    func testHomeHasNoJournalScope() {
+        XCTAssertNil(PlaceRouting.journalScope(for: .home))
+    }
+
     func testFixedRowsMatchTheLockedTitlesSymbolsAndIdentifiers() {
         let rows = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: true)
         let expected: [(place: Place, title: String, systemImage: String?, accessibilityIdentifier: String)] = [
+            (.home, "Home", "house", "sidebar.home"),
             (.capture, "Capture", "mic.circle", "sidebar.capture"),
             (.allEntries, "All Entries", "books.vertical", "sidebar.allEntries"),
             (.trash, "Trash", "trash", "sidebar.trash"),

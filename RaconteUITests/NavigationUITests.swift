@@ -136,6 +136,7 @@ final class NavigationUITests: XCTestCase {
     /// place again — it must reopen, not silently no-op.
     func testReselectingThePlaceYouJustLeftReopensIt() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
                       "the app did not launch into the capture screen")
         openPlace(app, "sidebar.allEntries")
@@ -158,11 +159,13 @@ final class NavigationUITests: XCTestCase {
     /// exit at all).
     func testTappingCaptureFromTheBareSidebarReturnsToCapture() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
                       "the app did not launch into the capture screen")
 
-        // Straight from Capture — the launch place — to the bare sidebar, with NO
-        // intermediate place change in between. `router.place` never left `.capture`,
+        // Navigate to Capture first (Home is the launch place since #108, not Capture),
+        // then to the bare sidebar, with NO intermediate place change in between.
+        // `router.place` never left `.capture`,
         // so tapping the Capture row writes the exact value a naive binding's getter
         // already reports as selected — this is what makes Capture uniquely stranded
         // (every other place still has a DIFFERENT row to fall back on first; going via
@@ -181,14 +184,14 @@ final class NavigationUITests: XCTestCase {
     // MARK: - The load-bearing platform claim
 
     /// `NavigationSplitView` with a non-nil sidebar selection, collapsed to a stack on
-    /// iPhone, must show the DETAIL column at launch — not the places list.
-    func testLaunchLandsDirectlyOnCaptureWithNoTaps() {
+    /// iPhone, must show the DETAIL column at launch — Home, since #108 (was capture).
+    func testLaunchLandsDirectlyOnHomeWithNoTaps() {
         let app = launchApp()
-        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
-        XCTAssertFalse(app.buttons["sidebar.allEntries"].firstMatch.exists,
-                       "the places list is showing instead of capture")
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "sidebar.capture")
+        XCTAssertTrue(app.buttons["home.newEntry"].firstMatch.waitForExistence(timeout: 30),
+                      "the app did not launch into Home")
+        XCTAssertFalse(app.buttons["capture.record"].firstMatch.exists,
+                       "capture is showing at launch instead of Home")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "sidebar.home")
                           .firstMatch.exists,
                        "the sidebar column is showing instead of the detail column")
     }
@@ -198,6 +201,7 @@ final class NavigationUITests: XCTestCase {
     /// All Entries must show the library screen inside the detail column, not a blank one.
     func testSelectingAllEntriesShowsTheLibraryInTheDetailColumn() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
                       "the app did not launch into the capture screen")
         openPlace(app, "sidebar.allEntries")
@@ -213,6 +217,7 @@ final class NavigationUITests: XCTestCase {
         // the Debug modal trapped the app. Reachability must no longer depend on capture
         // phase.
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         press(recordButton(app))
         openPlace(app, "sidebar.allEntries")
         XCTAssertTrue(app.descendants(matching: .any)
@@ -225,6 +230,7 @@ final class NavigationUITests: XCTestCase {
         // Design §3: "it no longer hides the exits." A just-finished capture used to leave
         // the receipt owning the whole screen with no route out except dismissing it first.
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -282,6 +288,7 @@ final class NavigationUITests: XCTestCase {
     /// from "the list always shows everything".
     func testSelectingAJournalPlaceScopesTheEntryList() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
@@ -383,6 +390,7 @@ final class NavigationUITests: XCTestCase {
     ///    both times — no cross-element format bridging.
     func testARecordingSurvivesNavigatingAwayAndComingBack() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         press(recordButton(app))
         Thread.sleep(forTimeInterval: 1.5)   // let the phase reach .recording before leaving
 

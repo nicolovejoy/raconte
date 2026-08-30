@@ -85,8 +85,9 @@ final class JournalEditorUITests: XCTestCase {
     /// out prefilled with the journal's actual name — not just "some field exists".
     func testTappingTheHeaderOpensTheEditorPrefilledWithTheJournalName() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -114,8 +115,9 @@ final class JournalEditorUITests: XCTestCase {
     /// one path a focus-loss-only commit would silently lose.
     func testRenameSurvivesTheEditorBeingPoppedFromUnderneathBySidebarNavigation() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -166,8 +168,9 @@ final class JournalEditorUITests: XCTestCase {
     /// wrote it.
     func testSettingASpanSurvivesTheEditorBeingPoppedFromUnderneathBySidebarNavigation() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -212,8 +215,9 @@ final class JournalEditorUITests: XCTestCase {
     /// library. Cancel proves it is a real dismissible sheet, not a dead tap.
     func testAddingACoverOpensTheRealPickerSheet() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         let journalRow = firstJournalRow(app)
         XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
@@ -247,8 +251,9 @@ final class JournalEditorUITests: XCTestCase {
     /// A journal place shows the journal itself above its entries — All Entries does not.
     func testSelectingAJournalShowsItsHeader() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         openPlace(app, "sidebar.allEntries")
         XCTAssertFalse(app.descendants(matching: .any)
@@ -275,6 +280,7 @@ final class JournalEditorUITests: XCTestCase {
     /// actually in hand.
     func testSidebarPlusCreatesAJournalAndOpensItsEditor() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
 
         // Reveal the sidebar on compact width before reaching for its toolbar.
@@ -327,6 +333,7 @@ final class JournalEditorUITests: XCTestCase {
     /// as a side effect of committing its own name field.
     func testRenamingFromTheOpenEditorDoesNotPopTheEditorItself() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
 
         let journalRow = firstJournalRow(app)
@@ -384,6 +391,7 @@ final class JournalEditorUITests: XCTestCase {
     /// alert (and inherits its editor push) can't do so silently.
     func testCaptureScreenNewJournalStaysOnCapture() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
 
         // Not `capture.journalPicker` — Task 10 (#18) swapped the old Menu for a plain
@@ -429,8 +437,9 @@ final class JournalEditorUITests: XCTestCase {
     /// drives directly.
     func testDeletingAnEmptyJournalRemovesItAndLandsSomewhereSane() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         revealSidebar(app)
         let journalRowsBefore = app.descendants(matching: .any)
@@ -487,9 +496,10 @@ final class JournalEditorUITests: XCTestCase {
     /// either reason is sufficient to refuse.
     func testAJournalWithAnEntryShowsTheDisabledDeleteAffordance() {
         let app = launchApp()
+        openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 30),
-                      "the app did not launch into the capture screen")
+                      "capture screen never appeared after openCapture")
 
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }

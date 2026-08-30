@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Top-level navigation (nav T4/T5): a `NavigationSplitView` with the sidebar selection
-/// bound to `AppRouter`, capture pre-selected. On iPhone the collapsed split view lands
-/// directly on the detail column (capture) at launch — verified by
-/// `NavigationUITests.testLaunchLandsDirectlyOnCaptureWithNoTaps`, the load-bearing platform
+/// bound to `AppRouter`, Home pre-selected (#108). On iPhone the collapsed split view
+/// lands directly on the detail column (Home) at launch — verified by
+/// `NavigationUITests.testLaunchLandsDirectlyOnHomeWithNoTaps`, the load-bearing platform
 /// claim the whole redesign rests on.
 ///
 /// The detail `NavigationStack` is bound to `router.detailPath: [LibraryDestination]`
@@ -65,6 +65,12 @@ struct ContentView: View {
         // on purpose: bootstrap is the recovery path a capture depends on, and sync must
         // not be able to delay it.
         .task { await services.sync?.launch() }
+        // #108: capture's bootstrap (the crash-recovery scan) used to ride CaptureView's
+        // own `.task`, which was fine while capture was the launch root. Home is now the
+        // root, and recovery must not depend on the owner ever visiting capture — kick it
+        // here too. `bootstrap()` is `didBootstrap`-guarded, so the CaptureView copy (kept,
+        // as a belt for previews/tests that mount CaptureView directly) never double-runs.
+        .task { await services.capture.bootstrap() }
         #if os(macOS)
         .frame(minWidth: 720, minHeight: 560)
         #endif
@@ -172,6 +178,13 @@ struct ContentView: View {
 
     @ViewBuilder private var detailRoot: some View {
         switch services.router.place {
+        case .home:
+            HomeView(library: services.library,
+                     capture: services.capture,
+                     onOpenJournal: { services.router.select(.journal($0)) },
+                     onNewEntry: { services.router.select(.capture) })
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .capture:
             CaptureView(model: services.capture)
         case .allEntries:
@@ -214,7 +227,7 @@ struct ContentView: View {
             return "All Entries"
         case .journal(let id):
             return services.library.journals.first(where: { $0.id == id })?.name ?? "Library"
-        case .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .about, .debug:
             return "Library"
         }
     }

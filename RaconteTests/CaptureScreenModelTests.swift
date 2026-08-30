@@ -528,6 +528,73 @@ final class CaptureScreenModelTests: XCTestCase {
                        "the discarded capture belongs in the trash, recoverable")
     }
 
+    /// The guard this branch went without all the way to its final review: a discard must
+    /// trash the capture the OWNER discarded, and nothing else.
+    ///
+    /// Both rules that inferred the target from `coordinator.finalizeQueue` were wrong, in
+    /// opposite directions. `for id in transcribed` binned a whole recovered backlog. And
+    /// `transcribed.last` — the rule that replaced it — acted on the wrong capture
+    /// entirely on the setup below: #122's early drain runs `finishCurrentCapture()` on
+    /// `[recoveredID]` before the live capture is appended to the queue at all, so the
+    /// RECOVERED reading was trashed and the mis-tap was kept. That is what this test found
+    /// (it was written to pin `.last` and instead falsified it), and why the discard now
+    /// carries the capture's identity from the moment it is armed.
+    ///
+    /// The assertion therefore no longer depends on the queue's ordering, or on whether the
+    /// early drain wins the race — which is exactly why it is landable while #122 is open.
+    ///
+    /// Two captures, no concurrency to arrange: `performBootstrap()`'s `recoverAtLaunch()`
+    /// leaves a recovered id in the queue before any user capture exists, and `bootstrap()`
+    /// does not respawn the coordinator.
+    func testDiscardTrashesTheCaptureTheOwnerDiscardedNotARecoveredBacklog() async throws {
+        // Same orphan fixture as the launch-healed sync test above: a capture killed at
+        // `.finalizing` with its m4a already on disk, which recovery hands to the finalizer.
+        let recoveredID = "01J000000000000000000122"
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: recoveredID)
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: dir), withIntermediateDirectories: true)
+        try Data([0x00, 0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let manifestFmt = AudioFormatDescriptor(sampleRate: 48000, channels: 1,
+                                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        let manifest = Manifest(captureID: recoveredID, createdAt: Date(timeIntervalSince1970: 0),
+                                state: .finalizing, stateSeq: 7,
+                                stateUpdatedAt: Date(timeIntervalSince1970: 0),
+                                format: manifestFmt, segmentCount: 3,
+                                lastKnownFrameOffset: 2500)
+        try AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir),
+                               writing: CaptureCoding.encoder().encode(manifest))
+
+        let recorder = ModelFakeRecorder()
+        let encoder = FakeAudioEncoder()
+        encoder.verifyOverride = VerifyResult(decodable: true, decodedFrameCount: 2500, nonSilent: true)
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: encoder)
+        await model.bootstrap()
+
+        let live = model.coordinator
+        XCTAssertEqual(live.finalizeQueue, [recoveredID],
+                       "precondition: launch recovery must have left the backlog in the queue, "
+                       + "or this test has no second capture and proves nothing")
+
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        guard let discardedID = live.activeCaptureID, discardedID != recoveredID else {
+            return XCTFail("the live capture has no distinct id — the test would prove nothing")
+        }
+        recorder.feed(frames: 1000)
+        await model.discardCurrentCapture()
+        await waitUntil({ model.coordinator !== live }, "no coordinator reset")
+
+        XCTAssertEqual(model.library.trashed.map(\.captureID), [discardedID],
+                       "only the capture the owner discarded may be trashed")
+        XCTAssertEqual(model.library.items.map(\.captureID), [recoveredID],
+                       "the recovered backlog is not the owner's discard — it must survive")
+    }
+
     /// No receipt. The receipt says "here is the reading you just made" — for a mis-tap that
     /// is exactly the cruft the owner asked not to be left with.
     func testDiscardLeavesNoReceipt() async throws {

@@ -52,28 +52,32 @@ hypothesis is NOT reliably a trailing suffix. (4) The backdate audit trail Nico 
 About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
 
 **Next steps:**
-1. **Review and merge the two cloud PRs** when they land. The #118-prep one has a known trap:
-   adding a row to About pushes the diagnostic rows below the single `swipeUp()`
-   `AboutUITests` relies on — a failure there is an under-scrolled test, not a broken feature.
-2. **Write the #118 implementation plan** from the committed design, then SDD it. Deliberately
-   NOT delegated: reviews on this project catch more defects in plans than in implementations,
-   and §5's dimming spec is exactly the shape that ships an untestable assertion. It needs a
-   proof-of-RED step and an adversarial reviewer.
-3. **Measure before building §5.** Instrument `TranscriptConsolidator` and record a minute of
-   real speech to see how long text stays provisional. If the window is short, the transcript's
-   tail changes brightness continuously while reading aloud — motion in peripheral vision,
-   the opposite of the screen's job. Needs real speech; the simulator won't produce it.
-4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
-   Support role → TestFlight Internal group. Next TestFlight build should carry #119+#124.
-5. **TestFlight build 13 is teed up but NOT uploaded.** `CFBundleVersion` bumped 12 → 13
-   (`project.yml`); run `scripts/upload_testflight.sh ios` then `... macos`. Needs the Xcode
-   GUI session awake (the archive leg cannot cloud-sign with an API key) and CI green on
-   `82c81d42`, the only code commit since the last green. Carries #119 + #124 + the About
-   rewrite.
-6. **Parked** (unchanged): #122/#123 from the record-flow branch; #125 current-week times;
-   #86 back-destination from an entry; NeutralCoverTile non-square overload;
-   `EntryMonthGroup.id` salt; cache the month formatter; "Add Cover" pill routes to editor;
-   sync hardening #91/#85; dark recovery-banner smoke.
+1. **Review and merge PR #126** (cloud, #118 §7 prep — build stamp → About, stale premise).
+   https://github.com/nicolovejoy/raconte/pull/126 — unit green, UI in flight at handoff.
+   It found a **fourth** copy of the stale premise (`RecordControlsRow`) that the design doc
+   missed. Also merge the #73/#74 dead-code PR when it lands; watch for the executed test
+   count going DOWN there — a green run at a lower count is the correct outcome.
+2. **Bulk select is planned and NOT started** — `docs/plans/2026-08-30-bulk-select-plan.md`,
+   issue #128, five tasks. Owner-agreed to **hold until #126 lands**, since both touch
+   library files and two agents against a moving main is asking for it. Then write the cloud
+   prompt into `docs/cloud-tasks/` and fire it.
+3. **Write the #118 implementation plan** from the committed design, then SDD it.
+   Deliberately NOT delegated: reviews here catch more defects in plans than in
+   implementations, and §5's dimming spec is the shape that ships an untestable assertion.
+4. **Measure before building §5.** Instrument `TranscriptConsolidator`, record a minute of
+   real speech, look at how long text stays provisional. If the window is short the
+   transcript's tail flickers continuously while reading aloud. Needs real speech — the
+   simulator will not produce it.
+5. **TestFlight build 13 is teed up, NOT uploaded.** `CFBundleVersion` 12 → 13.
+   `scripts/upload_testflight.sh ios` then `... macos`, one at a time. Needs the Xcode GUI
+   session awake (the archive leg cannot cloud-sign with an API key) and CI green on
+   `1ea4fe81`. Carries #119 + #124 + the About rewrite.
+6. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+   Support role → TestFlight Internal group.
+7. **Parked**: #122/#123; #125 current-week times; #86 back-destination from an entry;
+   NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; cache the month
+   formatter; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
+   recovery-banner smoke.
 
 ## What Raconte is
 

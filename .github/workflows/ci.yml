@@ -1,9 +1,25 @@
 name: CI
 
+# Docs-only commits skip CI entirely. Every run spawns TWO macOS runners for
+# ~30 minutes; in August 2026, 93 of 180 main runs were docs-only (devlog,
+# handoff, plan docs), i.e. over half the Actions spend cold-built Xcode twice
+# and ran 2009 unit + 57 UI tests to prove a markdown file didn't break the app.
+# `paths-ignore` skips only when EVERY changed file matches, so a commit that
+# touches code and docs together still runs in full.
+# Safe as written because `main` has no branch protection and no rulesets (checked
+# 2026-08-29): with a required status check, a skipped run sits "expected" forever
+# and blocks merge on docs-only PRs — if protection is ever added, convert this to
+# the always-run-with-a-skipped-inner-job pattern instead of a path filter.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
 
 # A push that supersedes an in-flight run on the same ref cancels it — without
 # this, every amend to a PR left the previous ~30-minute run burning a macOS

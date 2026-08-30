@@ -2,6 +2,62 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
+## Session 2026-08-30 (laptop — PR #119 merged; record flow + Discard + About tutorial, PR #124 open)
+
+**PR #119 merged** (#117 closed). Then the record-flow build shipped via SDD from
+`docs/plans/2026-08-29-record-flow.md`, 8 tasks, **PR #124 open and unmerged — merging is
+Nico's.** https://github.com/nicolovejoy/raconte/pull/124
+
+**Owner rulings this session:** (1) record-flow **option 1** — the library's floating button
+and Home's "New entry" now START recording on arrival (`CaptureScreenModel.beginCapture(inJournal:)`),
+instead of preselecting + routing to capture's idle screen; (2) discard semantics **trash,
+not hard delete** — a mis-tap goes to Trash, restorable 30 days, same rule `delete(_:)`
+refuses to except; (3) About gains a short "what this is / how it works" for a first-time
+TestFlight user (Lori) — copy is written to be rewritten.
+
+**`Discard` stops through the ORDINARY `done()` path** and lets the capture finalize
+normally — the m4a is verified and promoted exactly as for a kept reading, nothing is left
+half-written — then the entry is trashed. Supporting change: `bootstrap()` is now
+**await-once** (a stored `Task`), so a caller arriving from the library waits for the
+launch-recovery scan instead of racing it.
+
+**The finding worth remembering: never infer WHICH capture an intent refers to from
+`finalizeQueue`.** The plan trashed every id in it; fix round 1 narrowed that to `.last`
+(matching `buildReceipt`); the final fix wave PROVED both wrong, 3/3 runs — on a launch that
+healed an orphaned capture, an early drain makes `transcribed == [recoveredID]`, so a discard
+trashed the RECOVERED reading and kept the mis-tap. `discardCurrentCapture()` now snapshots
+`coordinator.activeCaptureID` at arm time and trashes THAT id. Removes the dependency on
+#122's race and made the regression test landable (it had been blocked all branch).
+Also fixed: an armed discard could survive a dropped `done()` (no `(.resuming, .done)` row in
+`CaptureMachine`) and trash a later, longer reading; the Discard button rendered 12pt on
+macOS, under the 16pt floor, because it used a raw font instead of `captureLabel`.
+
+**Process note: the reviews caught more defects in the PLAN than in the implementations** —
+three test specs that could not fail (two at pre-flight, one caught by an implementer that
+instrumented the code rather than shrugging), plus two wrong implementations the plan
+mandated. Unit 2032 green; `NavigationUITests` 14/14; `AboutUITests` needed a `swipeUp` once
+the tutorial pushed the diagnostics below the fold (CI caught it — Task 8 only ran
+`NavigationUITests`).
+
+**Next steps:**
+1. **Owner smoke** on `~/Desktop/Raconte.app` (built from `feat/record-flow`, real signing,
+   debug dylib UUID `FE06F091`). Steps are at the bottom of
+   `docs/plans/2026-08-29-record-flow.md`. Read the About copy as Lori would and say what is
+   wrong with it — it is meant to be rewritten.
+2. **Merge PR #124** once CI is green and the smoke passes (Nico).
+3. **#118 — capture screen design pass** (what is capture now that it isn't the front door,
+   and now that arriving there means you are already recording?).
+4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+   Support role → TestFlight Internal group. Next TestFlight build should include #119+#124.
+5. **New issues from this branch:** #122 (phase flips before `enqueueFinalize`, so a finish
+   can drain a stale queue and strand the real capture — the branch no longer depends on it),
+   #123 (a disk-full inside the ~300ms stop flush can resurrect a capture with its discard
+   still armed). Both fail in the keep-the-audio direction.
+6. **Parked polish** (unchanged from last session): NeutralCoverTile non-square overload +
+   migrate `HomeView.faceOutCover`; `EntryMonthGroup.id` salt; cache the month formatter;
+   "Add Cover" pill routes to editor not picker. Plus sync hardening #91/#85, dark
+   recovery-banner smoke still unverified.
+
 ## Session 2026-08-29 late (laptop — #117 shipped: library + sidebar restyle, PR #119 open)
 
 **#117 built end-to-end via SDD resume** of `docs/plans/2026-08-29-ux-redesign-implementation.md`

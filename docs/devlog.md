@@ -3,6 +3,84 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-08-30 late (laptop — PR #124 merged; #118 capture design WRITTEN and committed)
+
+**PR #124 merged by Nico; main green on the merge commit `a917b278`.** Record flow, Discard
+and the About tutorial are all on main. Three docs commits pushed this session: the handoff
+(`82c81d42`), the #118 design (`eea2d4ff`), a second cloud-task prompt (`0234979b`).
+
+**Design of record: `docs/plans/2026-08-30-118-capture-screen-design.md`** — every decision
+owner-ratified at smoke. It supersedes the capture half of `2026-08-29-ux-redesign-design.md`.
+Mockup, updated to match: https://claude.ai/code/artifact/d62b442d-7ecf-497b-b5c5-42b87ee0c391
+
+**The load-bearing ruling: the record control NEVER moves, in any state.** An earlier draft
+centred it in a 96 pt halo on the idle screen — a front-door idea that does not survive
+capture no longer being the front door. Ready and Recording now differ only in the middle
+band (empty vs. transcript) and in what the status row says. Owner's own words: *"why not
+just keep it at the bottom?"*
+
+Other ratified decisions: `.setup` becomes a thin ready state (journal header + backdate line
++ bar; two-voices, recovery banners, last entry and build stamp all leave); the two-voices
+toggle is DELETED and the BN/LN switch goes live in every recording with a lazy frame-0
+opener; the live transcript is New York serif with the hypothesis dimmed per-run; backdate
+appears on BOTH ready and recording; **"Record another" is deleted** — it duplicated the
+bar's own record button — and the receipt's entry becomes a tappable view/edit card
+(*"Open isn't super clear here"*). **The record button stays WHITE with a black mic glyph** —
+owner ruled 2026-08-30 (*"keep the mic as is, it's nice"*); the earlier "should it be red?"
+question is closed, and the design's red is only the live dot and the Discard-free status row.
+
+**Owner smoke, 5 steps — item 1 CLOSED as no-bug.** The "previous transcript text" was the
+**Last entry card** doing its job, not a stale transcript region; `allEntries` excludes
+trashed, so a discarded entry cannot appear there. The `8edb3db3` fix is sound. The card is
+removed by the design anyway. Build stamp on the smoked app reads `built Aug 30, 9:24 AM PT`
+(the 9:14 in the prior handoff was a directory mtime, not a build time — `dwarfdump --uuid`
+remains the only identity worth quoting). Also learned: the sidebar has **All Entries**, not
+"Library".
+
+**Four things the code contradicted, each caught by checking rather than trusting:**
+(1) `metadata.multiVoice` is a **synced, LWW-merged CloudKit field** with a per-field
+`modified` stamp, read by `CaptureReceipt` — written at a different moment, never redefined.
+(2) `BuildInfo.stamp` exists **only in `CaptureView`**; the 2026-08-29 doc's "moves to About"
+never ran, and About shows the version *number*, a different fact. (3) Per-sentence transcript
+emphasis is **unbuildable** — nothing tracks sentence boundaries; the real seam is
+`TranscriptConsolidator`'s `committed` vs `provisional`, merged by frame position, so the
+hypothesis is NOT reliably a trailing suffix. (4) The backdate audit trail Nico asked for
+**already exists** — `EntryLogRecord` stores `from`/`to`/`cause` per field including
+`originalDate`, and capture's writes go through the same chokepoint that produces that diff.
+
+**Two cloud sessions were started at end of session** from `docs/cloud-tasks/`:
+`73-74-dead-code.txt` (#73 + #74 dead code) and `118-prep-corrections.txt` (build stamp →
+About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
+
+**Next steps:**
+1. **Review and merge PR #126** (cloud, #118 §7 prep — build stamp → About, stale premise).
+   https://github.com/nicolovejoy/raconte/pull/126 — unit green, UI in flight at handoff.
+   It found a **fourth** copy of the stale premise (`RecordControlsRow`) that the design doc
+   missed. Also merge the #73/#74 dead-code PR when it lands; watch for the executed test
+   count going DOWN there — a green run at a lower count is the correct outcome.
+2. **Bulk select is planned and NOT started** — `docs/plans/2026-08-30-bulk-select-plan.md`,
+   issue #128, five tasks. Owner-agreed to **hold until #126 lands**, since both touch
+   library files and two agents against a moving main is asking for it. Then write the cloud
+   prompt into `docs/cloud-tasks/` and fire it.
+3. **Write the #118 implementation plan** from the committed design, then SDD it.
+   Deliberately NOT delegated: reviews here catch more defects in plans than in
+   implementations, and §5's dimming spec is the shape that ships an untestable assertion.
+4. **Measure before building §5.** Instrument `TranscriptConsolidator`, record a minute of
+   real speech, look at how long text stays provisional. If the window is short the
+   transcript's tail flickers continuously while reading aloud. Needs real speech — the
+   simulator will not produce it.
+5. **TestFlight build 13 is teed up, NOT uploaded.** `CFBundleVersion` 12 → 13.
+   `scripts/upload_testflight.sh ios` then `... macos`, one at a time. Needs the Xcode GUI
+   session awake (the archive leg cannot cloud-sign with an API key) and CI green on
+   `1ea4fe81`. Carries #119 + #124 + the About rewrite.
+6. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+   Support role → TestFlight Internal group.
+7. **Parked**: #122/#123; #125 current-week times; #86 back-destination from an entry;
+   NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; cache the month
+   formatter; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
+   recovery-banner smoke.
+
+
 ## Session 2026-08-30 (laptop — PR #119 merged; record flow + Discard + About tutorial, PR #124 open)
 
 **PR #119 merged** (#117 closed). Then the record-flow build shipped via SDD from

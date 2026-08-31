@@ -2,82 +2,58 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-30 late (laptop — PR #124 merged; #118 capture design WRITTEN and committed)
+## Session 2026-08-31 (cloud → laptop — PR #126 merged: #118 §7 corrections landed)
 
-**PR #124 merged by Nico; main green on the merge commit `a917b278`.** Record flow, Discard
-and the About tutorial are all on main. Three docs commits pushed this session: the handoff
-(`82c81d42`), the #118 design (`eea2d4ff`), a second cloud-task prompt (`0234979b`).
+Cloud session (Linux container), continued onto the laptop at the end. **PR #126 merged**
+(`661e5a0`): build stamp moved to About, stale colorScheme premise corrected. **PR #127
+(#73/#74 dead code) also merged** (`fc3bc24`); the two merges share zero files and no
+symbols, verified, so order didn't matter — but neither PR's CI saw the other, and main's
+runs on both merge commits were still in flight at handoff.
 
-**Design of record: `docs/plans/2026-08-30-118-capture-screen-design.md`** — every decision
-owner-ratified at smoke. It supersedes the capture half of `2026-08-29-ux-redesign-design.md`.
-Mockup, updated to match: https://claude.ai/code/artifact/d62b442d-7ecf-497b-b5c5-42b87ee0c391
+**Build stamp now lives in About** — sidebar → About → App section → `Build` row
+(`about.buildStamp`), beside Version. Two facts, deliberately not consolidated: Version
+("1.0 (12)") is identical across every install of one submission; the stamp ("built Aug 30,
+9:24 AM PT") is what identifies the binary in hand. Both `CaptureView` copies deleted.
+Smoke passes read it in About from now on. Known wart: the row renders "Build / built …" —
+label echo, fix on request.
 
-**The load-bearing ruling: the record control NEVER moves, in any state.** An earlier draft
-centred it in a 96 pt halo on the idle screen — a front-door idea that does not survive
-capture no longer being the front door. Ready and Recording now differ only in the middle
-band (empty vs. transcript) and in what the status row says. Owner's own words: *"why not
-just keep it at the bottom?"*
+**The stale premise had FOUR copies, not the three the design doc listed.**
+`JournalHeaderView`'s copy was hyphenated across a line break (`permanently-\n mounted`),
+so a phrase grep found three of four and missed `RecordControlsRow`. Lesson: when auditing
+prose in code, a phrase grep misses line-wrapped occurrences — search a distinctive single
+word (`permanently`), not the phrase. All four now corrected; the pins themselves untouched.
+The surviving justification: nothing presents `CaptureView` as a sheet/popover, so
+`.preferredColorScheme` would resolve to the whole window.
 
-Other ratified decisions: `.setup` becomes a thin ready state (journal header + backdate line
-+ bar; two-voices, recovery banners, last entry and build stamp all leave); the two-voices
-toggle is DELETED and the BN/LN switch goes live in every recording with a lazy frame-0
-opener; the live transcript is New York serif with the hypothesis dimmed per-run; backdate
-appears on BOTH ready and recording; **"Record another" is deleted** — it duplicated the
-bar's own record button — and the receipt's entry becomes a tappable view/edit card
-(*"Open isn't super clear here"*). **The record button stays WHITE with a black mic glyph** —
-owner ruled 2026-08-30 (*"keep the mic as is, it's nice"*); the earlier "should it be red?"
-question is closed, and the design's red is only the live dot and the Discard-free status row.
+**`AboutUITests` got the durable form of the scroll fix**: `revealRow()` — directional
+swipes repeated until the row enters the accessibility tree, never a fixed distance AND
+never a fixed count, so the next row added above the diagnostics doesn't break it again.
 
-**Owner smoke, 5 steps — item 1 CLOSED as no-bug.** The "previous transcript text" was the
-**Last entry card** doing its job, not a stale transcript region; `allEntries` excludes
-trashed, so a discarded entry cannot appear there. The `8edb3db3` fix is sound. The card is
-removed by the design anyway. Build stamp on the smoked app reads `built Aug 30, 9:24 AM PT`
-(the 9:14 in the prior handoff was a directory mtime, not a build time — `dwarfdump --uuid`
-remains the only identity worth quoting). Also learned: the sidebar has **All Entries**, not
-"Library".
-
-**Four things the code contradicted, each caught by checking rather than trusting:**
-(1) `metadata.multiVoice` is a **synced, LWW-merged CloudKit field** with a per-field
-`modified` stamp, read by `CaptureReceipt` — written at a different moment, never redefined.
-(2) `BuildInfo.stamp` exists **only in `CaptureView`**; the 2026-08-29 doc's "moves to About"
-never ran, and About shows the version *number*, a different fact. (3) Per-sentence transcript
-emphasis is **unbuildable** — nothing tracks sentence boundaries; the real seam is
-`TranscriptConsolidator`'s `committed` vs `provisional`, merged by frame position, so the
-hypothesis is NOT reliably a trailing suffix. (4) The backdate audit trail Nico asked for
-**already exists** — `EntryLogRecord` stores `from`/`to`/`cause` per field including
-`originalDate`, and capture's writes go through the same chokepoint that produces that diff.
-
-**Two cloud sessions were started at end of session** from `docs/cloud-tasks/`:
-`73-74-dead-code.txt` (#73 + #74 dead code) and `118-prep-corrections.txt` (build stamp →
-About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
+**Three process facts worth keeping:**
+(1) **Cloud (web) containers are Linux with no Swift toolchain** — no xcodebuild, xcodegen,
+or swiftc. A raconte cloud task cannot build or test locally; CI is its only verification.
+Write cloud-task prompts accordingly. (2) The "executed test count must change" rule has an
+exception: adding an *assertion* to an existing test moves no count — verify via the
+assertion's failure mode instead (here: 0 failures across 61 with `continueAfterFailure =
+false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners spans
+29–42 min for the identical 61 tests — duration alone is not evidence of retries.
 
 **Next steps:**
-1. **Review and merge PR #126** (cloud, #118 §7 prep — build stamp → About, stale premise).
-   https://github.com/nicolovejoy/raconte/pull/126 — unit green, UI in flight at handoff.
-   It found a **fourth** copy of the stale premise (`RecordControlsRow`) that the design doc
-   missed. Also merge the #73/#74 dead-code PR when it lands; watch for the executed test
-   count going DOWN there — a green run at a lower count is the correct outcome.
-2. **Bulk select is planned and NOT started** — `docs/plans/2026-08-30-bulk-select-plan.md`,
-   issue #128, five tasks. Owner-agreed to **hold until #126 lands**, since both touch
-   library files and two agents against a moving main is asking for it. Then write the cloud
-   prompt into `docs/cloud-tasks/` and fire it.
-3. **Write the #118 implementation plan** from the committed design, then SDD it.
-   Deliberately NOT delegated: reviews here catch more defects in plans than in
-   implementations, and §5's dimming spec is the shape that ships an untestable assertion.
-4. **Measure before building §5.** Instrument `TranscriptConsolidator`, record a minute of
-   real speech, look at how long text stays provisional. If the window is short the
-   transcript's tail flickers continuously while reading aloud. Needs real speech — the
-   simulator will not produce it.
-5. **TestFlight build 13 is teed up, NOT uploaded.** `CFBundleVersion` 12 → 13.
-   `scripts/upload_testflight.sh ios` then `... macos`, one at a time. Needs the Xcode GUI
-   session awake (the archive leg cannot cloud-sign with an API key) and CI green on
-   `1ea4fe81`. Carries #119 + #124 + the About rewrite.
-6. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
-   Support role → TestFlight Internal group.
-7. **Parked**: #122/#123; #125 current-week times; #86 back-destination from an entry;
-   NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; cache the month
-   formatter; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
-   recovery-banner smoke.
+1. **Fire bulk select (#128)** — now unblocked (#126 and #127 both merged; the hold is
+   over). `docs/plans/2026-08-30-bulk-select-plan.md`, five tasks. Write the cloud prompt
+   into `docs/cloud-tasks/` and start it.
+2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
+   delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
+   real speech (device, not simulator) to measure the provisional window.
+3. **TestFlight build 13**: wait for CI green on `fc3bc24` (both main runs were in flight
+   at handoff), then `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
+   Needs the Xcode GUI session awake. Now also carries #126/#127.
+4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
+   Customer Support role → TestFlight Internal group.
+5. **Parked**: #122/#123; #125 current-week times; #86 back-destination; NeutralCoverTile
+   non-square overload; `EntryMonthGroup.id` salt; month-formatter cache; "Add Cover" pill
+   routes to editor; sync hardening #91/#85; dark recovery-banner smoke; Build-row label
+   echo in About.
 
 ## What Raconte is
 

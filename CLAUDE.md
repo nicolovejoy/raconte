@@ -184,6 +184,39 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
   finds nothing and fails for the wrong reason. Reveal it with a directional `swipeUp()`
   before querying (a directional scroll, not a fixed distance, so it survives other device
   sizes). Discovered 2026-08-21 on the journal editor's disabled-delete footnote.
+- **A UI test that scrolls to reach a row must scroll UNTIL IT FINDS IT, never a fixed
+  number of swipes.** The rule above (directional, not a fixed distance) survives a change
+  of device; it does not survive a row being ADDED above the assertion, which silently
+  pushes the target back below the fold. That is exactly how #118 §7 broke
+  `AboutUITests` — one row into About's App section moved three assertions out of reach of
+  its single `swipeUp()`. The durable form is `AboutUITests.revealRow(_:_:)`: swipe, check,
+  repeat to a bound, since swipes past the end of a list are no-ops. Call such helpers in
+  top-to-bottom document order — the scroll only goes down, so a row checked after a lower
+  one may already have left the tree off the top.
+- **A phrase grep misses prose that wrapped across a line.** #118 §7 listed three stale
+  doc comments; there were FOUR. `JournalHeaderView`'s copy read `permanently-\n  mounted`,
+  so every grep for the phrase found three and silently missed `RecordControlsRow`. When
+  auditing COMMENTS rather than code, grep a short distinctive fragment that cannot wrap
+  (one word, e.g. `permanently`), then count the hits to zero — a phrase match is evidence
+  of nothing.
+- **A cloud session cannot build or test this project.** Claude Code on the web runs a
+  Linux container with NO Swift toolchain — no `xcodebuild`, no `xcodegen`, no `swiftc` —
+  so an unattended cloud task cannot run either suite, and CI on the macOS runners is its
+  only verification. Write cloud-task prompts that expect this: end at an open PR and let
+  CI judge it. What a cloud session CAN still check locally is real: brace/paren balance,
+  that a removed accessibility identifier is referenced nowhere, and `git merge-tree` for
+  conflicts against a moved main.
+- **"Verify the executed test count CHANGED" has an exception: an assertion added to an
+  EXISTING test does not move it.** #118 §7 added the `about.buildStamp` assertion inside
+  `testAboutScreenShowsVersionEnvironmentAndSyncRows`; UI stayed 61 → 61, correctly. The
+  honest verification there is that the count matches the same-day baseline on main (so
+  nothing was skipped) and that the run is green with `continueAfterFailure = false` — a
+  missing row would have failed the test, not lowered the count.
+- **The build stamp lives in About, not on the capture screen** (#118 §7, merged in
+  https://github.com/nicolovejoy/raconte/pull/126). Read it at sidebar → About → App →
+  `Build`; it is a different fact from the `Version` row beside it, which is the same on
+  every install of one build submission. `dwarfdump --uuid` remains the only build identity
+  worth quoting when the two disagree.
 - **The `RaconteUI` suite exceeds the Bash tool's HARD 10-minute cap** (600000 ms is the
   maximum the tool accepts), so a single whole-suite invocation is killed mid-run and reads
   exactly like a hang. Split it into two or more FOREGROUND `-only-testing:` invocations by

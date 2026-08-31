@@ -51,6 +51,20 @@ struct AboutView: View {
             Section("App") {
                 LabeledContent("Version", value: AppVersion.current())
                     .accessibilityIdentifier("about.version")
+                // A DIFFERENT fact from Version, not a duplicate of it: Version is the
+                // marketing/build number pair ("1.0 (12)"), which is identical across
+                // every install of one build submission. The build TIME is what tells
+                // you whether the app in your hand is the one just built — the question
+                // a wireless `devicectl` install and a TestFlight update both leave
+                // unanswered (see `BuildInfo`). It lived on the capture screen until
+                // #118 §7 moved it here; About is the only Release-visible screen it
+                // can live on. Not DEBUG-gated, for the same reason.
+                //
+                // The value keeps `BuildInfo.stamp` verbatim, sentence prefix and all —
+                // it is the string the owner reads off a smoke build and compares
+                // against the build he just ran, so it should not be reworded per site.
+                LabeledContent("Build", value: BuildInfo.stamp)
+                    .accessibilityIdentifier("about.buildStamp")
                 LabeledContent("CloudKit", value: environment.map { $0.rawValue.capitalized } ?? "…")
                     .accessibilityIdentifier("about.environment")
             }

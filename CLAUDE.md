@@ -39,9 +39,10 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
 29–42 min for the identical 61 tests — duration alone is not evidence of retries.
 
 **Next steps:**
-1. **Fire bulk select (#128)** — now unblocked (#126 and #127 both merged; the hold is
-   over). `docs/plans/2026-08-30-bulk-select-plan.md`, five tasks. Write the cloud prompt
-   into `docs/cloud-tasks/` and start it.
+1. **Bulk select (#128) is FIRED** — a cloud session (Fable) was started 2026-08-31 from
+   `docs/cloud-tasks/128-bulk-select.txt` against the five-task plan. It ends at an OPEN
+   PR; do not start a second agent on it. Review and merge its PR when it lands. #125
+   (current-week times) deliberately NOT fired alongside — same library files.
 2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
    delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
    real speech (device, not simulator) to measure the provisional window.

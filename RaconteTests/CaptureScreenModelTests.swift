@@ -356,7 +356,13 @@ final class CaptureScreenModelTests: XCTestCase {
 
     /// Cardinality-2 case 2: once the current journal has labels configured, they are
     /// visible through this property with no separate cache to go stale — proving the
-    /// capture screen's voice switch will pick up a save from the Voice Labels sheet.
+    /// capture screen's voice switch will pick up a save made in the journal editor.
+    ///
+    /// Configured through `library.setJournalVoiceLabels` because that IS the live path
+    /// (`JournalEditorView.commitVoiceLabels`): store write, then `rescan()`. The old
+    /// setup called `CaptureScreenModel.setCurrentJournalVoiceLabels`, deleted with #74
+    /// — it had no caller left, so a test driving it proved nothing about what the app
+    /// can actually do.
     func testSelectedJournalVoiceLabelsReflectsTheConfiguredLabels() async throws {
         let model = CaptureScreenModel(
             capturesRoot: root,
@@ -372,7 +378,9 @@ final class CaptureScreenModelTests: XCTestCase {
             journalsContainerRoot: root)
         await model.bootstrap()
 
-        let saved = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa", "ln": "Me"])
+        let id = try XCTUnwrap(model.selectedJournalID,
+                               "harness failure: no default journal selected after bootstrap")
+        let saved = await model.library.setJournalVoiceLabels(id, labels: ["bn": "Grandpa", "ln": "Me"])
         XCTAssertTrue(saved)
         XCTAssertEqual(model.selectedJournalVoiceLabels, ["bn": "Grandpa", "ln": "Me"])
     }
@@ -394,7 +402,9 @@ final class CaptureScreenModelTests: XCTestCase {
             // journal list.
             journalsContainerRoot: root)
         await model.bootstrap()
-        _ = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa"])
+        let id = try XCTUnwrap(model.selectedJournalID,
+                               "harness failure: no default journal selected after bootstrap")
+        _ = await model.library.setJournalVoiceLabels(id, labels: ["bn": "Grandpa"])
 
         let created = await model.createJournal(name: "Second Journal")
         let second = try XCTUnwrap(created)
@@ -404,15 +414,19 @@ final class CaptureScreenModelTests: XCTestCase {
                        "the freshly created journal has no labels of its own")
     }
 
-    // MARK: journal create/rename must reach the shared library (nav T5 review, Important 2)
+    // MARK: journal create must reach the shared library (nav T5 review, Important 2)
     //
     // `LibraryScreenModel.journals` (what the sidebar reads) and `CaptureScreenModel.journals`
-    // (this model's own copy, appended/patched in place by `createJournal`/
-    // `renameCurrentJournal`) are separate arrays that only reconcile through a rescan.
-    // Discovered empirically by nav T5's own UI test: a journal created on the capture
-    // screen was invisible in the sidebar until some UNRELATED place selection happened
-    // to trigger a rescan first. `createJournal`/`renameCurrentJournal` must trigger that
-    // rescan themselves rather than leaving it to whatever the caller does next.
+    // (this model's own copy, appended in place by `createJournal`) are separate arrays
+    // that only reconcile through a rescan. Discovered empirically by nav T5's own UI
+    // test: a journal created on the capture screen was invisible in the sidebar until
+    // some UNRELATED place selection happened to trigger a rescan first. `createJournal`
+    // must trigger that rescan itself rather than leaving it to whatever the caller does
+    // next.
+    //
+    // The rename half of this pair went with `renameCurrentJournal` (#74). Renaming from
+    // the capture screen has had no UI since #72; the editor renames through
+    // `LibraryScreenModel.renameJournal`, which is the library model's to cover.
 
     func testCreateJournalIsVisibleThroughTheSharedLibrary() async throws {
         let model = CaptureScreenModel(
@@ -428,26 +442,6 @@ final class CaptureScreenModelTests: XCTestCase {
 
         XCTAssertTrue(model.library.journals.contains(where: { $0.id == created.id }),
                       "the shared library's own journals array never learned about the new journal")
-    }
-
-    /// Rename is the worse failure mode of the two: not a missing row, but a STALE NAME
-    /// sitting in the sidebar.
-    func testRenameCurrentJournalIsVisibleThroughTheSharedLibrary() async throws {
-        let model = CaptureScreenModel(
-            capturesRoot: root,
-            makeSession: { ModelFakeSession() },
-            makeRecorder: { ModelFakeRecorder() },
-            encoder: FakeAudioEncoder(),
-            journalsContainerRoot: root)
-        await model.bootstrap()
-        let id = try XCTUnwrap(model.selectedJournalID,
-                               "harness failure: no default journal selected after bootstrap")
-
-        await model.renameCurrentJournal(to: "Renamed Journal")
-
-        let inLibrary = model.library.journals.first(where: { $0.id == id })
-        XCTAssertEqual(inLibrary?.name, "Renamed Journal",
-                       "the shared library still has the journal's OLD name")
     }
 
     // MARK: #94 secondary finding — bootstrap must push what it healed, same launch

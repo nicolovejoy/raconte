@@ -383,37 +383,15 @@ final class JournalCaptureContextTests: XCTestCase {
                        "resume erased a backdate the live capture never set")
     }
 
-    // MARK: Voice labels (T7 Mark Voices, issue #56)
-
-    /// Mirrors `renameCurrentJournal`'s shape: the store call is the source of truth,
-    /// and the model patches its own `journals` array in place — no rescan required for
-    /// the change to be visible through `model.journals`.
-    func testSetCurrentJournalVoiceLabelsPersistsAndPatchesInPlace() async throws {
-        let model = makeModel()
-        await model.bootstrap()
-        let id = try XCTUnwrap(model.selectedJournalID)
-
-        let succeeded = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa", "ln": "Nico"])
-        XCTAssertTrue(succeeded)
-
-        XCTAssertEqual(model.journals.first(where: { $0.id == id })?.voiceLabels,
-                       ["bn": "Grandpa", "ln": "Nico"],
-                       "model.journals must reflect the new labels without a rescan")
-
-        let onDisk = try await JournalStore(containerRoot: containerRoot).journal(id: id)
-        XCTAssertEqual(onDisk?.voiceLabels, ["bn": "Grandpa", "ln": "Nico"],
-                       "labels must be visible via journalStore.journal(id:)")
-    }
-
     // MARK: Task A2 (issue #79, second half) — capture picker tracks sync-adopted journals
 
     /// The capture picker used to hold a bootstrap-once copy of `journals` that only a
     /// relaunch (or one of this model's own mutating intents) ever refreshed. A journal
     /// adopted from another device lands via `JournalStore.applySyncMerge` +
     /// `library.rescan()` (`SyncCoordinator.swift:120`), with nothing routing through
-    /// `createJournal`/`renameCurrentJournal` — so the picker never saw it until the app
-    /// relaunched. This pins the model-to-model refresh: no direct call on
-    /// `CaptureScreenModel` at all, just the same rescan a background sync pull drives.
+    /// `createJournal` — so the picker never saw it until the app relaunched. This pins
+    /// the model-to-model refresh: no direct call on `CaptureScreenModel` at all, just
+    /// the same rescan a background sync pull drives.
     func testCapturePickerTracksAJournalAdoptedFromSyncWithoutRelaunch() async throws {
         let model = makeModel()
         await model.bootstrap()
@@ -524,25 +502,5 @@ final class JournalCaptureContextTests: XCTestCase {
                           "a selection whose journal left the registry must not be kept")
         XCTAssertTrue(model.journals.contains(where: { $0.id == model.selectedJournalID }),
                       "the fallback selection must resolve to a journal that still exists")
-    }
-
-    func testSetCurrentJournalVoiceLabelsFailureReturnsFalse() async throws {
-        let model = makeModel()
-        await model.bootstrap()
-        let id = try XCTUnwrap(model.selectedJournalID)
-        let before = model.journals.first(where: { $0.id == id })?.voiceLabels
-
-        // `AtomicFile.replace` writes `journals.json.part` beside the target and renames
-        // it in — both need the *directory* writable, so the target file's own
-        // permissions are irrelevant here.
-        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: containerRoot.path)
-        defer {
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: containerRoot.path)
-        }
-
-        let succeeded = await model.setCurrentJournalVoiceLabels(["bn": "Grandpa"])
-        XCTAssertFalse(succeeded)
-        XCTAssertEqual(model.journals.first(where: { $0.id == id })?.voiceLabels, before,
-                       "a failed write must not patch the in-memory journal either")
     }
 }

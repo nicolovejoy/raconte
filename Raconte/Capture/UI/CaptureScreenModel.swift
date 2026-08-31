@@ -147,8 +147,9 @@ final class CaptureScreenModel {
     /// The selected journal's voice labels, or `[:]` when nothing is selected or the
     /// journal has none configured (owner ruling 2026-08-12: the capture-time voice
     /// switch must speak the journal's labels, not hardcoded "LN"/"BN"). Reads straight
-    /// off `journals`, so a journal switch or a `setCurrentJournalVoiceLabels` save is
-    /// visible here with no separate cache to go stale.
+    /// off `journals`, so a journal switch — or a save made in the journal editor, which
+    /// lands here through `library.rescan()` — is visible with no separate cache to go
+    /// stale.
     var selectedJournalVoiceLabels: [String: String] {
         journals.first(where: { $0.id == selectedJournalID })?.voiceLabels ?? [:]
     }
@@ -628,58 +629,11 @@ final class CaptureScreenModel {
         return created
     }
 
-    /// See `createJournal`'s doc comment — same reconciliation gap, worse consequence: a
-    /// STALE NAME left sitting in the sidebar rather than a missing row.
-    func renameCurrentJournal(to name: String) async {
-        guard let id = selectedJournalID,
-              let renamed = try? await journalStore.rename(id: id, to: name) else { return }
-        // A rename never changes createdAt, so this patch cannot itself change display
-        // order — re-sorting here is defensive symmetry with every other assignment
-        // site, not a behavior fix on its own (#79).
-        if let index = journals.firstIndex(where: { $0.id == id }) {
-            journals[index] = renamed
-            journals = journals.displayOrdered
-        }
-        await library.rescan()
-    }
-
-    /// Sets (or clears, via an empty dict) the current journal's voice labels
-    /// (T7 Mark Voices, issue #56). Same load/patch shape as `renameCurrentJournal`:
-    /// `journalStore` is the source of truth, and `journals[index]` is patched in place
-    /// so the change is visible through `journals` with no rescan. `labels` is passed
-    /// through to `JournalStore.setVoiceLabels`, which trims VALUES but not keys — the
-    /// sheet only ever constructs the "bn"/"ln" keys as literals, so no untrimmed key can
-    /// reach here today, but a future caller building keys dynamically would need to
-    /// trim/normalize them itself before calling this.
-    @discardableResult
-    func setCurrentJournalVoiceLabels(_ labels: [String: String]) async -> Bool {
-        guard let id = selectedJournalID,
-              let updated = try? await journalStore.setVoiceLabels(id: id, labels: labels)
-        else { return false }
-        // Voice labels never change createdAt either — same defensive symmetry as
-        // `renameCurrentJournal` above (#79).
-        if let index = journals.firstIndex(where: { $0.id == id }) {
-            journals[index] = updated
-            journals = journals.displayOrdered
-        }
-        return true
-    }
-
     /// Cover image for the currently selected journal, sourced from `library` —
     /// the same store/scan the Library screen reads (M3's one-data-path rule, applied
     /// to covers too).
     var selectedJournalCover: Data? {
         selectedJournalID.flatMap { library.journalCovers[$0] }
-    }
-
-    func setCurrentJournalCover(imageData: Data) async throws {
-        guard let id = selectedJournalID else { return }
-        try await library.setJournalCover(id, imageData: imageData)
-    }
-
-    func removeCurrentJournalCover() async {
-        guard let id = selectedJournalID else { return }
-        await library.removeJournalCover(id)
     }
 
     /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
@@ -1190,12 +1144,12 @@ extension CaptureScreenModel: LibraryRescanObserver {
                 self.currentJournal.select(created.id)
                 self.resolveBackdateForJournalChange()
                 self.syncActiveEntryMetadata()
-                // Same convention as `createJournal`/`renameCurrentJournal` (see their
-                // doc comments above): `library.journals` and this model's own
-                // `journals` are separate arrays with no shared storage, and only a
-                // rescan reconciles them. Without this, the freshly-minted default is
-                // invisible to `library.journals` — the sidebar, and anything else that
-                // reads through `library` rather than this model — until some UNRELATED
+                // Same convention as `createJournal` (see its doc comment above):
+                // `library.journals` and this model's own `journals` are separate
+                // arrays with no shared storage, and only a rescan reconciles them.
+                // Without this, the freshly-minted default is invisible to
+                // `library.journals` — the sidebar, and anything else that reads
+                // through `library` rather than this model — until some UNRELATED
                 // rescan happens to run first. Last, same reason: the write must be
                 // durable before the rescan reads it back.
                 await self.library.rescan()

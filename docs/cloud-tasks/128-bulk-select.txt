@@ -1,0 +1,51 @@
+Implement bulk select (issue #128) in nicolovejoy/raconte.
+
+The plan of record is docs/plans/2026-08-30-bulk-select-plan.md — read it in full
+before writing anything. It is owner-ratified: execute its five tasks in order, and
+treat its Design decisions, Traps, and Out of scope sections as binding. Where this
+prompt and the plan disagree, the plan wins.
+
+Execution notes on top of the plan:
+
+- Work test-first where the plan specifies tests (Tasks 1, 2, 5). For Task 2's
+  partial-failure test, the injected failing store is the point — a fixture where
+  everything succeeds is a vacuous test and will be treated as not done.
+- Branch from CURRENT main (verify `git merge-base --is-ancestor origin/main HEAD`
+  after branching — worktrees have silently started from stale bases before). Main
+  must be at or after commit fc3bc24 ("#127 dead code"); if CI on main's tip is
+  red, stop and say so rather than building on a broken base.
+- Commit per task, not one squashed blob — the review reads better and a bad task
+  can be reverted alone.
+
+Your environment is a Linux container with NO Swift toolchain — no xcodebuild, no
+xcodegen, no swiftc. You cannot compile or run either suite locally. Do not try, do
+not pretend to. Verification is CI:
+
+- Push early, after Task 1 or 2, and read the Actions run — both jobs run on macOS
+  runners for any .swift diff. Iterate against CI rather than accumulating five
+  unverified tasks.
+- The executed-count rule still applies, read off CI logs: RaconteTests baseline is
+  2032 executed / 1 skipped (main run on fc3bc24's parent); RaconteUITests baseline
+  is 61. Your new test files must move those counts UP. Exit code 0 at the old
+  count means the file never ran.
+- Cheap local proxies that DO work in your container: brace/paren balance, grep for
+  orphaned identifiers, `git merge-tree` against main for conflicts.
+
+Project rules that will bite you:
+
+- project.yml sources by directory, so new files are picked up on CI's own
+  `xcodegen generate` — but never edit or commit *.xcodeproj (gitignored, generated).
+- Identifiers on LEAF controls only — a container identifier flattens descendants
+  (bitten three times); `library.selectionCount` etc. per the plan.
+- UI tests reach screens through openPlace(app, "sidebar.…") in
+  RaconteUITests/UITestNavigation.swift — never hard-code a navigation tap.
+- Do not change trashEntry / moveEntry / restoreEntry / deleteEntryPermanently
+  signatures; extract non-rescanning cores alongside them.
+- macOS-specific UI (the bottom action bar) exists in the same SwiftUI files;
+  keep text styles at legibility floors in points, not style names (.callout is
+  12pt on macOS).
+
+End state: an OPEN PR against main with a --body-file body, CI green on its head,
+the PR body stating what CI verified (both executed counts, before → after). Do NOT
+merge — merges are the owner's. No close-verb plus #128 in the PR body; write
+"Refs #128". If CI fails, fix and push until green; ending red is ending unfinished.

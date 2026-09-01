@@ -41,25 +41,26 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
 29–42 min for the identical 61 tests — duration alone is not evidence of retries.
 
 **Next steps:**
-1. **Bulk select (#128): review and merge PR #129** — the cloud agent (Fable) pushed all
-   five plan tasks, one commit each, to `feat/bulk-select`; CI was running on the tip
-   (`619df14`) at handoff, agent still alive and watching it. It stalled once mid-Task-3
-   and was resumed with verified state (Tasks 1-2 were already green); a second stall
-   means hand the remainder to a fresh agent, don't resume again. Do NOT start another
-   agent on #128. #125 (current-week times) deliberately not fired alongside — same
-   library files; fire it after #129 merges.
-2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
+1. **Bulk select (#128) is MERGED** — PR #129, merge commit `bc344853`, all five plan
+   tasks, CI green (unit 2029→2049, UI 61→62). Owner-smoke the select mode on device
+   when convenient; #128 can be closed after that smoke (check the issue's item list
+   first — repo rule).
+2. **#125 (current-week times) is UNBLOCKED and has a ready prompt** —
+   `docs/cloud-tasks/125-current-week-times.txt`, decisions pinned (calendar week in
+   America/Los_Angeles; no time on backdated rows). A cloud session may already have
+   been started on it gated on the #129 merge — check claude.ai/code before firing a
+   second; if one is waiting, tell it "#129 is merged, proceed". Opus is sufficient.
+3. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
    delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
    real speech (device, not simulator) to measure the provisional window.
-3. **TestFlight build 13 is UNBLOCKED**: main CI went green on both merge commits
-   (`661e5a0`, `fc3bc24`). Run `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
-   Needs the Xcode GUI session awake. Now also carries #126/#127.
-4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
+4. **TestFlight build 13**: run `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
+   Needs the Xcode GUI session awake. Now also carries #126/#127/#128.
+5. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
    Customer Support role → TestFlight Internal group.
-5. **Parked**: #122/#123; #125 current-week times; #130 (`selectedJournalCover`, the last
-   of the capture-screen cover cluster — check #118 wants no cover there first); #86
-   back-destination; NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt;
-   month-formatter cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
+6. **Parked**: #122/#123; #130 (`selectedJournalCover`, the last of the capture-screen
+   cover cluster — check #118 wants no cover there first); #86 back-destination;
+   NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; month-formatter
+   cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
    recovery-banner smoke; Build-row label echo in About.
 
 ## What Raconte is

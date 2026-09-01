@@ -32,42 +32,199 @@ struct TrashView: View {
     /// to a batch instead of one entry.
     @State private var emptyTrashFailedCount: Int?
 
+    /// Select mode (#128 Task 4) — its own selection, deliberately separate from the
+    /// entry lists' (out of scope to select across the two screens at once). View-held,
+    /// same reasoning as `LibraryView.selection`: nothing about it survives the view.
+    @State private var selection = BulkSelection()
+    /// Bulk Delete Now confirms — that one is not recoverable. Bulk Restore does not:
+    /// it only ever puts entries back.
+    @State private var confirmingBulkDeleteNow = false
+    /// A completed bulk operation with a nonzero `failed` — both counts reported, the
+    /// failed ids re-selected (see `finishBulkAction`).
+    @State private var bulkFailure: BulkFailureReport?
+
+    private struct BulkFailureReport {
+        var title: String
+        var succeeded: Int
+        var failed: Int
+    }
+
     var body: some View {
+        // Dialog groups live in helper functions, matching `LibraryView`'s split (one
+        // monolithic modifier chain stops type-checking once a second mode joins it).
+        withBulkDialogs(withSingleEntryDialogs(screenBody))
+            .navigationTitle("Trash")
+            .task { await model.rescan() }
+            .toolbar { toolbarContent }
+    }
+
+    private var screenBody: some View {
         Group {
             if model.trashed.isEmpty {
                 emptyState
             } else {
                 List {
                     ForEach(model.trashed) { item in
-                        TrashEntryRow(item: item,
-                                      onRestore: {
-                                          Task {
-                                              if !(await model.restoreEntry(item.captureID)) {
-                                                  restoreFailed = true
+                        if selection.isActive {
+                            selectableRow(item)
+                        } else {
+                            TrashEntryRow(item: item,
+                                          onRestore: {
+                                              Task {
+                                                  if !(await model.restoreEntry(item.captureID)) {
+                                                      restoreFailed = true
+                                                  }
                                               }
-                                          }
-                                      },
-                                      onDeleteNow: { pendingPermanentDelete = item })
+                                          },
+                                          onDeleteNow: { pendingPermanentDelete = item })
+                        }
                     }
                 }
                 .listStyle(.plain)
                 .accessibilityIdentifier("trash.list")
             }
         }
-        .navigationTitle("Trash")
-        .task { await model.rescan() }
+        .safeAreaInset(edge: .bottom) {
+            if selection.isActive { selectionBar }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if selection.isActive {
+            ToolbarItem {
+                Button("Done") { selection = BulkSelection() }
+                    .accessibilityIdentifier("trash.selectDone")
+            }
+        } else {
+            ToolbarItem {
+                Button("Select") { selection.isActive = true }
+                    .disabled(model.trashed.isEmpty)
+                    .accessibilityIdentifier("trash.select")
+            }
+        }
         // Visible-but-disabled when there is nothing to empty — the journal-editor
         // disabled-delete idiom (#80 ruling 2): an absent control cannot be discovered,
         // let alone understood, so the button always exists and only `.disabled` moves.
-        .toolbar {
-            ToolbarItem {
-                Button("Empty Trash", role: .destructive) {
-                    showingEmptyTrashConfirmation = true
-                }
-                .disabled(model.trashed.isEmpty)
-                .accessibilityIdentifier("trash.emptyAll")
+        // Untouched by select mode (#128: "leave the whole-trash Empty Trash alone").
+        ToolbarItem {
+            Button("Empty Trash", role: .destructive) {
+                showingEmptyTrashConfirmation = true
+            }
+            .disabled(model.trashed.isEmpty)
+            .accessibilityIdentifier("trash.emptyAll")
+        }
+    }
+
+    // MARK: - Select mode (#128 Task 4)
+
+    private func selectableRow(_ item: EntryListItem) -> some View {
+        Button {
+            selection.toggle(item.captureID)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selection.isSelected(item.captureID)
+                        ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selection.isSelected(item.captureID)
+                        ? InkTone.accent.color : InkTone.inkSecondary.color)
+                // Per-row Restore/Delete Now are hidden in this mode — the bottom bar
+                // owns both actions, and a live button inside the toggle target would
+                // fire alongside the toggle.
+                TrashEntryRow(item: item, showsActions: false,
+                              onRestore: {}, onDeleteNow: {})
             }
         }
+        .buttonStyle(.plain)
+        // On the Button, the row's leaf control in this mode (`LibraryView
+        // .selectableRow`'s flattening reasoning); the merged element's VALUE carries
+        // the selection state for UI tests.
+        .accessibilityIdentifier("trash.selectRow")
+        .accessibilityValue(selection.isSelected(item.captureID) ? "selected" : "not selected")
+    }
+
+    private func entryCountText(_ count: Int) -> String {
+        count == 1 ? "1 entry" : "\(count) entries"
+    }
+
+    /// Same epilogue as `LibraryView.finishBulkAction`: full success leaves select
+    /// mode; partial failure stays in it with exactly the failed ids re-selected and
+    /// both counts reported. Never plain success while something did not move.
+    private func finishBulkAction(_ result: LibraryScreenModel.BulkResult, failureTitle: String) {
+        if result.failed.isEmpty {
+            selection = BulkSelection()
+        } else {
+            selection.clear()
+            selection.selectAll(result.failed)
+            bulkFailure = BulkFailureReport(title: failureTitle,
+                                            succeeded: result.succeeded,
+                                            failed: result.failed.count)
+        }
+    }
+
+    /// Explicit point sizes, not text-style names — this bar renders on macOS too,
+    /// where `.callout` drops to 12 pt (`LibraryView.selectionBar`'s rule).
+    private var selectionBar: some View {
+        HStack(spacing: 16) {
+            Text("\(selection.count) selected")
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("trash.selectionCount")
+            Spacer()
+            Button("Restore") {
+                let ids = selection.sortedIDs
+                Task {
+                    finishBulkAction(await model.bulkRestore(ids),
+                                     failureTitle: "Some entries couldn’t be restored")
+                }
+            }
+            .disabled(selection.isEmpty)
+            .accessibilityIdentifier("trash.bulkRestore")
+            Button("Delete Now", role: .destructive) { confirmingBulkDeleteNow = true }
+                .disabled(selection.isEmpty)
+                .accessibilityIdentifier("trash.bulkDeleteNow")
+        }
+        .font(.system(size: 15))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(InkTone.paperInset.color)
+    }
+
+    /// #128's bulk Delete Now confirmation (naming the count — not recoverable) and
+    /// the partial-failure alert.
+    private func withBulkDialogs(_ base: some View) -> some View {
+        base
+        .confirmationDialog("Permanently delete \(entryCountText(selection.count))?",
+                            isPresented: $confirmingBulkDeleteNow,
+                            titleVisibility: .visible) {
+            Button("Delete Permanently", role: .destructive) {
+                confirmingBulkDeleteNow = false
+                let ids = selection.sortedIDs
+                Task {
+                    finishBulkAction(await model.bulkDeletePermanently(ids),
+                                     failureTitle: "Some entries couldn’t be deleted")
+                }
+            }
+            .accessibilityIdentifier("trash.confirmBulkDeleteNow")
+            Button("Cancel", role: .cancel) { confirmingBulkDeleteNow = false }
+        } message: {
+            Text("The audio and its transcript are erased. This can’t be undone.")
+        }
+        .alert(bulkFailure?.title ?? "", isPresented: Binding(
+            get: { bulkFailure != nil },
+            set: { if !$0 { bulkFailure = nil } })
+        ) {
+            Button("OK") { bulkFailure = nil }
+        } message: {
+            let succeeded = bulkFailure?.succeeded ?? 0
+            let failed = bulkFailure?.failed ?? 0
+            Text("\(succeeded) succeeded, \(failed) failed. "
+                 + "The entries that failed are still selected — try again.")
+        }
+    }
+
+    /// The pre-#128 dialogs and alerts, moved out of `body` verbatim.
+    private func withSingleEntryDialogs(_ base: some View) -> some View {
+        base
         // Attached to the screen's outer view, never a `Section` or other child — a
         // `.confirmationDialog` on a `Section` silently never presents on iOS 26
         // (`JournalEditorView`'s delete-journal dialog carries the same note; #68's
@@ -157,6 +314,10 @@ struct TrashView: View {
 /// two ways out.
 struct TrashEntryRow: View {
     let item: EntryListItem
+    /// `false` in select mode (#128): the bottom bar owns Restore/Delete Now there,
+    /// and a live button inside the row-as-toggle-target would fire alongside the
+    /// toggle. Default `true` keeps every pre-#128 call site unchanged.
+    var showsActions: Bool = true
     let onRestore: () -> Void
     let onDeleteNow: () -> Void
 
@@ -188,14 +349,16 @@ struct TrashEntryRow: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("trash.row.remaining")
 
-            HStack(spacing: 16) {
-                Button("Restore", action: onRestore)
-                    .accessibilityIdentifier("trash.row.restore")
-                Button("Delete Now", role: .destructive, action: onDeleteNow)
-                    .accessibilityIdentifier("trash.row.deleteNow")
+            if showsActions {
+                HStack(spacing: 16) {
+                    Button("Restore", action: onRestore)
+                        .accessibilityIdentifier("trash.row.restore")
+                    Button("Delete Now", role: .destructive, action: onDeleteNow)
+                        .accessibilityIdentifier("trash.row.deleteNow")
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
             }
-            .font(.caption)
-            .buttonStyle(.borderless)
         }
         .padding(.vertical, 6)
         // No row-level identifier, deliberately: SwiftUI propagates a container's

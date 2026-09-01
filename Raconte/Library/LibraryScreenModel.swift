@@ -394,13 +394,7 @@ final class LibraryScreenModel {
     /// either way: the caller decides whether to tell the owner.
     @discardableResult
     func moveEntry(_ captureID: String, toJournal journalID: String?) async -> Bool {
-        let succeeded: Bool
-        do {
-            _ = try await entryMetadataStore.update(captureID: captureID) { $0.journalID = journalID }
-            succeeded = true
-        } catch {
-            succeeded = false
-        }
+        let succeeded = await moveEntryCore(captureID, toJournal: journalID)
         // #84 point 2: the detail screen's journal picker files an entry too — the same
         // shared chokepoint `CaptureScreenModel.enqueueEntryMetadataWrite` routes
         // through, so a still-provisional default filed into from here also promotes
@@ -858,13 +852,7 @@ final class LibraryScreenModel {
     /// `update` that silently no-ops while the caller believes the entry is trashed.
     @discardableResult
     func trashEntry(_ captureID: String, now: Date = Date()) async -> Bool {
-        let succeeded: Bool
-        do {
-            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = now }
-            succeeded = true
-        } catch {
-            succeeded = false
-        }
+        let succeeded = await trashEntryCore(captureID, now: now)
         await rescan()
         return succeeded
     }
@@ -873,15 +861,144 @@ final class LibraryScreenModel {
     /// `false` on a store failure — see `trashEntry`.
     @discardableResult
     func restoreEntry(_ captureID: String) async -> Bool {
-        let succeeded: Bool
-        do {
-            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = nil }
-            succeeded = true
-        } catch {
-            succeeded = false
-        }
+        let succeeded = await restoreEntryCore(captureID)
         await rescan()
         return succeeded
+    }
+
+    // MARK: - Non-rescanning cores (#128 Task 2)
+
+    /// The sidecar write behind `trashEntry`, with no rescan — so a bulk loop over N
+    /// entries can rescan exactly once at the end instead of N times (`emptyTrash`'s
+    /// structure). Same store-failure contract as `trashEntry`: `false` means the write
+    /// did not land and the sidecar is untouched.
+    private func trashEntryCore(_ captureID: String, now: Date) async -> Bool {
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = now }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// See `trashEntryCore` — the non-rescanning half of `restoreEntry`.
+    private func restoreEntryCore(_ captureID: String) async -> Bool {
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.trashedAt = nil }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// See `trashEntryCore` — the non-rescanning half of `moveEntry`. The
+    /// `promoteProvisionalDefaultAfterEntrySave` call deliberately stays OUT of the
+    /// core: `moveEntry` promotes per call as it always has, while a bulk move targets
+    /// one journal and promotes once after its loop (the call is idempotent; once is a
+    /// cost decision, not a correctness one).
+    private func moveEntryCore(_ captureID: String, toJournal journalID: String?) async -> Bool {
+        do {
+            _ = try await entryMetadataStore.update(captureID: captureID) { $0.journalID = journalID }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The per-entry stage behind `deleteEntryPermanently`/`emptyTrash`/
+    /// `bulkDeletePermanently`, with no purge and no rescan. Keeps every guard those
+    /// paths share: re-reads the sidecar and refuses unless the disk still says trashed
+    /// (the row the caller acted from is a snapshot); gathers the sync-record family
+    /// BEFORE the rename (the only point the directory is still enumerable); fires the
+    /// sync delete only for a stage that actually landed. The rename is the deletion —
+    /// `true` here means the entry is gone from every scanned tree, and the purge that
+    /// follows (caller's job, once per batch) only reclaims bytes.
+    private func stagePermanentDelete(_ captureID: String) async -> Bool {
+        guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
+              metadata.isTrashed else { return false }
+        let remover = self.remover
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
+        let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
+            do { _ = try remover.stage(captureID: captureID) } catch { return false }
+            return true
+        }.value
+        if staged {
+            await noteSyncDelete(captureID: captureID, family: family)
+        }
+        return staged
+    }
+
+    /// What one bulk operation did (#128): how many landed, and WHICH ids did not —
+    /// the ids, not just a count, so the view can keep exactly the failed ones selected
+    /// for a retry. Same never-report-plain-success discipline as `EmptyTrashResult`.
+    struct BulkResult: Equatable {
+        var succeeded: Int
+        var failed: [String]
+    }
+
+    /// Bulk soft-delete (#128). One `rescan()` after the loop — never per entry; see
+    /// `trashEntryCore`. One `now` for the whole batch, so the entries expire from the
+    /// trash together, exactly as they were trashed together.
+    @discardableResult
+    func bulkTrash(_ ids: [String], now: Date = Date()) async -> BulkResult {
+        var succeeded = 0
+        var failed: [String] = []
+        for id in ids {
+            if await trashEntryCore(id, now: now) { succeeded += 1 } else { failed.append(id) }
+        }
+        await rescan()
+        return BulkResult(succeeded: succeeded, failed: failed)
+    }
+
+    /// Bulk undo (#128). Same shape as `bulkTrash`.
+    @discardableResult
+    func bulkRestore(_ ids: [String]) async -> BulkResult {
+        var succeeded = 0
+        var failed: [String] = []
+        for id in ids {
+            if await restoreEntryCore(id) { succeeded += 1 } else { failed.append(id) }
+        }
+        await rescan()
+        return BulkResult(succeeded: succeeded, failed: failed)
+    }
+
+    /// Bulk reassignment to ONE journal (#128; `nil` files the batch as unfiled).
+    /// `promoteProvisionalDefaultAfterEntrySave` runs once after the loop, not N times —
+    /// idempotent per its own doc, and the batch targets a single journal. Gated on ANY
+    /// write landing, per that function's contract: one filed entry is enough to make a
+    /// provisional default real.
+    @discardableResult
+    func bulkMove(_ ids: [String], toJournal journalID: String?) async -> BulkResult {
+        var succeeded = 0
+        var failed: [String] = []
+        for id in ids {
+            if await moveEntryCore(id, toJournal: journalID) { succeeded += 1 } else { failed.append(id) }
+        }
+        _ = await promoteProvisionalDefaultAfterEntrySave(
+            journalStore: journalStore, journalID: journalID, entryWriteSucceeded: succeeded > 0)
+        await rescan()
+        return BulkResult(succeeded: succeeded, failed: failed)
+    }
+
+    /// Bulk "Delete Now" (#128) — the selected subset of the trash, where `emptyTrash`
+    /// is the whole trash. Every per-entry guard lives in `stagePermanentDelete`,
+    /// including the re-read-and-refuse rule: each sidecar is re-read and the entry
+    /// refused unless the disk still says trashed, never trusting the rows the selection
+    /// was drawn from. One `purge()` and one `rescan()` after the loop. An empty batch
+    /// does not even create the staging root (matching `emptyTrash`'s no-op).
+    @discardableResult
+    func bulkDeletePermanently(_ ids: [String]) async -> BulkResult {
+        guard !ids.isEmpty else { return BulkResult(succeeded: 0, failed: []) }
+        var succeeded = 0
+        var failed: [String] = []
+        for id in ids {
+            if await stagePermanentDelete(id) { succeeded += 1 } else { failed.append(id) }
+        }
+        let remover = self.remover
+        _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
+        await rescan()
+        return BulkResult(succeeded: succeeded, failed: failed)
     }
 
     /// "Delete Now" from the Trash view: skip the remaining grace period.
@@ -898,20 +1015,13 @@ final class LibraryScreenModel {
     /// launch. The alert on `false` now means exactly one thing: the entry is still there.
     @discardableResult
     func deleteEntryPermanently(_ captureID: String) async -> Bool {
-        guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
-              metadata.isTrashed else { return false }
-        let remover = self.remover
-        // M4 T11: gathered BEFORE `stage` renames the directory away — the only point
-        // it is still enumerable off disk (`SyncRecordFamily`'s own doc comment).
-        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-        let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
-        let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
-            do { _ = try remover.stage(captureID: captureID) } catch { return false }
-            _ = remover.purge()
-            return true
-        }.value
+        // Guards (re-read-and-refuse, family-before-rename, sync delete only after a
+        // landed stage) live in `stagePermanentDelete`, shared with `emptyTrash` and
+        // `bulkDeletePermanently` (#128 Task 2).
+        let staged = await stagePermanentDelete(captureID)
         if staged {
-            await noteSyncDelete(captureID: captureID, family: family)
+            let remover = self.remover
+            _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
         }
         await rescan()
         return staged
@@ -965,29 +1075,17 @@ final class LibraryScreenModel {
 
         var deleted = 0
         var failed = 0
-        let remover = self.remover
         for item in candidates {
-            let captureID = item.captureID
-            guard let metadata = try? await entryMetadataStore.read(captureID: captureID),
-                  metadata.isTrashed else {
-                failed += 1
-                continue
-            }
-            // M4 T11: gathered BEFORE `stage` renames the directory away, same
-            // reasoning as `deleteEntryPermanently`.
-            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
-            let family = SyncRecordFamily.names(captureID: captureID, captureDirectory: directory)
-            let staged = await Task.detached(priority: .userInitiated) { () -> Bool in
-                do { _ = try remover.stage(captureID: captureID) } catch { return false }
-                return true
-            }.value
-            if staged {
+            // Per-item guards (re-read-and-refuse, family-before-rename, sync delete
+            // only after a landed stage) live in `stagePermanentDelete`, shared with
+            // `deleteEntryPermanently` and `bulkDeletePermanently` (#128 Task 2).
+            if await stagePermanentDelete(item.captureID) {
                 deleted += 1
-                await noteSyncDelete(captureID: captureID, family: family)
             } else {
                 failed += 1
             }
         }
+        let remover = self.remover
         _ = await Task.detached(priority: .userInitiated) { remover.purge() }.value
         await rescan()
         return EmptyTrashResult(deleted: deleted, failed: failed)

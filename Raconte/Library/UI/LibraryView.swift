@@ -45,6 +45,26 @@ struct LibraryView: View {
     @State private var pendingTrashCaptureID: String?
     @State private var pendingMoveCaptureID: String?
 
+    /// Select mode (#128). On the VIEW, deliberately — the inverse of the
+    /// capture-screen lifetime invariant: selection *should* die on navigation away.
+    /// Flat set of capture ids, so it spans the year/month grouping for free.
+    @State private var selection = BulkSelection()
+    /// The two bulk confirmations. Trash confirms because a seven-entry action is not a
+    /// one-entry action (#83's single-swipe direction deliberately diverged from);
+    /// Move confirms implicitly by being a destination picker.
+    @State private var confirmingBulkTrash = false
+    @State private var choosingBulkMoveDestination = false
+    /// A completed bulk operation with a nonzero `failed` — presented with BOTH counts,
+    /// never swallowed. The failed ids are re-selected by then (see `finishBulkAction`).
+    @State private var bulkFailure: BulkFailureReport?
+
+    /// What the partial-failure alert needs to say: which action, and both counts.
+    private struct BulkFailureReport {
+        var title: String
+        var succeeded: Int
+        var failed: Int
+    }
+
     /// Sidecar writes that reported failure — same swallowed-`try?` family as
     /// `EntryDetailView`/`TrashView`.
     @State private var trashFailed = false
@@ -54,6 +74,16 @@ struct LibraryView: View {
     @State private var createEntryFailed = false
 
     var body: some View {
+        // Split into `screenStack` + two dialog-group functions + `toolbarContent`
+        // because one monolithic modifier chain stopped type-checking in reasonable
+        // time once the select-mode chrome (#128) joined it.
+        withBulkDialogs(withSingleEntryDialogs(screenStack))
+            .navigationTitle(title)
+            .toolbar { toolbarContent }
+            .task { await model.rescan() }
+    }
+
+    private var screenStack: some View {
         VStack(spacing: 0) {
             if model.journalsUnreadable { registryBanner }
             // Above `content`, not inside the List's non-empty branch: a freshly
@@ -70,9 +100,37 @@ struct LibraryView: View {
             #endif
         }
         .background(InkTone.paper.color)
-        .overlay(alignment: .bottomTrailing) { floatingRecordButton }
-        .navigationTitle(title)
-        .toolbar {
+        .overlay(alignment: .bottomTrailing) {
+            // Hidden in select mode: the selection bar owns the bottom edge, and a
+            // record button floating over "n selected · Move… · Trash" would sit on
+            // top of the very controls the mode exists for.
+            if !selection.isActive { floatingRecordButton }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selection.isActive { selectionBar }
+        }
+    }
+
+    /// The toolbar, extracted (with the two dialog modifier groups below) because one
+    /// monolithic `body` expression stopped type-checking in reasonable time once the
+    /// select-mode chrome joined it.
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if selection.isActive {
+            ToolbarItem {
+                Button("Done") {
+                    // Leaving the mode clears the selection — nothing about it
+                    // survives the mode, let alone the view.
+                    selection = BulkSelection()
+                }
+                .accessibilityIdentifier("library.selectDone")
+            }
+        } else {
+            ToolbarItem {
+                Button("Select") { selection.isActive = true }
+                    .disabled(model.items.isEmpty)
+                    .accessibilityIdentifier("library.select")
+            }
             ToolbarItem {
                 Button {
                     Task {
@@ -88,7 +146,13 @@ struct LibraryView: View {
                 .accessibilityIdentifier("library.newEntry")
             }
         }
-        .task { await model.rescan() }
+    }
+
+    /// The pre-#128 per-row dialogs and alerts, moved out of `body` verbatim (see the
+    /// type-checking note there). Still attached above the screen's whole stack, per
+    /// the repo rule that a dialog on a nested child can silently never present.
+    private func withSingleEntryDialogs(_ base: some View) -> some View {
+        base
         .confirmationDialog("Move this entry to the trash?",
                             isPresented: Binding(
                                 get: { pendingTrashCaptureID != nil },
@@ -138,6 +202,116 @@ struct LibraryView: View {
         } message: {
             Text("The change didn’t save. Try again.")
         }
+    }
+
+    /// #128 bulk confirmations and the partial-failure alert — same outer-view
+    /// attachment rule as `withSingleEntryDialogs`. The count in each title is the
+    /// whole point: it is what makes a mis-selection visible before it lands.
+    private func withBulkDialogs(_ base: some View) -> some View {
+        base
+        .confirmationDialog("Move \(entryCountText(selection.count)) to the Trash?",
+                            isPresented: $confirmingBulkTrash,
+                            titleVisibility: .visible) {
+            Button("Move to Trash", role: .destructive) {
+                confirmingBulkTrash = false
+                let ids = selection.sortedIDs
+                Task {
+                    finishBulkAction(await model.bulkTrash(ids),
+                                     failureTitle: "Some entries couldn’t be moved to the trash")
+                }
+            }
+            .accessibilityIdentifier("library.confirmBulkTrash")
+            Button("Cancel", role: .cancel) { confirmingBulkTrash = false }
+        } message: {
+            Text("You can restore them from the Trash for \(TrashPolicy.retentionDays) days.")
+        }
+        .confirmationDialog("Move \(entryCountText(selection.count)) to journal",
+                            isPresented: $choosingBulkMoveDestination,
+                            titleVisibility: .visible) {
+            ForEach(bulkJournalChoices()) { journal in
+                Button(journal.name) {
+                    choosingBulkMoveDestination = false
+                    let ids = selection.sortedIDs
+                    Task {
+                        finishBulkAction(await model.bulkMove(ids, toJournal: journal.id),
+                                         failureTitle: "Some entries couldn’t be moved")
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { choosingBulkMoveDestination = false }
+        }
+        .alert(bulkFailure?.title ?? "", isPresented: Binding(
+            get: { bulkFailure != nil },
+            set: { if !$0 { bulkFailure = nil } })
+        ) {
+            Button("OK") { bulkFailure = nil }
+        } message: {
+            let succeeded = bulkFailure?.succeeded ?? 0
+            let failed = bulkFailure?.failed ?? 0
+            Text("\(succeeded) succeeded, \(failed) failed. "
+                 + "The entries that failed are still selected — try again.")
+        }
+    }
+
+    // MARK: - Select mode (#128)
+
+    private func entryCountText(_ count: Int) -> String {
+        count == 1 ? "1 entry" : "\(count) entries"
+    }
+
+    /// The shared epilogue of both bulk operations: full success leaves select mode;
+    /// partial failure stays in it with EXACTLY the failed ids re-selected — so the
+    /// owner can retry or investigate precisely those — and reports both counts.
+    /// A bulk operation must never read as plain success when some entries did not move.
+    private func finishBulkAction(_ result: LibraryScreenModel.BulkResult, failureTitle: String) {
+        if result.failed.isEmpty {
+            selection = BulkSelection()
+        } else {
+            selection.clear()
+            selection.selectAll(result.failed)
+            bulkFailure = BulkFailureReport(title: failureTitle,
+                                            succeeded: result.succeeded,
+                                            failed: result.failed.count)
+        }
+    }
+
+    /// `journalChoices(for:)` generalized to the selection: a journal is excluded only
+    /// when EVERY selected entry is already in it (for a single-journal-scoped list that
+    /// is exactly the scoped journal, matching the single-row rule); a mixed selection
+    /// keeps every journal, since the move is a real change for at least one entry.
+    private func bulkJournalChoices() -> [Journal] {
+        let selectedJournalIDs = Set(model.items
+            .filter { selection.isSelected($0.captureID) }
+            .map(\.journalID))
+        return model.journals.filter { journal in
+            !(selectedJournalIDs.count == 1 && selectedJournalIDs.first == journal.id)
+        }
+    }
+
+    /// The bottom action bar, present only in select mode. Explicit point sizes, not
+    /// text-style names — `.callout` is 16 pt on iOS but 12 pt on macOS, and this bar
+    /// renders on both platforms from this one file.
+    private var selectionBar: some View {
+        HStack(spacing: 16) {
+            Button("Select All") { selection.selectAll(model.items.map(\.captureID)) }
+                .accessibilityIdentifier("library.selectAll")
+            Spacer()
+            Text("\(selection.count) selected")
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(InkTone.inkSecondary.color)
+                .accessibilityIdentifier("library.selectionCount")
+            Spacer()
+            Button("Move…") { choosingBulkMoveDestination = true }
+                .disabled(selection.isEmpty)
+                .accessibilityIdentifier("library.bulkMove")
+            Button("Trash", role: .destructive) { confirmingBulkTrash = true }
+                .disabled(selection.isEmpty)
+                .accessibilityIdentifier("library.bulkTrash")
+        }
+        .font(.system(size: 15))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(InkTone.paperInset.color)
     }
 
     /// Every journal except the entry's current one — reassigning to where it already is
@@ -254,52 +428,17 @@ struct LibraryView: View {
                             }
 
                             ForEach(monthGroup.items) { item in
-                                NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                                    LibraryEntryRow(model: model, item: item,
-                                                    showsJournalName: journal == nil)
-                                }
-                                // On the LINK, not on the row inside it. A `NavigationLink`
-                                // merges its label's children into one accessibility element,
-                                // so `LibraryEntryRow`'s own `library.row` identifier is not
-                                // independently queryable — the same flattening `capture
-                                // .recentRow` exists to work around, and which silently made
-                                // every library row unqueryable from a UI test until the
-                                // capture screen stopped listing three recents and the tests
-                                // had to come here instead.
-                                .accessibilityIdentifier("library.entryLink")
-                                .listRowBackground(InkTone.paper.color)
-                                // Trailing swipe (trash first, so a full swipe trashes —
-                                // platform convention) plus a Mac-convention right-click
-                                // context menu with the same two handlers, reusing
-                                // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
-                                // detail screen does — no second delete or move path.
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        pendingTrashCaptureID = item.captureID
-                                    } label: {
-                                        Label("Trash", systemImage: "trash")
-                                    }
-                                    .accessibilityIdentifier("library.row.trashSwipe")
-
-                                    Button {
-                                        pendingMoveCaptureID = item.captureID
-                                    } label: {
-                                        Label("Move", systemImage: "folder")
-                                    }
-                                    .tint(.blue)
-                                    .accessibilityIdentifier("library.row.moveSwipe")
-                                }
-                                .contextMenu {
-                                    Button {
-                                        pendingMoveCaptureID = item.captureID
-                                    } label: {
-                                        Label("Move to Journal…", systemImage: "folder")
-                                    }
-                                    Button(role: .destructive) {
-                                        pendingTrashCaptureID = item.captureID
-                                    } label: {
-                                        Label("Move to Trash", systemImage: "trash")
-                                    }
+                                if selection.isActive {
+                                    // Select mode (#128): the row toggles instead of
+                                    // navigating; swipe actions and the context menu
+                                    // are suppressed by living only on the other
+                                    // branch. The whole row is the toggle target — a
+                                    // deliberate dodge of the known trap where a tap
+                                    // on a control inside a List row hits the merged
+                                    // label frame and silently does nothing.
+                                    selectableRow(item)
+                                } else {
+                                    navigableRow(item)
                                 }
                             }
                         }
@@ -315,6 +454,78 @@ struct LibraryView: View {
             // content — without this the last row's trailing side sits permanently
             // under the button. Clearance, not decoration.
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 84) }
+        }
+    }
+
+    private func selectableRow(_ item: EntryListItem) -> some View {
+        Button {
+            selection.toggle(item.captureID)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selection.isSelected(item.captureID)
+                        ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selection.isSelected(item.captureID)
+                        ? InkTone.accent.color : InkTone.inkSecondary.color)
+                LibraryEntryRow(model: model, item: item, showsJournalName: journal == nil)
+            }
+        }
+        .buttonStyle(.plain)
+        // On the Button, the row's leaf control in this mode — same flattening
+        // reasoning as `library.entryLink` on the NavigationLink below. The merged
+        // element's VALUE carries the selection state so a UI test can assert which
+        // rows are selected without depending on the checkmark glyph.
+        .accessibilityIdentifier("library.selectRow")
+        .accessibilityValue(selection.isSelected(item.captureID) ? "selected" : "not selected")
+        .listRowBackground(InkTone.paper.color)
+    }
+
+    private func navigableRow(_ item: EntryListItem) -> some View {
+        NavigationLink(value: LibraryDestination.entry(item.captureID)) {
+            LibraryEntryRow(model: model, item: item,
+                            showsJournalName: journal == nil)
+        }
+        // On the LINK, not on the row inside it. A `NavigationLink`
+        // merges its label's children into one accessibility element,
+        // so `LibraryEntryRow`'s own `library.row` identifier is not
+        // independently queryable — the same flattening `capture
+        // .recentRow` exists to work around, and which silently made
+        // every library row unqueryable from a UI test until the
+        // capture screen stopped listing three recents and the tests
+        // had to come here instead.
+        .accessibilityIdentifier("library.entryLink")
+        .listRowBackground(InkTone.paper.color)
+        // Trailing swipe (trash first, so a full swipe trashes —
+        // platform convention) plus a Mac-convention right-click
+        // context menu with the same two handlers, reusing
+        // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
+        // detail screen does — no second delete or move path.
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                pendingTrashCaptureID = item.captureID
+            } label: {
+                Label("Trash", systemImage: "trash")
+            }
+            .accessibilityIdentifier("library.row.trashSwipe")
+
+            Button {
+                pendingMoveCaptureID = item.captureID
+            } label: {
+                Label("Move", systemImage: "folder")
+            }
+            .tint(.blue)
+            .accessibilityIdentifier("library.row.moveSwipe")
+        }
+        .contextMenu {
+            Button {
+                pendingMoveCaptureID = item.captureID
+            } label: {
+                Label("Move to Journal…", systemImage: "folder")
+            }
+            Button(role: .destructive) {
+                pendingTrashCaptureID = item.captureID
+            } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
         }
     }
 

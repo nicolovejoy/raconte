@@ -7,8 +7,10 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
 Cloud session (Linux container), continued onto the laptop at the end. **PR #126 merged**
 (`661e5a0`): build stamp moved to About, stale colorScheme premise corrected. **PR #127
 (#73/#74 dead code) also merged** (`fc3bc24`); the two merges share zero files and no
-symbols, verified, so order didn't matter — but neither PR's CI saw the other, and main's
-runs on both merge commits were still in flight at handoff.
+symbols, verified, so order didn't matter — but neither PR's CI saw the other, so main's
+own runs were the first to test the combination. Both since confirmed green, read from the
+job logs: `661e5a0` success, and `fc3bc24` at **2029 unit (1 skipped, 0 failures) / 61 UI
+(0 failures)** — the combined tree is verified, not merely assumed.
 
 **Build stamp now lives in About** — sidebar → About → App section → `Build` row
 (`about.buildStamp`), beside Version. Two facts, deliberately not consolidated: Version
@@ -54,10 +56,11 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
    Needs the Xcode GUI session awake. Now also carries #126/#127.
 4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
    Customer Support role → TestFlight Internal group.
-5. **Parked**: #122/#123; #125 current-week times; #86 back-destination; NeutralCoverTile
-   non-square overload; `EntryMonthGroup.id` salt; month-formatter cache; "Add Cover" pill
-   routes to editor; sync hardening #91/#85; dark recovery-banner smoke; Build-row label
-   echo in About.
+5. **Parked**: #122/#123; #125 current-week times; #130 (`selectedJournalCover`, the last
+   of the capture-screen cover cluster — check #118 wants no cover there first); #86
+   back-destination; NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt;
+   month-formatter cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
+   recovery-banner smoke; Build-row label echo in About.
 
 ## What Raconte is
 
@@ -215,6 +218,23 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
   honest verification there is that the count matches the same-day baseline on main (so
   nothing was skipped) and that the run is green with `continueAfterFailure = false` — a
   missing row would have failed the test, not lowered the count.
+- **Take the test-count baseline from the latest main CI run, never from a commit
+  message or a PR body.** Those numbers go stale the moment anything merges. PR #127
+  predicted "2006 against a baseline of 2009" from #116's commit message, which two
+  merges (#119, #124) had already overtaken — the real baseline was 2032 and the real
+  result 2029. The delta was right and the absolutes were nonsense, which is the
+  dangerous shape: it looks like verification. Read `Executed N tests` out of the job
+  log of main's most recent CODE-carrying run (docs-only pushes skip CI, so "most
+  recent run" is not always the most recent commit). Main after #126+#127: **2029 unit
+  (1 skipped), 61 UI**.
+- **Two PRs branched from the same base can both be green and still merge into a red
+  main.** #126 and #127 both had base `1ea4fe8` and merged 52 seconds apart, so neither
+  one's CI ever saw the other's changes; the first run to test the combination was
+  main's own, after both were already in. It came out green — the file sets were
+  disjoint — but that was luck, not process. When two PRs are open at once: merge one,
+  wait for main to go green, then hit **Update branch** on the second before merging it,
+  which forces its CI to test the actual combination. Cheap, and it turns "probably
+  fine" into evidence.
 - **The build stamp lives in About, not on the capture screen** (#118 §7, merged in
   https://github.com/nicolovejoy/raconte/pull/126). Read it at sidebar → About → App →
   `Build`; it is a different fact from the `Version` row beside it, which is the same on

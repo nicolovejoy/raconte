@@ -2,65 +2,33 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-08-31 (cloud → laptop — PR #126 merged: #118 §7 corrections landed)
+## Session 2026-09-01 (laptop — build 13 on TestFlight, #125 merged, light resync)
 
-Cloud session (Linux container), continued onto the laptop at the end. **PR #126 merged**
-(`661e5a0`): build stamp moved to About, stale colorScheme premise corrected. **PR #127
-(#73/#74 dead code) also merged** (`fc3bc24`); the two merges share zero files and no
-symbols, verified, so order didn't matter — but neither PR's CI saw the other, so main's
-own runs were the first to test the combination. Both since confirmed green, read from the
-job logs: `661e5a0` success, and `fc3bc24` at **2029 unit (1 skipped, 0 failures) / 61 UI
-(0 failures)** — the combined tree is verified, not merely assumed.
+Short ops session. **TestFlight build 13 uploaded, both platforms**, from main at
+`cae172bd` (#132, the #125 current-week-times cloud PR, merged that afternoon). iOS
+upload succeeded 3:25 PM PT, macOS 3:28 PM PT; the whole two-leg run was ~6 minutes of wall
+clock, with **Xcode GUI not running** — the archive leg cloud-signs fine off the stored
+Xcode account. Build 13 carries #126 + #127 + #128 + #125. Main's CI on `cae172bd` went
+green after the upload: **2057 unit (1 skipped) / 62 UI** — that is the new baseline.
 
-**Build stamp now lives in About** — sidebar → About → App section → `Build` row
-(`about.buildStamp`), beside Version. Two facts, deliberately not consolidated: Version
-("1.0 (12)") is identical across every install of one submission; the stamp ("built Aug 30,
-9:24 AM PT") is what identifies the binary in hand. Both `CaptureView` copies deleted.
-Smoke passes read it in About from now on. Known wart: the row renders "Build / built …" —
-label echo, fix on request.
-
-**The stale premise had FOUR copies, not the three the design doc listed.**
-`JournalHeaderView`'s copy was hyphenated across a line break (`permanently-\n mounted`),
-so a phrase grep found three of four and missed `RecordControlsRow`. Lesson: when auditing
-prose in code, a phrase grep misses line-wrapped occurrences — search a distinctive single
-word (`permanently`), not the phrase. All four now corrected; the pins themselves untouched.
-The surviving justification: nothing presents `CaptureView` as a sheet/popover, so
-`.preferredColorScheme` would resolve to the whole window.
-
-**`AboutUITests` got the durable form of the scroll fix**: `revealRow()` — directional
-swipes repeated until the row enters the accessibility tree, never a fixed distance AND
-never a fixed count, so the next row added above the diagnostics doesn't break it again.
-
-**Three process facts worth keeping:**
-(1) **Cloud (web) containers are Linux with no Swift toolchain** — no xcodebuild, xcodegen,
-or swiftc. A raconte cloud task cannot build or test locally; CI is its only verification.
-Write cloud-task prompts accordingly. (2) The "executed test count must change" rule has an
-exception: adding an *assertion* to an existing test moves no count — verify via the
-assertion's failure mode instead (here: 0 failures across 61 with `continueAfterFailure =
-false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners spans
-29–42 min for the identical 61 tests — duration alone is not evidence of retries.
+**Light resync** (2026-09-01): #128 and #125 are shipped-but-open, awaiting the owner's
+device smoke; #130 confirmed real (`CaptureScreenModel.swift:635`, zero callers). No stale
+remote branches, no duplicates. Three local branches track gone remotes
+(`feat/bulk-select`, `feat/record-flow`, `feat/ux-entry-detail`) — `git branch -d` them.
 
 **Next steps:**
-1. **Bulk select (#128) is MERGED** — PR #129, merge commit `bc344853`, all five plan
-   tasks, CI green (unit 2029→2049, UI 61→62). Owner-smoke the select mode on device
-   when convenient; #128 can be closed after that smoke (check the issue's item list
-   first — repo rule).
-2. **#125 (current-week times) is UNBLOCKED and has a ready prompt** —
-   `docs/cloud-tasks/125-current-week-times.txt`, decisions pinned (calendar week in
-   America/Los_Angeles; no time on backdated rows). A cloud session may already have
-   been started on it gated on the #129 merge — check claude.ai/code before firing a
-   second; if one is waiting, tell it "#129 is merged, proceed". Opus is sufficient.
-3. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
+1. **Smoke build 13 on the phone from TestFlight**: bulk select (#128 — check the issue's
+   item list first, repo rule) and time-of-day on current-week rows (#125). Close both after.
+2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
    delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
    real speech (device, not simulator) to measure the provisional window.
-4. **TestFlight build 13**: run `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
-   Needs the Xcode GUI session awake. Now also carries #126/#127/#128.
-5. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
+3. **Bump `CFBundleVersion` 13 → 14 in project.yml** before the next upload; the script
+   skips an existing archive by build number, so a re-run at 13 would re-upload stale bits.
+4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
    Customer Support role → TestFlight Internal group.
-6. **Parked**: #122/#123; #130 (`selectedJournalCover`, the last of the capture-screen
-   cover cluster — check #118 wants no cover there first); #86 back-destination;
-   NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; month-formatter
-   cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
+5. **Parked**: #122/#123; #130 (check #118 wants no cover on capture first); #86
+   back-destination; NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt;
+   month-formatter cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
    recovery-banner smoke; Build-row label echo in About.
 
 ## What Raconte is

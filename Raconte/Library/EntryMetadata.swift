@@ -13,6 +13,19 @@ extension Calendar {
         calendar.timeZone = .current
         return calendar
     }
+
+    /// Gregorian, pinned to `America/Los_Angeles` — the owner's day, and the clock the
+    /// recording actually happened on (repo convention: UTC at rest, Pacific on display).
+    /// Used to decide which calendar week `capturedAt` falls in (#125). Deliberately NOT
+    /// `.current`'s time zone: the week a reading belongs to should not shift because the
+    /// owner opened the library from another time zone.
+    static var gregorianPacific: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        // A fixed IANA identifier that always resolves — same force-unwrap rationale as
+        // `BuildStamp`'s formatter.
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        return calendar
+    }
 }
 
 /// Precision a `PartialDate` was set at (M3 issue #14 part 1) — paper journals are often

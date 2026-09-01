@@ -320,4 +320,115 @@ final class EntryListItemTests: XCTestCase {
         let groups = EntryListItem.monthGroups(of: [backdated], calendar: utc)
         XCTAssertEqual(groups.map(\.month), ["March"])
     }
+
+    // MARK: formattedLibraryRowDate (#125: current-week rows carry the time of day)
+
+    /// The calendar every #125 assertion is made against — Gregorian, pinned to
+    /// `America/Los_Angeles`, exactly what `showsCaptureTime` defaults to. Passed
+    /// EXPLICITLY in every test below alongside an injected `now`, so no assertion
+    /// depends on when or where the suite runs.
+    private var pacific: Calendar { .gregorianPacific }
+
+    /// Wednesday 2026-08-26, 2:30 PM Pacific. Mid-week on purpose: the week it belongs to
+    /// has room on both sides, so "earlier this week" and "later this week" are both
+    /// expressible without leaving it.
+    private var wednesdayAfternoon: Date {
+        var comps = DateComponents()
+        comps.year = 2026; comps.month = 8; comps.day = 26
+        comps.hour = 14; comps.minute = 30
+        comps.timeZone = pacific.timeZone
+        return pacific.date(from: comps)!
+    }
+
+    /// The week interval `showsCaptureTime` itself computes for `wednesdayAfternoon` —
+    /// boundary cases are built from THIS, never by adding or subtracting a fixed number
+    /// of seconds from a hand-picked midnight (the repo's fake-inclusive-bound trap).
+    private var currentWeek: DateInterval {
+        pacific.dateInterval(of: .weekOfYear, for: wednesdayAfternoon)!
+    }
+
+    private func entry(capturedAt: Date, originalDate: PartialDate? = nil) -> EntryListItem {
+        EntryListItem(captureID: "A",
+                      capturedAt: capturedAt,
+                      durationSeconds: 1,
+                      metadata: EntryMetadata(originalDate: originalDate))
+    }
+
+    /// The owner's case: a reading from earlier the same day reads "Aug 26, 9:30 AM", not
+    /// a bare "Aug 26" indistinguishable from the other three readings that day.
+    func testCurrentWeekEntryShowsTheTimeOfDay() {
+        let morning = pacific.date(byAdding: .hour, value: -5, to: wednesdayAfternoon)!
+        let row = entry(capturedAt: morning)
+        XCTAssertTrue(row.showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+        XCTAssertEqual(row.formattedLibraryRowDate(now: wednesdayAfternoon, calendar: pacific),
+                       morning.formatted(date: .abbreviated, time: .shortened))
+    }
+
+    /// "Current week", not "today": Monday still carries a time on Wednesday.
+    func testEarlierInTheSameWeekStillShowsTheTime() {
+        let monday = pacific.date(byAdding: .day, value: -2, to: wednesdayAfternoon)!
+        XCTAssertTrue(entry(capturedAt: monday).showsCaptureTime(now: wednesdayAfternoon,
+                                                                calendar: pacific))
+    }
+
+    /// Eight days back is a different week — the row falls back to the bare date, byte for
+    /// byte what `formattedEffectiveDate()` renders.
+    func testEntryOlderThanThisWeekShowsDateOnly() {
+        let lastWeek = pacific.date(byAdding: .day, value: -8, to: wednesdayAfternoon)!
+        let row = entry(capturedAt: lastWeek)
+        XCTAssertFalse(row.showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+        XCTAssertEqual(row.formattedLibraryRowDate(now: wednesdayAfternoon, calendar: pacific),
+                       row.formattedEffectiveDate())
+    }
+
+    /// Decision 1, the one that keeps the row honest: a backdated entry read aloud TODAY
+    /// shows its user-authored date and no time. `capturedAt` is inside the week and the
+    /// unbackdated twin proves it — the backdate alone suppresses the time.
+    func testBackdatedEntryCapturedThisWeekShowsNoTime() {
+        let backdated = entry(capturedAt: wednesdayAfternoon,
+                              originalDate: PartialDate(year: 1998, month: 3, day: 4))
+        XCTAssertFalse(backdated.showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+        XCTAssertEqual(backdated.formattedLibraryRowDate(now: wednesdayAfternoon, calendar: pacific),
+                       backdated.formattedEffectiveDate())
+        XCTAssertTrue(entry(capturedAt: wednesdayAfternoon)
+            .showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+    }
+
+    /// The week's first instant is IN the week (`>= start`).
+    func testWeekStartInstantIsInsideTheWeek() {
+        XCTAssertTrue(entry(capturedAt: currentWeek.start)
+            .showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+    }
+
+    /// `dateInterval(of:for:).end` is the first instant of the NEXT week, so it is OUT
+    /// (`< end`) — the half-open bound `JournalSpan.contains` uses. One second before it
+    /// is still in, which is what proves the boundary lands in the right place rather
+    /// than the whole comparison being false.
+    func testWeekEndInstantIsTheNextWeekAndIsExcluded() {
+        XCTAssertFalse(entry(capturedAt: currentWeek.end)
+            .showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+        XCTAssertTrue(entry(capturedAt: currentWeek.end.addingTimeInterval(-1))
+            .showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+    }
+
+    /// The instant right before the week begins belongs to last week.
+    func testInstantBeforeWeekStartIsExcluded() {
+        XCTAssertFalse(entry(capturedAt: currentWeek.start.addingTimeInterval(-1))
+            .showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+    }
+
+    /// The zone is pinned, not inherited: a `capturedAt` that is Sunday in UTC but still
+    /// Saturday evening in Pacific is bucketed by the Pacific day, so it stays in the week
+    /// Pacific says it is in. This is the "never bucket by UTC" rule with teeth — under a
+    /// UTC calendar this same instant lands in the following week.
+    func testWeekBoundaryIsComputedInPacificNotUTC() {
+        // Six hours before the Pacific week rolls over: still Pacific-evening on the
+        // week's last day, but already past midnight UTC (PDT is UTC-7), so UTC has
+        // moved on to the next week. Derived from the interval rather than a named
+        // weekday, so it holds whichever day the locale starts its week on.
+        let lastEveningOfPacificWeek = currentWeek.end.addingTimeInterval(-6 * 3_600)
+        let row = entry(capturedAt: lastEveningOfPacificWeek)
+        XCTAssertTrue(row.showsCaptureTime(now: wednesdayAfternoon, calendar: pacific))
+        XCTAssertFalse(row.showsCaptureTime(now: wednesdayAfternoon, calendar: utc))
+    }
 }

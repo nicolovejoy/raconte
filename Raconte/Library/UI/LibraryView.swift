@@ -719,7 +719,10 @@ struct LibraryEntryRow: View {
         }
     }
 
-    private var dateText: String { item.formattedEffectiveDate() }
+    /// #125: an entry recorded this week also shows the time to the minute, so several
+    /// readings in one day are told apart at a glance. Backdated rows are unaffected —
+    /// see `EntryListItem.showsCaptureTime(now:calendar:)` for both rules.
+    private var dateText: String { item.formattedLibraryRowDate(now: Date()) }
     private var recordedDateText: String { item.capturedAt.formatted(date: .abbreviated, time: .shortened) }
     private var durationText: String { CaptureCoordinator.formatDuration(item.durationSeconds) }
 }

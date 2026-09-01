@@ -209,6 +209,46 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
 
     var isBackdated: Bool { originalDate != nil }
 
+    /// This entry's row should carry the time of day as well as the date (#125): several
+    /// readings in one day are otherwise indistinguishable in the list.
+    ///
+    /// Two conditions, both necessary:
+    ///
+    /// - **Not backdated.** A backdated row shows a *user-authored* date, and a
+    ///   `PartialDate` has no time of day. Taking one from `capturedAt` would attach the
+    ///   moment of the reading to the date of the thing being read — a lie about which
+    ///   the row is claiming to date. Backdated rows are unchanged even inside the week.
+    /// - **`capturedAt` falls in the calendar week containing `now`**, in
+    ///   `America/Los_Angeles` (`Calendar.gregorianPacific`), never UTC — bucketing
+    ///   UTC-stamped instants by a UTC day rolls the owner's week over at 5pm Pacific.
+    ///
+    /// The membership test is half-open (`>= start`, `< end`) against the week's own
+    /// interval, matching `JournalSpan.contains`: `dateInterval(of:for:).end` is already
+    /// the first instant of the NEXT week, so `<` covers every instant of this one
+    /// (including its final sub-second) without a synthetic "last instant".
+    func showsCaptureTime(now: Date, calendar: Calendar = .gregorianPacific) -> Bool {
+        guard !isBackdated else { return false }
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return false }
+        return capturedAt >= week.start && capturedAt < week.end
+    }
+
+    /// The library row's date line (#125). Identical to `formattedEffectiveDate()`
+    /// everywhere except a non-backdated entry captured in the current week, which also
+    /// gets the time to the minute — "Aug 31, 9:41 PM", the same date+time pair the
+    /// backdated marker's accessibility label already uses.
+    ///
+    /// A sibling of `formattedEffectiveDate()` rather than a parameter on it: the other
+    /// three callers (`CaptureReceipt`, `EntryInfoSheet`, `EntryDetailView`) render the
+    /// bare date and are out of scope for #125.
+    func formattedLibraryRowDate(now: Date,
+                                 calendar: Calendar = .gregorianPacific,
+                                 dayStyle: Date.FormatStyle.DateStyle = .abbreviated) -> String {
+        guard showsCaptureTime(now: now, calendar: calendar) else {
+            return formattedEffectiveDate(dayStyle: dayStyle)
+        }
+        return capturedAt.formatted(date: dayStyle, time: .shortened)
+    }
+
     /// The weekday for this entry's backdate — `nil` unless `originalDate` is set AND
     /// at `.day` precision (issue #48). A capture-date-only entry has no user-authored
     /// day to name a weekday for, so it is `nil` here regardless of `capturedAt`'s own

@@ -1,0 +1,65 @@
+Implement issue #125 in nicolovejoy/raconte: library entry rows in the current
+week show the time of day, not just the date.
+
+Owner's words (smoke, 2026-08-30): "add time to the minute for entries in the
+current week I think. that's helpful." The problem: an entry recorded today and
+one from three days ago both read as a bare date, and several readings in one
+day — the common case — are indistinguishable.
+
+PRECONDITION — check before writing anything:
+
+PR #129 (bulk select, feat/bulk-select) must be MERGED into main, because its
+Task 3 rewrote the same LibraryView row area this task touches. Verify with
+`gh pr view 129 --json state`. If it is not merged, STOP and report — do not
+branch, do not build against pre-#129 main.
+
+THE CODE, so you start in the right place:
+
+- The row's date string is `EntryListItem.formattedEffectiveDate()`
+  (Raconte/Library/EntryListItem.swift:205): if `originalDate` (a backdate,
+  type PartialDate) is set it formats THAT; otherwise `capturedAt`, day only.
+- That function is SHARED by four surfaces: the library row (LibraryView
+  `dateText`), CaptureReceipt, EntryInfoSheet, EntryDetailView. #125 is scoped
+  to the LIBRARY ROW ONLY — do not change what the other three render. Add a
+  parameter or a sibling accessor; do not fork the logic into the view.
+
+DECISIONS, pinned:
+
+1. Time appears ONLY on the `capturedAt` branch. A backdated entry shows a
+   user-authored date; a PartialDate has no time and inventing one from
+   `capturedAt` would lie about the reading it claims to date. Backdated rows
+   are unchanged even inside the current week.
+2. "Current week" = the calendar week containing now IN America/Los_Angeles
+   (repo rule: UTC at rest, Pacific on display; never bucket by UTC). Build it
+   with a Calendar whose timeZone is America/Los_Angeles and
+   `dateInterval(of: .weekOfYear, for: now)`; membership is
+   `interval.contains(capturedAt)`. Do not hand-roll day arithmetic.
+3. Format: keep the existing date, append the time — e.g. "Aug 31, 9:41 PM"
+   via `time: .shortened` (LibraryView:512 already uses exactly this pair for
+   `recordedDateText`; match it). State the final format in the PR body for
+   owner smoke.
+4. Out of scope: #83 confirmation behavior, the parked month-formatter cache,
+   any change to month/year grouping, and the detail/info/receipt surfaces.
+
+TESTS:
+
+- Unit-test the week logic with an INJECTED now and an injected or pinned
+  calendar/timezone — never Date() inside the assertion path. Cover: capturedAt
+  earlier today (time shown), capturedAt 8+ days ago (no time), a backdated
+  entry whose capturedAt is today (NO time — decision 1), and a boundary case
+  built from the week interval's own start/end, not from subtracting seconds
+  (repo trap: fake inclusive bounds under-cover).
+- If the pure logic lands in a new file, remember project.yml sources by
+  directory — CI's own `xcodegen generate` picks it up; never commit
+  *.xcodeproj.
+
+YOUR ENVIRONMENT (cloud): Linux, no Swift toolchain — no xcodebuild, xcodegen,
+or swiftc. Do not claim compilation you cannot run. CI is the verification:
+push early, read the Actions runs. Read the executed-test baselines off main's
+LATEST green run (they moved when #129 merged — do not hardcode 2032/61) and
+show before → after in the PR body. Local proxies that do work: brace/paren
+balance, grep, `git merge-tree` against main.
+
+END STATE: an OPEN PR against main, --body-file body, CI green on its head,
+body says "Refs #125" (no close verb) and states the chosen format and the
+backdate exclusion. Do NOT merge — merges are the owner's.

@@ -39,15 +39,18 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
 29–42 min for the identical 61 tests — duration alone is not evidence of retries.
 
 **Next steps:**
-1. **Bulk select (#128) is FIRED** — a cloud session (Fable) was started 2026-08-31 from
-   `docs/cloud-tasks/128-bulk-select.txt` against the five-task plan. It ends at an OPEN
-   PR; do not start a second agent on it. Review and merge its PR when it lands. #125
-   (current-week times) deliberately NOT fired alongside — same library files.
+1. **Bulk select (#128): review and merge PR #129** — the cloud agent (Fable) pushed all
+   five plan tasks, one commit each, to `feat/bulk-select`; CI was running on the tip
+   (`619df14`) at handoff, agent still alive and watching it. It stalled once mid-Task-3
+   and was resumed with verified state (Tasks 1-2 were already green); a second stall
+   means hand the remainder to a fresh agent, don't resume again. Do NOT start another
+   agent on #128. #125 (current-week times) deliberately not fired alongside — same
+   library files; fire it after #129 merges.
 2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
    delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
    real speech (device, not simulator) to measure the provisional window.
-3. **TestFlight build 13**: wait for CI green on `fc3bc24` (both main runs were in flight
-   at handoff), then `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
+3. **TestFlight build 13 is UNBLOCKED**: main CI went green on both merge commits
+   (`661e5a0`, `fc3bc24`). Run `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
    Needs the Xcode GUI session awake. Now also carries #126/#127.
 4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
    Customer Support role → TestFlight Internal group.

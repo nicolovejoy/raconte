@@ -17,8 +17,7 @@ remote branches, no duplicates. Three local branches track gone remotes
 (`feat/bulk-select`, `feat/record-flow`, `feat/ux-entry-detail`) — `git branch -d` them.
 
 **Next steps:**
-1. **Smoke build 13 on the phone from TestFlight**: bulk select (#128 — check the issue's
-   item list first, repo rule) and time-of-day on current-week rows (#125). Close both after.
+1. **Build 13 smoked and #128/#125 CLOSED** (2026-09-02, iPhone, TestFlight). Nothing pending on build 13.
 2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
    delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
    real speech (device, not simulator) to measure the provisional window.

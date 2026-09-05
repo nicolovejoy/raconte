@@ -454,7 +454,8 @@ final class NavigationUITests: XCTestCase {
         waitUntil(15, "discard did not return the capture screen to idle") {
             primary.label == "Record"
         }
-        XCTAssertFalse(app.buttons["capture.receipt.open"].exists,
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
+                        .firstMatch.exists,
                        "a discarded capture must not leave a receipt")
     }
 

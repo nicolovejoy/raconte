@@ -145,6 +145,22 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
+    /// #118 §8's regression pin: the colour literals `InkTone` absorbed out of `CaptureView`
+    /// must not creep back in. Comment-stripped (via the shared `strippingComments` helper,
+    /// same as `captureUISources()` above) so a literal merely *named* in a doc comment
+    /// explaining this test cannot satisfy the check — a raw-source scan would be.
+    func testCaptureViewDoesNotReintroduceTheColourLiteralsInkToneReplaced() throws {
+        let source = strippingComments(try captureViewSource())
+        for literal in [".foregroundStyle(.white)", "Color.white.opacity(", "Color.green",
+                        ".tint(.white)", ".tint(.red)"] {
+            XCTAssertFalse(
+                source.contains(literal),
+                "CaptureView still hardcodes \(literal) — capture-screen colour must route "
+                + "through InkTone (#118 §8) so it stays pinned to the near-black studio "
+                + "surface regardless of system appearance")
+        }
+    }
+
     /// The adversary the floor tests were missing.
     ///
     /// Every assertion above quantifies over `CaptureLabel.allCases` — so a case that no

@@ -1202,15 +1202,15 @@ Write the PR body to a file and open it with `gh pr create --body-file` (heredoc
 - Produces:
 
 ```swift
-struct TranscriptRun: Equatable, Sendable {
+struct ConsolidatedTranscriptRun: Equatable, Sendable {
     var text: String
     var range: FrameRange
     var isProvisional: Bool
 }
-extension TranscriptConsolidator { var runs: [TranscriptRun] { get } }   // frame-ordered
-// TranscriptionSession: var runs: [TranscriptRun]
-// LiveTranscriptionRun:  private(set) var runs: [TranscriptRun]
-// LiveTranscriptionCoordinator: var runs: [TranscriptRun]
+extension TranscriptConsolidator { var runs: [ConsolidatedTranscriptRun] { get } }   // frame-ordered
+// TranscriptionSession: var runs: [ConsolidatedTranscriptRun]
+// LiveTranscriptionRun:  private(set) var runs: [ConsolidatedTranscriptRun]
+// LiveTranscriptionCoordinator: var runs: [ConsolidatedTranscriptRun]
 ```
 
   `displayText` everywhere becomes `TranscriptText.join(runs.map(\.text))` so the two cannot drift.
@@ -1289,7 +1289,7 @@ Append to `RaconteTests/TranscriptConsolidatorTests.swift`:
 
 - [ ] **Step 2: Run to see them fail**
 
-Expected: compile error — `runs` and `TranscriptRun` do not exist.
+Expected: compile error — `runs` and `ConsolidatedTranscriptRun` do not exist.
 
 - [ ] **Step 3: Implement `runs`**
 
@@ -1301,7 +1301,7 @@ In `Raconte/Transcription/TranscriptConsolidator.swift`, before `struct Transcri
 /// provisional is the hypothesis it may still revise. Sentence boundaries are not tracked
 /// anywhere in the pipeline, so "current sentence vs earlier" is unbuildable — this is
 /// the real seam.
-struct TranscriptRun: Equatable, Sendable {
+struct ConsolidatedTranscriptRun: Equatable, Sendable {
     var text: String
     var range: FrameRange
     var isProvisional: Bool
@@ -1316,9 +1316,9 @@ Replace `displayText` (lines ~115-124) with:
     /// hypothesis can precede committed text; appending it after would render it in the
     /// wrong place — visibly, the moment it happens. The screen dims on `isProvisional`,
     /// never on position, for the same reason.
-    var runs: [TranscriptRun] {
-        let all = committed.map { TranscriptRun(text: $0.text, range: $0.range, isProvisional: false) }
-                + provisional.map { TranscriptRun(text: $0.text, range: $0.range, isProvisional: true) }
+    var runs: [ConsolidatedTranscriptRun] {
+        let all = committed.map { ConsolidatedTranscriptRun(text: $0.text, range: $0.range, isProvisional: false) }
+                + provisional.map { ConsolidatedTranscriptRun(text: $0.text, range: $0.range, isProvisional: true) }
         return all.sorted { $0.range.start < $1.range.start }
     }
 
@@ -1334,12 +1334,12 @@ Run the unit target: the four new tests pass, the thirteen old ones still pass.
 `Raconte/Transcription/TranscriptionSession.swift` line ~153, add beside `displayText`:
 
 ```swift
-    var runs: [TranscriptRun] { consolidator.runs }
+    var runs: [ConsolidatedTranscriptRun] { consolidator.runs }
 ```
 
 `Raconte/Transcription/LiveTranscription.swift`:
 
-- `LiveTranscriptionRun`: add `private(set) var runs: [TranscriptRun] = []` beside `displayText`. In the ticker (lines ~90-96):
+- `LiveTranscriptionRun`: add `private(set) var runs: [ConsolidatedTranscriptRun] = []` beside `displayText`. In the ticker (lines ~90-96):
 
 ```swift
                 while !Task.isCancelled {
@@ -1352,16 +1352,16 @@ Run the unit target: the four new tests pass, the thirteen old ones still pass.
                 }
 ```
 
-  After `consume` returns (lines ~98-104): set `self?.runs = final.isEmpty ? [] : [TranscriptRun(text: final, range: FrameRange(start: 0, end: 0), isProvisional: false)]` beside `displayText = final`.
+  After `consume` returns (lines ~98-104): set `self?.runs = final.isEmpty ? [] : [ConsolidatedTranscriptRun(text: final, range: FrameRange(start: 0, end: 0), isProvisional: false)]` beside `displayText = final`.
 - `LiveTranscriptionCoordinator`: add beside `displayText`:
 
 ```swift
     /// The active run's runs; outside a capture, the last completed text as one
     /// committed run (the receipt covers this on the ordinary path — see `displayText`).
-    var runs: [TranscriptRun] {
+    var runs: [ConsolidatedTranscriptRun] {
         if let id = activeCaptureID, let run = runs[id] { return run.runs }
         return lastCompletedText.isEmpty
-            ? [] : [TranscriptRun(text: lastCompletedText, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+            ? [] : [ConsolidatedTranscriptRun(text: lastCompletedText, range: FrameRange(start: 0, end: 0), isProvisional: false)]
     }
 ```
 
@@ -1435,8 +1435,8 @@ building it as written.
 - Create: `RaconteTests/LiveTranscriptTextTests.swift`
 
 **Interfaces:**
-- Consumes: `LiveTranscriptionCoordinator.runs: [TranscriptRun]`; `InkTone.studioInk`, `InkTone.studioInkDim` (PR A Task 4).
-- Produces: `LiveTranscriptText.attributed(_ runs: [TranscriptRun], ink: Color, dim: Color) -> AttributedString` (pure, tested) and a `LiveTranscriptText` view.
+- Consumes: `LiveTranscriptionCoordinator.runs: [ConsolidatedTranscriptRun]`; `InkTone.studioInk`, `InkTone.studioInkDim` (PR A Task 4).
+- Produces: `LiveTranscriptText.attributed(_ runs: [ConsolidatedTranscriptRun], ink: Color, dim: Color) -> AttributedString` (pure, tested) and a `LiveTranscriptText` view.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1450,8 +1450,8 @@ import SwiftUI
 /// #118 §5. The live transcript dims the HYPOTHESIS, wherever it sits — never "the tail".
 final class LiveTranscriptTextTests: XCTestCase {
 
-    private func run(_ text: String, _ start: Int64, provisional: Bool) -> TranscriptRun {
-        TranscriptRun(text: text, range: FrameRange(start: start, end: start + 100), isProvisional: provisional)
+    private func run(_ text: String, _ start: Int64, provisional: Bool) -> ConsolidatedTranscriptRun {
+        ConsolidatedTranscriptRun(text: text, range: FrameRange(start: start, end: start + 100), isProvisional: provisional)
     }
 
     private func colours(_ s: AttributedString) -> [(String, Color?)] {
@@ -1514,7 +1514,7 @@ import SwiftUI
 /// Serif, matching the receipt: the same words in the same face from the moment they
 /// appear. `CaptureProse.font` is shared with `receiptProse` for that reason.
 struct LiveTranscriptText: View {
-    let runs: [TranscriptRun]
+    let runs: [ConsolidatedTranscriptRun]
 
     var body: some View {
         Text(Self.attributed(runs, ink: InkTone.studioInk.color, dim: InkTone.studioInkDim.color))
@@ -1524,7 +1524,7 @@ struct LiveTranscriptText: View {
 
     /// Pure, so the dim-in-the-middle rule is testable without a renderer. Runs are joined
     /// with single spaces; the separator takes the colour of the run before it.
-    static func attributed(_ runs: [TranscriptRun], ink: Color, dim: Color) -> AttributedString {
+    static func attributed(_ runs: [ConsolidatedTranscriptRun], ink: Color, dim: Color) -> AttributedString {
         var out = AttributedString()
         for run in runs where !run.text.isEmpty {
             var piece = AttributedString(run.text)

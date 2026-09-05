@@ -1265,16 +1265,23 @@ Append to `RaconteTests/TranscriptConsolidatorTests.swift`:
         XCTAssertEqual(c.runs.map(\.isProvisional), [true, false])
     }
 
-    /// Promotion flips the flag without moving the run.
+    /// Promotion flips the flag without moving the run — and leaves a still-provisional
+    /// run sitting BETWEEN two committed ones.
+    ///
+    /// The marker rides on a final result over a far range, not a zero-length one at a
+    /// boundary: `FrameRange.supersededBy` treats a zero-length range at a neighbour's
+    /// endpoint as contained, so a `[200,200)` final would evict `second` instead of
+    /// leaving it provisional.
     func testPromotionFlipsTheFlagInPlace() {
         var c = TranscriptConsolidator()
         c.apply(result("first", 0, 100, volatile: true))
         c.apply(result("second", 100, 200, volatile: true))
-        var marker = result("", 200, 200)          // a zero-length final carrying the marker
-        marker.finalizedThroughFrame = 100
-        c.apply(marker)
-        XCTAssertEqual(c.runs.map(\.text), ["first", "second"])
-        XCTAssertEqual(c.runs.map(\.isProvisional), [false, true])
+        var third = result("third", 300, 400)
+        third.finalizedThroughFrame = 100
+        c.apply(third)
+        XCTAssertEqual(c.runs.map(\.text), ["first", "second", "third"])
+        XCTAssertEqual(c.runs.map(\.isProvisional), [false, true, false],
+                       "first was promoted, second is still a hypothesis, third arrived final")
     }
 ```
 

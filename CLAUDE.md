@@ -2,33 +2,51 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-01 (laptop — build 13 on TestFlight, #125 merged, light resync)
+## Session 2026-09-04/05 (laptop — #118 planned and PR A shipped via SDD; PR B gated on a Mac measurement)
 
-Short ops session. **TestFlight build 13 uploaded, both platforms**, from main at
-`cae172bd` (#132, the #125 current-week-times cloud PR, merged that afternoon). iOS
-upload succeeded 3:25 PM PT, macOS 3:28 PM PT; the whole two-leg run was ~6 minutes of wall
-clock, with **Xcode GUI not running** — the archive leg cloud-signs fine off the stored
-Xcode account. Build 13 carries #126 + #127 + #128 + #125. Main's CI on `cae172bd` went
-green after the upload: **2057 unit (1 skipped) / 62 UI** — that is the new baseline.
+Wrote `docs/plans/2026-09-04-118-capture-screen-plan.md` (two PRs; §7 already shipped in
+#126) and executed it with subagent-driven development. **PR #135 merged** (`fad8f97f`):
+voice switch in every recording with no Two-voices toggle (§4, `CaptureScreenModel.markVoice`
+writes opener → mark → `multiVoice: true` once per capture), Ready = journal + compact
+backdate + bar with FOUR dead layout flags deleted (§3/§6 — `usesCompactBackdateField` went
+too, disclosed), receipt entry is a tappable card and "Record another" is gone (§3), colour
+literals → five `InkTone` studio tones (§8), UI tests migrated (shared `openReceiptEntry`/
+`finishReceipt`). Final review also removed dead `LibraryScreenModel.recent`. Unit 2049 /
+UI 62 on the PR; **main CI on `fad8f97f` was still in progress at handoff — read its count
+before quoting a baseline.** Design doc corrected: Home does NOT render the last entry.
 
-**Light resync** (2026-09-01): #128 and #125 are shipped-but-open, awaiting the owner's
-device smoke; #130 confirmed real (`CaptureScreenModel.swift:635`, zero callers). No stale
-remote branches, no duplicates. Three local branches track gone remotes
-(`feat/bulk-select`, `feat/record-flow`, `feat/ux-entry-detail`) — `git branch -d` them.
+**PR B** (`feat/118-live-transcript`, worktree `.claude/worktrees/118-live`, rebased onto
+main, head `e3a831ee`): `TranscriptConsolidator.runs` → `[ConsolidatedTranscriptRun]` with
+`isProvisional`, plumbed to `LiveTranscriptionCoordinator.runs`; `displayText` derived from
+it; a `transcript-timing` notice-level log (`provisionalMs=`) at `TranscriptionSession.apply`.
+Task 7 (the dimmed-hypothesis view) is GATED on the owner reading that log — the design's
+"check first" rule. The SDD ledger lives at
+`.superpowers/sdd/2026-09-04-118-capture-screen-plan/progress.md` (git-ignored; keep until
+Task 7 lands). Issues filed: #133 merge/split, #134 repeated photo capture, #136 live
+paragraph break, #137 Mac editing mode.
+
+**Measurement attempt failed for a reason worth knowing:** the owner's build ran on `main`
+because `git checkout feat/118-live-transcript` refuses when the branch is checked out in a
+worktree, and the chained command carried on. The instrumented app is already built at
+`/tmp/raconte-118b/Build/Products/Debug/Raconte.app` (dylib UUID `F5ACE8ED…`, verified to
+contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build does not).
 
 **Next steps:**
-1. **Build 13 smoked and #128/#125 CLOSED** (2026-09-02, iPhone, TestFlight). Nothing pending on build 13.
-2. **Write the #118 implementation plan** from the committed design, then SDD it. NOT
-   delegated. Before building §5, instrument `TranscriptConsolidator` with a minute of
-   real speech (device, not simulator) to measure the provisional window.
-3. **Bump `CFBundleVersion` 13 → 14 in project.yml** before the next upload; the script
-   skips an existing archive by build number, so a re-run at 13 would re-upload stale bits.
-4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
-   Customer Support role → TestFlight Internal group.
-5. **Parked**: #122/#123; #130 (check #118 wants no cover on capture first); #86
-   back-destination; NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt;
-   month-formatter cache; "Add Cover" pill routes to editor; sync hardening #91/#85; dark
-   recovery-banner smoke; Build-row label echo in About.
+1. **Measure the provisional window (owner, Mac, ~5 min).** Quit every running Raconte
+   (there were two), `open /tmp/raconte-118b/Build/Products/Debug/Raconte.app`, record one
+   minute of natural speech, stop, then
+   `/usr/bin/log show --last 10m --predicate 'subsystem == "org.pianohouseproject.raconte" AND category == "transcript-timing"' --style compact`.
+   Median and max of `provisionalMs` decide Task 7: under ~1500 ms the dimming design
+   changes first; over ~3 s build it as planned. Also click the receipt card once on the Mac.
+2. **Task 7 → PR B** ("Closes #118"): brief at the ledger's `task-7-brief.md` (already
+   renamed to `ConsolidatedTranscriptRun`). Then delete the SDD workspace and the worktree.
+3. **Device smoke of #135 on the iPhone** (next TestFlight; bump `CFBundleVersion` 13 → 14
+   first): record → BN flips to LN → stop → card, no "Record another" → tap card → back to
+   Capture via sidebar → must be Ready, NOT the receipt (the card's dismiss is the same
+   gesture #62 saw fail on device; "Record another" was the gesture-independent exit).
+4. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; `MarkerControlsModel`'s
+   two now-constant show flags; `transcriptFillsAvailableHeight` ≡ `showsLiveTranscript`;
+   sync hardening #91/#85.
 
 ## What Raconte is
 
@@ -167,6 +185,18 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
   repeat to a bound, since swipes past the end of a list are no-ops. Call such helpers in
   top-to-bottom document order — the scroll only goes down, so a row checked after a lower
   one may already have left the tree off the top.
+- **A straggler grep scoped to the target you changed misses the rest of the repo.** #118's
+  Task 5 grepped `RaconteUITests` for deleted identifiers and found zero; `Place.swift`,
+  `LibraryView.swift` and `HomeView.swift` still named them in comments, and one comment
+  cited a test the same PR deleted. Grep `Raconte RaconteTests RaconteUITests` — all three —
+  for every deleted symbol, identifier and test name, and drive present-tense hits to zero.
+- **`git checkout <branch>` fails when that branch is checked out in a worktree, and a
+  chained `&&` command carries on with whatever was already checked out.** The owner's
+  measurement build silently ran on `main`. Build from the worktree directory instead, or
+  verify the built dylib carries a string only the branch has (`strings … | grep`).
+- **`Logger(...).info` lines are not persisted to disk by default** — `log show` returns
+  nothing even with `--info` once the process has moved on. Use `.notice` for anything the
+  owner will read back after the fact.
 - **A phrase grep misses prose that wrapped across a line.** #118 §7 listed three stale
   doc comments; there were FOUR. `JournalHeaderView`'s copy read `permanently-\n  mounted`,
   so every grep for the phrase found three and silently missed `RecordControlsRow`. When

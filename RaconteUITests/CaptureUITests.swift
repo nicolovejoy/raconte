@@ -94,11 +94,23 @@ final class CaptureUITests: XCTestCase {
         // `durationSeconds(in:)` used against a Recent row's label.
         let row = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the finished entry never appeared in the library")
-        guard let range = row.label.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) else {
+        // Take the LAST m:ss-shaped match, not the first: since #125, a current-week
+        // row's date renders with a time-of-day ("Sep 4, 2026 at 8:28 PM"), and the date
+        // Text lays out before the duration Text — so the merged label reads "...8:28
+        // PM, 0:03, Journal". The first match would be the wall clock, not the duration.
+        // `String.range(of:options:)` does NOT support `[.regularExpression,
+        // .backwards]` together — verified empirically (a standalone script and this
+        // test both showed it silently returns the FIRST match regardless of
+        // `.backwards`) — so the last match is found via `NSRegularExpression` directly.
+        let nsLabel = row.label as NSString
+        let regex = try! NSRegularExpression(pattern: #"\d{1,2}:\d{2}"#)
+        let matches = regex.matches(in: row.label, range: NSRange(location: 0, length: nsLabel.length))
+        guard let lastMatch = matches.last else {
             XCTFail("the finished entry shows no duration: \(row.label)")
             return
         }
-        XCTAssertNotNil(Self.seconds(String(row.label[range])), "duration is not m:ss: \(row.label)")
+        let matchedDuration = nsLabel.substring(with: lastMatch.range)
+        XCTAssertNotNil(Self.seconds(matchedDuration), "duration is not m:ss: \(row.label)")
     }
 
     // MARK: doc tests 6/30 (flow) — kill mid-recording → relaunch recovers

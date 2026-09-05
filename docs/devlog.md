@@ -33,12 +33,13 @@ worktree, and the chained command carried on. The instrumented app is already bu
 contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build does not).
 
 **Next steps:**
-1. **Measure the provisional window (owner, Mac, ~5 min).** Quit every running Raconte
-   (there were two), `open /tmp/raconte-118b/Build/Products/Debug/Raconte.app`, record one
-   minute of natural speech, stop, then
-   `/usr/bin/log show --last 10m --predicate 'subsystem == "org.pianohouseproject.raconte" AND category == "transcript-timing"' --style compact`.
-   Median and max of `provisionalMs` decide Task 7: under ~1500 ms the dimming design
-   changes first; over ~3 s build it as planned. Also click the receipt card once on the Mac.
+1. **Provisional window MEASURED (2026-09-05 08:04, Mac, two recordings, 19 settled runs):**
+   bimodal — 8 runs settle in 7–83 ms (finalized within the same result burst; never
+   renders as dim at the 250 ms ticker), 10 runs sit 3.2–3.95 s (the analyzer's ~3.85 s
+   finalization cadence), one 700 ms, one 7.7 s. Median 3166 ms, max 7735 ms. **Gate
+   passes: over the ~3 s line, so Task 7 builds as designed** — a run dims for ~4 s then
+   brightens once, a step every few seconds, not flicker. Receipt-card click on the Mac
+   still unconfirmed by the owner.
 2. **Task 7 → PR B** ("Closes #118"): brief at the ledger's `task-7-brief.md` (already
    renamed to `ConsolidatedTranscriptRun`). Then delete the SDD workspace and the worktree.
 3. **Device smoke of #135 on the iPhone** (next TestFlight; bump `CFBundleVersion` 13 → 14

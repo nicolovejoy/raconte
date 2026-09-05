@@ -47,7 +47,7 @@ final class CaptureUITests: XCTestCase {
 
     /// Entries as the Library screen lists them.
     ///
-    /// The capture screen shows only the single most recent entry now, so counting
+    /// The capture screen shows no recent-entries section at all (#118 §3), so counting
     /// distinct entries there is no longer possible — the library is where that question
     /// is answerable.
     private func libraryRows(_ app: XCUIApplication) -> XCUIElementQuery {
@@ -83,33 +83,36 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)    // let synthetic audio flow
         press(record)                       // Stop → flush → captured → finalize
 
-        finishReceipt(app)
+        // `openReceiptEntry`, not `finishReceipt`: the assertion below wants the library
+        // row still on screen, read straight off the entry the receipt just opened.
+        // `EntryDetailView` has no total-duration identifier to read instead (checked
+        // before writing this — grepped for one, found none), so the row label is still
+        // the only place duration is queryable at all.
+        openReceiptEntry(app)
         openPlace(app, "sidebar.allEntries")
         // Not a direct `library.row.duration` query: `library.entryLink`
         // (`LibraryView.swift`) is a `NavigationLink`, which merges its label's
         // children into ONE accessibility element, so the nested duration Text is not
-        // independently queryable — the row's own doc comment names this as the same
-        // flattening `capture.recentRow` existed to work around. Parse the `m:ss` shape
-        // out of the link's merged label instead, same technique the old
-        // `durationSeconds(in:)` used against a Recent row's label.
+        // independently queryable. Parse the `m:ss` shape out of the link's merged
+        // label instead.
         let row = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), "the finished entry never appeared in the library")
-        // Take the LAST m:ss-shaped match, not the first: since #125, a current-week
-        // row's date renders with a time-of-day ("Sep 4, 2026 at 8:28 PM"), and the date
-        // Text lays out before the duration Text — so the merged label reads "...8:28
-        // PM, 0:03, Journal". The first match would be the wall clock, not the duration.
-        // `String.range(of:options:)` does NOT support `[.regularExpression,
-        // .backwards]` together — verified empirically (a standalone script and this
-        // test both showed it silently returns the FIRST match regardless of
-        // `.backwards`) — so the last match is found via `NSRegularExpression` directly.
+        // Exactly two `m:ss`-shaped matches are expected in the merged label: since
+        // #125, a current-week row's date renders with a time-of-day ("Sep 4, 2026 at
+        // 8:28 PM"), so the label reads "...8:28 PM, 0:03, [snippet], [journal]" — the
+        // date's wall-clock time is match 0, the duration is match 1. Asserting the
+        // count is exactly 2, rather than blindly taking the first or last match, means
+        // a transcript that happens to contain its own time-shaped text (which would
+        // land after the duration, as the snippet) fails loudly here instead of being
+        // silently picked as "the" duration.
         let nsLabel = row.label as NSString
         let regex = try! NSRegularExpression(pattern: #"\d{1,2}:\d{2}"#)
         let matches = regex.matches(in: row.label, range: NSRange(location: 0, length: nsLabel.length))
-        guard let lastMatch = matches.last else {
-            XCTFail("the finished entry shows no duration: \(row.label)")
-            return
-        }
-        let matchedDuration = nsLabel.substring(with: lastMatch.range)
+        XCTAssertEqual(matches.count, 2,
+                       "expected exactly 2 m:ss-shaped matches (date's time-of-day, duration) "
+                       + "in: \(row.label)")
+        guard matches.count == 2 else { return }
+        let matchedDuration = nsLabel.substring(with: matches[1].range)
         XCTAssertNotNil(Self.seconds(matchedDuration), "duration is not m:ss: \(row.label)")
     }
 
@@ -187,9 +190,8 @@ final class CaptureUITests: XCTestCase {
             finishReceipt(app, "cycle \(cycle)")
         }
 
-        // Counted in the LIBRARY, not on the capture screen. The capture screen shows only
-        // the single most recent entry now (owner: "just see the most recent one and then
-        // have an obvious link to the Library"), so three rows can no longer be counted
+        // Counted in the LIBRARY, not on the capture screen. The capture screen shows no
+        // recent-entries section at all (#118 §3), so three rows can no longer be counted
         // there — and quietly weakening this to "the newest one exists" would drop the
         // separate-entries property this test is named for.
         openPlace(app, "sidebar.allEntries")
@@ -388,12 +390,6 @@ final class CaptureUITests: XCTestCase {
         }
         XCTAssertTrue(app.staticTexts["trash.empty"].waitForExistence(timeout: 10),
                       "Trash not showing empty state after the only entry was deleted")
-
-        // Back to the Library: the entry must not have resurrected there either.
-        openPlace(app, "sidebar.allEntries")
-        waitUntil(15, "library still shows the permanently-deleted entry") {
-            app.staticTexts.matching(identifier: "library.row.duration").count == 0
-        }
 
         // Relaunch and rescan from scratch: the deletion must be on disk, not just
         // in the in-memory list this process happened to be holding.

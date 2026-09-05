@@ -314,9 +314,8 @@ final class CaptureCoordinator {
         appendMarker(kind: .voice, voice: voice, atFrame: frame)
     }
 
-    /// Raw tap: the current clock frame, as a paragraph marker. Independent of the
-    /// multi-voice toggle (owner decision 7) — always available, including in
-    /// single-voice entries.
+    /// Raw tap: the current clock frame, as a paragraph marker. Independent of voice
+    /// marking (owner decision 7) — always available, including in single-voice entries.
     func markParagraph() {
         guard canMark, let frame = currentCaptureFrame else { return }
         appendMarker(kind: .paragraph, voice: nil, atFrame: frame)

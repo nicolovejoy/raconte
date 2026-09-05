@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// The Milestone 1 capture screen: recovery banners, elapsed timer + status, mic meter,
-/// the one big round record button, and a recent-recordings list. Dark-first, minimal
-/// chrome (design language: quiet personal journal; polish is Milestone 5).
+/// The capture screen: journal + backdate on top, the live transcript or the receipt in
+/// the middle, the control bar pinned to the bottom (#118).
 struct CaptureView: View {
     let model: CaptureScreenModel
 
@@ -132,50 +131,20 @@ struct CaptureView: View {
         }
     }
 
-    /// Journal, backdate, two-voices, recovery banners, recents — everything that is
-    /// setup or browsing rather than operating the recorder. (The build stamp used to sit
-    /// here too; #118 §7 moved it to About, the one Release-visible diagnostic screen.)
-    ///
-    /// Two different renderings by design (approach 2 of the 2026-08-16 IA discussion —
-    /// owner: "there's two scrollable sections above [the bar]... I would rather have
-    /// none, especially during the recording"). Idle is a browsing screen, so one honest
-    /// scroll region is fine. While capturing, nothing left in this band is unbounded —
-    /// journal name and backdate — so nothing here scrolls at all;
-    /// `CaptureLayoutModel.usesCompactBackdateField`/`showsRecoveryBanners` strip the band
-    /// down to that bounded content instead of squeezing the full band into a fixed-height
-    /// box that then had to scroll internally, which is what stacked a second scroll view
-    /// above the transcript's own.
-    @ViewBuilder
+    /// Journal and backdate — the two things that describe the reading, in every mode
+    /// that is not the receipt. Bounded content, so it never scrolls (approach 2 of the
+    /// 2026-08-16 IA discussion: "I would rather have none, especially during the
+    /// recording"). #118 §3 made Ready the same band as Recording: the last-entry card,
+    /// the Two-voices toggle and the recovery banners left for Home, and the full inline
+    /// backdate field left for the compact summary's sheet (§6 — backdate "whenever,
+    /// basically", so the same one-line summary is on Ready and Recording alike).
     private var setupRegion: some View {
-        if layout.usesCompactBackdateField {
-            VStack(alignment: .leading, spacing: 12) {
-                JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
-                CompactBackdateSummary(model: model)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ScrollView {
-                VStack(spacing: 28) {
-                    JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
-                    BackdateField(model: model)
-
-                    if layout.showsRecoveryBanners {
-                        ForEach(model.visibleRecovered) { rec in
-                            RecoveryBanner(recording: rec,
-                                           capturesRoot: model.capturesRoot,
-                                           onKeep: { model.keep(rec.captureID) },
-                                           onDelete: { model.delete(rec.captureID) })
-                        }
-                    }
-
-                    if layout.showsLastEntry {
-                        lastEntrySection
-                    }
-                }
-                .padding(24)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
+            CompactBackdateSummary(model: model)
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The live transcript: capped when idle, and free to take everything the setup band
@@ -334,30 +303,6 @@ struct CaptureView: View {
         .padding(.horizontal, CaptureControlBarMetrics.controlRowHorizontalPadding)
     }
 
-    /// The single most recent entry (M3 T4.5, cut down 2026-08-15), sourced from
-    /// `model.library` — the SAME scan/store the Library screen reads — and rendered with
-    /// the same `LibraryEntryRow` the library list uses.
-    ///
-    /// One, not three, and not a list. Owner smoke: "I'd rather not have too many things
-    /// scrolling around. Would be better just to see the most recent one and then have an
-    /// obvious link to the Library." Three rows were also what turned the setup band into a
-    /// scroll view tall enough to compete with the control bar for height, which is why
-    /// its last row rendered sliced through the middle of a sentence.
-    @ViewBuilder
-    private var lastEntrySection: some View {
-        if let item = model.library.recent.first {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Last entry")
-                    .captureLabel(.recentHeader)
-                NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                    LibraryEntryRow(model: model.library, item: item)
-                }
-                .accessibilityIdentifier("capture.recentRow")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     /// The post-stop receipt (owner ruling 2026-08-15, capture-landing option B).
     ///
     /// Everything above the control bar for as long as it is up. What the owner lost
@@ -405,7 +350,7 @@ struct CaptureView: View {
                     .accessibilityIdentifier("capture.receipt.dismiss")
             }
             .controlSize(.large)
-            // Never `.preferredColorScheme` on this screen — see `BackdateField`.
+            // Never `.preferredColorScheme` on this screen — see `JournalHeaderView`.
             .environment(\.colorScheme, .dark)
         }
         .padding(.horizontal, 24)
@@ -544,13 +489,12 @@ struct JournalHeaderView: View {
 /// materialized into its sidecar (`EntryMetadata.originalDate == nil` means "use the
 /// capture's own date"). Settable before or during recording (M3 T3); the model pushes
 /// every change straight to the live capture's `entry.json` when one is in progress.
-/// The backdate toggle plus its precision date picker, with no styling applied. Two
-/// callers style this content for two different surfaces: `BackdateField` pins it to the
-/// near-black capture background (issue #58, the idle setup band's inline field);
-/// `CompactBackdateSummary`'s sheet leaves it in the system's own light/dark appearance —
-/// the same convention `JournalHeaderView`'s cover/voice-labels sheets already use, and
-/// the reason this content is factored out rather than duplicated (approach 2, 2026-08-16
-/// IA discussion: the sheet needs the identical write-through bindings, just un-styled).
+/// The backdate toggle plus its precision date picker, with no styling applied.
+/// `CompactBackdateSummary`'s sheet presents it in the system's own light/dark
+/// appearance — the same convention `JournalHeaderView`'s cover/voice-labels sheets
+/// already use, and the reason this content is factored out on its own (approach 2,
+/// 2026-08-16 IA discussion: the sheet needs the identical write-through bindings, just
+/// un-styled).
 struct BackdateEditorContent: View {
     let model: CaptureScreenModel
 
@@ -591,42 +535,9 @@ struct BackdateEditorContent: View {
     }
 }
 
-struct BackdateField: View {
-    let model: CaptureScreenModel
-
-    var body: some View {
-        BackdateEditorContent(model: model)
-            // Belt-and-suspenders alongside the `.environment` pin below (issue #58): an
-            // explicit foreground/tint at this call site (not inside
-            // `BackdateEditorContent`, which `CompactBackdateSummary`'s light-background
-            // sheet also uses and must not force) so the toggle's and date field's own
-            // text/highlight read correctly even if the environment pin doesn't reach
-            // every native subview.
-            .tint(.white)
-            .foregroundStyle(.white)
-            // The capture screen's background is near-black regardless of the app's color
-            // scheme; an ambient-scheme system control renders dark-on-dark in light mode
-            // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
-            // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
-            // presentation, such as a popover or window" (Apple's own wording): this view
-            // lives inside `CaptureView`, which is pushed inline into the app's navigation
-            // with no sheet or popover boundary between it and the window, so a
-            // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
-            // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
-            // scoped `.environment` pin has no such reach; a control's own transient popup
-            // (the calendar/segment dropdown) is explicitly out of scope for #58 — it
-            // renders on its own material background, not the near-black screen.
-            .environment(\.colorScheme, .dark)
-    }
-}
-
-/// One-line, non-scrolling stand-in for `BackdateField` while capturing (approach 2,
-/// 2026-08-16 IA discussion). Owner: "there's two scrollable sections above [the bar]...
-/// I would rather have none, especially during the recording." The full field is bounded
-/// (a toggle and a date), so it never needed a scroll region — it just needed to stop
-/// being drawn as one. Tapping opens the same write-through editor in a sheet, unstyled
-/// (system light/dark material), the same convention `JournalHeaderView`'s other sheets
-/// already use.
+/// The one-line backdate summary, on Ready and Recording alike (#118 §6). Tapping opens
+/// the same write-through editor in a sheet, unstyled (system light/dark material), the
+/// same convention `JournalHeaderView`'s other sheets already use.
 struct CompactBackdateSummary: View {
     let model: CaptureScreenModel
     @State private var showingEditor = false
@@ -834,7 +745,7 @@ struct RecordControlsRow<Center: View>: View {
         .buttonStyle(.bordered)
         .controlSize(.large)
         // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding:
+        // see the matching comment on `JournalHeaderView` (issue #58 fix-round-1 finding:
         // nothing presents `CaptureView` as a sheet or popover, so `preferredColorScheme`
         // here would resolve to the whole window).
         .environment(\.colorScheme, .dark)

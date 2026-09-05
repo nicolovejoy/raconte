@@ -76,7 +76,7 @@ struct PrecisionDatePicker: View {
             // underlying reason — the calendar was drawn in a presentation this app cannot
             // reach. `.compact` on macOS opens an AppKit POPOVER: the capture screen's
             // `.environment(\.colorScheme, .dark)` pin does not travel into it (see
-            // `BackdateField`'s own comment) while the screen's inherited white foreground
+            // `BackdateEditorContent`'s own comment) while the screen's inherited white foreground
             // plausibly does, so it renders white-on-light, anchored inside a scroll band
             // this screen clips — owner smoke, 2026-08-15: "I can't pick a date at all".
             // `.field` then removed the popup, but a typed field at the Mac's own small

@@ -3,8 +3,8 @@ import XCTest
 
 /// Approach 2 of the 2026-08-16 capture-interface IA discussion: bounded content (the
 /// journal name, the backdate) must never need its own scroll region during a capture —
-/// only the transcript is genuinely unbounded. `CompactBackdateSummary` is the one-line,
-/// non-scrolling stand-in for the full `BackdateField` while recording; this pins its pure
+/// only the transcript is genuinely unbounded. `CompactBackdateSummary` is the one-line
+/// backdate summary shown on Ready and Recording alike (#118 §6); this pins its pure
 /// text logic, the same "pull the string out so a test can call it directly" pattern
 /// `EntryDetailView.navigationTitleText` already uses.
 final class CompactBackdateSummaryTests: XCTestCase {

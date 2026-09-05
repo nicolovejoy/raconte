@@ -61,8 +61,7 @@ final class VoiceMarkingUITests: XCTestCase {
     ///
     /// Queried by `library.entryLink` — the identifier on the `NavigationLink` itself. The
     /// row's own `library.row` is NOT queryable: the link merges its label's children into
-    /// one accessibility element, the same flattening `capture.recentRow` exists to work
-    /// around.
+    /// one accessibility element, the same flattening every `NavigationLink` row has.
     private func openSeededEntry(_ app: XCUIApplication, row index: Int) {
         openPlace(app, "sidebar.allEntries")
 

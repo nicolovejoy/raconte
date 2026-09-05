@@ -63,9 +63,8 @@ final class CaptureControlsUITests: XCTestCase {
 
     // MARK: - #53
 
-    /// The control bar must not be reachable by scrolling. Under the old single-ScrollView
-    /// layout the record button scrolled with the page like any other content; it is now
-    /// outside every scroll view, so a scroll gesture cannot touch it.
+    /// Ready has no scroll view at all (#118 §3); a page swipe must still leave the bar
+    /// where it was.
     func testScrollingThePageDoesNotMoveTheRecordButton() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
@@ -75,16 +74,15 @@ final class CaptureControlsUITests: XCTestCase {
         let before = record.frame
         XCTAssertGreaterThan(before.height, 0, "record button has no measurable frame")
 
-        app.scrollViews.firstMatch.swipeUp()
-        app.scrollViews.firstMatch.swipeUp()
+        app.swipeUp()
+        app.swipeUp()
 
         assertFrame(record, equals: before, "record button after scrolling the page")
     }
 
-    /// The transition into recording is where the layout changes most (the Two-voices
-    /// toggle and the Recent list are removed, and the transcript is unleashed). The bar
-    /// must not shift as a result — a control that jumps at the moment recording starts is
-    /// the same defect wearing a different hat.
+    /// The transition into recording is where the layout changes most (the transcript
+    /// band appears). The bar must not shift as a result — a control that jumps at the
+    /// moment recording starts is the same defect wearing a different hat.
     func testRecordButtonDoesNotMoveWhenRecordingStarts() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
@@ -106,17 +104,11 @@ final class CaptureControlsUITests: XCTestCase {
     /// The specific control the owner lost. It only exists while recording (and only with
     /// two-voice mode on), so this pins that once shown it holds still — and, critically,
     /// that it remains hittable, which "scrolled off the bottom of the screen" is not.
-    func testVoiceSwitchStaysPutAndHittableWhileRecording() throws {
+    func testVoiceSwitchStaysPutAndHittableWhileRecording() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
-
-        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
-        guard multiVoice.waitForExistence(timeout: 10) else {
-            throw XCTSkip("two-voices toggle not present in this configuration")
-        }
-        if (multiVoice.value as? String) != "1" { press(multiVoice) }
 
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }
@@ -238,68 +230,55 @@ final class CaptureControlsUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)   // let the synthetic engine produce transcript
         press(record)
 
-        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-        XCTAssertTrue(dismiss.waitForExistence(timeout: 30),
+        let card = app.descendants(matching: .any).matching(identifier: "capture.receipt.open").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 30),
                       "no receipt after a capture finished")
-        XCTAssertTrue(app.staticTexts["capture.receipt.date"].firstMatch.exists,
-                      "the receipt does not say which entry it is about")
+        XCTAssertTrue(card.label.hasPrefix("Open entry from"),
+                      "the receipt does not say which entry it is about: \(card.label)")
         XCTAssertFalse(app.descendants(matching: .any)
                         .matching(identifier: "capture.transcript").firstMatch.exists,
                        "the live transcript band is STILL on screen behind the receipt — "
                        + "this is the stranded-text bug the receipt exists to fix")
-        // The receipt IS the last entry; showing the recent row too would be a duplicate —
-        // `CaptureLayoutModel` sets `showsLastEntry: false` in receipt mode.
-        XCTAssertFalse(app.descendants(matching: .any)
-                        .matching(identifier: "capture.recentRow").firstMatch.exists,
-                       "the landing screen's last-entry row is showing behind the receipt")
 
-        // And dismissing returns to a landing screen with neither the receipt nor the
-        // stranded text — the state the owner should have been getting all along. The
-        // library door itself is retired (nav T5, the sidebar replaces it), so the "landing
-        // screen came back" claim is now the recent row reappearing — a control that still
-        // exists, and one that can only show once the setup band has actually taken over.
-        press(dismiss)
-        waitUntil(10, "receipt never dismissed") { !dismiss.exists }
+        // And opening it retires the receipt and the stranded text with it — the state the
+        // owner should have been getting all along.
+        finishReceipt(app)
         XCTAssertFalse(app.descendants(matching: .any)
                         .matching(identifier: "capture.transcript").firstMatch.exists,
-                       "the finished transcript came back after dismissing the receipt")
-        waitUntil(15, "the landing screen did not come back") {
-            app.descendants(matching: .any).matching(identifier: "capture.recentRow").firstMatch.exists
-        }
+                       "the finished transcript came back on Ready")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "capture.journalHeader")
+                        .firstMatch.waitForExistence(timeout: 15),
+                      "Ready did not come back")
     }
 
-    /// One entry on the landing screen, and a reachable route to the rest via the sidebar.
-    ///
-    /// Owner: "I'd rather not have too many things scrolling around. Would be better just
-    /// to see the most recent one and then have an obvious link to the Library. That's not
-    /// just up in the top right." The door itself retired in nav T5 — the sidebar is now
-    /// that "obvious link", reachable from every screen rather than only the landing one.
-    func testLandingScreenShowsExactlyOneRecentEntryAndAReachableLibrary() {
+    /// #118 §3: Ready is journal + backdate + the bar. Nothing that Home already shows is
+    /// duplicated here — no last-entry card, no Two-voices toggle — and the backdate is
+    /// the same one-line summary Recording shows (§6: "back date whenever, basically").
+    func testReadyShowsOnlyJournalAndBackdateAboveTheBar() {
         let app = launchApp()
-        openCapture(app)                    // #108: launch now lands on Home
+        openCapture(app)
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
-        // Record twice; the landing screen must still show exactly one entry.
-        for _ in 1...2 {
-            waitUntil(15, "record button not ready") { record.label == "Record" && record.isEnabled }
-            press(record)
-            waitUntil(10, "never entered recording") { record.label == "Stop" }
-            Thread.sleep(forTimeInterval: 1)
-            press(record)
-            let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-            XCTAssertTrue(dismiss.waitForExistence(timeout: 30), "no receipt")
-            press(dismiss)
-        }
+        press(record)
+        waitUntil(10, "never entered recording") { record.label == "Stop" }
+        Thread.sleep(forTimeInterval: 1)
+        press(record)
+        finishReceipt(app)
 
-        waitUntil(15, "landing screen never showed the last entry") {
-            app.descendants(matching: .any).matching(identifier: "capture.recentRow").count >= 1
-        }
-        XCTAssertEqual(app.descendants(matching: .any)
-                        .matching(identifier: "capture.recentRow").count, 1,
-                       "the landing screen is listing more than the single most recent entry")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "capture.journalHeader")
+                        .firstMatch.waitForExistence(timeout: 15), "no journal header on Ready")
+        XCTAssertTrue(app.buttons["capture.backdateSummary"].firstMatch.exists,
+                      "the compact backdate summary must be on Ready too (#118 §6)")
+        XCTAssertFalse(app.switches["capture.backdateToggle"].firstMatch.exists,
+                       "the full inline backdate field is back on Ready")
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "capture.recentRow").count, 0,
+                       "the last-entry card is back — Home owns it now")
+        XCTAssertFalse(app.switches["capture.multiVoiceToggle"].firstMatch.exists,
+                       "the Two-voices toggle is back")
+        XCTAssertEqual(app.scrollViews.count, 0, "Ready has nothing to scroll")
 
-        // There is a route to everything else from the landing screen.
+        // Everything else is one sidebar tap away.
         openPlace(app, "sidebar.allEntries")
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "library.list")
                         .firstMatch.waitForExistence(timeout: 15))
@@ -369,11 +348,6 @@ final class CaptureControlsUITests: XCTestCase {
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
 
-        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
-        if multiVoice.waitForExistence(timeout: 10), (multiVoice.value as? String) != "1" {
-            press(multiVoice)
-        }
-
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }
 
@@ -390,17 +364,11 @@ final class CaptureControlsUITests: XCTestCase {
     /// label changes on every tap — "BN" → "LN", or a journal's own labels, which can be
     /// any length — so intrinsic widths would walk the Stop button sideways mid-reading.
     /// This is #53's failure mode rotated 90°, and nothing else in the suite would see it.
-    func testMarkingAVoiceDoesNotMoveTheRecordButtonSideways() throws {
+    func testMarkingAVoiceDoesNotMoveTheRecordButtonSideways() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
         let record = app.buttons["capture.record"].firstMatch
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
-
-        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
-        guard multiVoice.waitForExistence(timeout: 10) else {
-            throw XCTSkip("two-voices toggle not present in this configuration")
-        }
-        if (multiVoice.value as? String) != "1" { press(multiVoice) }
 
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }

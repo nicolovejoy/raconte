@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreMedia
 import Speech
+import os
 
 /// Resolves a two-way race exactly once, so the loser can be abandoned rather than
 /// awaited. `NSLock` rather than an actor: the whole point is that resolving must not
@@ -89,6 +90,12 @@ actor TranscriptionSession {
     private var consolidator = TranscriptConsolidator()
     private var resultsTask: Task<Void, Never>?
 
+    /// #118 §5 "check first": wall-clock first-seen time per provisional range start, so
+    /// the owner can read how long text stays provisional in real speech before the
+    /// dimmed-hypothesis view is built. Diagnostic only; nothing reads it.
+    private var provisionalFirstSeen: [Int64: ContinuousClock.Instant] = [:]
+    private let timing = Logger(subsystem: "org.pianohouseproject.raconte", category: "transcript-timing")
+
     // MARK: Capture-frame accounting (design §2, "The clock")
 
     /// Where the next chunk must start for the stream to be contiguous. `nil` before
@@ -151,6 +158,7 @@ actor TranscriptionSession {
 
     var committedText: String { consolidator.committedText }
     var displayText: String { consolidator.displayText }
+    var runs: [ConsolidatedTranscriptRun] { consolidator.runs }
     var committed: [TranscriptResult] { consolidator.committed }
     var provisional: [TranscriptResult] { consolidator.provisional }
 
@@ -474,8 +482,20 @@ actor TranscriptionSession {
     }
 
     private func apply(_ result: TranscriptResult) {
+        let now = ContinuousClock.now
+        if result.isVolatile, !result.text.isEmpty, provisionalFirstSeen[result.range.start] == nil {
+            provisionalFirstSeen[result.range.start] = now
+        }
+        let before = Set(consolidator.provisional.map(\.range.start))
         for logged in consolidator.apply(result) {
             persist(logged)
+        }
+        let after = Set(consolidator.provisional.map(\.range.start))
+        for start in before.subtracting(after) {
+            guard let seen = provisionalFirstSeen.removeValue(forKey: start) else { continue }
+            let ms = Int((now - seen) / .milliseconds(1))
+            let how = result.isVolatile ? "superseded" : "settled"
+            timing.info("\(how, privacy: .public) start=\(start, privacy: .public) provisionalMs=\(ms, privacy: .public)")
         }
     }
 

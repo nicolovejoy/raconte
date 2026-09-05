@@ -1019,7 +1019,7 @@ final class CaptureScreenModel {
     ///
     /// Writes are chained so they land in submission order.
     ///
-    /// `BackdateField`'s `DatePicker` used to fire a fresh `Task` per change, each of
+    /// `BackdateEditorContent`'s `DatePicker` used to fire a fresh `Task` per change, each of
     /// which snapshotted main-actor state and *then* awaited the store — so two spins of
     /// the wheel could reach the actor in either order and settle on the older date.
     /// Every caller now enqueues synchronously on the main actor and the writes run in

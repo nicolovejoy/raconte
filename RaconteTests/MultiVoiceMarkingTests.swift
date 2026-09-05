@@ -68,30 +68,6 @@ final class MultiVoiceMarkingTests: XCTestCase {
         SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
     }
 
-    /// One scannable capture. Mirrors `LibraryScreenModelTests.writeCapture`, extended to
-    /// take a whole `EntryMetadata` — a bare `entry.json` is NOT enough to produce a row
-    /// (`LibraryScanner.holdsSomethingToShow` wants durable content or segment frames),
-    /// so the pcm + manifest are load-bearing here, not decoration.
-    private func writeCapture(_ id: String,
-                              capturedAt: Double,
-                              metadata: EntryMetadata,
-                              frames: Int = 48_000) throws {
-        let segs = SegmentLayout.segmentsDirectory(captureDirectory: captureDir(id))
-        try FileManager.default.createDirectory(at: segs, withIntermediateDirectories: true)
-        try Data(count: frames * 4).write(to: SegmentLayout.pcmURL(segmentsDirectory: segs, index: 0))
-
-        let format = AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
-                                           commonFormat: .pcmFormatFloat32,
-                                           interleaved: false, bytesPerFrame: 4)
-        let created = Date(timeIntervalSince1970: capturedAt)
-        let manifest = Manifest(captureID: id, createdAt: created, state: .captured,
-                                stateSeq: 1, stateUpdatedAt: created, format: format)
-        try CaptureCoding.encoder().encode(manifest)
-            .write(to: SegmentLayout.manifestURL(captureDirectory: captureDir(id)))
-        try EntryMetadataStore.write(
-            metadata, url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(id)))
-    }
-
     private func writeJournals(_ journals: [Journal]) throws {
         try JournalStore.encode(JournalRegistry(journals: journals))
             .write(to: journalsURL)
@@ -139,18 +115,6 @@ final class MultiVoiceMarkingTests: XCTestCase {
                 let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "<no file>"
                 XCTFail("\(message) — sidecar is \(text)", file: file, line: line)
                 return
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
-    private func waitForSidecarFile(_ captureID: String,
-                                    file: StaticString = #filePath, line: UInt = #line) async {
-        let url = SegmentLayout.entryMetadataURL(captureDirectory: captureDir(captureID))
-        let deadline = Date().addingTimeInterval(5)
-        while !FileManager.default.fileExists(atPath: url.path) {
-            if Date() > deadline {
-                return XCTFail("entry.json was never written", file: file, line: line)
             }
             try? await Task.sleep(for: .milliseconds(10))
         }

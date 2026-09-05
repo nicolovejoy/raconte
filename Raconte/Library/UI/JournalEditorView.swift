@@ -10,7 +10,7 @@ import SwiftUI
 /// `PlaceRouting.detailPath(afterSelecting:from:path:)` always returns `[]`, so ANY
 /// sidebar click, and on the Mac ⌘1-4, pops this screen with no warning and no chance to
 /// intervene. A Done-button-shaped batch of unsaved edits would be silently lost. Same
-/// discipline `BackdateField`/`BackdateEditorContent` already use: each field commits
+/// discipline `BackdateEditorContent` already uses: each field commits
 /// itself. Two commit paths, deliberately redundant:
 /// - Losing focus (the field the owner just left, via `focusedField`'s `onChange`) — the
 ///   ordinary case, fires the instant a real tap moves elsewhere on THIS screen.

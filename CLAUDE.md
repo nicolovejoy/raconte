@@ -38,7 +38,7 @@ contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build d
    finalization cadence), one 700 ms, one 7.7 s. Median 3166 ms, max 7735 ms. **Gate
    passes: over the ~3 s line, so Task 7 builds as designed** — a run dims for ~4 s then
    brightens once, a step every few seconds, not flicker. Receipt-card click on the Mac
-   still unconfirmed by the owner.
+   confirmed by the owner (opens the entry). Task 7 deferred to the next session by choice.
 2. **Task 7 → PR B** ("Closes #118"): brief at the ledger's `task-7-brief.md` (already
    renamed to `ConsolidatedTranscriptRun`). Then delete the SDD workspace and the worktree.
 3. **Device smoke of #135 on the iPhone** (next TestFlight; bump `CFBundleVersion` 13 → 14

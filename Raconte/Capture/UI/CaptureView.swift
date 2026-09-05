@@ -92,7 +92,7 @@ struct CaptureView: View {
             // mutation into an animated diff instead of an instant pop.
             .animation(.easeInOut, value: model.discardNotice)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(InkTone.studioInk.color)
         .task { await model.bootstrap() }
         // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s `VStack`
         // — repo memory: a `.sheet` attached inside a Form/List `Section` silently never
@@ -118,7 +118,7 @@ struct CaptureView: View {
         }
         // `.foregroundStyle(Color.primary)` on the field: an alert draws on the
         // SYSTEM's own light material, but its content is a SwiftUI builder nested
-        // inside `CaptureView`, which sets `.foregroundStyle(.white)` for the
+        // inside `CaptureView`, which sets `.foregroundStyle(InkTone.studioInk.color)` for the
         // near-black capture surface. That white is inherited straight into the text
         // field — owner smoke, 2026-08-15: "the 'new folder' text field is white on
         // white, can't read what I type. but it does work." Exactly that: the binding
@@ -255,7 +255,7 @@ struct CaptureView: View {
             // touch and by VoiceOver in the phases where it is not really there.
             Button("Done") { Task { await model.done() } }
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(InkTone.record.color)
                 .accessibilityIdentifier("capture.done")
                 .opacity(control.showsDoneButton ? 1 : 0)
                 .disabled(!control.showsDoneButton)
@@ -330,7 +330,7 @@ struct CaptureView: View {
                                 .captureLabel(.receiptSavedChip)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
-                                .background(Capsule().fill(Color.green.opacity(0.22)))
+                                .background(Capsule().fill(InkTone.studioSaved.color))
                         }
                         Text(receipt.summaryLine)
                             .captureLabel(.receiptSummary)
@@ -355,11 +355,11 @@ struct CaptureView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
+                        .fill(InkTone.studioCard.color)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                        .strokeBorder(InkTone.studioHairline.color, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -458,7 +458,7 @@ struct JournalHeaderView: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .captureLabel(.journalPickerChevron)
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(InkTone.studioInk.color)
             }
             .buttonStyle(.plain)
             // #65: the container identifier was overwriting its descendants', which made
@@ -570,7 +570,7 @@ struct CompactBackdateSummary: View {
             }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
+        .foregroundStyle(InkTone.studioInk.color)
         .accessibilityIdentifier("capture.backdateSummary")
         .sheet(isPresented: $showingEditor) {
             NavigationStack {
@@ -714,7 +714,7 @@ struct RecordControlsRow<Center: View>: View {
             // tap or say anything to VoiceOver.
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.white)
+                    .fill(InkTone.studioInk.color)
                     .opacity(flashBrightness[flashKind] ?? 0)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)

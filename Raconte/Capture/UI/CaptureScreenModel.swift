@@ -68,9 +68,10 @@ final class CaptureScreenModel {
 
     private var discardNoticeTask: Task<Void, Never>?
 
-    /// Dismiss the receipt and return to the landing screen. The "Record another" action,
-    /// and also what "Open" does on its way to the entry — coming back from the detail
-    /// screen to a receipt for an entry you have just been reading would be a loop.
+    /// Dismiss the receipt and return to the landing screen. What opening the entry from
+    /// the receipt does on its way out (#118 §3 deleted "Record another"; the bar's
+    /// record button retires the receipt through `record()`) — coming back from the
+    /// detail screen to a receipt for an entry you have just been reading would be a loop.
     func dismissReceipt() { receipt = nil }
 
     /// #62: retire the receipt if its entry has left the library (trashed from the

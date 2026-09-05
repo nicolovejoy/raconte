@@ -310,52 +310,70 @@ struct CaptureView: View {
     /// before was any sense that a reading had FINISHED: the transcript simply stayed on
     /// screen as loose text under a sliced Recent list, belonging to nothing and leading
     /// nowhere. Here the same words are headed, dated, set in the reading serif with their
-    /// voice marks, and have two doors out of them.
+    /// voice marks, and the whole block is the door to the entry (#118 §3: "Record
+    /// another" is gone — the bar's own record button starts the next reading, so the
+    /// screen offers one record control in one position).
     private func receiptRegion(_ receipt: CaptureReceipt) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(receipt.dateText)
-                        .captureLabel(.receiptDate)
-                        .accessibilityIdentifier("capture.receipt.date")
-                    Spacer()
-                    Text("Saved")
-                        .captureLabel(.receiptSavedChip)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.green.opacity(0.22)))
+        // One scroll view, OUTSIDE the link: long prose scrolls, and a tap anywhere on
+        // the card opens the entry. A `ScrollView` inside a link's label loses one of
+        // the two gestures on macOS.
+        ScrollView {
+            NavigationLink(value: LibraryDestination.entry(receipt.captureID)) {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(receipt.dateText)
+                                .captureLabel(.receiptDate)
+                                .accessibilityIdentifier("capture.receipt.date")
+                            Spacer()
+                            Text("Saved")
+                                .captureLabel(.receiptSavedChip)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.green.opacity(0.22)))
+                        }
+                        Text(receipt.summaryLine)
+                            .captureLabel(.receiptSummary)
+                            .monospacedDigit()
+                            .accessibilityIdentifier("capture.receipt.summary")
+                    }
+
+                    receiptProse(receipt)
+
+                    // The card's own caption, not a separate button: owner at smoke —
+                    // "Open isn't super clear here… show the entry in a box that's clearly
+                    // 'click to open'-able or (view/edit)."
+                    HStack(spacing: 4) {
+                        Spacer()
+                        Text("View / edit")
+                            .captureLabel(.receiptSummary)
+                        Image(systemName: "chevron.right")
+                            .captureLabel(.receiptSummary)
+                    }
                 }
-                Text(receipt.summaryLine)
-                    .captureLabel(.receiptSummary)
-                    .monospacedDigit()
-                    .accessibilityIdentifier("capture.receipt.summary")
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                )
             }
-
-            receiptProse(receipt)
-
-            HStack(spacing: 12) {
-                NavigationLink(value: LibraryDestination.entry(receipt.captureID)) {
-                    Text("Open")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                // Dismissed on the way out, not on the way back: returning from the entry
-                // you were just reading to a receipt about it is a loop with no exit that
-                // feels like progress.
-                .simultaneousGesture(TapGesture().onEnded { model.dismissReceipt() })
-                .accessibilityIdentifier("capture.receipt.open")
-
-                Button("Record another") { model.dismissReceipt() }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("capture.receipt.dismiss")
-            }
-            .controlSize(.large)
-            // Never `.preferredColorScheme` on this screen — see `JournalHeaderView`.
-            .environment(\.colorScheme, .dark)
+            .buttonStyle(.plain)
+            // Dismissed on the way out, not on the way back: returning from the entry
+            // you were just reading to a receipt about it is a loop with no exit that
+            // feels like progress. (`reconcileReceipt` covers the trash path if this
+            // gesture does not fire — #62.)
+            .simultaneousGesture(TapGesture().onEnded { model.dismissReceipt() })
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Open entry from \(receipt.dateText)")
+            .accessibilityIdentifier("capture.receipt.open")
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -370,37 +388,33 @@ struct CaptureView: View {
             Text(unavailable)
                 .captureLabel(.receiptSummary)
                 .accessibilityIdentifier("capture.receipt.prose")
-            Spacer(minLength: 0)
         } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch receipt.body {
-                    case .attributed(let paragraphs):
-                        // `VoiceAttributedText` is the SAME renderer the detail screen
-                        // uses, so the marks the owner asked to see "manifest" here are
-                        // exactly the ones he'll see when he opens the entry.
-                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                            VoiceAttributedText.paragraph(
-                                paragraph, voiceLabels: model.selectedJournalVoiceLabels)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    case .plain(let text):
-                        Text(text)
+            VStack(alignment: .leading, spacing: 12) {
+                switch receipt.body {
+                case .attributed(let paragraphs):
+                    // `VoiceAttributedText` is the SAME renderer the detail screen
+                    // uses, so the marks the owner asked to see "manifest" here are
+                    // exactly the ones he'll see when he opens the entry.
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                        VoiceAttributedText.paragraph(
+                            paragraph, voiceLabels: model.selectedJournalVoiceLabels)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    case .absent, .unreadable, .empty:
-                        // Unreachable: `proseUnavailableText` is non-nil for all three, so
-                        // the branch above handled them. Stated rather than defaulted, so
-                        // a new display case has to be decided here instead of silently
-                        // rendering nothing.
-                        EmptyView()
                     }
+                case .plain(let text):
+                    Text(text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .absent, .unreadable, .empty:
+                    // Unreachable: `proseUnavailableText` is non-nil for all three, so
+                    // the branch above handled them. Stated rather than defaulted, so
+                    // a new display case has to be decided here instead of silently
+                    // rendering nothing.
+                    EmptyView()
                 }
-                // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
-                // and this is a reading surface.
-                .font(.system(.callout, design: .serif))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
+            // and this is a reading surface.
+            .font(.system(.callout, design: .serif))
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("capture.receipt.prose")
         }
     }

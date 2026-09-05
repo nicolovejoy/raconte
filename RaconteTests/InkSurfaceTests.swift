@@ -40,4 +40,38 @@ final class InkSurfaceTests: XCTestCase {
         let contrast = (max(luminanceRecord, luminanceWhite) + 0.05) / (min(luminanceRecord, luminanceWhite) + 0.05)
         XCTAssertGreaterThanOrEqual(contrast, 3.0)
     }
+
+    // MARK: #118 §8 — the capture screen's own tones
+
+    /// Text on studio clears the same 7.0:1 floor `CaptureLabel` enforces; the dim tone
+    /// is the live transcript's provisional text (#118 §5) and must still be readable,
+    /// just visibly weaker than full ink.
+    func testStudioTextTonesClearTheCaptureFloor() {
+        XCTAssertGreaterThanOrEqual(
+            CaptureSurface.contrastOnSurface(InkTone.studioInk.lightColor),
+            CaptureSurface.minimumControlContrast)
+        XCTAssertGreaterThanOrEqual(
+            CaptureSurface.contrastOnSurface(InkTone.studioInkDim.lightColor),
+            CaptureSurface.minimumControlContrast)
+        XCTAssertLessThan(
+            CaptureSurface.relativeLuminance(InkTone.studioInkDim.lightColor),
+            CaptureSurface.relativeLuminance(InkTone.studioInk.lightColor) * 0.5,
+            "dim must be unmistakably dimmer than ink, not a near-white")
+    }
+
+    /// The card and its border are decoration: no WCAG floor, but each must differ from
+    /// the studio ground and from each other, or the card disappears.
+    func testStudioCardTonesAreDistinct() {
+        XCTAssertNotEqual(InkTone.studioCard.lightColor, InkTone.studio.lightColor)
+        XCTAssertNotEqual(InkTone.studioHairline.lightColor, InkTone.studio.lightColor)
+        XCTAssertNotEqual(InkTone.studioHairline.lightColor, InkTone.studioCard.lightColor)
+        XCTAssertNotEqual(InkTone.studioSaved.lightColor, InkTone.studio.lightColor)
+    }
+
+    /// Capture tones do not follow the system appearance — the screen is pinned dark.
+    func testStudioTonesAreAppearanceInvariant() {
+        for tone in [InkTone.studioInk, .studioInkDim, .studioCard, .studioHairline, .studioSaved] {
+            XCTAssertEqual(tone.darkColor, tone.lightColor, "\(tone)")
+        }
+    }
 }

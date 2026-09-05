@@ -73,13 +73,10 @@ final class TranscriptEditorUITests: XCTestCase {
     }
 
     private func openSeededEntry(_ app: XCUIApplication) {
-        // #108: launch now lands on Home, and `capture.recentRow` only exists on the
-        // capture screen — visit it before looking for the seeded entry's row.
-        openCapture(app)
-        let recentRow = app.descendants(matching: .any)
-            .matching(identifier: "capture.recentRow").firstMatch
-        XCTAssertTrue(recentRow.waitForExistence(timeout: 20), "seeded entry never appeared")
-        press(recentRow)
+        openPlace(app, "sidebar.allEntries")
+        let row = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "seeded entry never appeared")
+        press(row)
     }
 
     /// Task 6 (#55): "Edit transcript" moved from an in-body button to a row in the `⋯`

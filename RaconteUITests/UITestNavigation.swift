@@ -72,3 +72,43 @@ func firstJournalRow(_ app: XCUIApplication) -> XCUIElement {
     }
     return row
 }
+
+/// Wait for the post-stop receipt and open its entry.
+///
+/// #118 §3 deleted "Record another", so the receipt has two exits: the bar's record
+/// button (which starts the next reading) and the entry card (which pushes the detail
+/// screen and retires the receipt on the way). Tests want the second. The receipt
+/// appearing is the completion signal — it is built only after the finalizer, the
+/// transcript ref and the rescan have all run — so this also replaces the old
+/// "recent row appeared" wait.
+///
+/// `app.descendants(matching: .any)`, not `app.buttons`: a `NavigationLink` is reported
+/// as a button on iOS and as a generic element on macOS.
+func openReceiptEntry(_ app: XCUIApplication, _ what: String = "recording",
+                      file: StaticString = #filePath, line: UInt = #line) {
+    let card = app.descendants(matching: .any).matching(identifier: "capture.receipt.open").firstMatch
+    guard card.waitForExistence(timeout: 30) else {
+        XCTFail("\(what): the post-stop receipt never appeared", file: file, line: line)
+        return
+    }
+    #if os(macOS)
+    card.click()
+    #else
+    card.tap()
+    #endif
+    XCTAssertTrue(app.buttons["detail.moreButton"].firstMatch.waitForExistence(timeout: 15),
+                  "\(what): opening the receipt did not reach the entry", file: file, line: line)
+}
+
+/// Finish a recording the way the old "Record another" did — back on Capture, Ready,
+/// no receipt. Opens the entry (retiring the receipt) and returns via the sidebar.
+func finishReceipt(_ app: XCUIApplication, _ what: String = "recording",
+                   file: StaticString = #filePath, line: UInt = #line) {
+    openReceiptEntry(app, what, file: file, line: line)
+    openCapture(app, file: file, line: line)
+    XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15),
+                  "\(what): did not get back to the capture screen", file: file, line: line)
+    XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
+                    .firstMatch.exists,
+                   "\(what): the receipt survived opening its entry", file: file, line: line)
+}

@@ -169,13 +169,11 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     /// calendar sheet instead of a system date picker, so unlike the iOS `.compact` chip
     /// this text is ours to size and colour, and therefore ours to check.
     case backdateDateButton
-    /// The one-line "Backdated to …" / "Not backdated" summary shown in place of the full
-    /// `BackdateField` while capturing (approach 2, 2026-08-16 IA discussion) — the same
-    /// role as `backdateDateButton`, just cross-platform and reachable during a recording
-    /// rather than only inside macOS's own picker.
+    /// The one-line "Backdated to …" / "Not backdated" summary shown on Ready and
+    /// Recording alike (#118 §6) — the same role as `backdateDateButton`, just
+    /// cross-platform and reachable during a recording rather than only inside macOS's
+    /// own picker.
     case backdateSummary
-    case multiVoiceToggle
-    case recentHeader
     /// Post-stop receipt (2026-08-15).
     case receiptDate
     case receiptSummary
@@ -216,8 +214,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .journalName, .receiptDate, .receiptSavedChip,
              .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-             .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
-             .recentHeader, .receiptSummary, .discardButton, .discardNotice: .grey(0.78)
+             .backdateFieldCaption, .journalPickerChevron,
+             .receiptSummary, .discardButton, .discardNotice: .grey(0.78)
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
         // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the
@@ -236,9 +234,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .iOS:
             switch self {
             case .journalName, .receiptDate: .title3   // 20
-            case .recentHeader: .headline // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
+                 .backdateFieldCaption, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .discardButton, .discardNotice,
@@ -247,9 +244,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .macOS:
             switch self {
             case .journalName, .receiptDate: .title    // 22
-            case .recentHeader: .title2  // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
+                 .backdateFieldCaption, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .discardButton, .discardNotice,

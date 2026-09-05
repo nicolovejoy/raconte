@@ -43,30 +43,6 @@ final class NavigationUITests: XCTestCase {
         }
     }
 
-    /// Wait for the post-stop receipt and dismiss it. Local copy, not shared (R6):
-    /// `CaptureUITests.finishReceipt` is behaviorally identical but this class's
-    /// `press`/`waitUntil`/`launchApp` are already local per Task 5's ruling — the four
-    /// classes' helpers are not all byte-identical (`launchApp` diverges on seed env
-    /// vars), so `UITestNavigation.swift` carries only `openPlace`/`openCapture` and each
-    /// class keeps its own local copies of everything else.
-    private func finishReceipt(_ app: XCUIApplication, _ what: String = "recording",
-                               file: StaticString = #filePath, line: UInt = #line) {
-        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-        guard dismiss.waitForExistence(timeout: 30) else {
-            XCTFail("\(what): the post-stop receipt never appeared", file: file, line: line)
-            return
-        }
-        press(dismiss)
-    }
-
-    /// Rows in the capture screen's "Recent" section — see `CaptureUITests.recentRows`
-    /// for why this queries the `NavigationLink`'s own `capture.recentRow` identifier
-    /// rather than anything nested inside it. Local copy, same reasoning as
-    /// `finishReceipt` above.
-    private func recentRows(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(identifier: "capture.recentRow")
-    }
-
     /// Reveal the sidebar (if collapsed) and tap the first element whose label BEGINS
     /// WITH `prefix`. For journal rows, whose accessibility identifier carries a disk-
     /// generated id the test cannot predict — the row's spoken label ("<name>" or
@@ -239,7 +215,8 @@ final class NavigationUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         press(record)
 
-        XCTAssertTrue(app.buttons["capture.receipt.dismiss"].firstMatch.waitForExistence(timeout: 30),
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
+                        .firstMatch.waitForExistence(timeout: 30),
                       "no receipt after a capture finished")
 
         openPlace(app, "sidebar.allEntries")
@@ -296,9 +273,7 @@ final class NavigationUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 1)
         press(record)
-        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-        XCTAssertTrue(dismiss.waitForExistence(timeout: 30), "no receipt after a capture finished")
-        press(dismiss)
+        finishReceipt(app)
 
         // A second journal, named distinctly from the auto-created default "Journal".
         //
@@ -434,8 +409,9 @@ final class NavigationUITests: XCTestCase {
             elapsedText.label != beforeWait
         }
         press(recordButton(app))     // stop
-        finishReceipt(app)
-        XCTAssertEqual(recentRows(app).count, 1, "the recording did not commit")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
+                        .firstMatch.waitForExistence(timeout: 30),
+                      "the recording did not commit — no receipt")
     }
 
     // MARK: - Task 7 (record-flow): option 1 end-to-end
@@ -478,7 +454,8 @@ final class NavigationUITests: XCTestCase {
         waitUntil(15, "discard did not return the capture screen to idle") {
             primary.label == "Record"
         }
-        XCTAssertFalse(app.buttons["capture.receipt.open"].exists,
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
+                        .firstMatch.exists,
                        "a discarded capture must not leave a receipt")
     }
 

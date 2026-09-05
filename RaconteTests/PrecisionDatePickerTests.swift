@@ -10,11 +10,11 @@ import XCTest
 ///
 /// The root problem both styles share is that the calendar is drawn by the system in a
 /// presentation this app cannot reach. `.compact` opens an AppKit POPOVER: the capture
-/// screen's `.environment(\.colorScheme, .dark)` pin does not travel into it (BackdateField
-/// records this in its own comment) while the screen's inherited white foreground plausibly
-/// does, so it renders white-on-light and, anchored inside a clipped scroll band, in the
-/// wrong place. `.field` has no popup to mis-render, but it is a typed field at the system's
-/// own small Mac size, with no calendar at all.
+/// screen's `.environment(\.colorScheme, .dark)` pin does not travel into it
+/// (`BackdateEditorContent` records this in its own comment) while the screen's inherited
+/// white foreground plausibly does, so it renders white-on-light and, anchored inside a
+/// clipped scroll band, in the wrong place. `.field` has no popup to mis-render, but it
+/// is a typed field at the system's own small Mac size, with no calendar at all.
 ///
 /// So the fix is to stop asking the system for a presentation we cannot style, and own it:
 /// a button we draw (checkable by `CaptureLabelTests` like every other capture label) that
@@ -229,10 +229,11 @@ final class PrecisionDatePickerTests: XCTestCase {
 
     /// Issue #58 names the entry-date precision segmented control among the capture-screen
     /// controls that render illegibly. It is not a colour-scheme problem — it is arithmetic:
-    /// `BackdateField` wraps this picker in `.tint(.white)` AND `.foregroundStyle(.white)`,
-    /// and on a segmented control the tint fills the SELECTED segment while the foreground
-    /// draws its label. White fill under a white label is an invisible selection, in every
-    /// appearance, on both platforms — so the owner cannot see which precision is active.
+    /// `BackdateEditorContent`'s caller used to wrap this picker in `.tint(.white)` AND
+    /// `.foregroundStyle(.white)`, and on a segmented control the tint fills the SELECTED
+    /// segment while the foreground draws its label. White fill under a white label is an
+    /// invisible selection, in every appearance, on both platforms — so the owner cannot
+    /// see which precision is active.
     ///
     /// Resetting the tint here rather than at the call site is deliberate: the call site's
     /// white tint is what makes the iOS `.compact` chip read well on the near-black surface,

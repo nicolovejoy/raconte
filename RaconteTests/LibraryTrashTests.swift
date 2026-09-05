@@ -52,7 +52,7 @@ final class LibraryTrashTests: XCTestCase {
 
     // MARK: - Trash / restore
 
-    func testTrashRemovesFromListAndRecentAndAddsToTrash() async throws {
+    func testTrashRemovesFromListAndAddsToTrash() async throws {
         try writeCapture(idA, capturedAt: 1_000)
         try writeCapture(idB, capturedAt: 2_000)
 
@@ -63,7 +63,6 @@ final class LibraryTrashTests: XCTestCase {
         await model.trashEntry(idA)
 
         XCTAssertEqual(model.items.map(\.captureID), [idB])
-        XCTAssertEqual(model.recent.map(\.captureID), [idB])
         XCTAssertEqual(model.trashed.map(\.captureID), [idA])
         XCTAssertNotNil(try metadata(idA).trashedAt)
         // Nothing left the disk.

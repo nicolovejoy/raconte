@@ -131,8 +131,9 @@ final class ImageCaptureUITests: XCTestCase {
     /// attached. Confirms the library row's merged accessibility label carries "Entry
     /// photo" (the thumbnail's own `accessibilityLabel` — `library.row.thumbnail` is
     /// NOT independently queryable, matching this row's own doc comment about
-    /// `NavigationLink` flattening; `CaptureUITests.durationSeconds(in:)` is this
-    /// project's precedent for reading a row's content off its merged label instead),
+    /// `NavigationLink` flattening; `CaptureUITests.testRecordStopProducesFinishedEntry`
+    /// is this project's precedent for reading a row's content off its merged label
+    /// instead),
     /// then removes the image from the full-screen viewer and confirms the label no
     /// longer carries it — the round-trip the brief asks for, without a real
     /// `PhotosPicker` add.

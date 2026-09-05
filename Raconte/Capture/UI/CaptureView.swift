@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// The Milestone 1 capture screen: recovery banners, elapsed timer + status, mic meter,
-/// the one big round record button, and a recent-recordings list. Dark-first, minimal
-/// chrome (design language: quiet personal journal; polish is Milestone 5).
+/// The capture screen: journal + backdate on top, the live transcript or the receipt in
+/// the middle, the control bar pinned to the bottom (#118).
 struct CaptureView: View {
     let model: CaptureScreenModel
 
@@ -26,8 +25,7 @@ struct CaptureView: View {
     }
 
     private var markers: MarkerControlsModel {
-        MarkerControlsModel.make(phase: model.coordinator.phase,
-                                 multiVoice: model.multiVoiceEnabled)
+        MarkerControlsModel.make(phase: model.coordinator.phase)
     }
 
     private var layout: CaptureLayoutModel {
@@ -35,8 +33,9 @@ struct CaptureView: View {
                                 hasReceipt: model.receipt != nil)
     }
 
-    /// Issue #53. Three bands, top to bottom: a scrolling setup region, the live
-    /// transcript, and a control bar pinned to the bottom.
+    /// Issue #53, updated by #118 §3. Three bands, top to bottom: a fixed setup band
+    /// (journal + backdate), the live transcript or the receipt, and a control bar pinned
+    /// to the bottom.
     ///
     /// The single page-level `ScrollView` this replaces is what caused #53: the record
     /// button, voice switch and paragraph button sat inside it, *below* the transcript,
@@ -93,12 +92,12 @@ struct CaptureView: View {
             // mutation into an animated diff instead of an instant pop.
             .animation(.easeInOut, value: model.discardNotice)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(InkTone.studioInk.color)
         .task { await model.bootstrap() }
-        // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s
-        // `ScrollView`/`VStack` — repo memory: a `.sheet` attached inside a
-        // Form/List `Section` silently never presents on iOS 26; this generalizes the
-        // same "attach at the screen's outer view" rule to every sheet on this screen.
+        // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s `VStack`
+        // — repo memory: a `.sheet` attached inside a Form/List `Section` silently never
+        // presents on iOS 26; this generalizes the same "attach at the screen's outer
+        // view" rule to every sheet on this screen.
         // Presented PLAIN (no `.environment(\.colorScheme, .dark)`) — the sheet renders
         // on its own system material and follows ambient appearance, unlike the
         // near-black studio background behind it.
@@ -119,7 +118,7 @@ struct CaptureView: View {
         }
         // `.foregroundStyle(Color.primary)` on the field: an alert draws on the
         // SYSTEM's own light material, but its content is a SwiftUI builder nested
-        // inside `CaptureView`, which sets `.foregroundStyle(.white)` for the
+        // inside `CaptureView`, which sets `.foregroundStyle(InkTone.studioInk.color)` for the
         // near-black capture surface. That white is inherited straight into the text
         // field — owner smoke, 2026-08-15: "the 'new folder' text field is white on
         // white, can't read what I type. but it does work." Exactly that: the binding
@@ -133,58 +132,26 @@ struct CaptureView: View {
         }
     }
 
-    /// Journal, backdate, two-voices, recovery banners, recents — everything that is
-    /// setup or browsing rather than operating the recorder. (The build stamp used to sit
-    /// here too; #118 §7 moved it to About, the one Release-visible diagnostic screen.)
-    ///
-    /// Two different renderings by design (approach 2 of the 2026-08-16 IA discussion —
-    /// owner: "there's two scrollable sections above [the bar]... I would rather have
-    /// none, especially during the recording"). Idle is a browsing screen, so one honest
-    /// scroll region is fine. While capturing, nothing left in this band is unbounded —
-    /// journal name and backdate — so nothing here scrolls at all;
-    /// `CaptureLayoutModel.usesCompactBackdateField`/`showsRecoveryBanners` strip the band
-    /// down to that bounded content instead of squeezing the full band into a fixed-height
-    /// box that then had to scroll internally, which is what stacked a second scroll view
-    /// above the transcript's own.
-    @ViewBuilder
+    /// Journal and backdate — the two things that describe the reading, in every mode
+    /// that is not the receipt. Bounded content, so it never scrolls (approach 2 of the
+    /// 2026-08-16 IA discussion: "I would rather have none, especially during the
+    /// recording"). #118 §3 made Ready the same band as Recording: the last-entry card,
+    /// the Two-voices toggle and the recovery banners left for Home, and the full inline
+    /// backdate field left for the compact summary's sheet (§6 — backdate "whenever,
+    /// basically", so the same one-line summary is on Ready and Recording alike).
     private var setupRegion: some View {
-        if layout.usesCompactBackdateField {
-            VStack(alignment: .leading, spacing: 12) {
-                JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
-                CompactBackdateSummary(model: model)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            ScrollView {
-                VStack(spacing: 28) {
-                    JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
-                    BackdateField(model: model)
-
-                    if layout.showsMultiVoiceField {
-                        MultiVoiceField(model: model)
-                    }
-
-                    if layout.showsRecoveryBanners {
-                        ForEach(model.visibleRecovered) { rec in
-                            RecoveryBanner(recording: rec,
-                                           capturesRoot: model.capturesRoot,
-                                           onKeep: { model.keep(rec.captureID) },
-                                           onDelete: { model.delete(rec.captureID) })
-                        }
-                    }
-
-                    if layout.showsLastEntry {
-                        lastEntrySection
-                    }
-                }
-                .padding(24)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
+            CompactBackdateSummary(model: model)
         }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The live transcript: capped when idle, and free to take everything the setup band
-    /// and the control bar leave behind during a capture.
+    /// The live transcript: shown only while a capture is under way
+    /// (`layout.showsLiveTranscript`), free to take everything the setup band and the
+    /// control bar leave behind — never shown when idle (Ready or the post-stop
+    /// receipt), where the setup band and the receipt occupy this space instead.
     ///
     /// Its scroll view is now the ONLY one in this band — previously it was a same-axis
     /// scroll nested inside the page scroll, which is its own source of confused gestures.
@@ -246,8 +213,9 @@ struct CaptureView: View {
     /// button. Every size comes from `CaptureControlBarMetrics`, which is where the
     /// ≤ ⅓ arithmetic can be tested.
     ///
-    /// The background is opaque on purpose: the setup band scrolls behind this, and a
-    /// transparent bar would let text slide under the record button.
+    /// The background is opaque on purpose: the transcript region above this can grow
+    /// to fill the available height during a capture, and a transparent bar would let
+    /// its text slide under the record button.
     private var controlBar: some View {
         VStack(spacing: CaptureControlBarMetrics.rowSpacing) {
             statusRow
@@ -290,7 +258,7 @@ struct CaptureView: View {
             // touch and by VoiceOver in the phases where it is not really there.
             Button("Done") { Task { await model.done() } }
                 .buttonStyle(.bordered)
-                .tint(.red)
+                .tint(InkTone.record.color)
                 .accessibilityIdentifier("capture.done")
                 .opacity(control.showsDoneButton ? 1 : 0)
                 .disabled(!control.showsDoneButton)
@@ -339,82 +307,76 @@ struct CaptureView: View {
         .padding(.horizontal, CaptureControlBarMetrics.controlRowHorizontalPadding)
     }
 
-    /// The single most recent entry (M3 T4.5, cut down 2026-08-15), sourced from
-    /// `model.library` — the SAME scan/store the Library screen reads — and rendered with
-    /// the same `LibraryEntryRow` the library list uses.
-    ///
-    /// One, not three, and not a list. Owner smoke: "I'd rather not have too many things
-    /// scrolling around. Would be better just to see the most recent one and then have an
-    /// obvious link to the Library." Three rows were also what turned the setup band into a
-    /// scroll view tall enough to compete with the control bar for height, which is why
-    /// its last row rendered sliced through the middle of a sentence.
-    @ViewBuilder
-    private var lastEntrySection: some View {
-        if let item = model.library.recent.first {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Last entry")
-                    .captureLabel(.recentHeader)
-                NavigationLink(value: LibraryDestination.entry(item.captureID)) {
-                    LibraryEntryRow(model: model.library, item: item)
-                }
-                .accessibilityIdentifier("capture.recentRow")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
     /// The post-stop receipt (owner ruling 2026-08-15, capture-landing option B).
     ///
     /// Everything above the control bar for as long as it is up. What the owner lost
     /// before was any sense that a reading had FINISHED: the transcript simply stayed on
     /// screen as loose text under a sliced Recent list, belonging to nothing and leading
     /// nowhere. Here the same words are headed, dated, set in the reading serif with their
-    /// voice marks, and have two doors out of them.
+    /// voice marks, and the whole block is the door to the entry (#118 §3: "Record
+    /// another" is gone — the bar's own record button starts the next reading, so the
+    /// screen offers one record control in one position).
     private func receiptRegion(_ receipt: CaptureReceipt) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(receipt.dateText)
-                        .captureLabel(.receiptDate)
-                        .accessibilityIdentifier("capture.receipt.date")
-                    Spacer()
-                    Text("Saved")
-                        .captureLabel(.receiptSavedChip)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.green.opacity(0.22)))
+        // One scroll view, OUTSIDE the link: long prose scrolls, and a tap anywhere on
+        // the card opens the entry. A `ScrollView` inside a link's label loses one of
+        // the two gestures on macOS.
+        ScrollView {
+            NavigationLink(value: LibraryDestination.entry(receipt.captureID)) {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(receipt.dateText)
+                                .captureLabel(.receiptDate)
+                                .accessibilityIdentifier("capture.receipt.date")
+                            Spacer()
+                            Text("Saved")
+                                .captureLabel(.receiptSavedChip)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(InkTone.studioSaved.color))
+                        }
+                        Text(receipt.summaryLine)
+                            .captureLabel(.receiptSummary)
+                            .monospacedDigit()
+                            .accessibilityIdentifier("capture.receipt.summary")
+                    }
+
+                    receiptProse(receipt)
+
+                    // The card's own caption, not a separate button: owner at smoke —
+                    // "Open isn't super clear here… show the entry in a box that's clearly
+                    // 'click to open'-able or (view/edit)."
+                    HStack(spacing: 4) {
+                        Spacer()
+                        Text("View / edit")
+                            .captureLabel(.receiptSummary)
+                        Image(systemName: "chevron.right")
+                            .captureLabel(.receiptSummary)
+                    }
                 }
-                Text(receipt.summaryLine)
-                    .captureLabel(.receiptSummary)
-                    .monospacedDigit()
-                    .accessibilityIdentifier("capture.receipt.summary")
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(InkTone.studioCard.color)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(InkTone.studioHairline.color, lineWidth: 1)
+                )
             }
-
-            receiptProse(receipt)
-
-            HStack(spacing: 12) {
-                NavigationLink(value: LibraryDestination.entry(receipt.captureID)) {
-                    Text("Open")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                // Dismissed on the way out, not on the way back: returning from the entry
-                // you were just reading to a receipt about it is a loop with no exit that
-                // feels like progress.
-                .simultaneousGesture(TapGesture().onEnded { model.dismissReceipt() })
-                .accessibilityIdentifier("capture.receipt.open")
-
-                Button("Record another") { model.dismissReceipt() }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("capture.receipt.dismiss")
-            }
-            .controlSize(.large)
-            // Never `.preferredColorScheme` on this screen — see `BackdateField`.
-            .environment(\.colorScheme, .dark)
+            .buttonStyle(.plain)
+            // Dismissed on the way out, not on the way back: returning from the entry
+            // you were just reading to a receipt about it is a loop with no exit that
+            // feels like progress. (`reconcileReceipt` covers the trash path if this
+            // gesture does not fire — #62.)
+            .simultaneousGesture(TapGesture().onEnded { model.dismissReceipt() })
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Open entry from \(receipt.dateText)")
+            .accessibilityIdentifier("capture.receipt.open")
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -429,37 +391,33 @@ struct CaptureView: View {
             Text(unavailable)
                 .captureLabel(.receiptSummary)
                 .accessibilityIdentifier("capture.receipt.prose")
-            Spacer(minLength: 0)
         } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    switch receipt.body {
-                    case .attributed(let paragraphs):
-                        // `VoiceAttributedText` is the SAME renderer the detail screen
-                        // uses, so the marks the owner asked to see "manifest" here are
-                        // exactly the ones he'll see when he opens the entry.
-                        ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                            VoiceAttributedText.paragraph(
-                                paragraph, voiceLabels: model.selectedJournalVoiceLabels)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    case .plain(let text):
-                        Text(text)
+            VStack(alignment: .leading, spacing: 12) {
+                switch receipt.body {
+                case .attributed(let paragraphs):
+                    // `VoiceAttributedText` is the SAME renderer the detail screen
+                    // uses, so the marks the owner asked to see "manifest" here are
+                    // exactly the ones he'll see when he opens the entry.
+                    ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                        VoiceAttributedText.paragraph(
+                            paragraph, voiceLabels: model.selectedJournalVoiceLabels)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    case .absent, .unreadable, .empty:
-                        // Unreachable: `proseUnavailableText` is non-nil for all three, so
-                        // the branch above handled them. Stated rather than defaulted, so
-                        // a new display case has to be decided here instead of silently
-                        // rendering nothing.
-                        EmptyView()
                     }
+                case .plain(let text):
+                    Text(text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .absent, .unreadable, .empty:
+                    // Unreachable: `proseUnavailableText` is non-nil for all three, so
+                    // the branch above handled them. Stated rather than defaulted, so
+                    // a new display case has to be decided here instead of silently
+                    // rendering nothing.
+                    EmptyView()
                 }
-                // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
-                // and this is a reading surface.
-                .font(.system(.callout, design: .serif))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
+            // and this is a reading surface.
+            .font(.system(.callout, design: .serif))
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("capture.receipt.prose")
         }
     }
@@ -503,7 +461,7 @@ struct JournalHeaderView: View {
                     Image(systemName: "chevron.up.chevron.down")
                         .captureLabel(.journalPickerChevron)
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(InkTone.studioInk.color)
             }
             .buttonStyle(.plain)
             // #65: the container identifier was overwriting its descendants', which made
@@ -549,13 +507,12 @@ struct JournalHeaderView: View {
 /// materialized into its sidecar (`EntryMetadata.originalDate == nil` means "use the
 /// capture's own date"). Settable before or during recording (M3 T3); the model pushes
 /// every change straight to the live capture's `entry.json` when one is in progress.
-/// The backdate toggle plus its precision date picker, with no styling applied. Two
-/// callers style this content for two different surfaces: `BackdateField` pins it to the
-/// near-black capture background (issue #58, the idle setup band's inline field);
-/// `CompactBackdateSummary`'s sheet leaves it in the system's own light/dark appearance —
-/// the same convention `JournalHeaderView`'s cover/voice-labels sheets already use, and
-/// the reason this content is factored out rather than duplicated (approach 2, 2026-08-16
-/// IA discussion: the sheet needs the identical write-through bindings, just un-styled).
+/// The backdate toggle plus its precision date picker, with no styling applied.
+/// `CompactBackdateSummary`'s sheet presents it in the system's own light/dark
+/// appearance — the same convention `JournalHeaderView`'s cover/voice-labels sheets
+/// already use, and the reason this content is factored out on its own (approach 2,
+/// 2026-08-16 IA discussion: the sheet needs the identical write-through bindings, just
+/// un-styled).
 struct BackdateEditorContent: View {
     let model: CaptureScreenModel
 
@@ -596,42 +553,9 @@ struct BackdateEditorContent: View {
     }
 }
 
-struct BackdateField: View {
-    let model: CaptureScreenModel
-
-    var body: some View {
-        BackdateEditorContent(model: model)
-            // Belt-and-suspenders alongside the `.environment` pin below (issue #58): an
-            // explicit foreground/tint at this call site (not inside
-            // `BackdateEditorContent`, which `CompactBackdateSummary`'s light-background
-            // sheet also uses and must not force) so the toggle's and date field's own
-            // text/highlight read correctly even if the environment pin doesn't reach
-            // every native subview.
-            .tint(.white)
-            .foregroundStyle(.white)
-            // The capture screen's background is near-black regardless of the app's color
-            // scheme; an ambient-scheme system control renders dark-on-dark in light mode
-            // (smoke feedback 2026-08-02, issue #58). `.environment(\.colorScheme, .dark)`
-            // ONLY — never `.preferredColorScheme`, which governs "the nearest enclosing
-            // presentation, such as a popover or window" (Apple's own wording): this view
-            // lives inside `CaptureView`, which is pushed inline into the app's navigation
-            // with no sheet or popover boundary between it and the window, so a
-            // `preferredColorScheme` pin here would resolve to the WHOLE WINDOW — forcing
-            // Library/Detail/Trash dark for every macOS light-mode user, all the time. The
-            // scoped `.environment` pin has no such reach; a control's own transient popup
-            // (the calendar/segment dropdown) is explicitly out of scope for #58 — it
-            // renders on its own material background, not the near-black screen.
-            .environment(\.colorScheme, .dark)
-    }
-}
-
-/// One-line, non-scrolling stand-in for `BackdateField` while capturing (approach 2,
-/// 2026-08-16 IA discussion). Owner: "there's two scrollable sections above [the bar]...
-/// I would rather have none, especially during the recording." The full field is bounded
-/// (a toggle and a date), so it never needed a scroll region — it just needed to stop
-/// being drawn as one. Tapping opens the same write-through editor in a sheet, unstyled
-/// (system light/dark material), the same convention `JournalHeaderView`'s other sheets
-/// already use.
+/// The one-line backdate summary, on Ready and Recording alike (#118 §6). Tapping opens
+/// the same write-through editor in a sheet, unstyled (system light/dark material), the
+/// same convention `JournalHeaderView`'s other sheets already use.
 struct CompactBackdateSummary: View {
     let model: CaptureScreenModel
     @State private var showingEditor = false
@@ -649,7 +573,7 @@ struct CompactBackdateSummary: View {
             }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
+        .foregroundStyle(InkTone.studioInk.color)
         .accessibilityIdentifier("capture.backdateSummary")
         .sheet(isPresented: $showingEditor) {
             NavigationStack {
@@ -678,42 +602,6 @@ struct CompactBackdateSummary: View {
         guard enabled else { return "Not backdated" }
         let partial = PartialDate(from: date, precision: precision, calendar: calendar)
         return "Backdated to \(partial.formatted(calendar: calendar))"
-    }
-}
-
-/// Whether this is a two-voice reading (T6 §14, design §5) — the setup-area gate for the
-/// voice switch. Pre-record only: the frame-0 `bn` opener can only be written at recording
-/// start, so enabling mid-capture has no coherent meaning in this build (plan §0.3.5).
-///
-/// The toggle reads `multiVoiceEnabled`, which is *computed* — the in-session per-journal
-/// override, else the journal's most recent entry on disk. Unlike the backdate toggle this
-/// one auto-enables from carry-over: a wrong voice attribute is visible and editable in T7,
-/// where a wrong backdate is a quiet data error (the deliberate divergence, design §2).
-struct MultiVoiceField: View {
-    let model: CaptureScreenModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Toggle(isOn: Binding(
-                get: { model.multiVoiceEnabled },
-                set: { model.setMultiVoiceEnabled($0) }
-            )) {
-                Text("Two voices")
-                    .captureLabel(.multiVoiceToggle)
-            }
-            .accessibilityIdentifier("capture.multiVoiceToggle")
-            .disabled(model.coordinator.phase != .idle)
-            .opacity(model.coordinator.phase == .idle ? 1 : 0.45)
-            // Same `.switch` reasoning as `BackdateField`'s toggle — not itself named
-            // in issue #58, but the same control class on the same background.
-            .toggleStyle(.switch)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding):
-        // there is no sheet or popover boundary between `CaptureView` and the window, so
-        // `preferredColorScheme` here would resolve to the whole window, not this subtree.
-        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -800,11 +688,15 @@ struct RecordControlsRow<Center: View>: View {
     ///
     /// `.opacity(0)` + `.accessibilityHidden(true)` was tried first and is not enough:
     /// XCUITest still finds an accessibility-hidden `Button` by identifier, so the control
-    /// remained queryable (and, more to the point, VoiceOver-reachable) in phases where it
-    /// does nothing. `CaptureUITests.testVoiceControlsFollowTheMultiVoiceToggle` — which
-    /// asserts the voice switch does not exist during a single-voice capture — caught it,
-    /// and is the pin for it. A `Color.clear` of the same fixed size keeps the geometry
-    /// without keeping the control.
+    /// remained queryable (and, more to the point, VoiceOver-reachable) in a phase where it
+    /// does nothing. A `Color.clear` of the same fixed size keeps the geometry without
+    /// keeping the control.
+    ///
+    /// Since #118 §4 both `showsVoiceControl` and `showsParagraphControl` are constant
+    /// `true` in every `CaptureState` (`MarkerControlsModel.make(phase:)`), so the `else`
+    /// branch below is currently unreachable — `isShown` and the branch stay because the
+    /// design only mandated dropping the `multiVoice:` parameter that used to feed it, not
+    /// the mechanism itself.
     @ViewBuilder
     private func markerButton(_ title: String,
                               identifier: String,
@@ -829,7 +721,7 @@ struct RecordControlsRow<Center: View>: View {
             // tap or say anything to VoiceOver.
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.white)
+                    .fill(InkTone.studioInk.color)
                     .opacity(flashBrightness[flashKind] ?? 0)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -850,7 +742,7 @@ struct RecordControlsRow<Center: View>: View {
                          identifier: "capture.voiceSwitch",
                          isShown: markers.showsVoiceControl,
                          flashKind: .voice) {
-                model.coordinator.markVoice(otherVoice)
+                model.markVoice(otherVoice)
             }
 
             // Pushes the marks apart as far as the row allows — the owner's refinement,
@@ -875,7 +767,7 @@ struct RecordControlsRow<Center: View>: View {
         .buttonStyle(.bordered)
         .controlSize(.large)
         // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding:
+        // see the matching comment on `JournalHeaderView` (issue #58 fix-round-1 finding:
         // nothing presents `CaptureView` as a sheet or popover, so `preferredColorScheme`
         // here would resolve to the whole window).
         .environment(\.colorScheme, .dark)

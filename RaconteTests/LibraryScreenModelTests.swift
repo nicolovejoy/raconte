@@ -68,7 +68,7 @@ final class LibraryScreenModelTests: XCTestCase {
 
     // MARK: Rescan
 
-    func testRescanPopulatesItemsJournalsAndRecent() async throws {
+    func testRescanPopulatesItemsAndJournals() async throws {
         try writeJournals([journal("J1", "1987")])
         try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
         try writeCapture(idB, capturedAt: 2_000)
@@ -81,35 +81,6 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertFalse(model.journalsUnreadable)
         XCTAssertFalse(model.isLoading)
         XCTAssertEqual(model.items.first(where: { $0.captureID == idA })?.journal?.name, "1987")
-    }
-
-    /// `recent` is capture-time order across *every* journal, not a slice of the filtered
-    /// list — the capture screen's "what I just recorded" must not follow the library's
-    /// filter or a backdate.
-    func testRecentIsCaptureOrderedAcrossAllJournalsAndCappedAtThree() async throws {
-        try writeJournals([journal("J1", "1987")])
-        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
-        try writeCapture(idB, capturedAt: 2_000)
-        try writeCapture(idC, capturedAt: 3_000)
-
-        let model = model()
-        model.journalScope = .journal("J1")
-        await model.rescan()
-
-        XCTAssertEqual(model.items.map(\.captureID), [idA], "the list follows the filter")
-        XCTAssertEqual(model.recent.map(\.captureID), [idC, idB, idA],
-                       "recent does not")
-    }
-
-    func testRecentIsCappedAtThree() async throws {
-        for (index, id) in [idA, idB, idC].enumerated() {
-            try writeCapture(id, capturedAt: Double(1_000 * (index + 1)))
-        }
-        try writeCapture("01DDDDDDDDDDDDDDDDDDDDDDDD", capturedAt: 4_000)
-        let model = model()
-        await model.rescan()
-        XCTAssertEqual(model.items.count, 4)
-        XCTAssertEqual(model.recent.count, 3)
     }
 
     // MARK: Filters

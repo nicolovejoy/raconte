@@ -51,16 +51,6 @@ final class JournalEditorUITests: XCTestCase {
         }
     }
 
-    /// Wait for the post-stop receipt and dismiss it — mirrors `CaptureUITests`'
-    /// `finishReceipt`, needed here only to get a real entry into a journal for the
-    /// disabled-affordance test below.
-    private func finishReceipt(_ app: XCUIApplication) {
-        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-        XCTAssertTrue(dismiss.waitForExistence(timeout: 30),
-                      "the post-stop receipt never appeared")
-        press(dismiss)
-    }
-
     /// `openPlace`/`firstJournalRow` (`UITestNavigation.swift`) each try exactly ONE
     /// reveal tap before searching, which is enough from a place's own root screen. The
     /// editor is a SECOND push on top of that root (sidebar -> journal list ->

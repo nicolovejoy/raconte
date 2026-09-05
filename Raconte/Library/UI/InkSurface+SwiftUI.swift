@@ -16,7 +16,7 @@ extension InkTone {
         case .ink: CaptureLabelColor(red: 0xEC / 255, green: 0xE8 / 255, blue: 0xE0 / 255)
         case .inkSecondary: CaptureLabelColor(red: 0x9A / 255, green: 0x93 / 255, blue: 0x87 / 255)
         case .accent: CaptureLabelColor(red: 0xC8 / 255, green: 0x93 / 255, blue: 0x5E / 255)
-        case .record, .studio: lightColor
+        case .record, .studio, .studioInk, .studioInkDim, .studioCard, .studioHairline, .studioSaved: lightColor
         }
     }
 

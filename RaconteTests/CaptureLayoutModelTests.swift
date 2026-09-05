@@ -23,20 +23,6 @@ final class CaptureLayoutModelTests: XCTestCase {
     private let settledPhases: [CaptureState] =
         [.idle, .captured, .finalizing, .complete]
 
-    func testLastEntryIsHiddenWhileCapturing() {
-        for phase in capturingPhases {
-            XCTAssertFalse(layout(phase).showsLastEntry,
-                           "\(phase): the last-entry row still occupies height during a capture")
-        }
-    }
-
-    func testMultiVoiceFieldIsHiddenWhileCapturing() {
-        for phase in capturingPhases {
-            XCTAssertFalse(layout(phase).showsMultiVoiceField,
-                           "\(phase): the Two-voices toggle still occupies height during a capture")
-        }
-    }
-
     func testTranscriptFillsAvailableHeightWhileCapturing() {
         for phase in capturingPhases {
             XCTAssertTrue(layout(phase).transcriptFillsAvailableHeight,
@@ -44,46 +30,18 @@ final class CaptureLayoutModelTests: XCTestCase {
         }
     }
 
-    // MARK: - Approach 2, 2026-08-16 IA discussion
-    //
-    // Owner: "there are three sections on the iPhone screen... the fact that there's two
-    // scrollable sections above [the bottom control bar] doesn't make any sense at all to
-    // me... I would rather have none, especially during the recording." The two scroll
-    // views were the setup band (squeezed into `setupHeightWhileCapturing` and forced to
-    // scroll internally) and the transcript. Bounded content — the journal name, the
-    // backdate — should never need a scroll region of its own; only the transcript is
-    // genuinely unbounded. These two flags are how the setup band stops needing one.
-
-    func testBackdateFieldIsCompactWhileCapturing() {
-        for phase in capturingPhases {
-            XCTAssertTrue(layout(phase).usesCompactBackdateField,
-                          "\(phase): the full inline backdate field is still on screen — "
-                          + "it is exactly the content that forced a second scroll view")
-        }
-    }
-
-    func testRecoveryBannersAreHiddenWhileCapturing() {
-        for phase in capturingPhases {
-            XCTAssertFalse(layout(phase).showsRecoveryBanners,
-                           "\(phase): a launch-recovery banner still occupies height during "
-                           + "a capture")
-        }
-    }
-
-    /// The owner's explicit constraint: idle must look exactly as it did. This fix is not
-    /// licence to redesign the capture landing — that redesign is separately scoped and
-    /// deliberately deferred until it can be discussed on a large screen.
-    func testIdleShowsTheLandingLayout() {
-        let idle = layout(.idle)
-        XCTAssertEqual(idle.mode, .setup)
-        XCTAssertTrue(idle.showsLastEntry, "idle lost the last-entry row")
-        XCTAssertTrue(idle.showsMultiVoiceField, "idle lost the Two-voices toggle")
-        XCTAssertFalse(idle.transcriptFillsAvailableHeight,
-                       "idle must not give the transcript the whole screen")
-        XCTAssertFalse(idle.usesCompactBackdateField,
-                       "idle must keep the full inline backdate field — it is a browsing "
-                       + "screen, where one honest scroll region is fine")
-        XCTAssertTrue(idle.showsRecoveryBanners, "idle lost the launch-recovery banners")
+    /// #118 §3: Ready is journal + backdate + the bar, nothing else. Ready and Recording
+    /// differ ONLY in the middle band (empty vs transcript) — the flags that used to
+    /// distinguish them (last entry, two voices, recovery banners, full backdate field)
+    /// are gone, not pinned false.
+    func testReadyIsTheBareLayout() {
+        let ready = layout(.idle)
+        XCTAssertEqual(ready.mode, .ready)
+        XCTAssertFalse(ready.showsLiveTranscript, "nothing is being transcribed")
+        XCTAssertFalse(ready.showsReceipt)
+        XCTAssertFalse(ready.showsDiscardButton)
+        XCTAssertFalse(ready.transcriptFillsAvailableHeight,
+                       "no transcript, so nothing to give the height to")
     }
 
     // MARK: - The post-stop receipt (owner ruling 2026-08-15, option B)
@@ -102,12 +60,9 @@ final class CaptureLayoutModelTests: XCTestCase {
     }
 
     /// While the receipt is up, nothing about arming the NEXT reading is on screen.
-    func testReceiptReplacesTheLandingControls() {
+    func testReceiptOwnsTheMiddleBand() {
         let receipt = CaptureLayoutModel.make(phase: .idle, hasReceipt: true)
         XCTAssertTrue(receipt.showsReceipt)
-        XCTAssertFalse(receipt.showsLastEntry,
-                       "the receipt IS the last entry; showing the row too is a duplicate")
-        XCTAssertFalse(receipt.showsMultiVoiceField)
     }
 
     /// The stranded-text bug, pinned directly: the live transcript band must never be on
@@ -166,12 +121,8 @@ final class CaptureLayoutModelTests: XCTestCase {
         let resuming = layout(.resuming)
         let recording = layout(.recording)
         XCTAssertEqual(resuming.mode, recording.mode)
-        XCTAssertEqual(resuming.showsLastEntry, recording.showsLastEntry)
-        XCTAssertEqual(resuming.showsMultiVoiceField, recording.showsMultiVoiceField)
         XCTAssertEqual(resuming.showsLiveTranscript, recording.showsLiveTranscript)
         XCTAssertEqual(resuming.showsReceipt, recording.showsReceipt)
-        XCTAssertEqual(resuming.usesCompactBackdateField, recording.usesCompactBackdateField)
-        XCTAssertEqual(resuming.showsRecoveryBanners, recording.showsRecoveryBanners)
         XCTAssertEqual(resuming.transcriptFillsAvailableHeight,
                        recording.transcriptFillsAvailableHeight)
         XCTAssertFalse(resuming.showsDiscardButton,
@@ -218,5 +169,19 @@ final class CaptureLayoutModelTests: XCTestCase {
         XCTAssertFalse(CaptureLayoutModel.make(phase: .captured, hasReceipt: true).showsDiscardButton)
         XCTAssertFalse(CaptureLayoutModel.make(phase: .finalizing).showsDiscardButton)
         XCTAssertFalse(CaptureLayoutModel.make(phase: .complete).showsDiscardButton)
+    }
+
+    /// Every remaining flag is exercised by at least one phase in each direction — a flag
+    /// that reads the same in every phase is the dead flag #74 complained about.
+    func testNoRemainingFlagIsConstant() {
+        let all = CaptureState.allCases.flatMap { phase in
+            [CaptureLayoutModel.make(phase: phase, hasReceipt: false),
+             CaptureLayoutModel.make(phase: phase, hasReceipt: true)]
+        }
+        XCTAssertTrue(all.contains { $0.showsLiveTranscript } && all.contains { !$0.showsLiveTranscript })
+        XCTAssertTrue(all.contains { $0.showsReceipt } && all.contains { !$0.showsReceipt })
+        XCTAssertTrue(all.contains { $0.showsDiscardButton } && all.contains { !$0.showsDiscardButton })
+        XCTAssertTrue(all.contains { $0.transcriptFillsAvailableHeight }
+                      && all.contains { !$0.transcriptFillsAvailableHeight })
     }
 }

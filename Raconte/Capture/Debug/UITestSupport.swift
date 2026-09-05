@@ -152,8 +152,8 @@ enum UITestVoiceMarkingSeed {
     /// merges them into ONE block on reload, the shape needed to drag a range WITHIN a
     /// merged block rather than a freshly-opened one. Tail digit `0` (not `1`/`2`, both
     /// already used for the two 3-word fixtures below) sorts LAST among the three under
-    /// `LibraryScreenModel.mostRecentlyCaptured`'s captureID-descending tiebreak, so it
-    /// always lands at recent row 2 and never disturbs the existing row 0/1 assumptions.
+    /// `EntryListItem.sortedByEffectiveDate`'s captureID-descending tiebreak, so it
+    /// always lands at library row 2 and never disturbs the existing row 0/1 assumptions.
     static let mergeCaptureID = "01KYX77KK5QM15915EZBVXTQZ0"
     static let words: [(text: String, start: Int64, end: Int64)] = [
         ("one", 0, 10_000),

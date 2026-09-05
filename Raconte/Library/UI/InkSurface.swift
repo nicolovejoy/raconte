@@ -22,6 +22,21 @@ enum InkTone: CaseIterable, Sendable {
     case record
     /// The capture screen's fixed near-black. Pinned to `CaptureSurface.backgroundWhite`.
     case studio
+    /// Text on the studio ground — the capture screen's full white (#118 §8; was a
+    /// `.white` literal in `CaptureView`).
+    case studioInk
+    /// The live transcript's provisional text (#118 §5): readable, unmistakably weaker
+    /// than `studioInk`. Clears the 7.0:1 capture floor with a little to spare.
+    case studioInkDim
+    /// The receipt card's ground on studio (#118 §3).
+    case studioCard
+    /// The receipt card's border on studio.
+    case studioHairline
+    /// The "Saved" chip's ground — system green at 22%, flattened to a constant so it
+    /// can be checked. Actually drawn over `studioCard`, not `studio` directly; the two
+    /// grounds are close enough (`.grey(0.11)` vs. the near-black studio background)
+    /// that the difference is visually negligible.
+    case studioSaved
 
     var lightColor: CaptureLabelColor {
         switch self {
@@ -36,6 +51,11 @@ enum InkTone: CaseIterable, Sendable {
         case .accent: CaptureLabelColor(red: 0x91 / 255, green: 0x64 / 255, blue: 0x38 / 255)
         case .record: CaptureLabelColor(red: 0xE5 / 255, green: 0x48 / 255, blue: 0x4D / 255)
         case .studio: .grey(CaptureSurface.backgroundWhite)
+        case .studioInk: .grey(1.0)
+        case .studioInkDim: .grey(0.62)
+        case .studioCard: .grey(0.11)
+        case .studioHairline: .grey(0.17)
+        case .studioSaved: CaptureLabelColor(red: 0.08, green: 0.21, blue: 0.12)
         }
     }
 }

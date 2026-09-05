@@ -35,7 +35,8 @@ struct NeutralCoverTile: View {
                 // Decorative only — `.accessibilityHidden` so neither the SF Symbol's
                 // synthesized label (e.g. "microphone") nor a stray letter leaks into a
                 // merged `NavigationLink` label a UI test reads (`library.entryLink`'s
-                // "Entry photo" check, `CaptureUITests.durationSeconds(in:)`'s technique).
+                // "Entry photo" check, `CaptureUITests
+                // .testRecordStopProducesFinishedEntry`'s technique).
                 if let letter = Self.monogramText(monogram) {
                     Text(letter)
                         .font(.system(size: size * 0.42, design: .serif))

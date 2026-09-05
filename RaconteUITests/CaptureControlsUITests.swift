@@ -101,9 +101,10 @@ final class CaptureControlsUITests: XCTestCase {
         waitUntil(20, "never left recording") { record.label != "Stop" }
     }
 
-    /// The specific control the owner lost. It only exists while recording (and only with
-    /// two-voice mode on), so this pins that once shown it holds still — and, critically,
-    /// that it remains hittable, which "scrolled off the bottom of the screen" is not.
+    /// The specific control the owner lost. It is present in every recording (#118 §4,
+    /// no two-voice toggle left to gate it), so this pins that once shown it holds still
+    /// — and, critically, that it remains hittable, which "scrolled off the bottom of
+    /// the screen" is not.
     func testVoiceSwitchStaysPutAndHittableWhileRecording() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home
@@ -329,8 +330,11 @@ final class CaptureControlsUITests: XCTestCase {
             file: file, line: line)
     }
 
-    /// Idle is what the owner sees before he starts reading, and the state in which the
-    /// backdate field, Two voices and Recent all have to be reachable without scrolling.
+    /// Idle (Ready) is what the owner sees before he starts reading, and the state in
+    /// which the setup band above the bar — journal picker and backdate summary — has
+    /// to stay fully visible without scrolling, which is why the bar itself is capped
+    /// at a third of the screen even here, before a single mark or the live timer adds
+    /// anything to it.
     func testControlBarTakesAtMostAThirdOfTheScreenWhenIdle() {
         let app = launchApp()
         openCapture(app)                    // #108: launch now lands on Home

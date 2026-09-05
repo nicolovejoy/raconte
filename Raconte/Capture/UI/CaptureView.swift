@@ -148,8 +148,10 @@ struct CaptureView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The live transcript: capped when idle, and free to take everything the setup band
-    /// and the control bar leave behind during a capture.
+    /// The live transcript: shown only while a capture is under way
+    /// (`layout.showsLiveTranscript`), free to take everything the setup band and the
+    /// control bar leave behind — never shown when idle (Ready or the post-stop
+    /// receipt), where the setup band and the receipt occupy this space instead.
     ///
     /// Its scroll view is now the ONLY one in this band — previously it was a same-axis
     /// scroll nested inside the page scroll, which is its own source of confused gestures.
@@ -211,8 +213,9 @@ struct CaptureView: View {
     /// button. Every size comes from `CaptureControlBarMetrics`, which is where the
     /// ≤ ⅓ arithmetic can be tested.
     ///
-    /// The background is opaque on purpose: the setup band scrolls behind this, and a
-    /// transparent bar would let text slide under the record button.
+    /// The background is opaque on purpose: the transcript region above this can grow
+    /// to fill the available height during a capture, and a transparent bar would let
+    /// its text slide under the record button.
     private var controlBar: some View {
         VStack(spacing: CaptureControlBarMetrics.rowSpacing) {
             statusRow
@@ -685,11 +688,15 @@ struct RecordControlsRow<Center: View>: View {
     ///
     /// `.opacity(0)` + `.accessibilityHidden(true)` was tried first and is not enough:
     /// XCUITest still finds an accessibility-hidden `Button` by identifier, so the control
-    /// remained queryable (and, more to the point, VoiceOver-reachable) in phases where it
-    /// does nothing. `CaptureUITests.testVoiceControlsFollowTheMultiVoiceToggle` — which
-    /// asserts the voice switch does not exist during a single-voice capture — caught it,
-    /// and is the pin for it. A `Color.clear` of the same fixed size keeps the geometry
-    /// without keeping the control.
+    /// remained queryable (and, more to the point, VoiceOver-reachable) in a phase where it
+    /// does nothing. A `Color.clear` of the same fixed size keeps the geometry without
+    /// keeping the control.
+    ///
+    /// Since #118 §4 both `showsVoiceControl` and `showsParagraphControl` are constant
+    /// `true` in every `CaptureState` (`MarkerControlsModel.make(phase:)`), so the `else`
+    /// branch below is currently unreachable — `isShown` and the branch stay because the
+    /// design only mandated dropping the `multiVoice:` parameter that used to feed it, not
+    /// the mechanism itself.
     @ViewBuilder
     private func markerButton(_ title: String,
                               identifier: String,

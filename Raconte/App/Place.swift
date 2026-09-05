@@ -145,10 +145,9 @@ enum PlaceRouting {
     /// Superseded 2026-08-17 (Gate B I1): the old rule ("re-selecting keeps the path")
     /// was written for iPhone, where the sidebar is reachable only at depth 0 so the
     /// path is always empty when a re-select can even happen. On Mac/iPad the Capture
-    /// place can carry a pushed entry (its `capture.recentRow` link, or the post-stop
-    /// receipt's Open link — both push onto this same path), and re-selecting Capture
-    /// via its sidebar row or ⌘1 did nothing — a dead click on the exact gesture meant
-    /// to return there.
+    /// place can carry a pushed entry (the post-stop receipt's entry card pushes onto
+    /// this same path), and re-selecting Capture via its sidebar row or ⌘1 did nothing —
+    /// a dead click on the exact gesture meant to return there.
     static func detailPath(afterSelecting new: Place,
                            from old: Place,
                            path: [LibraryDestination]) -> [LibraryDestination] {

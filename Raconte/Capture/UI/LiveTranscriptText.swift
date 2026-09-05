@@ -36,6 +36,15 @@ struct LiveTranscriptText: View {
 }
 
 /// The one reading face on the capture screen — receipt prose and live transcript.
+/// iOS keeps the semantic style so Dynamic Type still scales it; macOS is pinned to the
+/// screen's legibility floor, because `.callout` is 12 pt there (see
+/// `CaptureSurface.minimumControlPointSize`).
 enum CaptureProse {
-    static let font: Font = .system(.callout, design: .serif)
+    static let font: Font = {
+        #if os(macOS)
+        .system(size: CaptureSurface.minimumControlPointSize, design: .serif)
+        #else
+        .system(.callout, design: .serif)
+        #endif
+    }()
 }

@@ -337,24 +337,6 @@ final class LibraryScreenModel {
                              derived: dateRange(forJournal: journalID))
     }
 
-    /// Durable per-journal multi-voice carry-over (T6 §14, owner decision 5): the
-    /// journal's most recently captured non-trashed entry decides. Derived from
-    /// `allEntries` — the same collection `dateRange(forJournal:)` reads — so it costs
-    /// nothing beyond the scan the library already does, and it re-publishes whenever
-    /// that scan lands.
-    ///
-    /// Deliberately **auto-enabling**, and the recorded divergence from the 2026-08-02
-    /// backdate rule (design §2): a wrong voice attribute is visible and editable in the
-    /// T7 editor, where a wrong backdate is a quiet data error.
-    ///
-    /// The tiebreak the design leaves open is "most recently captured", so trashing a
-    /// journal's latest entry moves carry-over to the next-latest. That is a coherent
-    /// reading of the journal's durable state, not an accident.
-    func lastMultiVoice(forJournal journalID: String) -> Bool {
-        Self.mostRecentlyCaptured(allEntries.filter { $0.journalID == journalID }, limit: 1)
-            .first?.multiVoice ?? false
-    }
-
     /// Sorted by `capturedAt` descending — deliberately not `effectiveDate`: recency on
     /// the capture screen means "what I just recorded", not wherever a backdate put it.
     static func mostRecentlyCaptured(_ items: [EntryListItem], limit: Int) -> [EntryListItem] {

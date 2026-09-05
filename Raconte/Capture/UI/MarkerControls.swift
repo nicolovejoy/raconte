@@ -8,14 +8,14 @@ import Foundation
 /// must break the build here rather than silently hiding the controls in a phase
 /// nobody thought about.
 struct MarkerControlsModel: Equatable, Sendable {
-    /// The BN/LN voice switch. Gated on the multi-voice toggle (design §5).
+    /// The BN/LN voice switch. Present in every recording (#118 §4) — there is no
+    /// pre-record toggle left to gate it.
     var showsVoiceControl: Bool
-    /// The paragraph button. Independent of the multi-voice toggle (owner decision 7)
+    /// The paragraph button. Independent of the voice switch (owner decision 7)
     /// — paragraphs are structure in a single-voice reading too.
     var showsParagraphControl: Bool
     /// Taps land only in `.recording` (design §5). The controls are shown in every phase —
-    /// greyed everywhere else — so the layout never jumps, and so the Two-voices toggle has
-    /// a visible effect at the moment it is being decided.
+    /// greyed everywhere else — so the layout never jumps.
     var isEnabled: Bool
 
     // There was a `reservedForLayout` constant here, and an `isVisible` flag, from the
@@ -33,18 +33,22 @@ struct MarkerControlsModel: Equatable, Sendable {
     /// The controls used to appear only from `.recording`, which made the Two-voices toggle
     /// look inert: you turn on the thing whose whole purpose is the voice switch, and nothing
     /// appears. They are the answer to "can this reading be marked at all", and that is asked
-    /// BEFORE the record button is pressed. So visibility is now phase-independent — voice
-    /// still gated on the toggle, paragraph never (owner decision 7) — and only `isEnabled`
-    /// tracks the phase.
+    /// BEFORE the record button is pressed. So visibility is phase-independent — voice and
+    /// paragraph both shown in every phase (owner decision 7) — and only `isEnabled` tracks
+    /// the phase.
     ///
     /// The cases stay listed individually rather than collapsing to `default`: a new
     /// `CaptureState` must still break the build here and be considered, which is the
     /// property this type was written for.
-    static func make(phase: CaptureState, multiVoice: Bool) -> MarkerControlsModel {
+    static func make(phase: CaptureState) -> MarkerControlsModel {
         switch phase {
         case .idle, .preparing, .recording, .interrupted, .resuming,
              .stopping, .captured, .finalizing, .complete:
-            return .init(showsVoiceControl: multiVoice,
+            // #118 §4: the voice switch is present in every recording. The Two-voices
+            // toggle that used to gate it is gone; `VoiceMarkingPlan.openerIfNeeded`
+            // makes a single-voice recording convertible after the fact, so nothing the
+            // gate protected is lost.
+            return .init(showsVoiceControl: true,
                          showsParagraphControl: true,
                          // Only `.recording` has a frame to anchor a marker to; a tap in any
                          // other phase would have nowhere to land.

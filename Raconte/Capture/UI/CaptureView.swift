@@ -26,8 +26,7 @@ struct CaptureView: View {
     }
 
     private var markers: MarkerControlsModel {
-        MarkerControlsModel.make(phase: model.coordinator.phase,
-                                 multiVoice: model.multiVoiceEnabled)
+        MarkerControlsModel.make(phase: model.coordinator.phase)
     }
 
     private var layout: CaptureLayoutModel {
@@ -160,10 +159,6 @@ struct CaptureView: View {
                 VStack(spacing: 28) {
                     JournalHeaderView(model: model, showingJournalPicker: $showingJournalPicker)
                     BackdateField(model: model)
-
-                    if layout.showsMultiVoiceField {
-                        MultiVoiceField(model: model)
-                    }
 
                     if layout.showsRecoveryBanners {
                         ForEach(model.visibleRecovered) { rec in
@@ -681,42 +676,6 @@ struct CompactBackdateSummary: View {
     }
 }
 
-/// Whether this is a two-voice reading (T6 §14, design §5) — the setup-area gate for the
-/// voice switch. Pre-record only: the frame-0 `bn` opener can only be written at recording
-/// start, so enabling mid-capture has no coherent meaning in this build (plan §0.3.5).
-///
-/// The toggle reads `multiVoiceEnabled`, which is *computed* — the in-session per-journal
-/// override, else the journal's most recent entry on disk. Unlike the backdate toggle this
-/// one auto-enables from carry-over: a wrong voice attribute is visible and editable in T7,
-/// where a wrong backdate is a quiet data error (the deliberate divergence, design §2).
-struct MultiVoiceField: View {
-    let model: CaptureScreenModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Toggle(isOn: Binding(
-                get: { model.multiVoiceEnabled },
-                set: { model.setMultiVoiceEnabled($0) }
-            )) {
-                Text("Two voices")
-                    .captureLabel(.multiVoiceToggle)
-            }
-            .accessibilityIdentifier("capture.multiVoiceToggle")
-            .disabled(model.coordinator.phase != .idle)
-            .opacity(model.coordinator.phase == .idle ? 1 : 0.45)
-            // Same `.switch` reasoning as `BackdateField`'s toggle — not itself named
-            // in issue #58, but the same control class on the same background.
-            .toggleStyle(.switch)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // `.environment(\.colorScheme, .dark)` ONLY, never `.preferredColorScheme` —
-        // see the matching comment on `BackdateField` (issue #58 fix-round-1 finding):
-        // there is no sheet or popover boundary between `CaptureView` and the window, so
-        // `preferredColorScheme` here would resolve to the whole window, not this subtree.
-        .environment(\.colorScheme, .dark)
-    }
-}
-
 /// The recorder's control row: the voice switch, the record button, and the paragraph
 /// button, side by side with the marks pushed toward the screen edges.
 ///
@@ -850,7 +809,7 @@ struct RecordControlsRow<Center: View>: View {
                          identifier: "capture.voiceSwitch",
                          isShown: markers.showsVoiceControl,
                          flashKind: .voice) {
-                model.coordinator.markVoice(otherVoice)
+                model.markVoice(otherVoice)
             }
 
             // Pushes the marks apart as far as the row allows — the owner's refinement,

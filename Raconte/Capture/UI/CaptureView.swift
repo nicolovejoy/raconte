@@ -33,8 +33,9 @@ struct CaptureView: View {
                                 hasReceipt: model.receipt != nil)
     }
 
-    /// Issue #53. Three bands, top to bottom: a scrolling setup region, the live
-    /// transcript, and a control bar pinned to the bottom.
+    /// Issue #53, updated by #118 §3. Three bands, top to bottom: a fixed setup band
+    /// (journal + backdate), the live transcript or the receipt, and a control bar pinned
+    /// to the bottom.
     ///
     /// The single page-level `ScrollView` this replaces is what caused #53: the record
     /// button, voice switch and paragraph button sat inside it, *below* the transcript,
@@ -93,10 +94,10 @@ struct CaptureView: View {
         }
         .foregroundStyle(.white)
         .task { await model.bootstrap() }
-        // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s
-        // `ScrollView`/`VStack` — repo memory: a `.sheet` attached inside a
-        // Form/List `Section` silently never presents on iOS 26; this generalizes the
-        // same "attach at the screen's outer view" rule to every sheet on this screen.
+        // Task 10 (#18): outer ZStack level, never nested inside `setupRegion`'s `VStack`
+        // — repo memory: a `.sheet` attached inside a Form/List `Section` silently never
+        // presents on iOS 26; this generalizes the same "attach at the screen's outer
+        // view" rule to every sheet on this screen.
         // Presented PLAIN (no `.environment(\.colorScheme, .dark)`) — the sheet renders
         // on its own system material and follows ambient appearance, unlike the
         // near-black studio background behind it.

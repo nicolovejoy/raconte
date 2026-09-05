@@ -494,7 +494,11 @@ actor TranscriptionSession {
         for start in before.subtracting(after) {
             guard let seen = provisionalFirstSeen.removeValue(forKey: start) else { continue }
             let ms = Int((now - seen) / .milliseconds(1))
-            let how = result.isVolatile ? "superseded" : "settled"
+            // `promote(through:)` runs for any result carrying `finalizedThroughFrame`,
+            // final or volatile — so `result.isVolatile` alone mislabels a hypothesis that
+            // a volatile-borne marker settled. Whether `start` landed in `committed` is
+            // the honest test.
+            let how = consolidator.committed.contains { $0.range.start == start } ? "settled" : "superseded"
             timing.notice("\(how, privacy: .public) start=\(start, privacy: .public) provisionalMs=\(ms, privacy: .public)")
         }
     }

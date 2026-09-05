@@ -93,6 +93,7 @@ final class LiveTranscriptionRun {
                 while !Task.isCancelled {
                     let runs = await session.runs
                     await MainActor.run {
+                        guard self?.runs != runs else { return }
                         self?.runs = runs
                         self?.displayText = TranscriptText.join(runs.map(\.text))
                     }
@@ -104,7 +105,7 @@ final class LiveTranscriptionRun {
             let final = await session.committedText
             await MainActor.run {
                 self?.displayText = final
-                self?.runs = final.isEmpty ? [] : [ConsolidatedTranscriptRun(text: final, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+                self?.runs = ConsolidatedTranscriptRun.wholeCommitted(final)
                 self?.isRunning = false
             }
         }
@@ -194,8 +195,7 @@ final class LiveTranscriptionCoordinator {
     /// committed run (the receipt covers this on the ordinary path — see `displayText`).
     var runs: [ConsolidatedTranscriptRun] {
         if let id = activeCaptureID, let run = liveRuns[id] { return run.runs }
-        return lastCompletedText.isEmpty
-            ? [] : [ConsolidatedTranscriptRun(text: lastCompletedText, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+        return ConsolidatedTranscriptRun.wholeCommitted(lastCompletedText)
     }
 
     var isRunning: Bool {

@@ -495,7 +495,7 @@ actor TranscriptionSession {
             guard let seen = provisionalFirstSeen.removeValue(forKey: start) else { continue }
             let ms = Int((now - seen) / .milliseconds(1))
             let how = result.isVolatile ? "superseded" : "settled"
-            timing.info("\(how, privacy: .public) start=\(start, privacy: .public) provisionalMs=\(ms, privacy: .public)")
+            timing.notice("\(how, privacy: .public) start=\(start, privacy: .public) provisionalMs=\(ms, privacy: .public)")
         }
     }
 

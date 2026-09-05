@@ -48,15 +48,14 @@ final class VoiceMarkingUITests: XCTestCase {
     /// Open one of the seeded fixtures, **from the library**.
     ///
     /// `UITestVoiceMarkingSeed.seedIfRequested` seeds BOTH fixtures under the one env
-    /// gate. The tiebreak in `LibraryScreenModel.mostRecentlyCaptured` (equal `capturedAt`
+    /// gate. The tiebreak in `EntryListItem.sortedByEffectiveDate` (equal effective date
     /// -> larger `captureID` first) is what orders them: `captureID` ("…TQZ6") sorts
     /// before `unmarkedCaptureID` ("…TQZ2") — see `UITestVoiceMarkingSeed`'s doc comment —
     /// so row 0 is always the marked entry and row 1 the unmarked one.
     ///
-    /// This used to read those rows off the capture screen's Recent section. Since
-    /// 2026-08-15 that screen shows only the single most recent entry (owner: "just see
-    /// the most recent one and then have an obvious link to the Library"), so row 1 is not
-    /// there at all. The library lists every entry in the same newest-first order, so the
+    /// This used to read those rows off the capture screen's Recent section. Since #118
+    /// the capture screen shows no recent-entries section at all, so these rows are read
+    /// off the library, which lists every entry in the same newest-first order — the
     /// ordering note above still holds.
     ///
     /// Queried by `library.entryLink` — the identifier on the `NavigationLink` itself. The

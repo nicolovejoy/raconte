@@ -5,7 +5,7 @@ import UIKit
 
 /// Composition + orchestration for the capture screen. Owns the (per-capture, ephemeral)
 /// `CaptureCoordinator`, the launch-recovery banner list, the background finalizer, and
-/// the recent-recordings list. Kept out of the pure-tested layer on purpose: the testable
+/// the post-stop receipt. Kept out of the pure-tested layer on purpose: the testable
 /// mapping lives in `RecordControlModel` / `RecFormat`; this type is the imperative glue.
 ///
 /// Why a fresh coordinator per capture: the machine has no `captured → idle` edge (a
@@ -91,11 +91,12 @@ final class CaptureScreenModel {
     }
 
     let capturesRoot: URL
-    /// The recent-recordings section (M3 T4.5) and the Library screen read through the
-    /// SAME instance — one scanner, one `JournalStore`/`EntryMetadataStore` pair, per
-    /// the "don't build a second data path" rule this task exists to fix. Defaults to a
-    /// model over the same `capturesRoot`/`journalsContainerRoot` when the caller (a
-    /// test, the UI-test harness) does not share one in.
+    /// The capture screen's receipt reconciliation (`reconcileReceipt()`) and the Library
+    /// screen read through the SAME instance — one scanner, one `JournalStore`/
+    /// `EntryMetadataStore` pair, per the "don't build a second data path" rule this task
+    /// exists to fix. Defaults to a model over the same `capturesRoot`/
+    /// `journalsContainerRoot` when the caller (a test, the UI-test harness) does not
+    /// share one in.
     let library: LibraryScreenModel
     private let spawn: @MainActor () -> CaptureCoordinator
     private let finalizer: FinalizerWorker
@@ -282,8 +283,8 @@ final class CaptureScreenModel {
     /// closure captures the transcription coordinator, never the model.
     ///
     /// `library` is the SAME `LibraryScreenModel` instance `ContentView` pushes the
-    /// Library screen with — the recent-recordings section and the library list must
-    /// read through one scanner, not two (M3 T4.5). Ignored under the UI-test harness,
+    /// Library screen with — receipt reconciliation and the library list must read
+    /// through one scanner, not two (M3 T4.5). Ignored under the UI-test harness,
     /// which builds its own matching-root library the same way `LibraryScreenModel.live()`
     /// does for the caller's copy.
     static func liveWithTranscription(library: LibraryScreenModel) -> CaptureScreenModel {

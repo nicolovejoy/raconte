@@ -66,26 +66,20 @@ final class LibraryScreenModel {
     let imageStore: ImageStore
 
     private(set) var items: [EntryListItem] = []
-    /// The 3 most recently *captured* entries, across every journal, regardless of
-    /// `journalScope` — the capture screen's "what I just did" section (M3 T4.5). A
-    /// separate scan rather than a slice of `items`: `items` is filtered/sorted by
-    /// `effectiveDate` for the library list, and recency here means capture time, not
-    /// the (possibly backdated) effective date.
-    private(set) var recent: [EntryListItem] = []
     /// Everything in the trash, across every journal and independent of `journalScope`
     /// (M3 T5). Not journal-scoped on purpose: the owner deletes an entry, then goes
     /// looking for it — making him first recall which journal it was filed in is how a
     /// recoverable entry reads as gone.
     private(set) var trashed: [EntryListItem] = []
     /// Every non-trashed entry, across every journal, independent of `journalScope` —
-    /// the source `recent` and `dateRange(forJournal:)` both derive from, since neither
-    /// wants the current filter's narrowing (issue #14 part 2).
+    /// the source `dateRange(forJournal:)` derives from, since it doesn't want the
+    /// current filter's narrowing (issue #14 part 2).
     private(set) var allEntries: [EntryListItem] = []
     private(set) var journals: [Journal] = []
     /// Cover JPEG bytes by journal id (issue #14 part 3), for whichever journals have
     /// one. Reloaded on every `rescan()` alongside `journals` — the chips and the
     /// capture header both read this rather than hitting the store themselves, the same
-    /// "one scan, three consumers" shape `items`/`recent`/`trashed` already use.
+    /// "one scan, multiple derived lists" shape `items`/`trashed` already use.
     private(set) var journalCovers: [String: Data] = [:]
     /// `journals.json` exists and did not decode. Rendered by `LibraryView`: without it
     /// every filed entry reads as having a dangling journal, with no way to tell why.
@@ -242,8 +236,8 @@ final class LibraryScreenModel {
     /// trash). `EntryListFilter.apply` is pure over `[EntryListItem]` and the scan itself
     /// is the expensive half — it reads and consolidates every capture's `live.jsonl` —
     /// so scanning the superset once and filtering it three ways is both cheaper and
-    /// strictly more consistent: the list, the recents strip and the trash count now
-    /// always describe the same instant on disk.
+    /// strictly more consistent: the list, the unfiltered superset and the trash count
+    /// now always describe the same instant on disk.
     ///
     /// **Returns whether THIS scan published.** `false` means it was superseded — another
     /// `rescan()` started while this one was in flight, so this one assigned nothing and
@@ -290,7 +284,6 @@ final class LibraryScreenModel {
         trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
         skipped = result.skipped
         allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
-        recent = Self.mostRecentlyCaptured(allEntries, limit: 3)
         isLoading = false
         // Model-to-model, no view in the loop (#62, nav redesign §5.1). Placed after
         // every published assignment and after the superseded-scan guard above: the
@@ -337,17 +330,6 @@ final class LibraryScreenModel {
                              derived: dateRange(forJournal: journalID))
     }
 
-    /// Sorted by `capturedAt` descending — deliberately not `effectiveDate`: recency on
-    /// the capture screen means "what I just recorded", not wherever a backdate put it.
-    static func mostRecentlyCaptured(_ items: [EntryListItem], limit: Int) -> [EntryListItem] {
-        let sorted = items.sorted {
-            $0.capturedAt == $1.capturedAt
-                ? $0.captureID > $1.captureID
-                : $0.capturedAt > $1.capturedAt
-        }
-        return Array(sorted.prefix(limit))
-    }
-
     func selectJournalScope(_ scope: JournalScope) async {
         journalScope = scope
         await rescan()
@@ -359,9 +341,9 @@ final class LibraryScreenModel {
     ///
     /// Scope-independence is the whole point. This resolves a pushed navigation
     /// destination, and the ids that get pushed do not come from `items` alone: the
-    /// capture screen's recents strip is built from `allEntries`, so a recent filed in
-    /// another journal used to resolve nil and push a blank page, as did an entry moved
-    /// out of the active filter while its detail screen was open.
+    /// post-stop receipt card pushes the just-captured entry's id directly, so an entry
+    /// filed in another journal used to resolve nil and push a blank page, as did an
+    /// entry moved out of the active filter while its detail screen was open.
     func item(_ captureID: String) -> EntryListItem? {
         items.first { $0.captureID == captureID }
             ?? allEntries.first { $0.captureID == captureID }
@@ -821,9 +803,9 @@ final class LibraryScreenModel {
 
     // MARK: - Trash (M3 T5)
 
-    /// Soft-delete: stamp `trashedAt`. The entry leaves the library list and the recents
-    /// strip (the filter already excluded trashed items) and appears in the Trash view
-    /// with its countdown running. Nothing is removed from disk.
+    /// Soft-delete: stamp `trashedAt`. The entry leaves the library list (the filter
+    /// already excluded trashed items) and appears in the Trash view with its countdown
+    /// running. Nothing is removed from disk.
     ///
     /// Through `update`, so an `entry.json` we cannot parse is never overwritten with a
     /// tombstone-plus-defaults — the read throws first and the entry stays exactly as it

@@ -174,7 +174,6 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     /// role as `backdateDateButton`, just cross-platform and reachable during a recording
     /// rather than only inside macOS's own picker.
     case backdateSummary
-    case multiVoiceToggle
     case recentHeader
     /// Post-stop receipt (2026-08-15).
     case receiptDate
@@ -216,7 +215,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .journalName, .receiptDate, .receiptSavedChip,
              .backdateDateButton, .backdateSummary: .grey(1.0)
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-             .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
+             .backdateFieldCaption, .journalPickerChevron,
              .recentHeader, .receiptSummary, .discardButton, .discardNotice: .grey(0.78)
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
@@ -238,7 +237,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalName, .receiptDate: .title3   // 20
             case .recentHeader: .headline // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
+                 .backdateFieldCaption, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .discardButton, .discardNotice,
@@ -249,7 +248,7 @@ enum CaptureLabel: String, CaseIterable, Sendable {
             case .journalName, .receiptDate: .title    // 22
             case .recentHeader: .title2  // 17
             case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .multiVoiceToggle, .journalPickerChevron,
+                 .backdateFieldCaption, .journalPickerChevron,
                  .receiptSummary,
                  .receiptSavedChip, .backdateDateButton, .backdateSummary,
                  .discardButton, .discardNotice,

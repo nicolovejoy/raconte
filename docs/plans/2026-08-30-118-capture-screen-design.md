@@ -18,7 +18,10 @@ Capture in the sidebar.
 
 It also duplicates Home. Of the six things in the idle band, Home already renders the
 recovery banners (`HomeView.recoveryBanners`, identical call-site arguments — verified,
-not assumed) and the last entry, and About is where the build stamp belongs.
+not assumed), and About is where the build stamp belongs. The last entry is not rendered
+anywhere else — Home is a bookshelf with per-journal dates, no entry row. It goes anyway:
+the owner asked for it to go (§3), and All entries is one sidebar tap away. (Corrected
+2026-09-04 at PR A's final review; the original text claimed Home "already renders" it.)
 
 ## 1. Scope
 

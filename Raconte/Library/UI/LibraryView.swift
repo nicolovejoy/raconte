@@ -487,11 +487,9 @@ struct LibraryView: View {
         // On the LINK, not on the row inside it. A `NavigationLink`
         // merges its label's children into one accessibility element,
         // so `LibraryEntryRow`'s own `library.row` identifier is not
-        // independently queryable — the same flattening `capture
-        // .recentRow` exists to work around, and which silently made
-        // every library row unqueryable from a UI test until the
-        // capture screen stopped listing three recents and the tests
-        // had to come here instead.
+        // independently queryable — a UI test has to read the merged
+        // label off this identifier instead (see `library.row.duration`'s
+        // doc comment below for the same technique applied to duration).
         .accessibilityIdentifier("library.entryLink")
         .listRowBackground(InkTone.paper.color)
         // Trailing swipe (trash first, so a full swipe trashes —
@@ -645,12 +643,11 @@ struct LibraryEntryRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .accessibilityIdentifier("library.row.thumbnail")
             // A `NavigationLink`'s label flattens every child into ONE accessibility
-            // element (this row's own doc comment, and `library.row.duration`'s —
-            // see `CaptureUITests.recentRows`), so `library.row.thumbnail` is not
-            // independently queryable from a UI test; only the merged element's
+            // element (`navigableRow`'s doc comment above), so `library.row.thumbnail`
+            // is not independently queryable from a UI test; only the merged element's
             // LABEL is. This label is the thing a thumbnail-presence UI test can
-            // actually assert on, same technique `CaptureUITests.durationSeconds
-            // (in:)` uses for the duration text.
+            // actually assert on — same technique `CaptureUITests
+            // .testRecordStopProducesFinishedEntry` uses for the duration text.
             .accessibilityLabel("Entry photo")
         } else {
             NeutralCoverTile(size: 56, glyph: nil, cornerRadius: 8)

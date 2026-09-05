@@ -32,8 +32,10 @@ enum InkTone: CaseIterable, Sendable {
     case studioCard
     /// The receipt card's border on studio.
     case studioHairline
-    /// The "Saved" chip's ground — system green at 22% over studio, flattened to a
-    /// constant so it can be checked.
+    /// The "Saved" chip's ground — system green at 22%, flattened to a constant so it
+    /// can be checked. Actually drawn over `studioCard`, not `studio` directly; the two
+    /// grounds are close enough (`.grey(0.11)` vs. the near-black studio background)
+    /// that the difference is visually negligible.
     case studioSaved
 
     var lightColor: CaptureLabelColor {

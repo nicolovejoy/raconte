@@ -211,6 +211,19 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
+    /// #118 final-review fix wave. `InkTone.studioInkDim` has exactly one call site
+    /// (`LiveTranscriptText.swift:14`), and `LiveTranscriptTextTests` inject `.white`/
+    /// `.gray` directly rather than the token — so `InkSurfaceTests.
+    /// testStudioTextTonesClearTheCaptureFloor` can pass while measuring a colour nothing
+    /// on screen paints. This source scan is the only pin that the view actually applies
+    /// both studio tones, not just injectable stand-ins for them.
+    func testTheLiveTranscriptActuallyAppliesTheStudioTones() throws {
+        let sources = try captureUISources()   // comment-stripped, Raconte/Capture/UI
+        XCTAssertTrue(sources.contains("InkTone.studioInk.color"))
+        XCTAssertTrue(sources.contains("InkTone.studioInkDim.color"),
+                      "studioInkDim's contrast floors are decorative unless a view applies it")
+    }
+
     /// Concatenated source of every capture-screen view, comments stripped (via the
     /// shared `strippingComments` helper) so a case merely *named* in prose cannot
     /// satisfy the check above.

@@ -29,7 +29,9 @@ final class LiveTranscriptTextTests: XCTestCase {
         let runs = [run("settled", 0, provisional: false), run("guessing", 100, provisional: true)]
         let c = colours(LiveTranscriptText.attributed(runs, ink: .white, dim: .gray))
         XCTAssertEqual(c.map(\.1), [.white, .gray])
-        XCTAssertEqual(c.map(\.0), ["settled ", "guessing"])
+        XCTAssertEqual(c.map(\.0), ["settled ", "guessing"],
+                       "the separator takes the PRECEDING run's colour — 'settled ' carries " +
+                       "the space, not 'guessing'")
     }
 
     func testEmptyRunsIsEmptyText() {
@@ -42,5 +44,27 @@ final class LiveTranscriptTextTests: XCTestCase {
         let runs = [run("a", 0, provisional: false), run("b", 100, provisional: false),
                     run("c", 200, provisional: true)]
         XCTAssertEqual(String(LiveTranscriptText.attributed(runs, ink: .white, dim: .gray).characters), "a b c")
+    }
+
+    /// An empty-text run is a revoked hypothesis (`TranscriptConsolidator.applyVolatile`)
+    /// still present in the frame-ordered list — `attributed` must skip it entirely, not
+    /// leave a blank word that would print as a double space between its neighbours.
+    func testEmptyRunsAreSkippedNotRenderedAsBlankWords() {
+        let runs = [run("a", 0, provisional: false), run("", 100, provisional: true),
+                    run("b", 200, provisional: false)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, ink: .white, dim: .gray).characters), "a b")
+    }
+
+    /// No committed text at all yet — every run is a live hypothesis. The whole line must
+    /// read dim, not just the runs after some notional first "settled" word. (Adjacent
+    /// same-colour text coalesces into one `AttributedString` run, so this checks every
+    /// run present is dim rather than pinning a run count.)
+    func testAllProvisionalRunsAreAllDim() {
+        let runs = [run("still", 0, provisional: true), run("guessing", 100, provisional: true)]
+        let attributed = LiveTranscriptText.attributed(runs, ink: .white, dim: .gray)
+        let c = colours(attributed)
+        XCTAssertFalse(c.isEmpty)
+        XCTAssertTrue(c.allSatisfy { $0.1 == .gray }, "every run must be dim: \(c)")
+        XCTAssertEqual(String(attributed.characters), "still guessing")
     }
 }

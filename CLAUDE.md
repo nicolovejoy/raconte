@@ -2,52 +2,45 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-04/05 (laptop — #118 planned and PR A shipped via SDD; PR B gated on a Mac measurement)
+## Session 2026-09-05 (laptop — #118 Task 7 shipped via SDD; PR #138 open, CI green, Mac smoke passed)
 
-Wrote `docs/plans/2026-09-04-118-capture-screen-plan.md` (two PRs; §7 already shipped in
-#126) and executed it with subagent-driven development. **PR #135 merged** (`fad8f97f`):
-voice switch in every recording with no Two-voices toggle (§4, `CaptureScreenModel.markVoice`
-writes opener → mark → `multiVoice: true` once per capture), Ready = journal + compact
-backdate + bar with FOUR dead layout flags deleted (§3/§6 — `usesCompactBackdateField` went
-too, disclosed), receipt entry is a tappable card and "Record another" is gone (§3), colour
-literals → five `InkTone` studio tones (§8), UI tests migrated (shared `openReceiptEntry`/
-`finishReceipt`). Final review also removed dead `LibraryScreenModel.recent`. Unit 2049 /
-UI 62 on the PR; **main CI on `fad8f97f` was still in progress at handoff — read its count
-before quoting a baseline.** Design doc corrected: Home does NOT render the last entry.
+Resumed the SDD ledger for `feat/118-live-transcript` and ran Task 7: `LiveTranscriptText`
+composes one `AttributedString`, committed runs in `studioInk`, provisional runs in
+`studioInkDim`, dimmed on `isProvisional` and never on position; `CaptureProse.font` is the
+one serif face for the live band and the receipt. Task review clean. The final whole-branch
+review (Opus) found one Important: `studioInkDim` had a single unpinned call site, so
+`InkSurfaceTests`' contrast floors were measuring a colour nothing painted — a source scan in
+`CaptureLabelTests` now pins it (RED proven by swapping the colour). Same fix wave: an
+`Equatable` guard so the 250 ms ticker stops invalidating the view during silence, one
+`ConsolidatedTranscriptRun.wholeCommitted` factory, two more view tests, an honest
+settled/superseded label. Owner Mac smoke: band calm, no flicker; 12 pt serif too small →
+`CaptureProse.font` pinned to `CaptureSurface.minimumControlPointSize` (16 pt) on macOS,
+iOS keeps `.callout`; second look passed. The `transcript-timing` instrument is stripped
+(measurement recorded in the PR and the plan). **PR #138** ("Closes #118", 7 commits, head
+`21cb8c9a`): unit **2060** against main's 2049, UI 62, both CI jobs green.
 
-**PR B** (`feat/118-live-transcript`, worktree `.claude/worktrees/118-live`, rebased onto
-main, head `e3a831ee`): `TranscriptConsolidator.runs` → `[ConsolidatedTranscriptRun]` with
-`isProvisional`, plumbed to `LiveTranscriptionCoordinator.runs`; `displayText` derived from
-it; a `transcript-timing` notice-level log (`provisionalMs=`) at `TranscriptionSession.apply`.
-Task 7 (the dimmed-hypothesis view) is GATED on the owner reading that log — the design's
-"check first" rule. The SDD ledger lives at
-`.superpowers/sdd/2026-09-04-118-capture-screen-plan/progress.md` (git-ignored; keep until
-Task 7 lands). Issues filed: #133 merge/split, #134 repeated photo capture, #136 live
-paragraph break, #137 Mac editing mode.
-
-**Measurement attempt failed for a reason worth knowing:** the owner's build ran on `main`
-because `git checkout feat/118-live-transcript` refuses when the branch is checked out in a
-worktree, and the chained command carried on. The instrumented app is already built at
-`/tmp/raconte-118b/Build/Products/Debug/Raconte.app` (dylib UUID `F5ACE8ED…`, verified to
-contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build does not).
+Filed during the smoke: **#139** sidebar journal rows indented; **#140 remove the Discard
+button from the capture screen** — the owner hit it by accident and lost a recording;
+**#141** About → Build as `build N: <date>` plus a sequential described build list
+(owner said "build 18"; `CFBundleVersion` is 13 — reconcile in the design).
 
 **Next steps:**
-1. **Provisional window MEASURED (2026-09-05 08:04, Mac, two recordings, 19 settled runs):**
-   bimodal — 8 runs settle in 7–83 ms (finalized within the same result burst; never
-   renders as dim at the 250 ms ticker), 10 runs sit 3.2–3.95 s (the analyzer's ~3.85 s
-   finalization cadence), one 700 ms, one 7.7 s. Median 3166 ms, max 7735 ms. **Gate
-   passes: over the ~3 s line, so Task 7 builds as designed** — a run dims for ~4 s then
-   brightens once, a step every few seconds, not flicker. Receipt-card click on the Mac
-   confirmed by the owner (opens the entry). Task 7 deferred to the next session by choice.
-2. **Task 7 → PR B** ("Closes #118"): brief at the ledger's `task-7-brief.md` (already
-   renamed to `ConsolidatedTranscriptRun`). Then delete the SDD workspace and the worktree.
-3. **Device smoke of #135 on the iPhone** (next TestFlight; bump `CFBundleVersion` 13 → 14
-   first): record → BN flips to LN → stop → card, no "Record another" → tap card → back to
-   Capture via sidebar → must be Ready, NOT the receipt (the card's dismiss is the same
-   gesture #62 saw fail on device; "Record another" was the gesture-independent exit).
-4. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; `MarkerControlsModel`'s
-   two now-constant show flags; `transcriptFillsAvailableHeight` ≡ `showsLiveTranscript`;
-   sync hardening #91/#85.
+1. **Merge PR #138** (owner). Then delete the SDD workspace
+   (`.superpowers/sdd/2026-09-04-118-capture-screen-plan/`, git-ignored) and the worktree
+   (`git worktree remove .claude/worktrees/118-live`; the worktree holds a symlink to that
+   workspace). Prune the three local branches gone on origin: `feat/bulk-select`,
+   `feat/record-flow`, `feat/ux-entry-detail`.
+2. **#140 Discard button** — small, high-value, owner-hurt; do it first next session.
+   Check whether the lost recording from 2026-09-05 is recoverable from Trash before
+   designing (discard = trash on this project, see the never-infer-intent memory).
+3. **#141 build numbering** — design question first (which counter, where the list lives).
+4. **Device smoke of #135 + #138 on the iPhone** (next TestFlight; bump `CFBundleVersion`
+   13 → 14 first): record → BN flips to LN → live band dims/brightens → stop → card, no
+   "Record another" → tap card → back to Capture via sidebar → must be Ready.
+5. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; #139;
+   `MarkerControlsModel`'s two constant show flags; `transcriptFillsAvailableHeight` ≡
+   `showsLiveTranscript`; `TranscriptionSession.displayText` is test-only now; sync
+   hardening #91/#85.
 
 ## What Raconte is
 

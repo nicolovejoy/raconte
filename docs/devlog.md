@@ -3,6 +3,46 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-05 (laptop — #118 Task 7 shipped via SDD; PR #138 open, CI green, Mac smoke passed)
+
+Resumed the SDD ledger for `feat/118-live-transcript` and ran Task 7: `LiveTranscriptText`
+composes one `AttributedString`, committed runs in `studioInk`, provisional runs in
+`studioInkDim`, dimmed on `isProvisional` and never on position; `CaptureProse.font` is the
+one serif face for the live band and the receipt. Task review clean. The final whole-branch
+review (Opus) found one Important: `studioInkDim` had a single unpinned call site, so
+`InkSurfaceTests`' contrast floors were measuring a colour nothing painted — a source scan in
+`CaptureLabelTests` now pins it (RED proven by swapping the colour). Same fix wave: an
+`Equatable` guard so the 250 ms ticker stops invalidating the view during silence, one
+`ConsolidatedTranscriptRun.wholeCommitted` factory, two more view tests, an honest
+settled/superseded label. Owner Mac smoke: band calm, no flicker; 12 pt serif too small →
+`CaptureProse.font` pinned to `CaptureSurface.minimumControlPointSize` (16 pt) on macOS,
+iOS keeps `.callout`; second look passed. The `transcript-timing` instrument is stripped
+(measurement recorded in the PR and the plan). **PR #138** ("Closes #118", 7 commits, head
+`21cb8c9a`): unit **2060** against main's 2049, UI 62, both CI jobs green.
+
+Filed during the smoke: **#139** sidebar journal rows indented; **#140 remove the Discard
+button from the capture screen** — the owner hit it by accident and lost a recording;
+**#141** About → Build as `build N: <date>` plus a sequential described build list
+(owner said "build 18"; `CFBundleVersion` is 13 — reconcile in the design).
+
+**Next steps:**
+1. **Merge PR #138** (owner). Then delete the SDD workspace
+   (`.superpowers/sdd/2026-09-04-118-capture-screen-plan/`, git-ignored) and the worktree
+   (`git worktree remove .claude/worktrees/118-live`; the worktree holds a symlink to that
+   workspace). Prune the three local branches gone on origin: `feat/bulk-select`,
+   `feat/record-flow`, `feat/ux-entry-detail`.
+2. **#140 Discard button** — small, high-value, owner-hurt; do it first next session.
+   Check whether the lost recording from 2026-09-05 is recoverable from Trash before
+   designing (discard = trash on this project, see the never-infer-intent memory).
+3. **#141 build numbering** — design question first (which counter, where the list lives).
+4. **Device smoke of #135 + #138 on the iPhone** (next TestFlight; bump `CFBundleVersion`
+   13 → 14 first): record → BN flips to LN → live band dims/brightens → stop → card, no
+   "Record another" → tap card → back to Capture via sidebar → must be Ready.
+5. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; #139;
+   `MarkerControlsModel`'s two constant show flags; `transcriptFillsAvailableHeight` ≡
+   `showsLiveTranscript`; `TranscriptionSession.displayText` is test-only now; sync
+   hardening #91/#85.
+
 ## Session 2026-09-04/05 (laptop — #118 planned and PR A shipped via SDD; PR B gated on a Mac measurement)
 
 Wrote `docs/plans/2026-09-04-118-capture-screen-plan.md` (two PRs; §7 already shipped in

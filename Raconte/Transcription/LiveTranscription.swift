@@ -56,6 +56,7 @@ final class LiveTranscriptionRun {
     /// Committed text plus the current hypothesis — the capture screen's ghost text.
     /// Never persisted; `TranscriptionSession` keeps the two separate for exactly that.
     private(set) var displayText: String = ""
+    private(set) var runs: [ConsolidatedTranscriptRun] = []
     private(set) var isRunning = false
 
     /// `capacity` in chunks. Generous: overflow costs a converter restart and a recorded
@@ -90,8 +91,11 @@ final class LiveTranscriptionRun {
             // recomputing it at speaking cadence is cheaper than diffing it.
             let ticker = Task { [weak self] in
                 while !Task.isCancelled {
-                    let text = await session.displayText
-                    await MainActor.run { self?.displayText = text }
+                    let runs = await session.runs
+                    await MainActor.run {
+                        self?.runs = runs
+                        self?.displayText = TranscriptText.join(runs.map(\.text))
+                    }
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
@@ -100,6 +104,7 @@ final class LiveTranscriptionRun {
             let final = await session.committedText
             await MainActor.run {
                 self?.displayText = final
+                self?.runs = final.isEmpty ? [] : [ConsolidatedTranscriptRun(text: final, range: FrameRange(start: 0, end: 0), isProvisional: false)]
                 self?.isRunning = false
             }
         }
@@ -161,13 +166,16 @@ final class LiveTranscriptionCoordinator {
 
     /// Keyed by capture id, not a single slot: `finishCurrentCapture()` spawns the next
     /// coordinator immediately, so capture N+1 can begin while N is still draining.
-    private var runs: [String: LiveTranscriptionRun] = [:]
+    ///
+    /// Named `liveRuns`, not `runs`: `runs` is the `[ConsolidatedTranscriptRun]` computed
+    /// property below (#118 §5), and the two names collided.
+    private var liveRuns: [String: LiveTranscriptionRun] = [:]
 
     private(set) var activeCaptureID: String?
 
-    /// Ids whose `finish()` is in flight. `runs` used to serve as this guard by removing
-    /// up front; it can't any more, because the run must stay in the map across the await
-    /// so the panel keeps rendering. See `finish(captureID:)`.
+    /// Ids whose `finish()` is in flight. `liveRuns` used to serve as this guard by
+    /// removing up front; it can't any more, because the run must stay in the map across
+    /// the await so the panel keeps rendering. See `finish(captureID:)`.
     private var finishing: Set<String> = []
 
     /// The finished capture's text, held until the next one begins.
@@ -178,12 +186,20 @@ final class LiveTranscriptionCoordinator {
     private(set) var lastCompletedText: String = ""
 
     var displayText: String {
-        if let id = activeCaptureID, let run = runs[id] { return run.displayText }
+        if let id = activeCaptureID, let run = liveRuns[id] { return run.displayText }
         return lastCompletedText
     }
 
+    /// The active run's runs; outside a capture, the last completed text as one
+    /// committed run (the receipt covers this on the ordinary path — see `displayText`).
+    var runs: [ConsolidatedTranscriptRun] {
+        if let id = activeCaptureID, let run = liveRuns[id] { return run.runs }
+        return lastCompletedText.isEmpty
+            ? [] : [ConsolidatedTranscriptRun(text: lastCompletedText, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+    }
+
     var isRunning: Bool {
-        activeCaptureID.flatMap { runs[$0]?.isRunning } ?? false
+        activeCaptureID.flatMap { liveRuns[$0]?.isRunning } ?? false
     }
 
     init(capturesRoot: URL, makeEngine: @escaping @MainActor () -> (any TranscriptionEngine)?) {
@@ -202,7 +218,7 @@ final class LiveTranscriptionCoordinator {
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
                                                        captureID: captureID)
         let run = LiveTranscriptionRun(captureID: captureID, captureDirectory: directory)
-        runs[captureID] = run
+        liveRuns[captureID] = run
         activeCaptureID = captureID
         lastCompletedText = ""
         return run.sink
@@ -213,7 +229,7 @@ final class LiveTranscriptionCoordinator {
     /// Called from the capture screen when the coordinator reaches `.recording`.
     /// Idempotent — the phase can be observed more than once.
     func activate(captureID: String, inputFormat: AudioFormatDescriptor) {
-        guard let run = runs[captureID], let engine = makeEngine() else { return }
+        guard let run = liveRuns[captureID], let engine = makeEngine() else { return }
         run.activate(inputFormat: inputFormat, engine: engine)
     }
 
@@ -226,12 +242,12 @@ final class LiveTranscriptionCoordinator {
     /// words reached `live.jsonl` and were never rendered. Read on the 2026-08-02 iPhone
     /// pass as "the transcript stopped a few words early"; nothing was ever lost.
     func finish(captureID: String) async -> TranscriptRef? {
-        guard let run = runs[captureID], !finishing.contains(captureID) else { return nil }
+        guard let run = liveRuns[captureID], !finishing.contains(captureID) else { return nil }
         finishing.insert(captureID)
         let ref = await run.finish()
         finishing.remove(captureID)
         lastCompletedText = run.displayText
-        runs.removeValue(forKey: captureID)
+        liveRuns.removeValue(forKey: captureID)
         // Only if the next capture hasn't already claimed the slot during the await —
         // `finishCurrentCapture()` spawns the successor immediately.
         if activeCaptureID == captureID { activeCaptureID = nil }
@@ -239,7 +255,7 @@ final class LiveTranscriptionCoordinator {
     }
 
     func abandon(captureID: String) async {
-        guard let run = runs.removeValue(forKey: captureID) else { return }
+        guard let run = liveRuns.removeValue(forKey: captureID) else { return }
         if activeCaptureID == captureID { activeCaptureID = nil }
         await run.abandon()
     }

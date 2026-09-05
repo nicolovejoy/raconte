@@ -33,15 +33,6 @@ final class CaptureUITests: XCTestCase {
         app.buttons["capture.record"].firstMatch
     }
 
-    /// Rows in the capture screen's "Recent" section (M3 T4.5) — each a `NavigationLink`
-    /// wrapping a `LibraryEntryRow`. Queried by the link's own `capture.recentRow`
-    /// identifier, not the row's nested `library.row.duration` text: a `NavigationLink`,
-    /// like `Button`, merges its label's children into ONE accessibility element, so the
-    /// nested identifier is not independently queryable — only the link's own is.
-    private func recentRows(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.descendants(matching: .any).matching(identifier: "capture.recentRow")
-    }
-
     /// Task 6 (#55): the trash affordance moved from an in-body button to a row in the
     /// `⋯` info sheet — open the sheet first, then hand back its trash row, same
     /// identifier as before minus the `.legacy` suffix.
@@ -52,26 +43,6 @@ final class CaptureUITests: XCTestCase {
         let trashButton = app.buttons["detail.trashButton"].firstMatch
         XCTAssertTrue(trashButton.waitForExistence(timeout: 10), "Move to Trash row missing from the info sheet")
         return trashButton
-    }
-
-    /// Wait for the post-stop receipt and dismiss it.
-    ///
-    /// Added 2026-08-15. Finishing a capture used to drop straight back to the landing
-    /// screen, so "a recording completed" could be read off a Recent row appearing. It now
-    /// raises a receipt that owns the screen until dismissed (owner ruling: the finished
-    /// transcript was being left stranded on the landing screen with nothing owning it),
-    /// so every test that records something needs this one step — the same step a person
-    /// takes. The receipt appearing is also a STRONGER completion signal than a row was:
-    /// it is only built after the finalizer, the transcript ref and the rescan have all
-    /// run, whereas a row could appear off a scan alone.
-    private func finishReceipt(_ app: XCUIApplication, _ what: String = "recording",
-                               file: StaticString = #filePath, line: UInt = #line) {
-        let dismiss = app.buttons["capture.receipt.dismiss"].firstMatch
-        guard dismiss.waitForExistence(timeout: 30) else {
-            XCTFail("\(what): the post-stop receipt never appeared", file: file, line: line)
-            return
-        }
-        press(dismiss)
     }
 
     /// Entries as the Library screen lists them.
@@ -113,12 +84,21 @@ final class CaptureUITests: XCTestCase {
         press(record)                       // Stop → flush → captured → finalize
 
         finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        let row = recentRows(app).firstMatch
-        XCTAssertNotNil(Self.durationSeconds(in: row.label),
-                        "recent row shows no duration: \(row.label)")
+        openPlace(app, "sidebar.allEntries")
+        // Not a direct `library.row.duration` query: `library.entryLink`
+        // (`LibraryView.swift`) is a `NavigationLink`, which merges its label's
+        // children into ONE accessibility element, so the nested duration Text is not
+        // independently queryable — the row's own doc comment names this as the same
+        // flattening `capture.recentRow` existed to work around. Parse the `m:ss` shape
+        // out of the link's merged label instead, same technique the old
+        // `durationSeconds(in:)` used against a Recent row's label.
+        let row = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "the finished entry never appeared in the library")
+        guard let range = row.label.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) else {
+            XCTFail("the finished entry shows no duration: \(row.label)")
+            return
+        }
+        XCTAssertNotNil(Self.seconds(String(row.label[range])), "duration is not m:ss: \(row.label)")
     }
 
     // MARK: doc tests 6/30 (flow) — kill mid-recording → relaunch recovers
@@ -157,17 +137,15 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 1)
         press(record)
         finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
         app.terminate()                     // idle now — a clean-ish quit
 
         let relaunched = launchApp()
         // No spurious banner: check on Home, where relaunch now lands, before navigating
-        // to capture for the Recent-row check below.
+        // to the library for the entry check below.
         XCTAssertFalse(recoveryBanner(relaunched).exists,
                        "spurious recovery banner on idle relaunch")
-        openCapture(relaunched)
-        let rows = recentRows(relaunched)
-        waitUntil(20, "entry lost across relaunch") { rows.count == 1 }
+        openPlace(relaunched, "sidebar.allEntries")
+        waitUntil(20, "entry lost across relaunch") { self.libraryRows(relaunched).count == 1 }
         // Re-check after bootstrap/scan has definitely completed (the entry row
         // wait above proves the scan finished), not just at the racy moment
         // right after relaunch.
@@ -230,13 +208,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 3)    // ~3 s so half is unambiguous
         press(record)
-        finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        let recentRow = recentRows(app).firstMatch
-        XCTAssertTrue(recentRow.waitForExistence(timeout: 10), "recent row never appeared")
-        press(recentRow)
+        openReceiptEntry(app)
 
         // The scrubber only exists once playback has been started at least once.
         let play = app.buttons["detail.play"].firstMatch
@@ -295,11 +267,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 2)
         press(record)
-        finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        press(recentRows(app).firstMatch)
+        openReceiptEntry(app)
 
         let trashButton = openTrashRow(app)
         press(trashButton)
@@ -307,8 +275,8 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
         press(confirm)
 
-        // Back on the capture screen: the entry is gone from Recent.
-        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+        openPlace(app, "sidebar.allEntries")
+        waitUntil(20, "trashed entry still in the library") { self.libraryRows(app).count == 0 }
 
         openPlace(app, "sidebar.trash")
 
@@ -350,10 +318,7 @@ final class CaptureUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)
         press(record)
 
-        let open = app.descendants(matching: .any)
-            .matching(identifier: "capture.receipt.open").firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 30), "the post-stop receipt never appeared")
-        press(open)
+        openReceiptEntry(app)
 
         let trashButton = openTrashRow(app)
         press(trashButton)
@@ -361,13 +326,11 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no trash confirmation")
         press(confirm)
 
-        // Back on the capture screen: the receipt is gone with its entry, and so is
-        // the Recent row (the row half already worked — trashEntry rescans).
+        // Back on the capture screen: the receipt is gone with its entry.
         XCTAssertTrue(record.waitForExistence(timeout: 20), "never landed back on the capture screen")
         waitUntil(15, "the receipt still names the trashed entry") {
-            app.buttons["capture.receipt.dismiss"].firstMatch.exists == false
+            app.descendants(matching: .any).matching(identifier: "capture.receipt.open").firstMatch.exists == false
         }
-        waitUntil(15, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
     }
 
     // MARK: owner report 2026-08-03 — Trash → Delete Now must actually erase the entry
@@ -387,11 +350,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 2)
         press(record)
-        finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        press(recentRows(app).firstMatch)
+        openReceiptEntry(app)
 
         let trashButton = openTrashRow(app)
         press(trashButton)
@@ -399,7 +358,8 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
         press(confirmTrash)
 
-        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+        openPlace(app, "sidebar.allEntries")
+        waitUntil(20, "trashed entry still in the library") { self.libraryRows(app).count == 0 }
 
         openPlace(app, "sidebar.trash")
 
@@ -427,10 +387,9 @@ final class CaptureUITests: XCTestCase {
         // in the in-memory list this process happened to be holding.
         app.terminate()
         let relaunched = launchApp()
-        openCapture(relaunched)             // #108: launch now lands on Home
-        XCTAssertTrue(relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
-        XCTAssertEqual(recentRows(relaunched).count, 0,
-                       "permanently-deleted entry reappeared in Recent after relaunch")
+        openPlace(relaunched, "sidebar.allEntries")
+        XCTAssertEqual(libraryRows(relaunched).count, 0,
+                       "permanently-deleted entry reappeared after relaunch")
 
         openPlace(relaunched, "sidebar.trash")
         XCTAssertTrue(relaunched.descendants(matching: .any).matching(identifier: "trash.empty")
@@ -453,21 +412,19 @@ final class CaptureUITests: XCTestCase {
 
         // Record and trash two separate entries.
         for _ in 0..<2 {
+            waitUntil(15, "record button not ready") { record.label == "Record" && record.isEnabled }
             press(record)
             waitUntil(10, "never entered recording") { record.label == "Stop" }
             Thread.sleep(forTimeInterval: 2)
             press(record)
-            finishReceipt(app)
-            waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-            waitUntil(15, "screen never reset to idle") { record.label == "Record" }
+            openReceiptEntry(app)
 
-            press(recentRows(app).firstMatch)
             let trashButton = openTrashRow(app)
             press(trashButton)
             let confirmTrash = app.buttons["detail.confirmTrash"].firstMatch
             XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
             press(confirmTrash)
-            waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+            openCapture(app)
         }
 
         openPlace(app, "sidebar.trash")
@@ -492,9 +449,6 @@ final class CaptureUITests: XCTestCase {
         // in-memory list.
         app.terminate()
         let relaunched = launchApp()
-        openCapture(relaunched)             // #108: launch now lands on Home
-        XCTAssertTrue(relaunched.buttons["capture.record"].firstMatch.waitForExistence(timeout: 15))
-
         openPlace(relaunched, "sidebar.trash")
         XCTAssertTrue(relaunched.staticTexts["trash.empty"].firstMatch.waitForExistence(timeout: 15),
                       "trash shows permanently-deleted entries after relaunch")
@@ -519,11 +473,7 @@ final class CaptureUITests: XCTestCase {
         waitUntil(10, "never entered recording") { record.label == "Stop" }
         Thread.sleep(forTimeInterval: 3)
         press(record)
-        finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        press(recentRows(app).firstMatch)
+        openReceiptEntry(app)
 
         let play = app.buttons["detail.play"].firstMatch
         XCTAssertTrue(play.waitForExistence(timeout: 10), "play button never appeared")
@@ -538,7 +488,8 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(confirmTrash.waitForExistence(timeout: 10), "no trash confirmation")
         press(confirmTrash)
 
-        waitUntil(20, "trashed entry still in Recent") { self.recentRows(app).count == 0 }
+        openPlace(app, "sidebar.allEntries")
+        waitUntil(20, "trashed entry still in the library") { self.libraryRows(app).count == 0 }
 
         openPlace(app, "sidebar.trash")
 
@@ -548,75 +499,35 @@ final class CaptureUITests: XCTestCase {
                       + "write likely silently failed while playback was running")
     }
 
-    // MARK: T6 §14 design §8 (flow) — the Two-voices toggle gates the voice switch
+    // MARK: #118 §4 — the voice switch is in every recording
 
-    /// Record twice over the synthetic engine: once with "Two voices" on, once off.
-    /// With it on, both marker controls are present while recording; with it off, the
-    /// paragraph button is still there (owner decision 7 — paragraphs are independent
-    /// of the voice toggle) and the voice switch is gone.
-    ///
-    /// The explicit toggle-*off* in the second half is part of what's being tested:
-    /// multi-voice carry-over auto-arms the toggle from the just-recorded entry, which
-    /// is the deliberate divergence from backdate carry-over (design §2).
-    ///
-    /// There is no `capture.done` button while recording (`RecordControlModel` offers
-    /// Done only from `.interrupted`), so captures are stopped the way every other test
-    /// here stops them: press `capture.record` again and poll its label.
-    func testVoiceControlsFollowTheMultiVoiceToggle() {
+    /// There is no Two-voices toggle any more. A recording opens with both marker
+    /// controls present, the voice switch reading the main voice, and a tap on it flips
+    /// the label — that tap is what makes the entry two-voice.
+    func testVoiceSwitchIsPresentInEveryRecording() {
         let app = launchApp()
-        openCapture(app)                    // #108: launch now lands on Home
+        openCapture(app)
         let record = recordButton(app)
         XCTAssertTrue(record.waitForExistence(timeout: 15), "record button never appeared")
-
-        let multiVoice = app.switches["capture.multiVoiceToggle"].firstMatch
-        XCTAssertTrue(multiVoice.waitForExistence(timeout: 10), "no Two voices toggle")
-        setToggle(multiVoice, on: true)
+        XCTAssertFalse(app.switches["capture.multiVoiceToggle"].firstMatch.exists,
+                       "the Two-voices toggle is gone (#118 §4)")
 
         press(record)
         waitUntil(10, "never entered recording") { record.label == "Stop" }
 
         let voiceSwitch = app.buttons["capture.voiceSwitch"].firstMatch
         let paragraph = app.buttons["capture.paragraph"].firstMatch
-        XCTAssertTrue(voiceSwitch.waitForExistence(timeout: 10),
-                      "no voice switch while recording with Two voices on")
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 10),
-                      "no paragraph button while recording")
-        XCTAssertEqual(voiceSwitch.label, "BN",
-                       "a multi-voice capture opens in bn, so the switch shows BN")
+        XCTAssertTrue(voiceSwitch.waitForExistence(timeout: 10), "no voice switch while recording")
+        XCTAssertTrue(paragraph.waitForExistence(timeout: 10), "no paragraph button while recording")
+        XCTAssertEqual(voiceSwitch.label, "BN", "a recording opens in the main voice")
+
+        Thread.sleep(forTimeInterval: 1)
+        press(voiceSwitch)
+        waitUntil(10, "the voice never flipped") { voiceSwitch.label == "LN" }
 
         Thread.sleep(forTimeInterval: 1)
         press(record)
         finishReceipt(app)
-        waitUntil(30, "finished entry never appeared") { self.recentRows(app).count == 1 }
-        waitUntil(15, "screen never reset to idle") { record.label == "Record" }
-
-        // Carry-over will have armed it from the entry just recorded — turn it off by hand.
-        setToggle(multiVoice, on: false)
-
-        press(record)
-        waitUntil(10, "never entered recording (second capture)") { record.label == "Stop" }
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 10),
-                      "the paragraph button must survive Two voices being off")
-        XCTAssertFalse(voiceSwitch.exists,
-                       "voice switch shown while recording with Two voices off")
-
-        Thread.sleep(forTimeInterval: 1)
-        press(record)
-        finishReceipt(app, "second recording")
-    }
-
-    /// Drive a SwiftUI `Toggle` to a known state and confirm it landed there — the
-    /// switch reports "0"/"1" through `value`, and tapping an already-correct toggle
-    /// would silently invert the thing under test.
-    private func setToggle(_ toggle: XCUIElement, on: Bool,
-                           file: StaticString = #filePath, line: UInt = #line) {
-        let wanted = on ? "1" : "0"
-        if (toggle.value as? String) != wanted {
-            press(toggle)
-        }
-        waitUntil(5, "toggle never reached \(on ? "on" : "off")", file: file, line: line) {
-            (toggle.value as? String) == wanted
-        }
     }
 
     /// `XCUIElement.value` is `Any?`; a SwiftUI slider reports its number as a
@@ -636,13 +547,4 @@ final class CaptureUITests: XCTestCase {
         return parts[0] * 60 + parts[1]
     }
 
-    /// A `NavigationLink`-wrapped `LibraryEntryRow`'s accessibility label is every child
-    /// `Text`'s label concatenated by SwiftUI (date, duration, snippet, journal) — so the
-    /// duration check searches for the `m:ss` shape rather than parsing the whole label.
-    private static func durationSeconds(in label: String) -> Double? {
-        guard let range = label.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) else {
-            return nil
-        }
-        return seconds(String(label[range]))
-    }
 }

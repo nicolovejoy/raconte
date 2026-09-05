@@ -15,6 +15,13 @@ struct ConsolidatedTranscriptRun: Equatable, Sendable {
     var text: String
     var range: FrameRange
     var isProvisional: Bool
+
+    /// One committed run standing for a finished transcript, for surfaces that hold the
+    /// text after the consolidator is gone. The range is a placeholder — nothing sorts or
+    /// merges these.
+    static func wholeCommitted(_ text: String) -> [ConsolidatedTranscriptRun] {
+        text.isEmpty ? [] : [ConsolidatedTranscriptRun(text: text, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+    }
 }
 
 /// Merges the transcriber's two result streams into one ordered view (design §8).

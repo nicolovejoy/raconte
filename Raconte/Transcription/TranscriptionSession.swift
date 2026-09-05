@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import CoreMedia
 import Speech
-import os
 
 /// Resolves a two-way race exactly once, so the loser can be abandoned rather than
 /// awaited. `NSLock` rather than an actor: the whole point is that resolving must not
@@ -89,12 +88,6 @@ actor TranscriptionSession {
 
     private var consolidator = TranscriptConsolidator()
     private var resultsTask: Task<Void, Never>?
-
-    /// #118 §5 "check first": wall-clock first-seen time per provisional range start, so
-    /// the owner can read how long text stays provisional in real speech before the
-    /// dimmed-hypothesis view is built. Diagnostic only; nothing reads it.
-    private var provisionalFirstSeen: [Int64: ContinuousClock.Instant] = [:]
-    private let timing = Logger(subsystem: "org.pianohouseproject.raconte", category: "transcript-timing")
 
     // MARK: Capture-frame accounting (design §2, "The clock")
 
@@ -482,24 +475,8 @@ actor TranscriptionSession {
     }
 
     private func apply(_ result: TranscriptResult) {
-        let now = ContinuousClock.now
-        if result.isVolatile, !result.text.isEmpty, provisionalFirstSeen[result.range.start] == nil {
-            provisionalFirstSeen[result.range.start] = now
-        }
-        let before = Set(consolidator.provisional.map(\.range.start))
         for logged in consolidator.apply(result) {
             persist(logged)
-        }
-        let after = Set(consolidator.provisional.map(\.range.start))
-        for start in before.subtracting(after) {
-            guard let seen = provisionalFirstSeen.removeValue(forKey: start) else { continue }
-            let ms = Int((now - seen) / .milliseconds(1))
-            // `promote(through:)` runs for any result carrying `finalizedThroughFrame`,
-            // final or volatile — so `result.isVolatile` alone mislabels a hypothesis that
-            // a volatile-borne marker settled. Whether `start` landed in `committed` is
-            // the honest test.
-            let how = consolidator.committed.contains { $0.range.start == start } ? "settled" : "superseded"
-            timing.notice("\(how, privacy: .public) start=\(start, privacy: .public) provisionalMs=\(ms, privacy: .public)")
         }
     }
 

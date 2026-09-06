@@ -50,7 +50,7 @@ struct EntryDetailView: View {
     /// presentation to finish before a second one can begin, so the follow-on flag
     /// flips in `.sheet`'s `onDismiss:`, never inline in the row's own action.
     private enum InfoSheetAction {
-        case journal, backdate, addImage, editTranscript, markVoices, revisionHistory, trash
+        case journal, backdate, addImage, editTranscript, copyTranscript, markVoices, revisionHistory, trash
     }
     @State private var pendingInfoAction: InfoSheetAction?
     /// The editor is a full-screen push, not a sheet (T7 Task 4, ruling Q9). Its model is
@@ -295,6 +295,7 @@ struct EntryDetailView: View {
                 onBackdate: { pendingInfoAction = .backdate; showingInfoSheet = false },
                 onAddImage: { pendingInfoAction = .addImage; showingInfoSheet = false },
                 onEditTranscript: { pendingInfoAction = .editTranscript; showingInfoSheet = false },
+                onCopyTranscript: transcript.copyText == nil ? nil : { pendingInfoAction = .copyTranscript; showingInfoSheet = false },
                 onMarkVoices: { pendingInfoAction = .markVoices; showingInfoSheet = false },
                 onRevisionHistory: { pendingInfoAction = .revisionHistory; showingInfoSheet = false },
                 onTrash: { pendingInfoAction = .trash; showingInfoSheet = false }
@@ -514,6 +515,7 @@ struct EntryDetailView: View {
         case .backdate: openBackdateSheet()
         case .addImage: showingImagePicker = true
         case .editTranscript: showingEditor = true
+        case .copyTranscript: if let text = transcript.copyText { Clipboard.copy(text) }
         case .markVoices: showingVoiceMarking = true
         case .revisionHistory: showingRevisionHistory = true
         case .trash: showingTrashConfirmation = true

@@ -21,6 +21,9 @@ struct EntryInfoSheet: View {
     let onBackdate: () -> Void
     let onAddImage: () -> Void
     let onEditTranscript: () -> Void
+    /// #105: nil hides the row — an entry with nothing to copy (no transcript text at
+    /// all) gets no "Copy transcript" row rather than one that does nothing.
+    let onCopyTranscript: (() -> Void)?
     let onMarkVoices: () -> Void
     let onRevisionHistory: () -> Void
     let onTrash: () -> Void
@@ -57,6 +60,12 @@ struct EntryInfoSheet: View {
                 row(systemImage: "pencil", label: "Edit transcript",
                     trailingValue: nil,
                     identifier: "detail.editButton", action: onEditTranscript)
+                if let onCopyTranscript {
+                    hairline
+                    row(systemImage: "doc.on.doc", label: "Copy transcript",
+                        trailingValue: nil,
+                        identifier: "detail.copyTranscriptButton", action: onCopyTranscript)
+                }
                 hairline
                 row(systemImage: "person.wave.2", label: "Mark voices",
                     trailingValue: nil,

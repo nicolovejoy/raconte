@@ -49,9 +49,17 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// definition never pushed for a remote peer to ever see.
     var provisionalDefault: Bool
 
+    /// #70: keys this build's `CodingKeys` does not name — from a newer build's registry,
+    /// or a future field. Decoded once at read time and re-emitted verbatim on every
+    /// encode, so an older build re-saving the registry for an unrelated reason (a
+    /// rename, a sync merge) does not silently drop a field it cannot understand. Not
+    /// synced as its own `SyncJournalField` — it travels as part of whichever write
+    /// carries the journal, same as every other field on this type.
+    var unknownFields: [String: JSONValue]
+
     init(id: String, name: String, createdAt: Date, voiceLabels: [String: String] = [:],
          span: JournalSpan? = nil, modified: [String: Date]? = nil,
-         provisionalDefault: Bool = false) {
+         provisionalDefault: Bool = false, unknownFields: [String: JSONValue] = [:]) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
@@ -59,6 +67,7 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         self.span = span
         self.modified = modified
         self.provisionalDefault = provisionalDefault
+        self.unknownFields = unknownFields
     }
 
     /// Hand-written per the house decoder rule (§11 of the M2 design): Swift's
@@ -67,8 +76,9 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// creation and never absent, so all three stay strict — a record missing one is not
     /// an older journal, it is a damaged registry, and silently substituting a default
     /// would file entries under a journal that isn't the one the user named. Fields
-    /// *added later* decode with `decodeIfPresent`. Unknown keys are ignored, so a newer
-    /// build's registry still opens here.
+    /// *added later* decode with `decodeIfPresent`. Unknown keys are preserved in
+    /// `unknownFields` and written back (#70), so a newer build's registry still opens
+    /// here and round-trips without losing the fields this build cannot read.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -93,6 +103,10 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // garbage decodes to `false`, which is also what every journal that was never a
         // provisional default actually is.
         provisionalDefault = ((try? container.decodeIfPresent(Bool.self, forKey: .provisionalDefault)) ?? nil) ?? false
+        // #70: everything not named by `CodingKeys`, kept so `encode(to:)` can write it
+        // back untouched.
+        unknownFields = try decoder.container(keyedBy: AnyCodingKey.self)
+            .unknownFields(except: CodingKeys.self)
     }
 
     /// Hand-written per the same rule: the synthesized encoder does not know
@@ -124,9 +138,12 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if provisionalDefault {
             try container.encode(provisionalDefault, forKey: .provisionalDefault)
         }
+        // #70: write back whatever this build could not read, verbatim.
+        var extra = encoder.container(keyedBy: AnyCodingKey.self)
+        try extra.encodeUnknownFields(unknownFields)
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, name, createdAt, voiceLabels, span, modified, provisionalDefault
     }
 }

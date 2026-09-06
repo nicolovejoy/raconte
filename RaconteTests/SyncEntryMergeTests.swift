@@ -59,12 +59,16 @@ final class SyncEntryMergeTests: XCTestCase {
     /// different surface — the audit-log differ — and does not cover this one.)
     func testEntryMetadataFieldCountIsPinnedSoTheSyncMergeSurfaceCatchesNewFields() {
         XCTAssertEqual(
-            Mirror(reflecting: EntryMetadata.defaults).children.count, 7,
+            Mirror(reflecting: EntryMetadata.defaults).children.count, 8,
             "EntryMetadata gained or lost a field. Bump this count, then wire the field " +
             "through SyncRecordBuilders.entryRecord (the push side), " +
             "RemoteEntryFields.init(record:) (the decode side), and EntryFieldMerge.merge's " +
             "field list, and confirm SyncTreeScanner.entryDigest still captures it, before " +
-            "this pin is honest again."
+            "this pin is honest again. EXCEPTION (#70): `unknownFields` is left OUT of all " +
+            "of those — it is opaque JSON this build cannot read, preserved only across a " +
+            "LOCAL re-encode of the sidecar; there is no `SyncEntryField` case for it and " +
+            "none is planned, so it never reaches a CKRecord at all, which is why the count " +
+            "bumped to 8 here without touching the sync sites this message names."
         )
     }
 

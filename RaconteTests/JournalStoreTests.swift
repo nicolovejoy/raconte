@@ -172,10 +172,24 @@ final class JournalStoreTests: XCTestCase {
         }
     }
 
-    func testDecoderIgnoresUnknownKeysFromANewerBuild() throws {
+    /// #70: a field written by a newer build must survive this build re-encoding the
+    /// journal for an unrelated reason — under M4 sync the older device's write is
+    /// genuinely newer, so no per-field LWW stamp can notice the loss.
+    func testUnknownKeysFromANewerBuildSurviveARoundTrip() throws {
         let registry = try JournalStore.load(url: writeRegistry(
-            #"{"schemaVersion":9,"journals":[{"id":"A","name":"N","createdAt":"1970-01-01T00:00:00.000Z","color":"red"}]}"#))
+            #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N","pages":{"count":12}}]}"#))
         XCTAssertEqual(registry.journals.map(\.id), ["A"])
+        XCTAssertEqual(registry.journals[0].unknownFields["color"], .string("red"))
+        let text = String(decoding: try JournalStore.encode(registry), as: UTF8.self)
+        XCTAssertEqual(text,
+            #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N","pages":{"count":12}}]}"#)
+    }
+
+    func testARenameKeepsTheUnknownKeys() throws {
+        var registry = try JournalStore.load(url: writeRegistry(
+            #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N"}]}"#))
+        try registry.rename(id: "A", to: "M", now: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(registry.journals[0].unknownFields["color"], .string("red"))
     }
 
     func testEncodedShapeIsSingleLineWithSortedKeysAndISO8601Dates() throws {
@@ -562,7 +576,7 @@ final class JournalStoreTests: XCTestCase {
     /// `SyncJournalRoundTripTests`.
     func testJournalFieldCountIsPinnedSoNewFieldsGetEncoded() {
         let journal = Journal(id: "J1", name: "N", createdAt: Date())
-        XCTAssertEqual(Mirror(reflecting: journal).children.count, 7,
+        XCTAssertEqual(Mirror(reflecting: journal).children.count, 8,
                        "Journal gained or lost a field — see Journal.encode(to:)")
     }
 

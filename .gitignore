@@ -37,3 +37,4 @@ device-pull*/
 *.mobileprovision
 .appstoreconnect/
 .superpowers/
+.worktrees/

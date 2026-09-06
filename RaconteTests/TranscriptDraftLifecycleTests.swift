@@ -291,6 +291,30 @@ final class TranscriptDraftLifecycleTests: XCTestCase {
         XCTAssertEqual(minted.basedOnMachineID, "M0")
     }
 
+    /// #51, reproduced at the store: under a frozen clock two consecutive edits used to
+    /// tie on `createdAt`, and `current` landed on whichever ULID suffix sorted last —
+    /// a coin flip. Twenty rounds, zero tolerance.
+    func testTwoEditsUnderAFrozenClockAlwaysMakeTheSecondOneCurrent() async throws {
+        let frozen = Date(timeIntervalSince1970: 3_000)
+        for round in 0..<20 {
+            let id = "01KYX77KK5QM15915EZBVX\(String(format: "%04d", round))"
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+            let s = store()
+            try await s.writeDraft(captureID: id, text: "first \(round)", now: frozen)
+            let firstResult = try await s.closeDraft(captureID: id, reason: .sessionEnd, now: frozen)
+            let first = try XCTUnwrap(firstResult)
+            try await s.writeDraft(captureID: id, text: "second \(round)", now: frozen)
+            let secondResult = try await s.closeDraft(captureID: id, reason: .sessionEnd, now: frozen)
+            let second = try XCTUnwrap(secondResult)
+
+            let ordered = TranscriptRevisionStore.loadChain(captureDirectory: directory)?.revisions ?? []
+            XCTAssertEqual(TranscriptChain.current(ordered)?.id, second,
+                           "round \(round): the second edit must be current, not \(first)")
+        }
+    }
+
     // MARK: - Hour cap
 
     func testCloseDraftOlderThanHourCapClosesWithHourCapRegardlessOfRequestedReason() async throws {

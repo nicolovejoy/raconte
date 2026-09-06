@@ -189,6 +189,17 @@ final class EntryMetadataStoreTests: XCTestCase {
         XCTAssertEqual(String(decoding: try EntryMetadataStore.encode(.defaults), as: UTF8.self), "{}")
     }
 
+    /// #70: mirrors `JournalStoreTests.testUnknownKeysFromANewerBuildSurviveARoundTrip` —
+    /// a field written by a newer build must survive this build re-encoding the sidecar.
+    func testUnknownKeysFromANewerBuildSurviveARoundTrip() throws {
+        try writeRaw(#"{"journalID":"J","mood":"calm"}"#)
+        let metadata = try EntryMetadataStore.read(url: sidecarURL)
+        XCTAssertEqual(metadata.unknownFields["mood"], .string("calm"))
+        try EntryMetadataStore.write(metadata, url: sidecarURL)
+        let text = String(decoding: try Data(contentsOf: sidecarURL), as: UTF8.self)
+        XCTAssertEqual(text, #"{"journalID":"J","mood":"calm"}"#)
+    }
+
     // MARK: setOriginalDate (disallow-future-backdates)
     //
     // Fixed "now" of June 15, 2026 — away from any year boundary, per the house rule
@@ -299,14 +310,17 @@ final class EntryMetadataStoreTests: XCTestCase {
     // MARK: Decoder rule (§11)
 
     /// Additive fields are lenient in both directions: a file written before a field
-    /// existed still reads, and a file from a newer build with extra keys still reads.
+    /// existed still reads, and a file from a newer build with extra keys still reads —
+    /// and (#70) those extra keys are preserved in `unknownFields`, not dropped.
     func testDecoderIsLenientAboutMissingAndUnknownKeys() throws {
         let older = try EntryMetadataStore.decode(Data(#"{"journalID":"J1"}"#.utf8))
         XCTAssertEqual(older, EntryMetadata(journalID: "J1"))
 
         let newer = try EntryMetadataStore.decode(
             Data(#"{"journalID":"J1","favourite":true,"tags":["a"]}"#.utf8))
-        XCTAssertEqual(newer, EntryMetadata(journalID: "J1"))
+        XCTAssertEqual(newer, EntryMetadata(journalID: "J1",
+            unknownFields: ["favourite": .bool(true), "tags": .array([.string("a")])]),
+            "full-struct equality — proves every OTHER field stayed at its default, not just that the two unknown keys were captured")
     }
 
     /// Regression pin for the hazard itself: synthesis ignores property defaults, so a

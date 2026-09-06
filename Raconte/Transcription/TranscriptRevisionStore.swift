@@ -945,7 +945,8 @@ actor TranscriptRevisionStore {
                                   createdAt: draft.openedAt, spans: [])
 
         var spans = TranscriptSplice.spans(parent: parentForSplice, editedText: draft.text)
-        let newID = ULID.make(now: now)
+        let mintedAt = TranscriptChain.mintInstant(now: now, after: ordered)
+        let newID = ULID.make(now: mintedAt)
         // The caller-side half of the sourceRevisionID omit-when-equal economy
         // (TranscriptSpan.swift:150-156, Task 1 ledger note): TranscriptSplice can't
         // know the id its output will be minted under, so it always writes an explicit
@@ -955,10 +956,13 @@ actor TranscriptRevisionStore {
             spans[index].sourceRevisionID = nil
         }
 
+        // #43/#51: the hour-cap comparison stays on the wall clock `now`, not the minted
+        // (possibly bumped) instant — the cap is about how long the draft has actually
+        // been open, not an artifact of tie-breaking.
         let effectiveReason: DraftCloseReason =
             now.timeIntervalSince(draft.openedAt) > policy.hourCapSeconds ? .hourCap : reason
 
-        let revision = TranscriptRevision(id: newID, source: .userEdit, createdAt: now, spans: spans,
+        let revision = TranscriptRevision(id: newID, source: .userEdit, createdAt: mintedAt, spans: spans,
                                           parentID: draft.parentID, basedOnMachineID: draft.basedOnMachineID,
                                           deviceID: deviceIDProvider(), closedBy: effectiveReason)
 
@@ -1069,8 +1073,9 @@ actor TranscriptRevisionStore {
             throw TranscriptRevisionStoreError.revisionNotFound(toRevisionID)
         }
 
+        let mintedAt = TranscriptChain.mintInstant(now: now, after: ordered)
         let revision = try TranscriptMerge.revert(current: current, toMachine: machine,
-                                                   id: ULID.make(now: now), createdAt: now,
+                                                   id: ULID.make(now: mintedAt), createdAt: mintedAt,
                                                    deviceID: deviceIDProvider())
         try await append(revision, captureID: captureID)
         return revision.id
@@ -1155,10 +1160,13 @@ actor TranscriptRevisionStore {
         let lastRecord = loaded.records.last
         let ref = Self.readManifest(captureDirectory: captureDirectory)?.transcript
 
+        // The chain is empty by construction here (`.skippedAlreadyPromoted` above
+        // already handled the non-empty case), so `mintInstant` only ever truncates.
+        let mintedAt = TranscriptChain.mintInstant(now: now, after: [])
         let revision = TranscriptRevision(
-            id: ULID.make(now: now),
+            id: ULID.make(now: mintedAt),
             source: .machineLive,
-            createdAt: now,
+            createdAt: mintedAt,
             spans: spans,
             parentID: nil,
             basedOnMachineID: nil,

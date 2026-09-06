@@ -96,10 +96,17 @@ final class EntryLogTests: XCTestCase {
     /// `EntryLogRecord.diff`, then bump the count here. `modified` (M4 T1) is the one
     /// exception — see the assertion message and `EntryLogRecord.diff`'s doc comment.
     func testEntryMetadataFieldCountIsPinnedSoNewFieldsGetLogged() {
-        XCTAssertEqual(Mirror(reflecting: EntryMetadata.defaults).children.count, 7,
+        XCTAssertEqual(Mirror(reflecting: EntryMetadata.defaults).children.count, 8,
                        "EntryMetadata gained or lost a field — see EntryLogRecord.diff(from:to:). " +
-                       "`modified` (M4 T1) is the one deliberate exception: it is this diff's own " +
+                       "`modified` (M4 T1) is one deliberate exception: it is this diff's own " +
                        "OUTPUT, stamped by EntryMetadataStore.update AFTER the diff runs, so it must " +
-                       "never get a diff case of its own.")
+                       "never get a diff case of its own. `unknownFields` (#70) is a second: this " +
+                       "change deliberately does not wire it into the audit-log differ — it is " +
+                       "opaque JSON from a field this build cannot read, not an owner edit, so a " +
+                       "diff of it would be noise rather than a real change to log. The CloudKit-" +
+                       "side counterpart (an older build's `RemoteJournal`/`RemoteEntryFields` " +
+                       "reading a newer build's CKRecord and losing any field it doesn't name) is " +
+                       "the residual tracked on #70; this differ has no CloudKit-facing analogue " +
+                       "of its own.")
     }
 }

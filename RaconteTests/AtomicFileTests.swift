@@ -85,12 +85,12 @@ final class AtomicFileTests: XCTestCase {
 
     func testCreateExclusivelyWritesFullContentWithNoStrayPart() throws {
         let target = dir.appendingPathComponent("head.json")
-        let part = SegmentLayout.partURL(for: target)
 
         try AtomicFile.createExclusively(at: target, writing: Data("A".utf8))
 
         XCTAssertEqual(try read(target), Data("A".utf8))
-        XCTAssertFalse(exists(part), "no stray .part after a clean create")
+        let stray = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".part") }
+        XCTAssertTrue(stray.isEmpty, "no stray .part after a clean create")
     }
 
     func testCreateExclusivelyThrowsEEXISTAndLeavesExistingTargetUntouched() throws {
@@ -109,11 +109,33 @@ final class AtomicFileTests: XCTestCase {
 
     func testCreateExclusivelyCleansUpPartAfterEEXIST() throws {
         let target = dir.appendingPathComponent("head.json")
-        let part = SegmentLayout.partURL(for: target)
         try AtomicFile.createExclusively(at: target, writing: Data("ORIGINAL".utf8))
 
         _ = try? AtomicFile.createExclusively(at: target, writing: Data("NEWDATA".utf8))
 
-        XCTAssertFalse(exists(part), "the losing .part must be cleaned up, not stranded")
+        let stray = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".part") }
+        XCTAssertTrue(stray.isEmpty, "the losing .part must be cleaned up, not stranded")
+    }
+
+    /// #43: two concurrent creates of the same target used to share ONE `.part` path, so
+    /// the EEXIST loser's `unlink` deleted the winner's staging file mid-write. Each call
+    /// now stages under its own name. Modelled with the `beforeRename` seam: call 1 is
+    /// parked (throws) with its staging file written; call 2 must not truncate or remove
+    /// it on its way to the target.
+    func testEachCreateStagesUnderItsOwnNameSoALoserCannotClobberAWinner() throws {
+        let target = dir.appendingPathComponent("head.json")
+        struct Parked: Error {}
+        XCTAssertThrowsError(try AtomicFile.createExclusively(at: target, writing: Data("A".utf8),
+                                                              beforeRename: { throw Parked() }))
+        let staged = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".part") }
+        XCTAssertEqual(staged.count, 1, "the parked call must leave exactly its own staging file")
+        let parkedURL = dir.appendingPathComponent(staged[0])
+        XCTAssertEqual(try read(parkedURL), Data("A".utf8))
+
+        try AtomicFile.createExclusively(at: target, writing: Data("B".utf8))
+
+        XCTAssertEqual(try read(target), Data("B".utf8))
+        XCTAssertEqual(try read(parkedURL), Data("A".utf8),
+                       "the second create must stage under a different name — the parked writer's bytes are untouched")
     }
 }

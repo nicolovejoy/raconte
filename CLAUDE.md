@@ -50,7 +50,13 @@ was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
    drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
    nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
    #91/#85, `MarkerControlsModel`'s two constant show flags.
-3. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
+3. **Read `docs/plans/2026-09-06-roadmap-review-and-phases.md`** — an unattended review of
+   all 40 open issues proposing a seven-phase order. Headline, verified against the code:
+   **export, migration and search — the three things the plan of record called
+   non-negotiable for v1 — are the three things not built.** Four open questions at the
+   end need owner answers, chiefly whether the M4 acceptance gate (delete the app,
+   reinstall, archive reconstructs from CloudKit) has ever actually been run.
+4. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
    space and land on the entry inside its journal — the sidebar stays on Capture today, so
    the detail view has no journal context), #149 (backdate sheet UX pass + a design system;
    the too-light text is a blanket `.opacity(0.45)` stacking on `.disabled`, not a colour

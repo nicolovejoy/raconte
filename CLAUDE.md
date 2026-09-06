@@ -40,23 +40,21 @@ XCUITest — new memory); one implementer's report cited a brief note that did n
 was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
 
 **Next steps:**
-1. **#143's UI CI job was still running at handoff** —
-   https://github.com/nicolovejoy/raconte/actions/runs/34043755169 . Unit already passed at
-   **2064 (1 skipped), 0 failures**, exactly as predicted; the UI job needs to land at **62**.
-   Check it first, then merge https://github.com/nicolovejoy/raconte/pull/143 .
-2. **Then merge #144 → #145 → #146 in order**, waiting for main to go green and hitting
-   **Update branch** before each (the two-green-PRs rule). All three were verified
-   `git merge-tree` **clean against main-with-#142** at handoff — that prediction goes stale
-   once #143 lands, so re-check before each.
-3. **Mac smoke** per each PR body: sidebar indent; Copy transcript → paste; next-day
-   backdate; About → `build 14: …`; ¶ break live. No Discard button anywhere.
-4. **Device smoke on the iPhone** (next TestFlight uses 14 — no further bump; add the row to
-   `docs/builds.md`): record → BN flips to LN → live band dims → ¶ break → stop → card.
-5. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
+1. **Device smoke on the iPhone — build 15**, uploaded to TestFlight 2026-09-06 14:58 PT.
+   Confirm TestFlight shows **15** and About → App → Build reads `build 15: Sep 6` BEFORE
+   testing anything. Then: record → BN flips to LN → live band dims the hypothesis but not
+   the settled tail → ¶ break lands at the tap → stop → receipt card with Open → no Discard
+   anywhere. Fill in the outcome on `docs/builds.md` row 15.
+2. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
    `Int?` for no caller; `advanceBackdateForNextEntry(now:)` seam never injected; `copyText`
    drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
    nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
    #91/#85, `MarkerControlsModel`'s two constant show flags.
+3. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
+   space and land on the entry inside its journal — the sidebar stays on Capture today, so
+   the detail view has no journal context), #149 (backdate sheet UX pass + a design system;
+   the too-light text is a blanket `.opacity(0.45)` stacking on `.disabled`, not a colour
+   token). #106 now carries the cover-lightbox proposal (#147 closed as its duplicate).
 
 ## Session 2026-09-06 (laptop — merge sequence: #142 in, #143 conflict resolved and pushed)
 
@@ -79,6 +77,33 @@ pushed; #143 is MERGEABLE with unit CI green at 2064.
   absolutes were wrong and its deltas were right — the dangerous shape.
 - **The UI job costs ~37 minutes of wall clock every push** (2190 s for 61 tests). Three PRs
   still to update-and-merge means roughly two more hours of runner time in the sequence.
+
+## Session 2026-09-06 (laptop — slate merged, build 14 smoked 8/8, build 15 to TestFlight)
+
+Owner merged **#143 → #144 → #145 → #146**. Main's tip run tested the whole combination and
+is green: **unit 2082 (1 skipped), UI 62, 0 failures** — that is the baseline, read out of
+run `34046973383`. The #144 and #145 runs show `cancelled` because the merges landed within
+90 seconds of each other and the tip run superseded them; that is fine here only because the
+tip run tested everything at once.
+
+Built macOS **build 14** from `28dbf0c2`, verified it carried #143/#145/#146 symbols and the
+iCloud entitlement, and smoked it: **8/8 pass** — build stamp, sidebar indent, no Discard,
+Copy transcript, next-day backdate (and correctly NOT advancing at Month precision), the live
+¶ break at the tap, and the break surviving the commit.
+
+- **Three stale build-13 `Raconte.app` bundles were sitting in DerivedData**, all plain-named,
+  all ranking in Spotlight beside the staged build. The owner relaunched via Spotlight and
+  reported two real-looking failures (¶ break "definitely did not work"; stop took him to "an
+  old screen") that were only build 13. Deleted them. **New protocol, at his request:** every
+  smoke request states the build number, step 1 is "About shows build N", and the app is
+  handed over as a clickable bare `file://` URL — never a Spotlight search. New memory.
+- **`Raconte/Info.plist` is tracked generated output and had drifted.** #141 bumped
+  `project.yml` 13 → 14 without committing the regenerated plist, so the checked-in plist
+  still read 13; only a local `xcodegen generate` made the build honest. Now committed in step.
+- **Build 14 is the Mac smoke; TestFlight is 15.** `project.yml`'s own rule is to bump for
+  every owner-facing build, smoke or TestFlight, so the handoff note saying "TestFlight uses
+  14" went stale the moment the Mac build was handed over. Uploaded 15 via
+  `scripts/upload_testflight.sh ios` — archive and upload both succeeded, 14:58 PT.
 
 ## What Raconte is
 

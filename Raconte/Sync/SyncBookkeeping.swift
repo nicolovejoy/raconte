@@ -120,13 +120,16 @@ actor SyncBookkeepingStore {
 
     /// Record names inbound sync couldn't land, keyed by `SyncRecordName.rawValue`. An
     /// absent `parked.json` is an empty dictionary, per the type's governing collapse
-    /// rule; an undecodable one is also treated as empty, but — unlike the ledger — that
-    /// case is logged, since a park list silently going empty is the difference between
+    /// rule. An undecodable one is NOT simply forgotten, unlike the ledger: the
+    /// unreadable file is moved aside to `parked-unreadable-<stamp>.json` (never
+    /// deleted — a human or a future migration can still recover it) and the loss is
+    /// logged, since a park list silently going empty is the difference between
     /// "retried later" and "lost".
     func parkedRecords() -> [String: ParkedRecord] {
-        guard let data = Self.read(url: Self.parkedURL(root: root)) else { return [:] }
+        let url = Self.parkedURL(root: root)
+        guard let data = Self.read(url: url) else { return [:] }
         guard let decoded = try? CaptureCoding.decoder().decode([String: ParkedRecord].self, from: data) else {
-            Self.log.notice("sync: parked.json present but undecodable — treating as empty")
+            Self.quarantineUnreadableParked(at: url, now: now())
             return [:]
         }
         return decoded
@@ -144,13 +147,13 @@ actor SyncBookkeepingStore {
             current[recordName] = ParkedRecord(reason: reason, attempts: 0,
                                                 firstParkedAt: now(), lastAttemptAt: nil)
         }
-        try? Self.saveParked(current, root: root)
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "park")
     }
 
     func unpark(_ recordName: String) {
         var current = parkedRecords()
         current.removeValue(forKey: recordName)
-        try? Self.saveParked(current, root: root)
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "unpark")
     }
 
     /// Increments `attempts` and stamps `lastAttemptAt` for a parked name; a no-op for a
@@ -161,7 +164,7 @@ actor SyncBookkeepingStore {
         existing.attempts += 1
         existing.lastAttemptAt = now()
         current[recordName] = existing
-        try? Self.saveParked(current, root: root)
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "noteRetryAttempt")
     }
 
     // MARK: Environment tag (#90)
@@ -258,5 +261,42 @@ actor SyncBookkeepingStore {
     private static func saveParked(_ parked: [String: ParkedRecord], root: URL) throws {
         let data = try CaptureCoding.encoder().encode(parked)
         try write(data, url: parkedURL(root: root))
+    }
+
+    /// `park`/`unpark`/`noteRetryAttempt` are non-throwing by contract (Tasks 2 and 3
+    /// depend on that shape) — a write failure here must never be silent, since a
+    /// caller of `park` that gets no error believes the record is durably parked. Log
+    /// at `.notice` naming the record, the operation, and the underlying error.
+    private static func saveParkedOrLog(_ parked: [String: ParkedRecord], root: URL,
+                                         recordName: String, operation: String) {
+        do {
+            try saveParked(parked, root: root)
+        } catch {
+            log.notice("""
+                sync: \(operation, privacy: .public)(\(recordName, privacy: .public)) failed to \
+                write parked.json: \(String(describing: error), privacy: .public)
+                """)
+        }
+    }
+
+    /// Moves an unreadable `parked.json` aside rather than discarding it — the file
+    /// still holds bytes that were once a durable park record, so a rename (never a
+    /// delete) leaves a trail a human or a future migration could still recover.
+    private static func quarantineUnreadableParked(at url: URL, now: Date) {
+        let stamp = CaptureCoding.iso8601Formatter().string(from: now)
+        let quarantineURL = url.deletingLastPathComponent()
+            .appendingPathComponent("parked-unreadable-\(stamp).json")
+        do {
+            try FileManager.default.moveItem(at: url, to: quarantineURL)
+            log.notice("""
+                sync: parked.json undecodable — moved aside from \(url.path, privacy: .public) \
+                to \(quarantineURL.path, privacy: .public)
+                """)
+        } catch {
+            log.notice("""
+                sync: parked.json undecodable and could not be moved aside from \
+                \(url.path, privacy: .public): \(String(describing: error), privacy: .public)
+                """)
+        }
     }
 }

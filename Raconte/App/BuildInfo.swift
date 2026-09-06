@@ -33,11 +33,29 @@ enum BuildInfo {
     /// Labelled "PT", not "PST": the zone is `America/Los_Angeles`, so the offset follows
     /// daylight saving. Half the year a hardcoded "PST" would be an hour off in print
     /// while the number beside it was right.
-    static let stamp: String = {
-        guard let builtAt else { return "build date unavailable" }
-        let formatter = DateFormatter()
-        formatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
-        formatter.dateFormat = "MMM d, h:mm a"
-        return "built \(formatter.string(from: builtAt)) PT"
-    }()
+    ///
+    /// `build N: <date>` (#141). N is `CFBundleVersion`, bumped in project.yml for every
+    /// build the owner is handed — smoke or TestFlight — and described in
+    /// `docs/builds.md`. The date keeps the link-time stamp: two builds can share N only
+    /// by mistake, and when they do the time is what tells them apart.
+    static func stampText(build: String?, builtAt: Date?) -> String {
+        let number = build.flatMap { $0.isEmpty ? nil : $0 }
+        let dateText: String? = builtAt.map { date in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(identifier: "America/Los_Angeles")
+            formatter.dateFormat = "MMM d, h:mm a"
+            return "\(formatter.string(from: date)) PT"
+        }
+        switch (number, dateText) {
+        case let (n?, d?): return "build \(n): \(d)"
+        case let (n?, nil): return "build \(n): date unavailable"
+        case let (nil, d?): return "built \(d)"
+        case (nil, nil): return "build date unavailable"
+        }
+    }
+
+    static let stamp: String = stampText(
+        build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+        builtAt: builtAt)
 }

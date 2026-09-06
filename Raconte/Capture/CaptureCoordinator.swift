@@ -714,6 +714,22 @@ final class CaptureCoordinator {
         finalizeQueue.append(id)
     }
 
+    /// The launch-recovery counterpart of `enqueueFinalize` (#122). `finalizeQueue` is
+    /// the hand-off surface for "committed, not yet finished"; `recoverAtLaunch()` fills
+    /// it and `CaptureScreenModel.bootstrap()` drains it in place, WITHOUT respawning
+    /// this coordinator. Without this call the drained ids stay queued forever, and the
+    /// first real capture's `.captured` flip — which the machine publishes before
+    /// `enqueueFinalize` has run for that capture — finds a non-empty queue, finishes
+    /// the stale backlog, spawns a fresh coordinator, and orphans this one with the real
+    /// capture still on it. Ids not present are ignored.
+    /// Consumption is about the queue, not about success: an id whose finalize failed is
+    /// re-planned from its on-disk state by the next launch's `recoverAtLaunch()`.
+    func consumeFinalized(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        let consumed = Set(ids)
+        finalizeQueue.removeAll { consumed.contains($0) }
+    }
+
     // MARK: PCM pump (tap → store)
 
     /// A detached loop draining the tap-fed forwarder into the store, serially and off

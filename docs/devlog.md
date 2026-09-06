@@ -3,6 +3,22 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-05/06 (laptop — overnight SDD run: 13 tasks, five PRs open, CI green)
+
+Owner approved the slate at 21:00 and went to bed; the run ended at 04:00 with five PRs open
+from one plan (`docs/plans/2026-09-05-overnight-fixes-plan.md`), each branched from main
+`95c1c0b5`. PR #142 (#140 Discard path removed, #130, #122 finalize-backlog fix; unit 2051,
+UI 61). PR #143 (#139 sidebar indent, #75 one entry-count rule, #77 round-trip pin, #47
+next-day backdate pre-fill, #105 Copy transcript; unit 2073, UI 63; one expected conflict
+with #142). PR #144 (#141 `build 14: <date>`, `docs/builds.md`, CFBundleVersion 14; unit
+2064). PR #145 (#43 per-call staging + deterministic mint instants, #70 unknown-key
+preservation; unit 2069; #51 and #70 stay open with residual comments). PR #146 (#136 live
+¶ break via one shared cut rule; unit 2065). Every CI count matched the plan's prediction.
+Rulings worth keeping: the `.day`-guard test for #47 was vacuous until a mutation proof
+caught it; a runner-side `UIPasteboard` read hangs XCUITest (two stalls, new memory); PRs
+that fix half an issue reference it and comment rather than close it. Lost 3.4 h to the
+account rate limit (22:16 → 01:40).
+
 ## Session 2026-09-05 (laptop — #118 Task 7 shipped via SDD; PR #138 open, CI green, Mac smoke passed)
 
 Resumed the SDD ledger for `feat/118-live-transcript` and ran Task 7: `LiveTranscriptText`

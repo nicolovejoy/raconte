@@ -69,28 +69,12 @@ struct CaptureView: View {
                 // Displaces the transcript/setup band above it, same as `errorBanner`
                 // below — or the `Spacer(minLength: 0)` fallback when neither band is
                 // stretching — so the control bar itself never moves.
-                // `discardNotice` is set by plain property mutation on the model — no
-                // `withAnimation` there, deliberately (animation is a view concern, not
-                // the model's) — so the `.animation(value:)` below is what actually makes
-                // the `.transition` run; without it the notice would pop in and out
-                // instantly despite the transition declaration.
-                if let notice = model.discardNotice {
-                    Text(notice)
-                        .captureLabel(.discardNotice)
-                        .accessibilityIdentifier("capture.discardNotice")
-                        .transition(.opacity)
-                }
                 errorBanner
                 controlBar
             }
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
             .frame(maxHeight: .infinity)
-            // Makes the discard notice's `.transition(.opacity)` real. `discardNotice`
-            // changes via plain property mutation (no `withAnimation` on the model side,
-            // deliberately — animation stays a view concern); this is what turns that
-            // mutation into an animated diff instead of an instant pop.
-            .animation(.easeInOut, value: model.discardNotice)
         }
         .foregroundStyle(InkTone.studioInk.color)
         .task { await model.bootstrap() }
@@ -160,13 +144,9 @@ struct CaptureView: View {
         // `layout.showsLiveTranscript` FIRST, not just "is there text". The transcription
         // session deliberately holds the finished text after a capture ends (so the panel
         // doesn't blank the instant you stop) and a fresh coordinator does not clear it —
-        // it belongs to the session, not the coordinator. On the ordinary path the receipt
-        // covers this region, so the stale text was never seen. Discard sets `receipt =
-        // nil`, which uncovered it: owner smoke 2026-08-30, "the transcription stays,
-        // though not in the journal is it visible" — the words stranded on the landing
-        // screen, belonging to a recording that no longer exists. That is precisely the
-        // #53-era defect `showsLiveTranscript` was added to prevent; this view was simply
-        // not asking it.
+        // it belongs to the session, not the coordinator. Anything that clears `receipt`
+        // in a non-capturing phase would otherwise strand the previous reading's words on
+        // the landing screen (#53); asking the layout, not the text, is what prevents it.
         if layout.showsLiveTranscript,
            let transcription = model.transcription, !transcription.runs.isEmpty {
             ScrollView {
@@ -260,25 +240,6 @@ struct CaptureView: View {
                 .opacity(control.showsDoneButton ? 1 : 0)
                 .disabled(!control.showsDoneButton)
                 .accessibilityHidden(!control.showsDoneButton)
-
-            // Quiet, not red: sits beside a live red record control and must not compete
-            // with it for the eye. No confirmation dialog — recoverable from the trash
-            // for 30 days, so a confirm would cost a tap for nothing. Identifier on the
-            // leaf button only (repo trap: a container identifier flattens the bar).
-            //
-            // `.captureLabel(.discardButton)`, not a raw `.font` — fix-round-1 (task 3
-            // review): a raw `.callout` renders at 16 pt on iOS but only 12 pt on macOS,
-            // 4 pt under `CaptureSurface.minimumControlPointSize`, and a raw font also
-            // sits outside `CaptureLabelTests`' floor sweep entirely, the same miss
-            // `errorBanner`'s own comment already records for `.footnote` + `.red`.
-            if layout.showsDiscardButton {
-                Button("Discard") { Task { await model.discardCurrentCapture() } }
-                    .buttonStyle(.plain)
-                    .captureLabel(.discardButton)
-                    .fontWeight(.semibold)
-                    .accessibilityIdentifier("capture.discard")
-                    .accessibilityLabel("Discard recording")
-            }
         }
         .frame(height: CaptureControlBarMetrics.statusRowHeight)
         .padding(.horizontal, CaptureControlBarMetrics.horizontalPadding)

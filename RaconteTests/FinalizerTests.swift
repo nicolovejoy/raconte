@@ -9,6 +9,8 @@ final class FakeAudioEncoder: AudioEncoder, @unchecked Sendable {
     private var _calls: [[EncodableSegment]] = []
     private var _lastEncodedFrames = 0
     /// When set, `verify` returns this instead of the default (exact, non-silent) pass.
+    /// Sticky: applies to EVERY `verify()` on this instance, so a multi-capture test must
+    /// clear it between captures or the fixture's frame count poisons the live capture.
     var verifyOverride: VerifyResult?
 
     var calls: [[EncodableSegment]] {

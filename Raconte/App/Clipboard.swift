@@ -1,7 +1,7 @@
 import Foundation
-#if canImport(UIKit)
+#if os(iOS)
 import UIKit
-#elseif canImport(AppKit)
+#elseif os(macOS)
 import AppKit
 #endif
 
@@ -10,11 +10,13 @@ import AppKit
 enum Clipboard {
     @MainActor
     static func copy(_ text: String) {
-        #if canImport(UIKit)
+        #if os(iOS)
         UIPasteboard.general.string = text
-        #elseif canImport(AppKit)
+        #elseif os(macOS)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+        #else
+        #error("Clipboard.copy has no implementation for this platform")
         #endif
     }
 }

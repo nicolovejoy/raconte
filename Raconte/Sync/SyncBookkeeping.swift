@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One digest of what was last durably uploaded for a CloudKit record: its content hash
 /// and byte count. T3 (upload queue) diffs a record's current bytes against this to
@@ -7,6 +8,17 @@ import Foundation
 struct UploadedDigest: Codable, Equatable, Sendable {
     var sha256: String
     var bytes: Int
+}
+
+/// A record a later sync pass couldn't land (inbound processing failed for it) but must
+/// not lose track of — "inbound sync must land or park": a refusal that returns without
+/// parking is permanent silent loss, since CKSyncEngine never redelivers a consumed
+/// record. `reason` is a human-readable diagnostic, not parsed by anything.
+struct ParkedRecord: Codable, Equatable, Sendable {
+    var reason: String
+    var attempts: Int
+    var firstParkedAt: Date
+    var lastAttemptAt: Date?
 }
 
 /// Bookkeeping for the M4 sync engine, under `sync/` beside `captures/`
@@ -36,14 +48,19 @@ actor SyncBookkeepingStore {
     private static let systemFieldsDirectoryName = "system-fields"
     private static let ledgerFileName = "ledger.json"
     private static let environmentTagFileName = "environment"
+    private static let parkedFileName = "parked.json"
+    private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")
 
     /// Always `AppContainer.syncRoot(containerRoot:)` in production — this store never
     /// derives it itself, matching `JournalCoverStore`'s pattern of taking the path it
     /// needs rather than reconstructing it from a parent root.
     nonisolated let root: URL
 
-    init(root: URL) {
+    private let now: @Sendable () -> Date
+
+    init(root: URL, now: @escaping @Sendable () -> Date = { Date() }) {
         self.root = root
+        self.now = now
     }
 
     // MARK: Engine state
@@ -97,6 +114,54 @@ actor SyncBookkeepingStore {
         var current = ledger()
         current.removeValue(forKey: recordName)
         try Self.saveLedger(current, root: root)
+    }
+
+    // MARK: Parked records (#85)
+
+    /// Record names inbound sync couldn't land, keyed by `SyncRecordName.rawValue`. An
+    /// absent `parked.json` is an empty dictionary, per the type's governing collapse
+    /// rule; an undecodable one is also treated as empty, but — unlike the ledger — that
+    /// case is logged, since a park list silently going empty is the difference between
+    /// "retried later" and "lost".
+    func parkedRecords() -> [String: ParkedRecord] {
+        guard let data = Self.read(url: Self.parkedURL(root: root)) else { return [:] }
+        guard let decoded = try? CaptureCoding.decoder().decode([String: ParkedRecord].self, from: data) else {
+            Self.log.notice("sync: parked.json present but undecodable — treating as empty")
+            return [:]
+        }
+        return decoded
+    }
+
+    /// Idempotent: a second park of the same name keeps `firstParkedAt` and `attempts`,
+    /// replacing only `reason` — parking again isn't a fresh failure, it's the same one
+    /// recurring.
+    func park(_ recordName: String, reason: String) {
+        var current = parkedRecords()
+        if var existing = current[recordName] {
+            existing.reason = reason
+            current[recordName] = existing
+        } else {
+            current[recordName] = ParkedRecord(reason: reason, attempts: 0,
+                                                firstParkedAt: now(), lastAttemptAt: nil)
+        }
+        try? Self.saveParked(current, root: root)
+    }
+
+    func unpark(_ recordName: String) {
+        var current = parkedRecords()
+        current.removeValue(forKey: recordName)
+        try? Self.saveParked(current, root: root)
+    }
+
+    /// Increments `attempts` and stamps `lastAttemptAt` for a parked name; a no-op for a
+    /// name that was never parked.
+    func noteRetryAttempt(_ recordName: String) {
+        var current = parkedRecords()
+        guard var existing = current[recordName] else { return }
+        existing.attempts += 1
+        existing.lastAttemptAt = now()
+        current[recordName] = existing
+        try? Self.saveParked(current, root: root)
     }
 
     // MARK: Environment tag (#90)
@@ -162,6 +227,10 @@ actor SyncBookkeepingStore {
         root.appendingPathComponent(environmentTagFileName)
     }
 
+    static func parkedURL(root: URL) -> URL {
+        root.appendingPathComponent(parkedFileName)
+    }
+
     private static func read(url: URL) -> Data? {
         try? Data(contentsOf: url)
     }
@@ -184,5 +253,10 @@ actor SyncBookkeepingStore {
     private static func saveLedger(_ ledger: [String: UploadedDigest], root: URL) throws {
         let data = try CaptureCoding.lineEncoder().encode(ledger)
         try write(data, url: ledgerURL(root: root))
+    }
+
+    private static func saveParked(_ parked: [String: ParkedRecord], root: URL) throws {
+        let data = try CaptureCoding.encoder().encode(parked)
+        try write(data, url: parkedURL(root: root))
     }
 }

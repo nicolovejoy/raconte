@@ -48,16 +48,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
     /// Whether the receipt owns the middle of the screen.
     var showsReceipt: Bool
 
-    /// Whether the one-tap Discard is on screen (record-flow plan, Task 1).
-    ///
-    /// Option 1 makes the library's floating record button start recording on arrival, so
-    /// a mis-tap now produces audio rather than a screen change. Discard is what makes that
-    /// cheap. Offered only in `.recording` and `.interrupted` — the phases where the owner
-    /// is the one holding the capture open. The machine-busy phases
-    /// (`.preparing`/`.resuming`/`.stopping`) already disable the primary control, and a
-    /// Discard racing a start or a stop is a defect, not an affordance.
-    var showsDiscardButton: Bool
-
     /// Whether the transcript fills the height available above the control bar (with its
     /// own scroll) instead of being capped.
     ///
@@ -83,7 +73,6 @@ struct CaptureLayoutModel: Equatable, Sendable {
             return .init(mode: .capturing,
                          showsLiveTranscript: true,
                          showsReceipt: false,
-                         showsDiscardButton: phase == .recording || phase == .interrupted,
                          transcriptFillsAvailableHeight: true)
 
         case .idle, .captured, .finalizing, .complete:
@@ -95,13 +84,11 @@ struct CaptureLayoutModel: Equatable, Sendable {
                 return .init(mode: .receipt,
                              showsLiveTranscript: false,
                              showsReceipt: true,
-                             showsDiscardButton: false,
                              transcriptFillsAvailableHeight: false)
             }
             return .init(mode: .ready,
                          showsLiveTranscript: false,
                          showsReceipt: false,
-                         showsDiscardButton: false,
                          transcriptFillsAvailableHeight: false)
         }
     }

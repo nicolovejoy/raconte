@@ -39,7 +39,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         XCTAssertEqual(ready.mode, .ready)
         XCTAssertFalse(ready.showsLiveTranscript, "nothing is being transcribed")
         XCTAssertFalse(ready.showsReceipt)
-        XCTAssertFalse(ready.showsDiscardButton)
         XCTAssertFalse(ready.transcriptFillsAvailableHeight,
                        "no transcript, so nothing to give the height to")
     }
@@ -109,24 +108,11 @@ final class CaptureLayoutModelTests: XCTestCase {
     /// exactly the moment the owner is trying to resume is the same class of defect as #53
     /// itself, and `MarkerControlsModel` already keeps the controls *shown* through these
     /// phases for this reason — the two models have to agree or the bar would still jump.
-    ///
-    /// `.resuming` is compared field-by-field, not with `==`: since Task 1 it deliberately
-    /// hides Discard (a machine-busy phase, per `showsDiscardButton`'s doc), which is the
-    /// one field this test is not about — everything that actually occupies screen space
-    /// must still match `.recording`.
     func testLayoutDoesNotChangeAcrossAnInterruption() {
         XCTAssertEqual(layout(.interrupted), layout(.recording),
                        "layout changes when a call interrupts a reading")
-
-        let resuming = layout(.resuming)
-        let recording = layout(.recording)
-        XCTAssertEqual(resuming.mode, recording.mode)
-        XCTAssertEqual(resuming.showsLiveTranscript, recording.showsLiveTranscript)
-        XCTAssertEqual(resuming.showsReceipt, recording.showsReceipt)
-        XCTAssertEqual(resuming.transcriptFillsAvailableHeight,
-                       recording.transcriptFillsAvailableHeight)
-        XCTAssertFalse(resuming.showsDiscardButton,
-                       "resuming is machine-busy — Discard must not race the resume")
+        XCTAssertEqual(layout(.resuming), layout(.recording),
+                       "resuming must not reflow the screen either")
     }
 
     /// Every phase must be classified deliberately. `CaseIterable` means a newly added
@@ -140,37 +126,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         }
     }
 
-    // MARK: Discard button (record-flow plan, Task 1)
-
-    /// Discard exists to undo a mis-tap of the library's floating record button, so it is
-    /// offered exactly while there is a capture the owner could still be stopping himself.
-    func testDiscardIsOfferedWhileRecording() {
-        XCTAssertTrue(CaptureLayoutModel.make(phase: .recording).showsDiscardButton)
-    }
-
-    /// An interrupted capture is still the owner's to abandon — the same reason
-    /// `RecordControlModel` offers Done there.
-    func testDiscardIsOfferedWhileInterrupted() {
-        XCTAssertTrue(CaptureLayoutModel.make(phase: .interrupted).showsDiscardButton)
-    }
-
-    /// The machine-busy phases. The primary control is already disabled in all three; a
-    /// Discard racing the start or the stop is a defect, not a feature.
-    func testDiscardIsHiddenInMachineBusyPhases() {
-        for phase in [CaptureState.preparing, .resuming, .stopping] {
-            XCTAssertFalse(CaptureLayoutModel.make(phase: phase).showsDiscardButton,
-                           "\(phase) must not offer Discard")
-        }
-    }
-
-    /// Nothing in flight: the landing screen, the receipt, and the terminal phases.
-    func testDiscardIsHiddenWhenNothingIsInFlight() {
-        XCTAssertFalse(CaptureLayoutModel.make(phase: .idle).showsDiscardButton)
-        XCTAssertFalse(CaptureLayoutModel.make(phase: .captured, hasReceipt: true).showsDiscardButton)
-        XCTAssertFalse(CaptureLayoutModel.make(phase: .finalizing).showsDiscardButton)
-        XCTAssertFalse(CaptureLayoutModel.make(phase: .complete).showsDiscardButton)
-    }
-
     /// Every remaining flag is exercised by at least one phase in each direction — a flag
     /// that reads the same in every phase is the dead flag #74 complained about.
     func testNoRemainingFlagIsConstant() {
@@ -180,7 +135,6 @@ final class CaptureLayoutModelTests: XCTestCase {
         }
         XCTAssertTrue(all.contains { $0.showsLiveTranscript } && all.contains { !$0.showsLiveTranscript })
         XCTAssertTrue(all.contains { $0.showsReceipt } && all.contains { !$0.showsReceipt })
-        XCTAssertTrue(all.contains { $0.showsDiscardButton } && all.contains { !$0.showsDiscardButton })
         XCTAssertTrue(all.contains { $0.transcriptFillsAvailableHeight }
                       && all.contains { !$0.transcriptFillsAvailableHeight })
     }

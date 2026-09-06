@@ -273,6 +273,69 @@ final class CaptureScreenModelTests: XCTestCase {
         XCTAssertTrue(model.coordinator === coordinator)
     }
 
+    /// #122: a launch that healed an orphaned capture leaves that capture's id in the live
+    /// coordinator's `finalizeQueue`. The next real capture's phase flips to `.captured`
+    /// BEFORE `enqueueFinalize` runs, and `handleFinalizeQueue` then drains the stale
+    /// backlog, spawns a fresh coordinator, and orphans the one the real capture is about
+    /// to enqueue on — so the real capture never finalizes until the next launch.
+    func testACaptureAfterALaunchRecoveredBacklogStillFinalizesInSession() async throws {
+        // Same orphan fixture as the launch-healed sync test above: a capture killed at
+        // `.finalizing` with its m4a already on disk, which recovery hands to the finalizer.
+        let recoveredID = "01J000000000000000000122"
+        let dir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: recoveredID)
+        try FileManager.default.createDirectory(
+            at: SegmentLayout.finalDirectory(captureDirectory: dir), withIntermediateDirectories: true)
+        try Data([0x00, 0x01, 0x02, 0x03]).write(
+            to: SegmentLayout.finalRecordingURL(captureDirectory: dir))
+        let manifestFmt = AudioFormatDescriptor(sampleRate: 48000, channels: 1,
+                                                commonFormat: .pcmFormatFloat32, interleaved: false)
+        let manifest = Manifest(captureID: recoveredID, createdAt: Date(timeIntervalSince1970: 0),
+                                state: .finalizing, stateSeq: 7,
+                                stateUpdatedAt: Date(timeIntervalSince1970: 0),
+                                format: manifestFmt, segmentCount: 3,
+                                lastKnownFrameOffset: 2500)
+        try AtomicFile.replace(at: SegmentLayout.manifestURL(captureDirectory: dir),
+                               writing: CaptureCoding.encoder().encode(manifest))
+
+        let recorder = ModelFakeRecorder()
+        let encoder = FakeAudioEncoder()
+        encoder.verifyOverride = VerifyResult(decodable: true, decodedFrameCount: 2500, nonSilent: true)
+        let model = CaptureScreenModel(
+            capturesRoot: root,
+            makeSession: { ModelFakeSession() },
+            makeRecorder: { recorder },
+            encoder: encoder)
+        await model.bootstrap()
+
+        let live = model.coordinator
+        XCTAssertTrue(live.finalizeQueue.isEmpty,
+                      "after bootstrap has drained the recovered backlog, nothing may be left "
+                      + "in the live coordinator's queue for a later phase flip to act on")
+
+        // The override above exists only to pass the healed fixture's decode-probe verify
+        // (no duration check on that path). Left set, it would also poison the live
+        // capture's OWN verify below with the fixture's frame count instead of the real
+        // one, failing its duration-tolerance check for a reason that has nothing to do
+        // with #122. Clear it so the live capture's finalize uses the fake's default
+        // (exact match to what was actually encoded).
+        encoder.verifyOverride = nil
+
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        let liveID = try XCTUnwrap(live.activeCaptureID)
+        XCTAssertNotEqual(liveID, recoveredID)
+        recorder.feed(frames: 48_000)
+        await model.done()
+        await waitUntil({ model.coordinator !== live }, timeout: 10, "no coordinator reset")
+
+        let liveDir = SegmentLayout.captureDirectory(capturesRoot: root, captureID: liveID)
+        await waitUntil({
+            FileManager.default.fileExists(atPath: SegmentLayout.finalRecordingURL(captureDirectory: liveDir).path)
+        }, timeout: 10, "the real capture was stranded — its m4a never appeared in-session")
+        XCTAssertEqual(Set(model.library.items.map(\.captureID)), [recoveredID, liveID],
+                       "both the healed backlog and the real capture must be in the library")
+    }
+
     // MARK: - T6c: finalize wiring promotes revision zero
 
     /// The finalize call-site wiring (design §5's brief, step 4.6): after a capture

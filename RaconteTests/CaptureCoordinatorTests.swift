@@ -1159,6 +1159,27 @@ final class CaptureCoordinatorTests: XCTestCase {
         await coordinator.done()
     }
 
+    /// #136: the live transcript keys its paragraph break to the marker's FRAME, so it
+    /// needs the frames of this capture's ¶ taps directly off the coordinator — reset
+    /// with the rest of the capture wiring, never carried into the next one.
+    func testParagraphFramesAccumulateAndResetWithTheWiring() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let fixedNow = Date(timeIntervalSince1970: 1_650_000_000)
+        let coordinator = makeCoordinator(session: session, recorder: recorder, now: { fixedNow })
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        coordinator.markParagraph()
+        recorder.feed(frames: 240)
+        coordinator.markParagraph()
+
+        XCTAssertEqual(coordinator.paragraphFrames, [480, 720])
+
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.paragraphFrames, [])
+    }
+
     /// #63: the visual marker confirmation needs to know WHICH button's marker just
     /// landed, and `markerCount` alone cannot say. Same honesty rule as the haptic:
     /// `lastMarkerKind` reports what reached disk, so it follows the append, not the tap.

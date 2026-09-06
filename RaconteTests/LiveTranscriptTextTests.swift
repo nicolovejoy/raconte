@@ -9,6 +9,10 @@ final class LiveTranscriptTextTests: XCTestCase {
         ConsolidatedTranscriptRun(text: text, range: FrameRange(start: start, end: start + 100), isProvisional: provisional)
     }
 
+    private func run(_ text: String, _ range: Range<Int64>) -> ConsolidatedTranscriptRun {
+        ConsolidatedTranscriptRun(text: text, range: FrameRange(start: range.lowerBound, end: range.upperBound), isProvisional: false)
+    }
+
     private func colours(_ s: AttributedString) -> [(String, Color?)] {
         s.runs.map { (String(s[$0.range].characters), $0.foregroundColor) }
     }
@@ -66,5 +70,30 @@ final class LiveTranscriptTextTests: XCTestCase {
         XCTAssertFalse(c.isEmpty)
         XCTAssertTrue(c.allSatisfy { $0.1 == .gray }, "every run must be dim: \(c)")
         XCTAssertEqual(String(attributed.characters), "still guessing")
+    }
+
+    /// #136: a ¶ tapped between two runs starts a new line where the words after it begin.
+    func testAParagraphFrameBetweenRunsBecomesABlankLine() {
+        let runs = [run("one two", 0..<100), run("three", 100..<200)]
+        let text = String(LiveTranscriptText.attributed(runs, paragraphFrames: [100], ink: .white, dim: .gray).characters)
+        XCTAssertEqual(text, "one two\n\nthree")
+    }
+
+    /// The same nearer-edge rule the detail screen uses — a frame inside a run cuts at the
+    /// nearer edge, never mid-word.
+    func testAParagraphFrameInsideARunCutsAtTheNearerEdge() {
+        let runs = [run("one", 0..<100), run("two", 100..<200), run("three", 200..<300)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, paragraphFrames: [110], ink: .white, dim: .gray).characters), "one\n\ntwo three")
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, paragraphFrames: [190], ink: .white, dim: .gray).characters), "one two\n\nthree")
+    }
+
+    func testFramesAtTheEdgesRenderNoBreak() {
+        let runs = [run("one", 0..<100), run("two", 100..<200)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, paragraphFrames: [0, 500], ink: .white, dim: .gray).characters), "one two")
+    }
+
+    func testTwoFramesInOneGapMakeOneBreak() {
+        let runs = [run("one", 0..<100), run("two", 100..<200)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, paragraphFrames: [100, 100], ink: .white, dim: .gray).characters), "one\n\ntwo")
     }
 }

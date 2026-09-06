@@ -170,7 +170,7 @@ struct CaptureView: View {
         if layout.showsLiveTranscript,
            let transcription = model.transcription, !transcription.runs.isEmpty {
             ScrollView {
-                LiveTranscriptText(runs: transcription.runs)
+                LiveTranscriptText(runs: transcription.runs, paragraphFrames: model.coordinator.paragraphFrames)
             }
             .frame(maxHeight: layout.transcriptFillsAvailableHeight ? .infinity : 160)
             .padding(.horizontal, 24)

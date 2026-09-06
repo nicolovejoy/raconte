@@ -12,23 +12,36 @@ import CloudKit
 /// itself then binds the values and proceeds; these functions never bind on its behalf.
 enum IngestDropReason {
     /// AudioAsset / LiveLog: `file` asset + `sha256` (mirrors `ingestAudio`/
-    /// `ingestLiveLog`'s guard).
+    /// `ingestLiveLog`'s now-sequential guards — each sub-cause here is one of those
+    /// guards' own literal park reasons, not re-derived).
     static func childAsset(_ record: CKRecord) -> String? {
-        guard let asset = record[SyncChildAssetField.file] as? CKAsset else { return "no file asset" }
-        guard asset.fileURL != nil else { return "file asset has no fileURL — asset download failed" }
-        guard record[SyncChildAssetField.sha256] as? String != nil else { return "no sha256" }
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset else { return "missing file asset" }
+        guard asset.fileURL != nil else { return "asset has no local fileURL" }
+        guard record[SyncChildAssetField.sha256] as? String != nil else { return "missing sha256 field" }
+        return nil
+    }
+
+    /// Image: `file` asset + `sha256` — same field keys as `childAsset` (`RemoteImageFields`
+    /// reads through `SyncChildAssetField`, not an image-specific pair), mirrors
+    /// `ingestImage`'s sequential guards.
+    static func image(_ record: CKRecord) -> String? {
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset else { return "missing file asset" }
+        guard asset.fileURL != nil else { return "asset has no local fileURL" }
+        guard record[SyncChildAssetField.sha256] as? String != nil else { return "missing sha256 field" }
         return nil
     }
 
     /// Revision: `body` asset + `sha256` + an `entryRef` that parses as an Entry name
-    /// (mirrors `ingestRevision`'s guard).
+    /// (mirrors `ingestRevision`'s sequential guards).
     static func revision(_ record: CKRecord) -> String? {
-        guard let asset = record[SyncRevisionField.body] as? CKAsset else { return "no body asset" }
-        guard asset.fileURL != nil else { return "body asset has no fileURL — asset download failed" }
-        guard record[SyncChildAssetField.sha256] as? String != nil else { return "no sha256" }
-        guard let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference else { return "no entryRef" }
+        guard let asset = record[SyncRevisionField.body] as? CKAsset else { return "missing file asset" }
+        guard asset.fileURL != nil else { return "asset has no local fileURL" }
+        guard record[SyncChildAssetField.sha256] as? String != nil else { return "missing sha256 field" }
+        guard let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference else {
+            return "missing entryRef"
+        }
         guard case .entry? = SyncCloudIdentifiers.name(of: entryRef.recordID) else {
-            return "entryRef does not name an Entry"
+            return "entryRef is not an entry name"
         }
         return nil
     }

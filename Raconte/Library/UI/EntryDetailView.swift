@@ -315,7 +315,7 @@ struct EntryDetailView: View {
                 covers: model.journalCovers,
                 currentJournalID: item.journalID,
                 dateLine: { model.dateLine(forJournal: $0) },
-                entryCount: { id in model.allEntries.filter { $0.journalID == id }.count },
+                entryCount: { model.entryCount(forJournal: $0) },
                 onSelect: { journalID in
                     Task {
                         if !(await model.moveEntry(captureID, toJournal: journalID)) { moveFailed = true }

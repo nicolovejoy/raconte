@@ -112,7 +112,7 @@ struct CaptureView: View {
                 covers: model.library.journalCovers,
                 currentJournalID: model.selectedJournalID,
                 dateLine: { model.library.dateLine(forJournal: $0) },
-                entryCount: { id in model.library.allEntries.filter { $0.journalID == id }.count },
+                entryCount: { model.library.entryCount(forJournal: $0) },
                 onSelect: { model.selectJournal($0) },
                 onNewJournal: { pendingNewJournalPrompt = true })
         }

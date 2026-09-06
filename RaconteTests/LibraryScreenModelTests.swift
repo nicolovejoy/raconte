@@ -122,6 +122,22 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertEqual(range.maxDate, Date(timeIntervalSince1970: 2_000))
     }
 
+    /// #75: the header card read `items.count` (scope-filtered) while the editor counted
+    /// `allEntries` — 40 vs 6 for the same journal in the frames before a rescan landed.
+    func testEntryCountIsIndependentOfJournalScope() async throws {
+        try writeJournals([journal("J1", "1987"), journal("J2", "Trip")])
+        try writeCapture(idA, capturedAt: 1_000, journalID: "J1")
+        try writeCapture(idB, capturedAt: 2_000, journalID: "J1")
+        try writeCapture(idC, capturedAt: 3_000, journalID: "J2")
+
+        let model = model()
+        await model.selectJournalScope(.journal("J2"))
+        XCTAssertEqual(model.items.count, 1, "precondition: the scope narrows items")
+        XCTAssertEqual(model.entryCount(forJournal: "J1"), 2)
+        XCTAssertEqual(model.entryCount(forJournal: "J2"), 1)
+        XCTAssertEqual(model.entryCount(forJournal: "nope"), 0)
+    }
+
     func testDateRangeIsNilForAnEmptyOrUnknownJournal() async throws {
         try writeJournals([journal("J1", "1987")])
         let model = model()

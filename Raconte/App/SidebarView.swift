@@ -135,9 +135,14 @@ struct SidebarRowView: View {
                 }
             }
         }
+        .padding(.leading, Self.leadingInset(isJournal: row.journalID != nil))
     }
 
     private static let thumbSize: CGFloat = 28
+
+    /// #139: journal rows are the children of this list — Capture and the system rows
+    /// are its spine — so they take one indent step and nothing else does.
+    static func leadingInset(isJournal: Bool) -> CGFloat { isJournal ? 14 : 0 }
 
     /// The row anatomy (#117): cover thumb, or the shared neutral tile — same tile
     /// `JournalPickerSheet` and the library entry rows use, echoed at sidebar scale.

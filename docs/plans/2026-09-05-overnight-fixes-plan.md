@@ -799,6 +799,12 @@ enum Clipboard {
 - [ ] **Step 4: UI test** in `EntryDetailSheetUITests` (read the class's existing seeding + sheet-open steps at lines 1-60 and follow them exactly):
 
 ```swift
+    // EXECUTION NOTE (ruling, 2026-09-06 02:40): as written below this test hung twice
+    // (10-27 min) — a runner-side `UIPasteboard` read can trip the iOS Allow-Paste prompt,
+    // which blocks XCUITest. Shipped instead as
+    // `testCopyTranscriptRowIsOfferedAndDismissesTheSheet`: row exists → tap → sheet gone,
+    // detail screen still there. Clipboard CONTENT is covered by the pure
+    // `EntryTranscriptCopyTextTests`. Never read the pasteboard from a UI test.
     /// #105: one action copies the whole transcript. The simulator shares one pasteboard
     /// with the test runner, so the copied text can be read back here.
     func testCopyTranscriptPutsTheWholeTextOnThePasteboard() {

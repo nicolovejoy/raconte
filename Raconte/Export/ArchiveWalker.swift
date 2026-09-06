@@ -27,6 +27,14 @@ import Foundation
 /// (deleted at finalize anyway), `transcript/head.json` (a cache), `images/thumbnails/`,
 /// and anything outside `captures/`/`journals.json`/`journals/` entirely
 /// (`trash-pending/`, `quarantine/`, `sync/`).
+/// A container root that doesn't exist (or isn't a directory) at all is a real failure —
+/// collapsing it to the same empty `Listing` a legitimately-empty archive produces would
+/// be silent data loss on an export path. A root that DOES exist but has no `captures/`
+/// yet (fresh install, nothing captured) is legitimate and must not throw.
+enum ArchiveWalkerError: Error, Equatable {
+    case containerRootMissing(URL)
+}
+
 enum ArchiveWalker {
     struct Listing: Equatable, Sendable {
         /// Sorted by `relativePath`.
@@ -47,6 +55,12 @@ enum ArchiveWalker {
     /// the same id as the package-relative path component.
     static func list(containerRoot: URL) throws -> Listing {
         let fm = FileManager.default
+        var rootIsDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: containerRoot.path, isDirectory: &rootIsDirectory), rootIsDirectory.boolValue
+        else {
+            throw ArchiveWalkerError.containerRootMissing(containerRoot)
+        }
+
         var files: [ExportFile] = []
         var warnings: [String] = []
         var journalIDs: [String] = []

@@ -344,6 +344,9 @@ final class CaptureScreenModel {
         for id in recoveredQueue {
             await FinalizeArtifactPush.push(capturesRoot: capturesRoot, captureID: id, syncHooks: syncHooks)
         }
+        // #122: the backlog is finished; take it off the live coordinator's queue so the
+        // next real capture's early `.captured` flip finds nothing to drain.
+        coordinator.consumeFinalized(recoveredQueue)
         await library.rescan()
         // Fire-and-forget corpus promotion (T6c) + head-cache stamping (T7 Task 3 fix
         // round 2) + stale-draft recovery (T7 prereq #41), ONE Task, sequential: the
@@ -463,7 +466,8 @@ final class CaptureScreenModel {
     /// empty queue, no-ops, and the capture never finalizes until the next launch's
     /// recovery scan. `enqueueFinalize` runs after `store.finish` — the durability
     /// commit — so this signal means the capture is fully on disk.
-    /// The phase guard skips launch-recovery fills (`bootstrap` drains those itself).
+    /// The phase guard skips launch-recovery fills (`bootstrap` drains those itself and
+    /// then `consumeFinalized` takes them off the queue — #122).
     func handleFinalizeQueue() {
         guard !coordinator.finalizeQueue.isEmpty,
               coordinator.phase == .captured || coordinator.phase == .complete else { return }

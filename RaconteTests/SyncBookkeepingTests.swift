@@ -370,6 +370,24 @@ final class SyncBookkeepingTests: XCTestCase {
         let parked = await store.parkedRecords()
         XCTAssertTrue(parked.isEmpty)
     }
+
+    func testUndecodableParkedFileIsQuarantinedNotLost() async throws {
+        let url = SyncBookkeepingStore.parkedURL(root: syncRoot)
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        let garbage = Data("not json at all".utf8)
+        try garbage.write(to: url)
+
+        let parked = await makeStore().parkedRecords()
+
+        XCTAssertTrue(parked.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: syncRoot.path)
+        let quarantined = siblings.filter { $0.hasPrefix("parked-unreadable-") && $0.hasSuffix(".json") }
+        XCTAssertEqual(quarantined.count, 1)
+        let quarantinedData = try Data(contentsOf: syncRoot.appendingPathComponent(quarantined[0]))
+        XCTAssertEqual(quarantinedData, garbage)
+    }
 }
 
 /// A tiny mutable clock for tests that need to advance time between two calls — a

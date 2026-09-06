@@ -50,13 +50,27 @@ was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
    drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
    nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
    #91/#85, `MarkerControlsModel`'s two constant show flags.
-3. **Read `docs/plans/2026-09-06-roadmap-review-and-phases.md`** — an unattended review of
+3. **recountly.org teardown is HELD — do not delete anything.** The owner asked to retire
+   it on the belief it held only test data. It does not: **36 entries, 4 journals, 34 audio
+   files, 39.5 MB**, of which **18 are substantive personal entries** and **23 of the audio
+   files are the `imp_`-prefixed paper-archive imports** the plan of record names (they
+   belong to no journal, which is why "Nicholas' travel notes 1998" reads as empty). Owner
+   accepted the correction. **Full backup taken: `~/recountly-export-2026-09-06/`** — all
+   rows as JSON with full transcripts, all 34 audio files, sha256 manifest, README
+   inventory. Nothing was torn down. Live resources still up: Vercel project `recountly`
+   (`prj_IxCq9E2HyOjOrLgWdoDQM9a8ZMf9`), Neon `recountly-db`
+   (`billowing-sky-08777171`), blob store `recountly-audio-priv`
+   (`store_TRuOEBLTjj2ja7QE`). The GitHub repo is already archived. `recountly.org` is a
+   third-party-registered domain, so keeping it needs no action. **Migrate before tearing
+   down** — the open fork is whether migrated audio gets re-transcribed on device (real
+   frame anchors, markable) or carries the web transcript with `none`-grade anchors.
+4. **Read `docs/plans/2026-09-06-roadmap-review-and-phases.md`** — an unattended review of
    all 40 open issues proposing a seven-phase order. Headline, verified against the code:
    **export, migration and search — the three things the plan of record called
    non-negotiable for v1 — are the three things not built.** Four open questions at the
    end need owner answers, chiefly whether the M4 acceptance gate (delete the app,
    reinstall, archive reconstructs from CloudKit) has ever actually been run.
-4. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
+5. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
    space and land on the entry inside its journal — the sidebar stays on Capture today, so
    the detail view has no journal context), #149 (backdate sheet UX pass + a design system;
    the too-light text is a blanket `.opacity(0.45)` stacking on `.disabled`, not a colour

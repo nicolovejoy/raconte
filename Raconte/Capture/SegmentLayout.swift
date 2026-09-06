@@ -214,6 +214,14 @@ enum SegmentLayout {
         url.appendingPathExtension(partExtension)
     }
 
+    /// A per-call staging sibling for `AtomicFile.createExclusively` (#43):
+    /// `head.json` -> `head.json.<uuid>.part`. Distinct from `partURL(for:)` so two
+    /// concurrent creates of one target never share a staging file. Still ends in
+    /// `.part`, so every "ignore stray parts" rule in the scanners applies unchanged.
+    static func exclusiveStagingURL(for url: URL) -> URL {
+        url.appendingPathExtension(UUID().uuidString.lowercased()).appendingPathExtension(partExtension)
+    }
+
     // MARK: Images
 
     /// Where captured/attached image originals and their sidecars live —

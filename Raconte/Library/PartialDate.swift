@@ -168,6 +168,14 @@ struct PartialDate: Sendable, Equatable, Hashable {
     func isFuture(now: Date = Date(), calendar: Calendar = .gregorianCurrent) -> Bool {
         self > PartialDate(from: now, precision: precision, calendar: calendar)
     }
+
+    /// The following calendar day, at `.day` precision only (#47). `nil` below day
+    /// precision: a journal covering 1998 does not advance a year per page.
+    func nextDay(calendar: Calendar) -> PartialDate? {
+        guard precision == .day else { return nil }
+        guard let next = calendar.date(byAdding: .day, value: 1, to: anchorDate(calendar: calendar)) else { return nil }
+        return PartialDate(from: next, precision: .day, calendar: calendar)
+    }
 }
 
 extension PartialDate: Comparable {

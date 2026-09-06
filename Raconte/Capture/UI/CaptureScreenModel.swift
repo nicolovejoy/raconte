@@ -729,6 +729,21 @@ final class CaptureScreenModel {
                                                   calendar: .gregorianCurrent)
     }
 
+    /// #47: after a day-precision backdated capture commits, pre-fill the NEXT reading
+    /// with the following day — consecutive pages of a paper journal are usually
+    /// consecutive days. Only `.day` advances; never into the future (the field would
+    /// then be silently refused at `EntryMetadata.setOriginalDate`). Sets the properties
+    /// directly rather than through `setBackdateDate`, which would try to sync a sidecar
+    /// for a capture that has already finished.
+    private func advanceBackdateForNextEntry(now: Date = Date()) {
+        guard backdateEnabled, backdatePrecision == .day else { return }
+        let current = PartialDate(from: backdateDate, precision: .day, calendar: .gregorianCurrent)
+        guard let next = current.nextDay(calendar: .gregorianCurrent),
+              !next.isFuture(now: now) else { return }
+        backdateDate = next.anchorDate(calendar: .gregorianCurrent)
+        rememberBackdate()
+    }
+
     // MARK: internals
 
     /// Everything that used to be an `.onChange` on `CaptureView` — the screen is no
@@ -860,6 +875,7 @@ final class CaptureScreenModel {
         } else {
             await buildReceipt(for: transcribed)
         }
+        advanceBackdateForNextEntry()
         coordinator = spawn()
         wroteMultiVoiceForActiveCapture = false
         finishing = false

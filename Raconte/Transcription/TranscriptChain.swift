@@ -87,6 +87,19 @@ enum TranscriptChain {
         return false
     }
 
+    /// The instant a new revision is minted at (#43, #51). Two rules, both about the total
+    /// order `(createdAt, id)` staying deterministic:
+    /// - truncated to the encoder's millisecond precision, so an in-memory revision and
+    ///   its re-decoded self never order differently;
+    /// - strictly later than the chain's last revision — a wall clock that has not moved
+    ///   a millisecond (or moved backwards) gets `tip + 1 ms`, so two mints can never tie
+    ///   and fall to the random half of a ULID.
+    static func mintInstant(now: Date, after ordered: [TranscriptRevision]) -> Date {
+        let truncated = Date(timeIntervalSince1970: (now.timeIntervalSince1970 * 1000).rounded(.down) / 1000)
+        guard let tip = ordered.last else { return truncated }
+        return truncated > tip.createdAt ? truncated : tip.createdAt.addingTimeInterval(0.001)
+    }
+
     /// spans → display text, via `TranscriptText.join` (design §4.2 rule 8) — the one
     /// `plainText` rule.
     static func plainText(_ revision: TranscriptRevision) -> String {

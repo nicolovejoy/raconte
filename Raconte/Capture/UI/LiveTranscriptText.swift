@@ -9,25 +9,37 @@ import SwiftUI
 /// appear. `CaptureProse.font` is shared with `receiptProse` for that reason.
 struct LiveTranscriptText: View {
     let runs: [ConsolidatedTranscriptRun]
+    /// #136: the frames of this capture's ¶ taps — the same coordinator state
+    /// `CaptureCoordinator.paragraphFrames` exposes. Recomputed on every render from
+    /// `runs`, so a provisional run that gets re-ranged moves the break with it.
+    var paragraphFrames: [Int64] = []
 
     var body: some View {
-        Text(Self.attributed(runs, ink: InkTone.studioInk.color, dim: InkTone.studioInkDim.color))
+        Text(Self.attributed(runs, paragraphFrames: paragraphFrames,
+                             ink: InkTone.studioInk.color, dim: InkTone.studioInkDim.color))
             .font(CaptureProse.font)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
     }
 
     /// Pure, so the dim-in-the-middle rule is testable without a renderer. Runs are joined
-    /// with single spaces; the separator takes the colour of the run before it.
-    static func attributed(_ runs: [ConsolidatedTranscriptRun], ink: Color, dim: Color) -> AttributedString {
+    /// with single spaces, except at a paragraph break (#136), which renders as a blank
+    /// line ("\n\n") instead — same nearer-edge cut rule the detail screen uses
+    /// (`TranscriptAttribution.cutIndex(forFrame:ranges:)`), so live and post-hoc agree on
+    /// where a break falls.
+    static func attributed(_ runs: [ConsolidatedTranscriptRun], paragraphFrames: [Int64] = [],
+                           ink: Color, dim: Color) -> AttributedString {
+        let visible = runs.filter { !$0.text.isEmpty }
+        let ranges = visible.map(\.range)
+        let breaks = Set(paragraphFrames.map { TranscriptAttribution.cutIndex(forFrame: $0, ranges: ranges) })
         var out = AttributedString()
-        for run in runs where !run.text.isEmpty {
+        for (index, run) in visible.enumerated() {
             var piece = AttributedString(run.text)
             piece.foregroundColor = run.isProvisional ? dim : ink
             if !out.characters.isEmpty {
-                var space = AttributedString(" ")
-                space.foregroundColor = out.runs.last?.foregroundColor
-                out.append(space)
+                var separator = AttributedString(breaks.contains(index) ? "\n\n" : " ")
+                separator.foregroundColor = out.runs.last?.foregroundColor
+                out.append(separator)
             }
             out.append(piece)
         }

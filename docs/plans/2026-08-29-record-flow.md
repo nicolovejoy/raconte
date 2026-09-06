@@ -75,6 +75,10 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
 
 ### Task 1: `CaptureLayoutModel.showsDiscardButton`
 
+> **Superseded 2026-09-05 (#140):** the Discard button and the whole discard path were
+> removed — the owner hit it by accident and lost a recording. Deliberate deletion is the
+> library's trash flow. #123 closed as moot with it.
+
 The pure visibility rule, so the view has no phase logic of its own.
 
 Discard is offered exactly while a capture is under way and can still be stopped by the

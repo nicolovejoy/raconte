@@ -2,45 +2,58 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-05 (laptop — #118 Task 7 shipped via SDD; PR #138 open, CI green, Mac smoke passed)
+## Session 2026-09-05/06 (laptop — overnight SDD run: 13 tasks, five PRs open, CI green)
 
-Resumed the SDD ledger for `feat/118-live-transcript` and ran Task 7: `LiveTranscriptText`
-composes one `AttributedString`, committed runs in `studioInk`, provisional runs in
-`studioInkDim`, dimmed on `isProvisional` and never on position; `CaptureProse.font` is the
-one serif face for the live band and the receipt. Task review clean. The final whole-branch
-review (Opus) found one Important: `studioInkDim` had a single unpinned call site, so
-`InkSurfaceTests`' contrast floors were measuring a colour nothing painted — a source scan in
-`CaptureLabelTests` now pins it (RED proven by swapping the colour). Same fix wave: an
-`Equatable` guard so the 250 ms ticker stops invalidating the view during silence, one
-`ConsolidatedTranscriptRun.wholeCommitted` factory, two more view tests, an honest
-settled/superseded label. Owner Mac smoke: band calm, no flicker; 12 pt serif too small →
-`CaptureProse.font` pinned to `CaptureSurface.minimumControlPointSize` (16 pt) on macOS,
-iOS keeps `.callout`; second look passed. The `transcript-timing` instrument is stripped
-(measurement recorded in the PR and the plan). **PR #138** ("Closes #118", 7 commits, head
-`21cb8c9a`): unit **2060** against main's 2049, UI 62, both CI jobs green.
+Planned and ran the owner-approved overnight slate via SDD
+(`docs/plans/2026-09-05-overnight-fixes-plan.md`): one plan, five branches from `main`
+`95c1c0b5`, each ending at an open PR for the owner to merge in order. Per-task spec +
+quality reviews on every task; whole-branch Opus reviews on PRs 1, 2 and 4 (PRs 3 and 5
+are single-task, so the task review was the branch review). Every PR's CI counts were read
+out of the job logs and matched the plan's predictions exactly.
 
-Filed during the smoke: **#139** sidebar journal rows indented; **#140 remove the Discard
-button from the capture screen** — the owner hit it by accident and lost a recording;
-**#141** About → Build as `build N: <date>` plus a sequential described build list
-(owner said "build 18"; `CFBundleVersion` is 13 — reconcile in the design).
+- **PR #142** capture: Discard button AND the whole discard path removed (#140, #123 moot);
+  `selectedJournalCover` deleted (#130); **#122 fixed** — `finalizeQueue` was append-only, so
+  the launch-recovered backlog stayed queued and the next capture's early `.captured` flip
+  drained it, respawned the coordinator and orphaned the real capture; fix is
+  `CaptureCoordinator.consumeFinalized(_:)` after bootstrap's drain, RED proven in two stages.
+  Unit 2051, UI 61.
+- **PR #143** small fixes: sidebar journal rows indented (#139); one
+  `entryCount(forJournal:)` rule (#75); span round-trip pin (#77); day-precision backdate
+  pre-fills the NEXT day after a capture commits, `.day` only, never future (#47 — the
+  year-month guard test was vacuous until a mutation proof caught it); Copy transcript row in
+  the ⋯ sheet, `Clipboard.copy` UIKit/AppKit split (#105). Unit 2073, UI 63. **Expected
+  one-hunk conflict with #142 in `finishCurrentCapture`** — resolution is in the PR body.
+- **PR #144** About → Build reads `build 14: <date>`; `CFBundleVersion` 13 → 14;
+  `docs/builds.md` starts at 14 (#141). Unit 2064, UI 62.
+- **PR #145** core hardening: per-call staging name for `createExclusively` (#43);
+  `TranscriptChain.mintInstant` ms-truncated and strictly after the tip (#43/#51 local half);
+  `Journal`/`EntryMetadata` preserve unknown JSON keys via `JSONValue`, encode side filters
+  claimed keys (#70 on-disk half). **Does not close #51 or #70** — residual comments posted on
+  both (cross-device equal-ms tie; CloudKit record builders read only named fields). Unit 2069.
+- **PR #146** live transcript shows the ¶ break at the tap's frame; the nearer-edge cut rule is
+  now one shared `TranscriptAttribution.cutIndex(forFrame:ranges:)` so live and post-hoc agree
+  (#136). Unit 2065. Owner smoke is the only end-to-end check.
+
+Process notes: the account rate limit hit at 22:16 and reset at 01:40 (3.4 h lost); two
+implementers stalled on the same Task 8 UI test (a runner-side `UIPasteboard` read hangs
+XCUITest — new memory); one implementer's report cited a brief note that did not exist and
+was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
 
 **Next steps:**
-1. **Merge PR #138** (owner). Then delete the SDD workspace
-   (`.superpowers/sdd/2026-09-04-118-capture-screen-plan/`, git-ignored) and the worktree
-   (`git worktree remove .claude/worktrees/118-live`; the worktree holds a symlink to that
-   workspace). Prune the three local branches gone on origin: `feat/bulk-select`,
-   `feat/record-flow`, `feat/ux-entry-detail`.
-2. **#140 Discard button** — small, high-value, owner-hurt; do it first next session.
-   Check whether the lost recording from 2026-09-05 is recoverable from Trash before
-   designing (discard = trash on this project, see the never-infer-intent memory).
-3. **#141 build numbering** — design question first (which counter, where the list lives).
-4. **Device smoke of #135 + #138 on the iPhone** (next TestFlight; bump `CFBundleVersion`
-   13 → 14 first): record → BN flips to LN → live band dims/brightens → stop → card, no
-   "Record another" → tap card → back to Capture via sidebar → must be Ready.
-5. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; #139;
-   `MarkerControlsModel`'s two constant show flags; `transcriptFillsAvailableHeight` ≡
-   `showsLiveTranscript`; `TranscriptionSession.displayText` is test-only now; sync
-   hardening #91/#85.
+1. **Merge the five PRs in order** #142 → #143 → #144 → #145 → #146, waiting for main to go
+   green and hitting **Update branch** before each merge (the two-green-PRs rule). #143 will
+   conflict with #142 in one hunk of `CaptureScreenModel.finishCurrentCapture`: keep
+   `await buildReceipt(for: transcribed)` then `advanceBackdateForNextEntry()` then
+   `coordinator = spawn()`.
+2. **Mac smoke** per PR body (each is self-contained): no Discard while recording; sidebar
+   indent; Copy transcript → paste; next-day backdate; About → `build 14: …`; ¶ break live.
+3. **Device smoke on the iPhone** (next TestFlight uses 14 — no further bump; add the row to
+   `docs/builds.md`): record → BN flips to LN → live band dims → ¶ break → stop → card.
+4. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
+   `Int?` for no caller; `advanceBackdateForNextEntry(now:)` seam never injected; `copyText`
+   drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
+   nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
+   #91/#85, `MarkerControlsModel`'s two constant show flags.
 
 ## What Raconte is
 

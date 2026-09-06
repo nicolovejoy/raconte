@@ -437,28 +437,6 @@ final class NavigationUITests: XCTestCase {
         // throwaway container, so nothing leaks. Don't "fix" this by adding a stop.
     }
 
-    /// The mis-tap round trip. Discard stops the reading and leaves the screen idle with no
-    /// receipt — the entry is in the trash, not on the landing screen.
-    func testDiscardEndsTheCaptureAndLeavesNoReceipt() {
-        let app = launchApp()
-        openPlace(app, "sidebar.allEntries")
-        let record = app.buttons["library.record"].firstMatch
-        XCTAssertTrue(record.waitForExistence(timeout: 15), "no floating record button on the library screen")
-        press(record)
-
-        let discard = app.buttons["capture.discard"].firstMatch
-        XCTAssertTrue(discard.waitForExistence(timeout: 15), "Discard must be offered while recording")
-        press(discard)
-
-        let primary = recordButton(app)
-        waitUntil(15, "discard did not return the capture screen to idle") {
-            primary.label == "Record"
-        }
-        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "capture.receipt.open")
-                        .firstMatch.exists,
-                       "a discarded capture must not leave a receipt")
-    }
-
     // MARK: - Task 8 (record-flow): About also explains the app
 
     /// Owner request 2026-08-29: About is the only Release-built screen that can tell a new

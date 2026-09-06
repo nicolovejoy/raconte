@@ -4,6 +4,8 @@
 # raw xcodebuild, ASC API key for the upload leg, Xcode GUI account for the
 # archive leg (-allowProvisioningUpdates cannot cloud-sign with an API key).
 #
+# Bump CFBundleVersion in project.yml AND append docs/builds.md before running (#141).
+#
 # Usage: scripts/upload_testflight.sh [ios|macos]   (default: ios)
 # Env:   ASC_KEY_ID overrides the key id (default matches asc_regenerate_profile.py)
 # macOS additionally needs a "3rd Party Mac Developer Installer" identity in the
@@ -47,4 +49,4 @@ xcodebuild -exportArchive \
   -authenticationKeyID "$KEY_ID" \
   -authenticationKeyIssuerID "$(cat "$ISSUER_FILE")"
 
-echo "== Done: build $BUILD ($PLATFORM) uploaded (watch App Store Connect for processing)"
+echo "== Done: build $BUILD ($PLATFORM) uploaded — add build $BUILD to docs/builds.md if not already there"

@@ -109,7 +109,8 @@ Owner-smoke app build (macOS) — real automatic signing, so the app actually ca
 iCloud entitlement. **This is the only macOS build that can sync.** An app built with the
 nocloud override launches and behaves normally but `SyncCoordinator.live()` returns nil
 (it reads the signature's entitlement), so a sync smoke against it silently tests
-nothing. Needs the iCloud capability enabled on the App ID.
+nothing. Needs the iCloud capability enabled on the App ID. Bump `CFBundleVersion` and
+append `docs/builds.md` first — About shows `build N: <date>` (#141).
 
 📋 **COPY THE BELOW**:
 

@@ -58,11 +58,20 @@ enum AtomicFile {
         try? fsyncDirectory(path: dirPath)
     }
 
-    /// Create-once: stages `data` at `url.part`, fsyncs, then renames with
-    /// `RENAME_EXCL` so an existing target fails with `EEXIST` instead of being
+    /// Create-once: stages `data` at a per-call `<url>.<uuid>.part`, fsyncs, then renames
+    /// with `RENAME_EXCL` so an existing target fails with `EEXIST` instead of being
     /// silently replaced (design §4.5b). Unlike `replace`, this never overwrites.
-    static func createExclusively(at url: URL, writing data: Data) throws {
-        let partURL = SegmentLayout.partURL(for: url)
+    ///
+    /// #43: an earlier version staged every call at the SAME shared `url.part`, so two
+    /// concurrent creates of one target raced on one staging file — the EEXIST loser's
+    /// cleanup `unlink` could delete the winner's still-open write mid-flight. Each call
+    /// now gets its own staging name, so a loser can only ever unlink its own file.
+    /// A crash between write and rename now strands a uniquely named `.part` that nothing
+    /// sweeps (`transcript/` has no part reaper today); the old shared name was reused by
+    /// the next attempt. Tiny and invisible to every reader, but a trade made knowingly.
+    static func createExclusively(at url: URL, writing data: Data,
+                                  beforeRename: (() throws -> Void)? = nil) throws {
+        let partURL = SegmentLayout.exclusiveStagingURL(for: url)
         let partPath = partURL.path
         let finalPath = url.path
         let dirPath = url.deletingLastPathComponent().path
@@ -78,6 +87,8 @@ enum AtomicFile {
             throw error
         }
         guard close(fd) == 0 else { throw AtomicFileError.posix(operation: "close", code: errno) }
+
+        try beforeRename?()
 
         guard renamex_np(partPath, finalPath, UInt32(RENAME_EXCL)) == 0 else {
             let code = errno

@@ -119,6 +119,34 @@ final class TranscriptChainTests: XCTestCase {
 
     // MARK: - plainText
 
+    // MARK: - mintInstant (#43, #51)
+
+    /// #43: `createdAt` is encoded at millisecond precision, so a mint must already be at
+    /// that precision or the in-memory chain and its re-decoded self can order differently.
+    func testMintInstantTruncatesToMilliseconds() {
+        let now = Date(timeIntervalSince1970: 1_000.123_456_789)
+        XCTAssertEqual(TranscriptChain.mintInstant(now: now, after: []).timeIntervalSince1970,
+                       1_000.123, accuracy: 0.000_000_1)
+    }
+
+    /// #51: two mints inside one millisecond tied on `createdAt` and fell to a random
+    /// ULID suffix, so `current` could land on the earlier one. A mint is always strictly
+    /// after the chain's last revision.
+    func testMintInstantIsStrictlyAfterTheChainTipUnderAFrozenClock() {
+        let frozen = Date(timeIntervalSince1970: 2_000)
+        let tip = TranscriptRevision(id: ULID.make(now: frozen), source: .userEdit, createdAt: frozen, spans: [])
+        let minted = TranscriptChain.mintInstant(now: frozen, after: TranscriptChain.ordered([tip]))
+        XCTAssertGreaterThan(minted, tip.createdAt)
+        XCTAssertEqual(minted.timeIntervalSince(tip.createdAt), 0.001, accuracy: 0.000_000_1)
+    }
+
+    func testMintInstantLeavesALaterClockAlone() {
+        let tip = TranscriptRevision(id: "01J0000000000000000000T1", source: .userEdit,
+                                     createdAt: Date(timeIntervalSince1970: 2_000), spans: [])
+        let later = Date(timeIntervalSince1970: 2_005)
+        XCTAssertEqual(TranscriptChain.mintInstant(now: later, after: [tip]), later)
+    }
+
     func testPlainTextJoinsSpansWithTheOneJoinRule() {
         let revision = TranscriptRevision(
             id: "R", source: .machineLive, createdAt: Date(timeIntervalSince1970: 0),

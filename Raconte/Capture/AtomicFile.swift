@@ -66,6 +66,9 @@ enum AtomicFile {
     /// concurrent creates of one target raced on one staging file — the EEXIST loser's
     /// cleanup `unlink` could delete the winner's still-open write mid-flight. Each call
     /// now gets its own staging name, so a loser can only ever unlink its own file.
+    /// A crash between write and rename now strands a uniquely named `.part` that nothing
+    /// sweeps (`transcript/` has no part reaper today); the old shared name was reused by
+    /// the next attempt. Tiny and invisible to every reader, but a trade made knowingly.
     static func createExclusively(at url: URL, writing data: Data,
                                   beforeRename: (() throws -> Void)? = nil) throws {
         let partURL = SegmentLayout.exclusiveStagingURL(for: url)

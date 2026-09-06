@@ -94,6 +94,9 @@ enum TranscriptChain {
     /// - strictly later than the chain's last revision — a wall clock that has not moved
     ///   a millisecond (or moved backwards) gets `tip + 1 ms`, so two mints can never tie
     ///   and fall to the random half of a ULID.
+    /// Local only: two DEVICES can still mint equal-millisecond revisions that sync into a
+    /// `(createdAt, id)` tie falling to the random half of a ULID — the cross-device
+    /// tiebreak is a separate design, tracked on #51.
     static func mintInstant(now: Date, after ordered: [TranscriptRevision]) -> Date {
         let truncated = Date(timeIntervalSince1970: (now.timeIntervalSince1970 * 1000).rounded(.down) / 1000)
         guard let tip = ordered.last else { return truncated }

@@ -50,8 +50,9 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
     var provisionalDefault: Bool
 
     /// #70: keys this build's `CodingKeys` does not name — from a newer build's registry,
-    /// or a future field. Decoded once at read time and re-emitted verbatim on every
-    /// encode, so an older build re-saving the registry for an unrelated reason (a
+    /// or a future field. Decoded once at read time and re-emitted with its value
+    /// preserved (numbers are re-serialized in canonical form, e.g. `1e3` becomes `1000`)
+    /// on every encode, so an older build re-saving the registry for an unrelated reason (a
     /// rename, a sync merge) does not silently drop a field it cannot understand. Not
     /// synced as its own `SyncJournalField` — it travels as part of whichever write
     /// carries the journal, same as every other field on this type.
@@ -103,8 +104,9 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         // garbage decodes to `false`, which is also what every journal that was never a
         // provisional default actually is.
         provisionalDefault = ((try? container.decodeIfPresent(Bool.self, forKey: .provisionalDefault)) ?? nil) ?? false
-        // #70: everything not named by `CodingKeys`, kept so `encode(to:)` can write it
-        // back untouched.
+        // #70: everything not named by `CodingKeys`, kept so `encode(to:)` can re-emit it
+        // with its value preserved (numbers are re-serialized in canonical form, e.g.
+        // `1e3` becomes `1000`).
         unknownFields = try decoder.container(keyedBy: AnyCodingKey.self)
             .unknownFields(except: CodingKeys.self)
     }
@@ -138,9 +140,10 @@ struct Journal: Codable, Sendable, Equatable, Identifiable, Hashable {
         if provisionalDefault {
             try container.encode(provisionalDefault, forKey: .provisionalDefault)
         }
-        // #70: write back whatever this build could not read, verbatim.
+        // #70: write back whatever this build could not read, with its value preserved
+        // (numbers are re-serialized in canonical form, e.g. `1e3` becomes `1000`).
         var extra = encoder.container(keyedBy: AnyCodingKey.self)
-        try extra.encodeUnknownFields(unknownFields)
+        try extra.encodeUnknownFields(unknownFields, except: CodingKeys.self)
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {

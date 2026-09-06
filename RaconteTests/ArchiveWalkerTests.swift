@@ -336,4 +336,78 @@ final class ArchiveWalkerTests: XCTestCase {
         XCTAssertTrue(result.warnings.isEmpty)
         XCTAssertTrue(result.captureIDs.isEmpty)
     }
+
+    // MARK: Fix round 1, Finding 1 — a missing/unreadable container root must throw,
+    // never collapse to the same empty `Listing` a legitimately-empty archive produces.
+
+    func testNonexistentContainerRootThrowsContainerRootMissing() throws {
+        let neverCreated = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("RaconteArchiveWalker-never-created-\(UUID().uuidString)", isDirectory: true)
+
+        XCTAssertThrowsError(try ArchiveWalker.list(containerRoot: neverCreated)) { error in
+            XCTAssertEqual(error as? ArchiveWalkerError, .containerRootMissing(neverCreated))
+        }
+    }
+
+    /// A root that exists but has no `captures/` yet (fresh install, nothing captured
+    /// and no journal created) is a legitimate empty archive, not a failure.
+    func testExistingRootWithNoCapturesOrJournalsReturnsEmptyListingWithoutThrowing() throws {
+        let freshRoot = FileManager.default.temporaryDirectory
+            .resolvingSymlinksInPath()
+            .appendingPathComponent("RaconteArchiveWalker-fresh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: freshRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: freshRoot) }
+
+        let result = try ArchiveWalker.list(containerRoot: freshRoot)
+
+        XCTAssertTrue(result.files.isEmpty)
+        XCTAssertTrue(result.captureIDs.isEmpty)
+        XCTAssertTrue(result.journalIDs.isEmpty)
+        XCTAssertTrue(result.warnings.isEmpty)
+    }
+
+    // MARK: Fix round 1, Gap 2 — sibling directories of `captures/` never leak in.
+
+    func testTrashPendingQuarantineAndSyncSiblingsNeverLeakIntoTheListing() throws {
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_060))
+        try writeFinalM4A(id)
+
+        // trash-pending/<name>/final/recording.m4a — a staged-for-removal directory.
+        let trashPendingName = "\(ULID.make())-\(ULID.make())"
+        let trashPendingFinal = AppContainer.trashPendingURL(containerRoot: containerRoot, name: trashPendingName)
+            .appendingPathComponent("final", isDirectory: true)
+        try FileManager.default.createDirectory(at: trashPendingFinal, withIntermediateDirectories: true)
+        try Data(repeating: 0xEE, count: 16).write(to: trashPendingFinal.appendingPathComponent("recording.m4a"))
+
+        // quarantine/<name>/final/recording.m4a — not yet a real sibling on this branch
+        // (a parallel task adds it), but the walker must never enumerate anything under
+        // containerRoot except captures/, journals.json and journals/ regardless.
+        let quarantineName = "\(ULID.make())-\(ULID.make())"
+        let quarantineFinal = containerRoot.appendingPathComponent("quarantine", isDirectory: true)
+            .appendingPathComponent(quarantineName, isDirectory: true)
+            .appendingPathComponent("final", isDirectory: true)
+        try FileManager.default.createDirectory(at: quarantineFinal, withIntermediateDirectories: true)
+        try Data(repeating: 0xFF, count: 16).write(to: quarantineFinal.appendingPathComponent("recording.m4a"))
+
+        // sync/parked.json — disposable sync bookkeeping.
+        let syncRoot = AppContainer.syncRoot(containerRoot: containerRoot)
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: syncRoot.appendingPathComponent("parked.json"))
+
+        let result = try ArchiveWalker.list(containerRoot: containerRoot)
+        let paths = result.files.map(\.relativePath)
+
+        XCTAssertFalse(paths.contains { $0.hasPrefix("trash-pending/") })
+        XCTAssertFalse(paths.contains { $0.hasPrefix("quarantine/") })
+        XCTAssertFalse(paths.contains { $0.hasPrefix("sync/") })
+        // Exactly the normal capture's own two files (capture.json + audio.m4a) — the
+        // three siblings above contributed nothing.
+        XCTAssertEqual(paths.sorted(), [
+            "entries/\(id)/audio.m4a",
+            "entries/\(id)/capture.json",
+        ])
+        XCTAssertEqual(result.files.count, 2)
+    }
 }

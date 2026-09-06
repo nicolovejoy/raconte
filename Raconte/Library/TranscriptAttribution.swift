@@ -338,21 +338,27 @@ enum TranscriptAttribution {
 
     // MARK: - Cut position
 
+    /// The one cut rule, shared with the live transcript (#136) so the break the owner
+    /// watched lands where the receipt's paragraph does. A frame strictly inside a range
+    /// cuts at the nearer edge — text is never torn mid-word; otherwise it cuts before
+    /// the first range whose start is at or after the frame.
+    static func cutIndex(forFrame frame: Int64, ranges: [FrameRange]) -> Int {
+        if let inside = ranges.firstIndex(where: { $0.start < frame && frame < $0.end }) {
+            let r = ranges[inside]
+            return frame - r.start < r.end - frame ? inside : inside + 1
+        }
+        return ranges.firstIndex { $0.start >= frame } ?? ranges.count
+    }
+
     /// Finds the piece index to cut before, and whether the cut lands strictly inside a
     /// piece (task-1-brief.md step 3). A frame that lands inside a piece cuts at the
     /// piece's nearer edge — text is never torn mid-word, because frames give no
-    /// character offset to tear at correctly.
+    /// character offset to tear at correctly. Delegates the actual cut search to
+    /// `cutIndex(forFrame:ranges:)` (#136) so live and post-hoc never disagree.
     private static func cutIndex(forFrame frame: Int64, pieces: [Piece]) -> (index: Int, structuralApprox: Bool) {
-        if let insideIndex = pieces.firstIndex(where: { $0.start < frame && frame < $0.end }) {
-            let piece = pieces[insideIndex]
-            if frame - piece.start < piece.end - frame {
-                return (insideIndex, true)       // nearer the start -> cut before the piece
-            } else {
-                return (insideIndex + 1, true)   // nearer the end -> cut after the piece
-            }
-        }
-        let index = pieces.firstIndex { $0.start >= frame } ?? pieces.count
-        return (index, false)
+        let structuralApprox = pieces.contains { $0.start < frame && frame < $0.end }
+        let index = cutIndex(forFrame: frame, ranges: pieces.map { FrameRange(start: $0.start, end: $0.end) })
+        return (index, structuralApprox)
     }
 
     // MARK: - Breakpoints

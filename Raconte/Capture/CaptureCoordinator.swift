@@ -105,6 +105,9 @@ final class CaptureCoordinator {
     /// reached disk, not what was tapped: a failed append is felt as the absence of
     /// the buzz, plus the `lastError` line.
     private(set) var markerCount = 0
+    /// #136: the frames of this capture's ¶ taps, for the live transcript; reset with
+    /// the wiring.
+    private(set) var paragraphFrames: [Int64] = []
     /// What kind the most recent LANDED marker was (#63) — how the visual confirmation
     /// knows which button to flash when `markerCount` rises. Same honesty rule as the
     /// count: follows the append, never the tap, so a failed write flashes nothing.
@@ -337,6 +340,7 @@ final class CaptureCoordinator {
             // `seq` is stamped by the writer, which resumes numbering from the file.
             try writer.append(StructureMarker(seq: 0, frame: frame, kind: kind, voice: voice))
             if case .voice = kind { currentVoice = voice }
+            if case .paragraph = kind { paragraphFrames.append(frame) }
             lastMarkerKind = kind
             markerCount += 1
         } catch {
@@ -803,6 +807,7 @@ final class CaptureCoordinator {
         currentVoice = nil
         didWriteOpeningVoice = false
         markerCount = 0
+        paragraphFrames = []
         lastMarkerKind = nil
         activeFormat = nil
         activeCaptureID = nil

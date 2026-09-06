@@ -217,6 +217,15 @@ final class BackdateCarryOverTests: XCTestCase {
     }
 
     /// Only `.day` advances — a journal covering 1998 does not turn a page per year.
+    ///
+    /// Asserts the dial itself at DAY resolution, not only the carried value: the carry is
+    /// re-derived through `rememberBackdate()`'s own precision-aware constructor, which
+    /// truncates any day-level advance away at `.yearMonth` regardless of whether the
+    /// `.day`-only guard fired — so `carriedBackdate()`/`backdatePrecision` alone cannot
+    /// tell "the guard held" from "the guard was bypassed and the truncation just hid it".
+    /// Proven by mutation: widening the guard to fire at any precision left
+    /// `carriedBackdate()`/`backdatePrecision` unchanged but moved `backdateDate` from the
+    /// 12th to the 13th, which only the day-resolution assertion below catches.
     func testAYearMonthBackdateDoesNotAdvance() async throws {
         let recorder = CarryOverFakeRecorder()
         let model = CaptureScreenModel(capturesRoot: root,
@@ -235,6 +244,9 @@ final class BackdateCarryOverTests: XCTestCase {
         await model.done()
         await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
 
+        XCTAssertEqual(PartialDate(from: model.backdateDate, precision: .day, calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 12),
+                       "the dial itself must stay on the exact day dialled, not just its yearMonth carry")
         XCTAssertEqual(model.carriedBackdate(), PartialDate(year: 1987, month: 6))
         XCTAssertEqual(model.backdatePrecision, .yearMonth)
     }

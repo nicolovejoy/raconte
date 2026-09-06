@@ -65,10 +65,14 @@ final class SyncEntryMergeTests: XCTestCase {
             "RemoteEntryFields.init(record:) (the decode side), and EntryFieldMerge.merge's " +
             "field list, and confirm SyncTreeScanner.entryDigest still captures it, before " +
             "this pin is honest again. EXCEPTION (#70): `unknownFields` is left OUT of all " +
-            "of those — it is opaque JSON this build cannot read, preserved only across a " +
-            "LOCAL re-encode of the sidecar; there is no `SyncEntryField` case for it and " +
-            "none is planned, so it never reaches a CKRecord at all, which is why the count " +
-            "bumped to 8 here without touching the sync sites this message names."
+            "of those — this change deliberately does not wire it into " +
+            "SyncRecordBuilders.entryRecord, RemoteEntryFields, or EntryFieldMerge; it is " +
+            "opaque JSON this build cannot read, preserved only across a LOCAL re-encode of " +
+            "the sidecar, with no `SyncEntryField` case. The CloudKit-side counterpart — an " +
+            "older build's `RemoteEntryFields` reading a newer build's CKRecord and losing " +
+            "any field it doesn't name — is the residual tracked on #70. It never reaches a " +
+            "CKRecord at all, which is why the count bumped to 8 here without touching the " +
+            "sync sites this message names."
         )
     }
 

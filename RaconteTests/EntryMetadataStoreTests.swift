@@ -318,9 +318,9 @@ final class EntryMetadataStoreTests: XCTestCase {
 
         let newer = try EntryMetadataStore.decode(
             Data(#"{"journalID":"J1","favourite":true,"tags":["a"]}"#.utf8))
-        XCTAssertEqual(newer.journalID, "J1")
-        XCTAssertEqual(newer.unknownFields["favourite"], .bool(true))
-        XCTAssertEqual(newer.unknownFields["tags"], .array([.string("a")]))
+        XCTAssertEqual(newer, EntryMetadata(journalID: "J1",
+            unknownFields: ["favourite": .bool(true), "tags": .array([.string("a")])]),
+            "full-struct equality — proves every OTHER field stayed at its default, not just that the two unknown keys were captured")
     }
 
     /// Regression pin for the hazard itself: synthesis ignores property defaults, so a

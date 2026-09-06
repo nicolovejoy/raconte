@@ -1,5 +1,29 @@
 import Foundation
 
+/// One span of the live transcript, in frame order, with the one distinction the screen
+/// can honestly draw (#118 §5): committed text is what the transcriber stands behind;
+/// provisional is the hypothesis it may still revise. Sentence boundaries are not tracked
+/// anywhere in the pipeline, so "current sentence vs earlier" is unbuildable — this is
+/// the real seam.
+///
+/// Named `ConsolidatedTranscriptRun`, not the brief's `TranscriptRun`: that name is
+/// already `TranscriptRecord.swift`'s Codable, persisted, per-attribution run type, used
+/// throughout `Raconte`/`RaconteTests`. The two are unrelated (this one is a live/UI
+/// merge of committed+provisional spans; that one is what gets written to disk) and a
+/// same-module redeclaration does not compile — this type gets a distinct name instead.
+struct ConsolidatedTranscriptRun: Equatable, Sendable {
+    var text: String
+    var range: FrameRange
+    var isProvisional: Bool
+
+    /// One committed run standing for a finished transcript, for surfaces that hold the
+    /// text after the consolidator is gone. The range is a placeholder — nothing sorts or
+    /// merges these.
+    static func wholeCommitted(_ text: String) -> [ConsolidatedTranscriptRun] {
+        text.isEmpty ? [] : [ConsolidatedTranscriptRun(text: text, range: FrameRange(start: 0, end: 0), isProvisional: false)]
+    }
+}
+
 /// Merges the transcriber's two result streams into one ordered view (design §8).
 ///
 /// The SDK emits *volatile* results — provisional hypotheses over a range that get
@@ -112,16 +136,20 @@ struct TranscriptConsolidator: Sendable, Equatable {
     /// What the transcriber stands behind. This is what gets persisted.
     var committedText: String { TranscriptText.join(committed.map(\.text)) }
 
-    /// Committed text plus the live hypothesis — the capture screen's ghost text.
-    /// Never persist this.
-    ///
-    /// Merged by frame position, not concatenated. Appending provisional after
-    /// committed renders a hypothesis that *precedes* committed text in the wrong
-    /// place, which is visible on screen the moment results arrive out of order.
-    var displayText: String {
-        let ordered = (committed + provisional).sorted { $0.range.start < $1.range.start }
-        return TranscriptText.join(ordered.map(\.text))
+    /// Committed and provisional runs merged by FRAME POSITION, not arrival order, and
+    /// not "committed then provisional". Results arrive out of order often enough that a
+    /// hypothesis can precede committed text; appending it after would render it in the
+    /// wrong place — visibly, the moment it happens. The screen dims on `isProvisional`,
+    /// never on position, for the same reason.
+    var runs: [ConsolidatedTranscriptRun] {
+        let all = committed.map { ConsolidatedTranscriptRun(text: $0.text, range: $0.range, isProvisional: false) }
+                + provisional.map { ConsolidatedTranscriptRun(text: $0.text, range: $0.range, isProvisional: true) }
+        return all.sorted { $0.range.start < $1.range.start }
     }
+
+    /// Committed text plus the live hypothesis — the capture screen's ghost text. Derived
+    /// from `runs` so the two cannot drift. Never persist this.
+    var displayText: String { TranscriptText.join(runs.map(\.text)) }
 }
 
 extension FrameRange {

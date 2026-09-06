@@ -123,8 +123,9 @@ struct EntryMetadata: Codable, Sendable, Equatable {
     var modified: [String: Date]?
 
     /// #70: keys this build's `CodingKeys` does not name — from a newer build's sidecar,
-    /// or a future field. Decoded once at read time and re-emitted verbatim on every
-    /// encode, so an older build re-saving the sidecar for an unrelated reason (a
+    /// or a future field. Decoded once at read time and re-emitted with its value
+    /// preserved (numbers are re-serialized in canonical form, e.g. `1e3` becomes `1000`)
+    /// on every encode, so an older build re-saving the sidecar for an unrelated reason (a
     /// backdate edit, a sync merge) does not silently drop a field it cannot understand.
     var unknownFields: [String: JSONValue]
 
@@ -242,7 +243,8 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         // #70: everything not named by `CodingKeys` (including `legacyPrecision`, which
         // IS named, so it is correctly excluded here and never re-emitted — it is
         // consumed on the upgrade-in-place path above, exactly today's behaviour), kept
-        // so `encode(to:)` can write it back untouched.
+        // so `encode(to:)` can re-emit it with its value preserved (numbers are
+        // re-serialized in canonical form, e.g. `1e3` becomes `1000`).
         unknownFields = try decoder.container(keyedBy: AnyCodingKey.self)
             .unknownFields(except: CodingKeys.self)
     }
@@ -296,9 +298,11 @@ struct EntryMetadata: Codable, Sendable, Equatable {
         if let modified, !modified.isEmpty {
             try container.encode(modified, forKey: .modified)
         }
-        // #70: write back whatever this build could not read, verbatim. An untouched,
-        // all-defaults entry has no unknown fields, so this keeps producing exactly `{}`.
+        // #70: write back whatever this build could not read, with its value preserved
+        // (numbers are re-serialized in canonical form, e.g. `1e3` becomes `1000`). An
+        // untouched, all-defaults entry has no unknown fields, so this keeps producing
+        // exactly `{}`.
         var extra = encoder.container(keyedBy: AnyCodingKey.self)
-        try extra.encodeUnknownFields(unknownFields)
+        try extra.encodeUnknownFields(unknownFields, except: CodingKeys.self)
     }
 }

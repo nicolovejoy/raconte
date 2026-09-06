@@ -185,6 +185,16 @@ final class JournalStoreTests: XCTestCase {
             #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N","pages":{"count":12}}]}"#)
     }
 
+    /// The encode side filters claimed keys exactly as the decode side does: an
+    /// `unknownFields` map that carries `id` cannot overwrite the journal's identity.
+    func testUnknownFieldsCannotOverwriteAnIdentityKeyOnEncode() throws {
+        var journal = Journal(id: "A", name: "N", createdAt: Date(timeIntervalSince1970: 0))
+        journal.unknownFields = ["id": .string("HIJACKED"), "color": .string("red")]
+        let text = String(decoding: try JournalStore.encode(JournalRegistry(journals: [journal])), as: UTF8.self)
+        XCTAssertEqual(text,
+            #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N"}]}"#)
+    }
+
     func testARenameKeepsTheUnknownKeys() throws {
         var registry = try JournalStore.load(url: writeRegistry(
             #"{"journals":[{"color":"red","createdAt":"1970-01-01T00:00:00.000Z","id":"A","name":"N"}]}"#))

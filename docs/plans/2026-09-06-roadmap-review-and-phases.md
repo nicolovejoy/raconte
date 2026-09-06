@@ -73,9 +73,28 @@ before search rather than after.
   `transcript.md`, `entry.json`, photos), manifest, checksums. The spec is already
   written in `plans/2026-07-29-data-model-and-migration.md`. Export is the longevity
   story — CloudKit is only transport.
-- **Migrate the frozen web entries.** `overview.md` says 36; the older plan of record
-  says ~50 including 23 paper-archive imports. **Confirm the real count before writing
-  the script.** One-evening script: Neon rows + private blobs → the local store.
+- **Migrate the frozen web entries.** Counted directly against the live Neon database on
+  2026-09-06 — **36 entries, 4 journals, 34 audio files, 39.5 MB, 53k characters of
+  transcript, 63 minutes of audio.** The breakdown matters:
+  - **12** in a journal called "Testing" — 3-17 second clips, genuinely disposable.
+  - **18** in "2026 learning to use this tool" — real personal entries, 1,300-10,600
+    characters each.
+  - **6** attached to no journal, mixed real and test.
+  - **23 of the 34 audio files carry an `imp_` prefix** (`imp_2025_AUG_07_07.49.mp4`).
+    These are the "23 paper-archive imports" the plan of record names. They are the
+    largest files (up to 6 MB) and belong to no journal, which is why the
+    "Nicholas' travel notes 1998" journal reads as empty.
+
+  **A full backup was taken before any teardown: `~/recountly-export-2026-09-06/`** —
+  all rows as JSON with full transcripts, every audio file, and a sha256 manifest. The
+  teardown is therefore no longer urgent, but the migration is no longer optional: this
+  is real material, not test data.
+
+  One-evening script: the exported JSON + audio files → the local store. Note the schema
+  gap — the web model has no revision chain, no markers and no voice attribution, so
+  every migrated entry lands as a single machine revision with no marker data. Decide
+  whether migrated audio gets re-transcribed on device (which would give it real frame
+  anchors) or keeps the web transcript as-is with `none`-grade anchors.
 - **Tear down the web app** per the checklist in the plan of record: verify the export
   first, then retire the Vercel project, Neon, Blob and domain routing. Keep the domain.
 
@@ -212,8 +231,13 @@ Three claims, stated plainly so they can be rejected:
 1. **Has the M4 acceptance gate been run** — delete the app from a Mac, reinstall, confirm
    the full archive reconstructs from CloudKit? Phase 2 tears down the other copy, so this
    is load-bearing.
-2. **How many entries are actually on recountly.org?** `overview.md` says 36, the plan of
-   record says ~50 including 23 paper-archive imports.
+2. ~~How many entries are actually on recountly.org?~~ **Answered 2026-09-06: 36 entries,
+   34 audio files, of which 23 are the paper-archive imports. Backed up to
+   `~/recountly-export-2026-09-06/`.** The owner's initial recollection was that this was
+   all test data; it is not — 18 entries are substantive personal journal entries. The
+   remaining question is narrower: **should migrated audio be re-transcribed on device**
+   (earning real frame anchors and marker-ready spans) **or carried over as-is** with the
+   web transcript and `none`-grade anchors?
 3. **Does the phase order above match where your attention is?** The honest alternative is
    to lead with Phase 3 and Phase 4 — the design system and the reading surface — because
    that is what you actually see every day, and let migration wait. That is a legitimate

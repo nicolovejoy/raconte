@@ -36,7 +36,7 @@ struct JournalEditorView: View {
 
     private var journal: Journal? { model.journals.first { $0.id == journalID } }
     private var entryCount: Int {
-        model.allEntries.filter { $0.journalID == journalID }.count
+        model.entryCount(forJournal: journalID)
     }
     private var trashedCount: Int {
         model.trashed.filter { $0.journalID == journalID }.count

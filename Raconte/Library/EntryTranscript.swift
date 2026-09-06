@@ -47,6 +47,22 @@ struct EntryTranscript: Sendable, Equatable {
     /// tail was lost to a kill. Both screens surface this; the row as a marker, the
     /// detail screen as a note under the prose.
     var isTruncated: Bool { degradations.contains(.transcriptTruncated) }
+
+    /// #105: the whole transcript as one string for the clipboard. Paragraphs, when the
+    /// entry has them, are separated by a blank line; otherwise the plain text verbatim.
+    /// `nil` when there is nothing to copy.
+    ///
+    /// Only meaningful for a transcript loaded with `AttributionMode.compute` (the detail
+    /// screen's path): on the scanner's row path `text` is the 160-char `snippet`, so a
+    /// caller there would copy a truncation and call it whole — see `text`'s own caveat.
+    var copyText: String? {
+        if let paragraphs, !paragraphs.isEmpty {
+            let joined = paragraphs.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n\n")
+            return joined.isEmpty ? nil : joined
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return text
+    }
 }
 
 extension EntryTranscript {

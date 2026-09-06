@@ -19,6 +19,16 @@ final class JournalHeaderSourceTests: XCTestCase {
         }
     }
 
+    private var libraryViewSource: String {
+        get throws {
+            let url = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()      // RaconteTests
+                .deletingLastPathComponent()      // repo root
+                .appendingPathComponent("Raconte/Library/UI/LibraryView.swift")
+            return strippingComments(try String(contentsOf: url))
+        }
+    }
+
     func testCaptureScreenRendersNoJournalCover() throws {
         XCTAssertFalse(try captureViewSource.contains("JournalCoverThumbnail"),
                        "#69: a cover inside this file's Menu label renders full-bleed on "
@@ -58,5 +68,18 @@ final class JournalHeaderSourceTests: XCTestCase {
                        "standing branch rule: call the shared primitive, never copy it — "
                        + "dateRange(forJournal:) is JournalDateLine's own fallback input, "
                        + "not something this file should call directly")
+    }
+
+    /// #75: the header card used to count `model.items.count` — scope-filtered — while
+    /// the editor counted `allEntries` directly, so the same journal showed two different
+    /// entry counts in the same frame. Both must now route through the one shared rule.
+    func testJournalHeaderRoutesEntryCountThroughTheSharedRule() throws {
+        let source = try libraryViewSource
+        XCTAssertTrue(source.contains("entryCount(forJournal:"),
+                      "the header card must call the shared LibraryScreenModel.entryCount(forJournal:), "
+                      + "not count items itself")
+        XCTAssertFalse(source.contains("entryCount: model.items.count"),
+                       "model.items is scope-filtered and lags a scope change by one async "
+                       + "rescan — the header must not read it directly for a count")
     }
 }

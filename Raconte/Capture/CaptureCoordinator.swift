@@ -722,6 +722,8 @@ final class CaptureCoordinator {
     /// `enqueueFinalize` has run for that capture — finds a non-empty queue, finishes
     /// the stale backlog, spawns a fresh coordinator, and orphans this one with the real
     /// capture still on it. Ids not present are ignored.
+    /// Consumption is about the queue, not about success: an id whose finalize failed is
+    /// re-planned from its on-disk state by the next launch's `recoverAtLaunch()`.
     func consumeFinalized(_ ids: [String]) {
         guard !ids.isEmpty else { return }
         let consumed = Set(ids)

@@ -151,6 +151,7 @@ actor TranscriptionSession {
 
     var committedText: String { consolidator.committedText }
     var displayText: String { consolidator.displayText }
+    var runs: [ConsolidatedTranscriptRun] { consolidator.runs }
     var committed: [TranscriptResult] { consolidator.committed }
     var provisional: [TranscriptResult] { consolidator.provisional }
 

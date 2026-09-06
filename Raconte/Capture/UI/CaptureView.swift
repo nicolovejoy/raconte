@@ -168,12 +168,9 @@ struct CaptureView: View {
         // #53-era defect `showsLiveTranscript` was added to prevent; this view was simply
         // not asking it.
         if layout.showsLiveTranscript,
-           let transcription = model.transcription, !transcription.displayText.isEmpty {
+           let transcription = model.transcription, !transcription.runs.isEmpty {
             ScrollView {
-                Text(transcription.displayText)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                LiveTranscriptText(runs: transcription.runs)
             }
             .frame(maxHeight: layout.transcriptFillsAvailableHeight ? .infinity : 160)
             .padding(.horizontal, 24)
@@ -416,7 +413,7 @@ struct CaptureView: View {
             }
             // Serif, per the 2026-08-09 type ruling: the reading surface is New York,
             // and this is a reading surface.
-            .font(.system(.callout, design: .serif))
+            .font(CaptureProse.font)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityIdentifier("capture.receipt.prose")
         }

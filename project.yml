@@ -50,7 +50,7 @@ targets:
         # next regen. Version-like keys live HERE, edited here, never in the plist.
         # Bump CFBundleVersion for EVERY owner-facing build (smoke or TestFlight) and
         # append docs/builds.md (#141).
-        CFBundleVersion: "14"
+        CFBundleVersion: "15"
         # ASC stops asking the export-compliance question per upload (PR #93).
         # Standard iOS crypto only (HTTPS/CloudKit), no proprietary encryption.
         ITSAppUsesNonExemptEncryption: false

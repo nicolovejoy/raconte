@@ -330,6 +330,13 @@ final class LibraryScreenModel {
                              derived: dateRange(forJournal: journalID))
     }
 
+    /// The one entry-count rule for a journal (#75): live entries filed under it, from
+    /// `allEntries` — never `items`, which is scope-filtered and lags a scope change by
+    /// one async rescan. `dateLine(forJournal:)` above is the same rule for the date.
+    func entryCount(forJournal journalID: String) -> Int {
+        allEntries.filter { $0.journalID == journalID }.count
+    }
+
     func selectJournalScope(_ scope: JournalScope) async {
         journalScope = scope
         await rescan()

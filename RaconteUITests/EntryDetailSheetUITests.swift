@@ -82,4 +82,25 @@ final class EntryDetailSheetUITests: XCTestCase {
             app.buttons["Cancel"].firstMatch.tap()
         }
     }
+
+    /// #105: one action copies the whole transcript. Reading `UIPasteboard` from the
+    /// test-runner process can trigger the system Allow-Paste prompt on iOS 16+, which
+    /// blocks XCUITest indefinitely — so this drives the row and confirms the sheet
+    /// dismisses, rather than reading the clipboard back here. The clipboard CONTENT
+    /// (paragraph joins, plain text, nil-when-empty) is covered by the pure
+    /// `EntryTranscriptCopyTextTests`.
+    func testCopyTranscriptRowIsOfferedAndDismissesTheSheet() {
+        let app = launchApp()
+        openFirstEntry(app)
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 10), "`⋯` toolbar button missing on detail")
+        more.tap()
+        let sheet = app.descendants(matching: .any).matching(identifier: "detail.infoSheet").firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 10), "info sheet did not present")
+        let copy = app.buttons["detail.copyTranscriptButton"].firstMatch
+        XCTAssertTrue(copy.waitForExistence(timeout: 5), "copy row missing on an entry with a transcript")
+        copy.tap()
+        XCTAssertTrue(sheet.waitForNonExistence(timeout: 10), "info sheet still present after Copy transcript")
+        XCTAssertTrue(more.exists, "detail screen's `⋯` button should still be present after the sheet dismisses")
+    }
 }

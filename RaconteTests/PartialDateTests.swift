@@ -226,4 +226,18 @@ final class PartialDateTests: XCTestCase {
         XCTAssertEqual(day.weekdayText(calendar: cal), expectedAbbreviated,
                        "default style must be abbreviated for the library row")
     }
+
+    // MARK: nextDay (#47)
+
+    func testNextDayAdvancesADayPrecisionValue() {
+        XCTAssertEqual(PartialDate(year: 1987, month: 6, day: 12).nextDay(calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13))
+        XCTAssertEqual(PartialDate(year: 1987, month: 12, day: 31).nextDay(calendar: .gregorianCurrent),
+                       PartialDate(year: 1988, month: 1, day: 1))
+    }
+
+    func testNextDayIsNilBelowDayPrecision() {
+        XCTAssertNil(PartialDate(year: 1987, month: 6).nextDay(calendar: .gregorianCurrent))
+        XCTAssertNil(PartialDate(year: 1987).nextDay(calendar: .gregorianCurrent))
+    }
 }

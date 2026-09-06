@@ -374,7 +374,7 @@ struct LibraryView: View {
                              cover: model.journalCovers[journal.id],
                              subtitle: JournalPickerSheet.rowSubtitle(
                                  dateLine: model.dateLine(forJournal: journal.id),
-                                 entryCount: model.items.count),
+                                 entryCount: model.entryCount(forJournal: journal.id)),
                              onEdit: { onEditJournal(journal.id) })
         }
     }

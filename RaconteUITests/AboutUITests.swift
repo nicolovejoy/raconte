@@ -57,8 +57,8 @@ final class AboutUITests: XCTestCase {
 
         // #118 §7: the build TIME, moved here off the capture screen. A different fact
         // from Version — "1.0 (12)" is the same on every install of one build, while
-        // "built Aug 30, 9:24 AM PT" is what identifies the binary in your hand after a
-        // wireless or TestFlight install.
+        // "build 14: Sep 5, 10:26 AM PT" (#141) is what identifies the binary in your
+        // hand after a wireless or TestFlight install.
         XCTAssertTrue(revealRow(app, "about.buildStamp").exists, "build stamp row missing")
 
         XCTAssertTrue(revealRow(app, "about.environment").exists, "environment row missing")

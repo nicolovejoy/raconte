@@ -26,6 +26,25 @@ final class JournalSpanEditorTests: XCTestCase {
         XCTAssertNil(span?.end)
     }
 
+    /// #77: the seam nothing composed. A `.year` value anchors to 1 Jan; re-reading that
+    /// anchor at `.day` precision would silently promote "1998" to "1 Jan 1998". The round
+    /// trip must be the identity at every precision.
+    func testPartialDateSurvivesTheAnchorThenPickerThenSpanRoundTripAtEveryPrecision() throws {
+        let calendar = Calendar.gregorianCurrent
+        let originals = [PartialDate(year: 1998),
+                         PartialDate(year: 1998, month: 3),
+                         PartialDate(year: 1998, month: 3, day: 4)]
+        for original in originals {
+            let pickerDate = original.anchorDate(calendar: calendar)
+            let span = try XCTUnwrap(JournalSpanEditorModel.span(
+                startDate: pickerDate, startPrecision: original.precision,
+                endDate: pickerDate, endPrecision: original.precision,
+                isOpenEnded: false, calendar: calendar))
+            XCTAssertEqual(span.start, original, "\(original) did not survive as start")
+            XCTAssertEqual(span.end, original, "\(original) did not survive as end")
+        }
+    }
+
     func testAnInvertedPairSurfacesAsAnErrorNotACrash() {
         let start = cal.date(from: DateComponents(year: 2001, month: 1, day: 1))!
         let end = cal.date(from: DateComponents(year: 1998, month: 1, day: 1))!

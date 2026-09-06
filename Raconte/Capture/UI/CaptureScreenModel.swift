@@ -36,37 +36,11 @@ final class CaptureScreenModel {
     /// vanishes on its own vanishes unseen.
     private(set) var receipt: CaptureReceipt?
 
-    /// One line saying a capture was just discarded, shown for a few seconds and then
-    /// cleared. The mic meter falling still and the timer resetting are the real feedback
-    /// that the recording stopped; this is what distinguishes "stopped and kept" from
-    /// "stopped and thrown away", which otherwise look identical.
-    private(set) var discardNotice: String?
-
-    /// The capture the owner asked to throw away — its **identity**, armed by
-    /// `discardCurrentCapture()` and consumed by `finishCurrentCapture()`.
-    ///
-    /// An id, not a boolean, and that is the whole point (owner ruling 2026-08-29, after
-    /// the branch's final review). A boolean says only "something was discarded" and
-    /// leaves the finish to INFER which capture that was from `coordinator.finalizeQueue`
-    /// — a queue that does not carry the information. Both inference rules tried were
-    /// wrong: `for id in transcribed` binned a whole recovered backlog, and `transcribed
-    /// .last` acted on the wrong capture entirely whenever the queue held a launch-
-    /// recovery backlog, because #122's early drain can run the finish on `[recoveredID]`
-    /// before the live capture is ever appended. That was demonstrated, not argued: a
-    /// discard trashed the recovered capture and KEPT the mis-tap.
-    ///
-    /// The discard knows exactly which capture it means at the moment it is armed, so it
-    /// records it and stops guessing. Still per-capture: snapshotted and cleared at the
-    /// top of the finish, so it can never leak into the next reading.
-    private var pendingDiscardID: String?
-
     /// Whether this capture's sidecar already carries `multiVoice: true` — set on the
     /// first live voice mark, reset when the coordinator is replaced. A latch, not a
     /// re-read of the sidecar: the write is asynchronous and a second tap in the same
     /// beat must not enqueue a duplicate.
     private var wroteMultiVoiceForActiveCapture = false
-
-    private var discardNoticeTask: Task<Void, Never>?
 
     /// Dismiss the receipt and return to the landing screen. What opening the entry from
     /// the receipt does on its way out (#118 §3 deleted "Record another"; the bar's
@@ -418,9 +392,6 @@ final class CaptureScreenModel {
     /// build of the new one fails.
     func record() async {
         receipt = nil
-        discardNoticeTask?.cancel()
-        discardNotice = nil
-        pendingDiscardID = nil
         await coordinator.record()
     }
     func done() async { await coordinator.done() }
@@ -484,79 +455,6 @@ final class CaptureScreenModel {
         guard coordinator.phase == .idle else { return }
         if let journalID { selectJournal(journalID) }
         await record()
-    }
-
-    /// Stop this capture and throw it away (record-flow plan, Task 2).
-    ///
-    /// Option 1 makes the library's floating record button start recording on arrival, so
-    /// a mis-tap now costs real audio instead of a screen change; this is the one tap that
-    /// undoes it.
-    ///
-    /// It stops through the ORDINARY `done()` path and lets the capture finalize normally.
-    /// Nothing here aborts a recording mid-flight: there is no second teardown path to
-    /// keep correct, the m4a is verified and promoted exactly as for a kept reading, and
-    /// nothing is left half-written on disk. The entry is trashed afterwards, in
-    /// `finishCurrentCapture`, once it exists.
-    ///
-    /// Trash, not a hard delete — owner ruling 2026-08-29. "Delete anywhere, recoverable
-    /// 30 days" has no exception for this one either (same reasoning as `delete(_:)`), and
-    /// the failure mode that matters is a fat-fingered discard forty minutes into a real
-    /// reading, which must not be unrecoverable.
-    ///
-    /// Only from `.recording`/`.interrupted` — the phases where the owner is the one
-    /// holding the capture open, matching `CaptureLayoutModel.showsDiscardButton`. From
-    /// idle it does nothing at all: arming the flag with no capture in flight would trash
-    /// whatever the next reading turned out to be.
-    func discardCurrentCapture() async {
-        guard coordinator.phase == .recording || coordinator.phase == .interrupted else { return }
-        // Snapshot WHICH capture, here, while it is still live. Sound at this point and
-        // only at this point: `activeCaptureID` is set when `.record` is realized and
-        // cleared solely by `resetCaptureWiring()`, whose three callers are
-        // `handlePrepareFailed` (`.preparing`), `teardownFailedCapture` (a `store.begin()`
-        // failure) and `completeCapture()` (`.captured`) — none of them reachable from the
-        // two phases this guard admits. `finishCurrentCapture`'s own doc comment warns the
-        // id is nil by the time IT runs, and that warning stands: it is about reading the
-        // id at finish time, after `completeCapture()` has already reset the wiring.
-        //
-        // Nil is still possible in one narrow window and is handled by meaning it: the
-        // machine publishes `.recording` before `beginRecording()` realizes it, so a
-        // `store.begin()` failure tears the wiring down while the phase still says
-        // `.recording`. There is then no capture to discard, and arming nothing is exactly
-        // right — the old boolean would have armed and gone on to trash `transcribed.last`,
-        // i.e. somebody else's recovered backlog.
-        pendingDiscardID = coordinator.activeCaptureID
-        await done()
-        // Disarm unless the stop actually took. `done()` reports nothing back, and there
-        // are two ways it can fail to stop anything:
-        //
-        //   1. The machine DROPS the event. `CaptureMachine` has rows for `.done` only
-        //      from `.recording` (row 12) and `.interrupted` (row 14) — `.resuming` has
-        //      none, so a `.done` reduced there is silently a no-op.
-        //   2. A stop that did take is knocked back off. The detached PCM pump raises
-        //      `.diskFull` from off-actor, and row 19 moves `.stopping` straight back to
-        //      `.interrupted` — reachable while this very call is suspended inside
-        //      `store(setState: .stopping)`. The `.tailDrained` that follows is then
-        //      dropped too, and the capture is simply live again.
-        //
-        // Either way the reading survives with `pendingDiscardID` still armed. The owner is
-        // forty minutes into a paper journal, an interruption (a phone call) or a full
-        // disk lands, he taps Discard, the capture comes back to life, he reads for
-        // another half hour and taps Stop — and `finishCurrentCapture` trashes the whole
-        // thing, announced only by a three-second "Discarded to Trash" chip naming
-        // nothing. Recoverable from Trash, but he is never told what went. An intent that
-        // did not take must not linger.
-        //
-        // The phases below are exactly the ones a capture passes through on its way to
-        // committing (`CaptureMachine`: `.stopping` → `.captured`, then the finalize rows
-        // `.finalizing` → `.complete`). `.stopping` is the ORDINARY phase here, not an
-        // edge case: `beginFlushWindow` schedules `.tailDrained` 300 ms out, so `done()`
-        // returns long before `.captured`.
-        switch coordinator.phase {
-        case .stopping, .captured, .finalizing, .complete:
-            break
-        case .idle, .preparing, .recording, .interrupted, .resuming:
-            pendingDiscardID = nil
-        }
     }
 
     /// Called when the coordinator's finalize queue changes. Keyed off the queue, NOT
@@ -766,20 +664,6 @@ final class CaptureScreenModel {
     private func finishCurrentCapture() async {
         guard !finishing else { return }
         finishing = true
-        // Snapshotted and cleared HERE, before any await: the flag is about the capture
-        // that is finishing right now, and a launch-recovery drain through this same
-        // method must never inherit it.
-        //
-        // The `guard !finishing` above returns before this line, so a discard armed
-        // while an earlier finish is still in flight would in principle carry into the
-        // NEXT finish rather than being consumed by the one it was meant for. Unreachable
-        // today: while a finish is running the live coordinator's phase is `.captured`,
-        // which `discardCurrentCapture`'s own phase guard already rejects, so nothing can
-        // arm `pendingDiscardID` in that window. Left as a comment, not a restructure,
-        // since there is no failing state to fix. Note that carrying an id into the wrong
-        // finish would now be harmless anyway — it names the capture it means.
-        let discardingID = pendingDiscardID
-        pendingDiscardID = nil
         // The queue, NOT `activeCaptureID`: teardown runs `resetCaptureWiring()` before
         // this point and nils the id out, so reading it here silently skipped the ref
         // write on every capture. The queue holds exactly the ids that just committed.
@@ -818,64 +702,10 @@ final class CaptureScreenModel {
         // the entry, so it cannot be assembled until the scan has seen it. Also after
         // `detectSpokenDate`, or a receipt could name a date the sidecar is about to
         // change under it.
-        // The id the discard NAMED, and deliberately not derived from `transcribed` at
-        // all. `finalizeQueue` is append-only and shared with launch recovery, so it can
-        // hold a recovered backlog the owner never touched — and worse, #122's early
-        // drain can run this whole method on `[recoveredID]` before the live capture has
-        // been appended to the queue at all. Every rule that read the discard target out
-        // of the queue was therefore wrong in one direction or the other: `for id in
-        // transcribed` binned the backlog, and `transcribed.last` acted on the wrong
-        // capture entirely on exactly that early drain. The recovered ids still run the
-        // full finalize/push/promote pipeline above and stay in the library untouched.
-        //
-        // Unconditional — NOT gated on `transcribed.contains(discardingID)` (owner ruling
-        // 2026-08-29). Three reasons, in order of weight:
-        //   1. Membership in the queue is not evidence about intent, which is the mistake
-        //      this whole change exists to stop making. The discarded capture can commit
-        //      on an EARLIER drain — the proven #122 race — and never appear in the
-        //      `transcribed` the discard is consumed on. A membership gate would silently
-        //      drop the discard there and keep the mis-tap: the owner's original complaint,
-        //      inverted.
-        //   2. The harms are asymmetric and both recoverable-vs-not. A wrongly trashed
-        //      entry is restorable for thirty days and visible in Trash; a wrongly KEPT
-        //      forty-minute mis-tap that was announced as "Discarded to Trash" is a lie
-        //      the owner has no way to notice.
-        //   3. It cannot act on nothing: `trashEntry` returns false for an id the library
-        //      has no entry for, and the `else` below already turns that into the honest
-        //      "show him what he still has" path rather than a false notice.
-        if let discardingID {
-            // After the rescan, deliberately: `trashEntry` writes the tombstone through
-            // `EntryMetadataStore`, which needs the entry to exist, and it rescans itself
-            // afterwards — so the library's visible list is correct without a second
-            // rescan here.
-            let trashed = await library.trashEntry(discardingID)
-            if trashed {
-                receipt = nil
-                showDiscardNotice()
-            } else {
-                // The notice must not claim a trash that didn't happen — show the owner
-                // the entry he still has instead of telling him it's gone.
-                await buildReceipt(for: transcribed)
-            }
-        } else {
-            await buildReceipt(for: transcribed)
-        }
+        await buildReceipt(for: transcribed)
         coordinator = spawn()
         wroteMultiVoiceForActiveCapture = false
         finishing = false
-    }
-
-    /// Three seconds, then gone. Unstructured `Task`, cancelled and replaced by the next
-    /// discard so two in quick succession do not leave the first one's timer to blank the
-    /// second one's notice early.
-    private func showDiscardNotice() {
-        discardNotice = "Discarded to Trash"
-        discardNoticeTask?.cancel()
-        discardNoticeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            self?.discardNotice = nil
-        }
     }
 
     /// Assemble the post-stop receipt for the capture that just committed.

@@ -187,16 +187,16 @@ final class CaptureLabelTests: XCTestCase {
 
     /// The hole the two scans above leave between them, found in the record-flow final
     /// review: a label CAN route through the model and still draw an unswept colour, by
-    /// overriding it on the very next line. The discard notice did exactly that —
-    /// `.captureLabel(.receiptSavedChip)` followed by `.foregroundStyle(.white.opacity(0.7))`
-    /// — so every floor in this file measured `receiptSavedChip`'s full white while the
-    /// screen painted something else. It cleared the floors anyway, which is the point:
-    /// nothing here could have told us either way.
+    /// overriding it on the very next line. The discard notice, since removed by #140, did
+    /// exactly that — `.captureLabel(.receiptSavedChip)` followed by
+    /// `.foregroundStyle(.white.opacity(0.7))` — so every floor in this file measured
+    /// `receiptSavedChip`'s full white while the screen painted something else. It cleared
+    /// the floors anyway, which is the point: nothing here could have told us either way.
     ///
     /// A `.foregroundStyle` immediately after a `.captureLabel` is always this mistake. The
-    /// fix is a case of its own (`discardNotice`), not an override. The build stamp's own
-    /// `.white.opacity(0.35)` is untouched by this — it is deliberately outside the model
-    /// (see `CaptureLabel`'s doc comment) and never carries a `.captureLabel`.
+    /// build stamp's own `.white.opacity(0.35)` is untouched by this — it is deliberately
+    /// outside the model (see `CaptureLabel`'s doc comment) and never carries a
+    /// `.captureLabel`.
     func testNoLabelOverridesTheColourCaptureLabelJustGaveIt() throws {
         let lines = try captureUISources()
             .split(separator: "\n", omittingEmptySubsequences: false)

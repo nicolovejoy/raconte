@@ -40,20 +40,45 @@ XCUITest — new memory); one implementer's report cited a brief note that did n
 was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
 
 **Next steps:**
-1. **Merge the five PRs in order** #142 → #143 → #144 → #145 → #146, waiting for main to go
-   green and hitting **Update branch** before each merge (the two-green-PRs rule). #143 will
-   conflict with #142 in one hunk of `CaptureScreenModel.finishCurrentCapture`: keep
-   `await buildReceipt(for: transcribed)` then `advanceBackdateForNextEntry()` then
-   `coordinator = spawn()`.
-2. **Mac smoke** per PR body (each is self-contained): no Discard while recording; sidebar
-   indent; Copy transcript → paste; next-day backdate; About → `build 14: …`; ¶ break live.
-3. **Device smoke on the iPhone** (next TestFlight uses 14 — no further bump; add the row to
+1. **#143's UI CI job was still running at handoff** —
+   https://github.com/nicolovejoy/raconte/actions/runs/34043755169 . Unit already passed at
+   **2064 (1 skipped), 0 failures**, exactly as predicted; the UI job needs to land at **62**.
+   Check it first, then merge https://github.com/nicolovejoy/raconte/pull/143 .
+2. **Then merge #144 → #145 → #146 in order**, waiting for main to go green and hitting
+   **Update branch** before each (the two-green-PRs rule). All three were verified
+   `git merge-tree` **clean against main-with-#142** at handoff — that prediction goes stale
+   once #143 lands, so re-check before each.
+3. **Mac smoke** per each PR body: sidebar indent; Copy transcript → paste; next-day
+   backdate; About → `build 14: …`; ¶ break live. No Discard button anywhere.
+4. **Device smoke on the iPhone** (next TestFlight uses 14 — no further bump; add the row to
    `docs/builds.md`): record → BN flips to LN → live band dims → ¶ break → stop → card.
-4. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
+5. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
    `Int?` for no caller; `advanceBackdateForNextEntry(now:)` seam never injected; `copyText`
    drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
    nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
    #91/#85, `MarkerControlsModel`'s two constant show flags.
+
+## Session 2026-09-06 (laptop — merge sequence: #142 in, #143 conflict resolved and pushed)
+
+Owner merged **PR #142**; main went green (**unit 2051 (1 skipped), UI 61** — matching the
+plan's prediction exactly). Resolved **#143**'s predicted conflict locally, since GitHub's
+**Update branch** cannot auto-merge a content conflict: `origin/main` merged into the branch,
+one conflict in `CaptureScreenModel.finishCurrentCapture`, resolved to main's tail plus the
+new line (`buildReceipt(for: transcribed)` → `advanceBackdateForNextEntry()` →
+`coordinator = spawn()`). Straggler grep across all three targets for `discardingID`,
+`showDiscardNotice`, `discardNotice`, `discardNoticeTask`: zero hits. Merge commit `23354e54`
+pushed; #143 is MERGEABLE with unit CI green at 2064.
+
+- **A branch that adds a SOURCE file needs `xcodegen generate` too, not just a test file.**
+  The first local build after checking out #143 failed `Cannot find 'Clipboard' in scope` —
+  `Raconte/App/Clipboard.swift` is new on that branch and the gitignored `.xcodeproj` predated
+  the checkout. Reads exactly like a bad merge and is not one. Regen before blaming the code.
+- **Re-derive predicted test counts against the CURRENT base, never the PR body's.** #143's
+  body predicted 2073/63 against a pre-#142 main (2060/62); #142 removed the discard path and
+  its tests, dropping main to 2051/61, so the real target was **2064/62**. Both the body's
+  absolutes were wrong and its deltas were right — the dangerous shape.
+- **The UI job costs ~37 minutes of wall clock every push** (2190 s for 61 tests). Three PRs
+  still to update-and-merge means roughly two more hours of runner time in the sequence.
 
 ## What Raconte is
 

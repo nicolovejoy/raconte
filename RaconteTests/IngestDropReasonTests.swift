@@ -46,6 +46,16 @@ final class IngestDropReasonTests: XCTestCase {
                                           entryID: entryID, zoneID: zoneID)
     }
 
+    private func imageRecordFixture() throws -> CKRecord {
+        let bytes = Data("payload".utf8)
+        let url = try payloadURL()
+        let sidecar = ImageSidecar(id: ULID.make(), originalExtension: "png", mime: "image/png",
+                                   bytes: bytes.count, sha256: "abc", width: 3, height: 2,
+                                   capturedAt: nil, addedAt: Date())
+        return SyncRecordBuilders.imageRecord(captureID: captureID, imageID: ULID.make(), sidecar: sidecar,
+                                              fileURL: url, entryID: entryID, zoneID: zoneID)
+    }
+
     // MARK: childAsset (AudioAsset / LiveLog)
 
     func testACompleteChildAssetRecordHasNoDropReason() throws {
@@ -55,13 +65,31 @@ final class IngestDropReasonTests: XCTestCase {
     func testAChildAssetRecordWithoutItsFileAssetNamesThatField() throws {
         let record = try audioRecord()
         record[SyncChildAssetField.file] = nil
-        XCTAssertEqual(IngestDropReason.childAsset(record), "no file asset")
+        XCTAssertEqual(IngestDropReason.childAsset(record), "missing file asset")
     }
 
     func testAChildAssetRecordWithoutItsSHA256NamesThatField() throws {
         let record = try audioRecord()
         record[SyncChildAssetField.sha256] = nil
-        XCTAssertEqual(IngestDropReason.childAsset(record), "no sha256")
+        XCTAssertEqual(IngestDropReason.childAsset(record), "missing sha256 field")
+    }
+
+    // MARK: image
+
+    func testACompleteImageRecordHasNoDropReason() throws {
+        XCTAssertNil(IngestDropReason.image(try imageRecordFixture()))
+    }
+
+    func testAnImageRecordWithoutItsFileAssetNamesThatField() throws {
+        let record = try imageRecordFixture()
+        record[SyncChildAssetField.file] = nil
+        XCTAssertEqual(IngestDropReason.image(record), "missing file asset")
+    }
+
+    func testAnImageRecordWithoutItsSHA256NamesThatField() throws {
+        let record = try imageRecordFixture()
+        record[SyncChildAssetField.sha256] = nil
+        XCTAssertEqual(IngestDropReason.image(record), "missing sha256 field")
     }
 
     // MARK: revision
@@ -73,25 +101,25 @@ final class IngestDropReasonTests: XCTestCase {
     func testARevisionRecordWithoutItsBodyAssetNamesThatField() throws {
         let record = try revisionRecord()
         record[SyncRevisionField.body] = nil
-        XCTAssertEqual(IngestDropReason.revision(record), "no body asset")
+        XCTAssertEqual(IngestDropReason.revision(record), "missing file asset")
     }
 
     func testARevisionRecordWithoutItsSHA256NamesThatField() throws {
         let record = try revisionRecord()
         record[SyncChildAssetField.sha256] = nil
-        XCTAssertEqual(IngestDropReason.revision(record), "no sha256")
+        XCTAssertEqual(IngestDropReason.revision(record), "missing sha256 field")
     }
 
     func testARevisionRecordWithoutItsEntryRefNamesThatField() throws {
         let record = try revisionRecord()
         record[SyncChildAssetField.entryRef] = nil
-        XCTAssertEqual(IngestDropReason.revision(record), "no entryRef")
+        XCTAssertEqual(IngestDropReason.revision(record), "missing entryRef")
     }
 
     func testARevisionRecordWhoseEntryRefIsNotAnEntryNameSaysSo() throws {
         let record = try revisionRecord()
         let alienID = CKRecord.ID(recordName: "not-a-parseable-name", zoneID: zoneID)
         record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: alienID, action: .deleteSelf)
-        XCTAssertEqual(IngestDropReason.revision(record), "entryRef does not name an Entry")
+        XCTAssertEqual(IngestDropReason.revision(record), "entryRef is not an entry name")
     }
 }

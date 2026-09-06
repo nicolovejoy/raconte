@@ -265,6 +265,21 @@ final class SyncImageIngestTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: parkURL.path))
     }
 
+    /// #85 part 2: an image record whose file asset is missing entirely must be PARKED
+    /// (in the bookkeeping store's diagnostic sense, distinct from the
+    /// `pending-images.json` staging mechanism above) rather than dropped — the same
+    /// land-or-park guarantee `SyncEntryIngestTests` pins for audio/liveLog/revision.
+    func testAnImageMissingItsFileAssetIsParked() async throws {
+        let record = try imageRecord(id: imageID, bytes: pngBytes())
+        record[SyncChildAssetField.file] = nil
+
+        await exchange().acceptRemote(record)
+
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing file asset")
+    }
+
     // MARK: Ingest — unknown capture: park, then rehydrate in the SAME commit
 
     func testAnImageForAnUnknownCaptureParksAndLeavesCapturesUntouched() async throws {

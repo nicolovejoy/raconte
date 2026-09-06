@@ -92,6 +92,13 @@ final class SyncEntryIngestTests: XCTestCase {
             bytes: bytes.count, entryID: entryRecordID, zoneID: zoneID)
     }
 
+    private func revisionRecord(bytes: Data) -> CKRecord {
+        let url = writeTempFile(bytes, name: "revision.json")
+        return SyncRecordBuilders.revisionRecord(
+            revisionID: ULID.make(), fileURL: url, sha256: SyncTreeScanner.sha256Hex(bytes),
+            bytes: bytes.count, entryID: entryRecordID, zoneID: zoneID)
+    }
+
     // MARK: RemoteEntryFields — wire decode
 
     func testRemoteEntryFieldsDecodesEveryFieldFromARecord() throws {
@@ -522,6 +529,67 @@ final class SyncEntryIngestTests: XCTestCase {
         let goodBytes = Data("real-m4a-bytes".utf8)
         await ex.acceptRemote(audioRecord(bytes: goodBytes))
         XCTAssertTrue(FileManager.default.fileExists(atPath: captureDirectory.path))
+    }
+
+    // MARK: Fix round — asset-arrival refusals park, never drop (#85 part 2)
+
+    private func bookkeeping() -> SyncBookkeepingStore {
+        SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+    }
+
+    func testAnAudioRecordMissingItsSHA256IsParkedNotDropped() async throws {
+        let record = audioRecord(bytes: Data("abc".utf8))
+        record[SyncChildAssetField.sha256] = nil
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing sha256 field")
+    }
+
+    func testASha256MismatchedAudioIsParked() async throws {
+        let record = audioRecord(bytes: Data("abc".utf8))
+        record[SyncChildAssetField.sha256] = String(repeating: "0", count: 64)
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "sha256 mismatch")
+    }
+
+    func testACleanAudioIngestUnparksThatName() async throws {
+        let record = audioRecord(bytes: Data("abc".utf8))
+        await bookkeeping().park(record.recordID.recordName, reason: "missing sha256 field")
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertNil(parked[record.recordID.recordName])
+    }
+
+    func testALiveLogMissingItsFileAssetIsParked() async throws {
+        let record = liveLogRecord(bytes: Data("{}\n".utf8))
+        record[SyncChildAssetField.file] = nil
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing file asset")
+    }
+
+    /// The revision-specific sub-cause: an `entryRef` that decodes fine as a
+    /// `CKRecord.Reference` but names something other than an Entry (here, the audio
+    /// record's own name for the same capture) parks under its own distinct reason,
+    /// never conflated with "missing entryRef".
+    func testARevisionWithAnUnreadableEntryRefIsParked() async throws {
+        let record = revisionRecord(bytes: Data("revision-bytes".utf8))
+        let alienID = SyncCloudIdentifiers.recordID(.audio(captureID: captureID), zoneID: zoneID)
+        record[SyncChildAssetField.entryRef] = CKRecord.Reference(recordID: alienID, action: .deleteSelf)
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "entryRef is not an entry name")
     }
 
     /// With no container root wired (mirrors the pre-T7 "no builder/ingest yet" degrade),

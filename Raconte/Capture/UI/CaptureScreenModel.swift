@@ -543,13 +543,6 @@ final class CaptureScreenModel {
         return created
     }
 
-    /// Cover image for the currently selected journal, sourced from `library` —
-    /// the same store/scan the Library screen reads (M3's one-data-path rule, applied
-    /// to covers too).
-    var selectedJournalCover: Data? {
-        selectedJournalID.flatMap { library.journalCovers[$0] }
-    }
-
     /// Toggling off clears the date too — `originalDate` in the sidecar goes back to
     /// nil ("use the capture's own date"), not to whatever was last picked. Precision
     /// resets to `.day` alongside it, for the same reason: nothing should carry over

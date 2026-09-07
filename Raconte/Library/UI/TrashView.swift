@@ -131,9 +131,9 @@ struct TrashView: View {
                 Text("Unreadable entries")
                     .accessibilityIdentifier("trash.unreadable.section")
             } footer: {
-                Text("These entries' settings files could not be read. Quarantine moves "
+                Text("These entries’ settings files could not be read. Quarantine moves "
                      + "the whole entry, audio included, out of the library into the "
-                     + "app's quarantine folder. Nothing is deleted.")
+                     + "app’s quarantine folder. Nothing is deleted.")
             }
         }
     }
@@ -195,9 +195,9 @@ struct TrashView: View {
             Button("Cancel", role: .cancel) { pendingQuarantine = nil }
         } message: { _ in
             Text("The whole entry, audio included, moves out of the library into the "
-                 + "app's quarantine folder. Nothing is deleted.")
+                 + "app’s quarantine folder. Nothing is deleted.")
         }
-        .alert("Couldn't quarantine this entry", isPresented: $quarantineFailed) {
+        .alert("Couldn’t quarantine this entry", isPresented: $quarantineFailed) {
             Button("OK") { quarantineFailed = false }
         } message: {
             Text("Try again, or restart the app.")

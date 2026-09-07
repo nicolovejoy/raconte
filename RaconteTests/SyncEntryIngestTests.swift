@@ -739,4 +739,19 @@ final class SyncEntryIngestTests: XCTestCase {
         let parked = await bookkeeping().parkedRecords()
         XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
     }
+
+    /// Fix round 1 (Important 1): `ingestEntry`'s success path — mirroring
+    /// `testACleanAudioIngestUnparksThatName` — must unpark, or a name parked by either
+    /// of the two branches above is refetched and re-ingested on every launch and
+    /// foreground forever, and `parkedRecords()` misreports a resolved failure.
+    func testACleanEntryIngestUnparksThatName() async throws {
+        let when = stamp(0)
+        let record = entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when)
+        await bookkeeping().park(record.recordID.recordName, reason: "sha256 mismatch")
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertNil(parked[record.recordID.recordName])
+    }
 }

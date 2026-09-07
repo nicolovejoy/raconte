@@ -361,4 +361,89 @@ final class SyncMarkerStreamTests: XCTestCase {
                       "an in-flight unknown-capture park must never be discarded by rehydration")
         XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path))
     }
+
+    // MARK: Fix wave finding 4 — the three unparked returns
+
+    private func bookkeeping() -> SyncBookkeepingStore {
+        SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+    }
+
+    /// With no container root wired, the record name — the only thing left to hold onto
+    /// — must be parked (`SyncBookkeepingStore`'s `parked.json`, the same durable park
+    /// every sibling ingest function uses for this exact branch), never merely logged
+    /// and dropped.
+    func testAMarkerStreamWithNoContainerRootWiredIsParked() async throws {
+        let journalStore = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: journalStore)
+        let ex = SyncRecordExchange(
+            journalStore: journalStore, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: ownDeviceID)   // no containerRoot
+
+        let record = SyncRecordBuilders.markerStreamRecord(captureID: captureID, deviceID: peerDeviceID,
+                                                            content: "no-root\n",
+                                                            entryID: entryRecordID, zoneID: zoneID)
+        await ex.acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "no container root wired")
+    }
+
+    /// A record missing `content` (or whose `entryRef` disagrees with its own name) is
+    /// not a real MarkerStream record — `CKSyncEngine` never redelivers it, so refusing
+    /// without parking would lose the stream permanently the moment it arrived malformed
+    /// even once.
+    func testAMarkerStreamRecordMissingContentIsParkedNotIgnored() async throws {
+        try writeFinalizedManifest()
+        let ex = exchange(deviceID: ownDeviceID)
+
+        let record = SyncRecordBuilders.markerStreamRecord(captureID: captureID, deviceID: peerDeviceID,
+                                                            content: "will-be-removed\n",
+                                                            entryID: entryRecordID, zoneID: zoneID)
+        record[SyncMarkerStreamField.content] = nil
+        await ex.acceptRemote(record)
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: SegmentLayout.foreignMarkerLogURL(captureDirectory: captureDirectory, deviceID: peerDeviceID).path))
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason,
+                       "marker stream content could not be decoded")
+    }
+
+    /// A `materializeMarkerStream` write failure — forced here by occupying
+    /// `transcript/` with a plain file, so `createDirectory` throws — must park rather
+    /// than silently drop the bytes, mirroring every other durable-write failure in this
+    /// file (`testALocalWriteFailureForEntryIsParked` and siblings).
+    func testALocalWriteFailureForAMarkerStreamIsParked() async throws {
+        try writeFinalizedManifest()
+        try Data("blocks the transcript directory".utf8).write(
+            to: captureDirectory.appendingPathComponent(SegmentLayout.transcriptDirName))
+        let ex = exchange(deviceID: ownDeviceID)
+
+        let record = SyncRecordBuilders.markerStreamRecord(captureID: captureID, deviceID: peerDeviceID,
+                                                            content: "blocked\n",
+                                                            entryID: entryRecordID, zoneID: zoneID)
+        await ex.acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
+    }
+
+    /// The success path must unpark — mirroring `testACleanEntryIngestUnparksThatName`
+    /// — or a name parked by any of the three branches above is refetched and
+    /// re-ingested on every launch and foreground forever.
+    func testACleanMarkerStreamIngestUnparksThatName() async throws {
+        try writeFinalizedManifest()
+        let ex = exchange(deviceID: ownDeviceID)
+
+        let record = SyncRecordBuilders.markerStreamRecord(captureID: captureID, deviceID: peerDeviceID,
+                                                            content: "{\"seq\":0}\n",
+                                                            entryID: entryRecordID, zoneID: zoneID)
+        await bookkeeping().park(record.recordID.recordName, reason: "local write failed")
+
+        await ex.acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertNil(parked[record.recordID.recordName])
+    }
 }

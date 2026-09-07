@@ -283,7 +283,12 @@ final class StagedRemovalTests: XCTestCase {
 
         _ = try r.quarantine(captureID: id)
         _ = try r.stage(captureID: otherID)
-        _ = r.purge()
+        let result = r.purge()
+
+        XCTAssertEqual(result.removed.count, 1, "purge must have actually run, on the staged capture")
+        XCTAssertTrue(result.failed.isEmpty)
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: trashPendingRoot.path)
+        XCTAssertTrue(remaining.isEmpty, "trash-pending/ must be empty after purge")
 
         let quarantined = try FileManager.default.contentsOfDirectory(
             atPath: AppContainer.quarantineRoot(containerRoot: containerRoot).path)

@@ -669,7 +669,7 @@ final class LibraryScreenModelTests: XCTestCase {
 
     func testQuarantiningTheUnreadableEntryUnblocksJournalDeletion() async throws {
         // J1 is empty apart from the unreadable capture, which is filed nowhere — the
-        // whole #82 hazard this task fixes: an unreadable sidecar blocks EVERY journal,
+        // whole #81 hazard this task fixes: an unreadable sidecar blocks EVERY journal,
         // not just whichever one it might belong to.
         try writeJournals([journal("J1", "Looks empty")])
         try writeCapture(idB, capturedAt: 2_000)     // filed nowhere — the whole hazard
@@ -688,6 +688,8 @@ final class LibraryScreenModelTests: XCTestCase {
         let quarantined = AppContainer.quarantineRoot(containerRoot: containerRoot)
         let children = try FileManager.default.contentsOfDirectory(atPath: quarantined.path)
         XCTAssertEqual(children.count, 1)
+        XCTAssertTrue(children[0].hasSuffix("-\(idB)"),
+                      "the quarantine directory name must carry the captureID suffix")
         let moved = quarantined.appendingPathComponent(children[0], isDirectory: true)
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: SegmentLayout.pcmURL(

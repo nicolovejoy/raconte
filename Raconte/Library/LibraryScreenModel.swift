@@ -357,6 +357,27 @@ final class LibraryScreenModel {
             ?? trashed.first { $0.captureID == captureID }
     }
 
+    /// Live and trashed items whose `entry.json` sidecar could not be read (#81). Empty
+    /// in a healthy archive. This is the same `.metadataUnreadable` degradation
+    /// `emptinessVerdict(forJournal:)` already vetoes every journal's deletion over —
+    /// surfaced here as its own list so a repair UI (Task 6) has something to act on.
+    var unreadableEntries: [EntryListItem] {
+        (allEntries + trashed).filter { $0.degradations.contains(.metadataUnreadable) }
+    }
+
+    /// Moves an unreadable-sidecar capture out of `captures/` into `quarantine/` and
+    /// rescans (#81). Never deletes: the whole point is that audio is ground truth and
+    /// an unreadable sidecar is not a reason to lose it. Throws whatever
+    /// `StagedRemover.quarantine` throws — most usefully `.captureDirectoryMissing` if
+    /// the row the caller acted from is already stale.
+    func quarantineUnreadable(captureID: String) async throws {
+        let remover = self.remover
+        try await Task.detached(priority: .userInitiated) {
+            try remover.quarantine(captureID: captureID)
+        }.value
+        await rescan()
+    }
+
     // MARK: - Entry edits (detail screen)
 
     /// Reassign an entry's journal. `nil` files it as unfiled. Returns `false` (and

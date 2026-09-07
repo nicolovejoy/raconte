@@ -653,6 +653,48 @@ final class LibraryScreenModelTests: XCTestCase {
         XCTAssertNotNil(model.journals.first { $0.id == "J2" })
     }
 
+    // MARK: - #81: quarantine an unreadable-sidecar capture, never delete it
+
+    func testUnreadableEntriesListsExactlyTheCapturesWithAnUnreadableSidecar() async throws {
+        try writeCapture(idA, capturedAt: 1_000)     // healthy, no sidecar written
+        try writeCapture(idB, capturedAt: 2_000)
+        try Data("{ not json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idB)))
+
+        let model = model()
+        await model.rescan()
+
+        XCTAssertEqual(model.unreadableEntries.map(\.captureID), [idB])
+    }
+
+    func testQuarantiningTheUnreadableEntryUnblocksJournalDeletion() async throws {
+        // J1 is empty apart from the unreadable capture, which is filed nowhere — the
+        // whole #82 hazard this task fixes: an unreadable sidecar blocks EVERY journal,
+        // not just whichever one it might belong to.
+        try writeJournals([journal("J1", "Looks empty")])
+        try writeCapture(idB, capturedAt: 2_000)     // filed nowhere — the whole hazard
+        try Data("{ not json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idB)))
+
+        let model = model()
+        await model.rescan()
+        XCTAssertEqual(model.emptinessVerdict(forJournal: "J1"), .blockedHard,
+                       "fixture sanity: the unreadable sidecar blocks every journal")
+
+        try await model.quarantineUnreadable(captureID: idB)
+
+        XCTAssertTrue(model.unreadableEntries.isEmpty)
+        XCTAssertNotEqual(model.emptinessVerdict(forJournal: "J1"), .blockedHard)
+        let quarantined = AppContainer.quarantineRoot(containerRoot: containerRoot)
+        let children = try FileManager.default.contentsOfDirectory(atPath: quarantined.path)
+        XCTAssertEqual(children.count, 1)
+        let moved = quarantined.appendingPathComponent(children[0], isDirectory: true)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: SegmentLayout.pcmURL(
+                segmentsDirectory: SegmentLayout.segmentsDirectory(captureDirectory: moved), index: 0).path),
+            "the audio must still exist under quarantine/")
+    }
+
     // MARK: - #82: resolve worthless zero-frame blockers on demand
 
     /// A capture filed into the journal that has no durable content yet — reachable in

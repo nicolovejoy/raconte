@@ -387,4 +387,20 @@ final class ArchiveExporterTests: XCTestCase {
         let packageContents = try FileManager.default.contentsOfDirectory(atPath: report.packageURL.path)
         XCTAssertFalse(packageContents.contains("junk.txt"))
     }
+
+    // MARK: (j) Fix wave Finding 9 — `ExportRunner.cancelled()` returns to `.idle`
+    // regardless of what state it was in, so `AboutView`'s `.fileImporter` routing a
+    // `CocoaError.userCancelled` failure there (instead of `fail(_:)`) never leaves the
+    // screen showing an "Export failed" row for the owner simply dismissing the picker.
+
+    @MainActor
+    func testExportRunnerCancelledReturnsToIdle() {
+        let runner = ExportRunner(exporter: exporter())
+        runner.fail("simulated failure")
+        XCTAssertEqual(runner.state, .failed("simulated failure"))
+
+        runner.cancelled()
+
+        XCTAssertEqual(runner.state, .idle)
+    }
 }

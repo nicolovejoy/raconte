@@ -52,4 +52,13 @@ final class ExportRunner {
     func fail(_ reason: String) {
         state = .failed(reason)
     }
+
+    /// Fix wave Finding 9: the owner dismissing the folder picker without choosing
+    /// anything is not a failure — `.fileImporter` reports it as a `.failure(
+    /// CocoaError.userCancelled)`, and `AboutView` routes that specific case here
+    /// instead of `fail(_:)` so the screen goes back to quiet `.idle` rather than
+    /// showing an alarming "Export failed" row for a no-op.
+    func cancelled() {
+        state = .idle
+    }
 }

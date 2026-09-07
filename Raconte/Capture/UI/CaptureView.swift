@@ -222,11 +222,13 @@ struct CaptureView: View {
     /// build measured 151 pt of exactly that before reserving space in every phase. The
     /// status string is the variable-length part and `RecStatusLine` shrinks it instead of
     /// wrapping; Done is reserved here for the same reason it was reserved before.
+    ///
+    /// The tick-rate `elapsed` read lives in `CaptureStatusReadout`, not here (#155) — this
+    /// row itself reads nothing that changes once a second, so recording no longer
+    /// re-evaluates the whole screen every tick.
     private var statusRow: some View {
         HStack(spacing: 12) {
-            RecStatusLine(phase: model.coordinator.phase,
-                          canResume: model.coordinator.canResume,
-                          elapsed: model.coordinator.elapsed)
+            CaptureStatusReadout(coordinator: model.coordinator)
 
             Spacer(minLength: 8)
 

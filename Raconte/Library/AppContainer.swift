@@ -40,6 +40,12 @@ enum AppContainer {
     /// `DirectorySnapshot.gather` and handed to the recovery planner. Unlike
     /// `trash-pending/`, this directory is deliberately NOT excluded from backup — it is
     /// the owner's real audio, just filed where nothing can act on it by accident.
+    ///
+    /// A directory here is a different thing from `RecoveryPlanner
+    /// .quarantineCaptureDirectory` (see `RecoveryExecutor.swift`'s handling of that
+    /// case): that quarantine is a no-op flag left in place under `captures/`, the
+    /// opposite of this one's actual `rename(2)` out of it — same word, two unrelated
+    /// mechanisms.
     static let quarantineDirectoryName = "quarantine"
     /// M4: root of the sync engine's on-disk bookkeeping (`SyncBookkeepingStore`) — a
     /// sibling of `captures/`, never inside it, for the reason this type's header

@@ -67,6 +67,22 @@ struct StagedRemover: Sendable {
     /// touch it while it waits for repair. Never called on a healthy capture; the caller
     /// is responsible for having a reason (an unreadable `entry.json`), since this moves
     /// the directory unread and unrepaired. `purge()` never visits this tree.
+    ///
+    /// Local-disk-only, on purpose, not the opposite of `RecoveryPlanner
+    /// .quarantineCaptureDirectory` (`RecoveryExecutor.swift`'s
+    /// `.quarantineCaptureDirectory` case) even though the two share a name: that one
+    /// means "leave the directory exactly where it is, just flag it" — the opposite
+    /// filesystem behaviour from this one's actual `rename(2)` out of `captures/`.
+    ///
+    /// The CloudKit copy of this capture, if any, is untouched and survives: the sidecar
+    /// that failed to decode was never pushed as an `Entry` record in the first place
+    /// (`entryRecordToPush` only builds a record from a sidecar that decodes), so the
+    /// server still holds the last version that DID decode. An ordinary incremental
+    /// CKSyncEngine fetch will not redeliver that unchanged record — but any remote edit,
+    /// or a full resync, re-creates `captures/<captureID>/` fresh from the healthy server
+    /// sidecar. That is desirable repair-by-resync, and it leaves the quarantined copy
+    /// under `quarantine/` as an inert duplicate — nothing reconciles the two, and nothing
+    /// needs to: the quarantined directory is never scanned again once it's here.
     func quarantine(captureID: String) throws -> String {
         let fm = FileManager.default
         let source = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)

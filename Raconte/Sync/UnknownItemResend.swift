@@ -30,6 +30,16 @@ enum UnknownItemResend {
     /// archived state is resent iff its parent Entry is ALSO being resent in this same
     /// event — checked against the first-pass set, so a parent that itself had no
     /// server state does not carry its child along.
+    ///
+    /// **The parents-first ORDER returned here is advisory, not the guarantee this
+    /// self-heal actually relies on.** `CloudKitEngineControl.apply` files each returned
+    /// name into `engine.state.add(pendingRecordZoneChanges:)`, which is set-shaped —
+    /// `CKSyncEngine` batches and sends whatever is pending together, not strictly in
+    /// insertion order. What actually makes the parent land before or with its child is
+    /// that both are added to the SAME pending set in this one call and go out in the
+    /// SAME atomic upload batch, so the server processes the recreated parent and its
+    /// child's save together rather than the child arriving first against a parent that
+    /// (from the server's perspective) does not exist yet.
     static func plan(_ outcomes: [Outcome]) -> [SyncRecordName] {
         let resentParents = outcomes.filter(\.hadServerState).map(\.name)
         let resentParentSet = Set(resentParents)

@@ -2,111 +2,69 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-06/07 (laptop — overnight SDD run #2: 13 tasks, four PRs open, unit CI green)
+## Session 2026-09-07 (laptop — Batch A via SDD: PRs #158 and #159 open, T8 ruling 2, cloud overview task queued)
 
-Reviewed the week, took four rulings from the owner before he left (slate = Phase 1
-hardening + export; #2 held; full-fidelity export with a folder picker; the M4 reinstall
-gate has NEVER been run), wrote `docs/plans/2026-09-06-overnight-hardening-export-plan.md`
-and ran it via SDD: four worktrees from `main` `2a1b4fbd`, two implementers at a time on
-disjoint branches, Sonnet for implementers and task reviewers, Opus for the four
-whole-branch reviews, one fix wave + one scoped re-review per branch. Owner merges in
-order **#150 → #152 → #153 → #151**, "Update branch" between each.
-
-- **PR #150** `feat/sync-land-or-park` — Closes #85, #91. Durable `sync/parked.json`;
-  every refusal in six ingest functions parks with a distinct reason and a clean ingest
-  unparks (three reviewers walked every early `return`); new engine verb
-  `refetch(recordNames:)` (chunked at 100, same `acceptRemote` path) run by
-  `retryParked` on launch (all names) and foreground (attempts < 10), gone-from-server
-  unparks loudly; `UnknownItemResend.plan` resends a NOT_FOUND child with its Entry in
-  the same event; `IngestDropReason` deleted as dead code. **Fixes FUTURE losses only**
-  — earlier drops were never parked. Unit **2124** (CI matched).
-- **PR #152** `feat/81-unreadable-entry-repair` — Closes #81. `StagedRemover.quarantine`
-  renames `captures/<id>/` into `<container>/quarantine/<ULID>-<id>/` (not backup-excluded,
-  invisible to sync and to `purge()`); Trash screen "Unreadable entries" section with a
-  confirmed Quarantine action; destination logged at `.notice`. Recovery by hand is
-  macOS-only (iOS container is not browsable). A resync re-creates the capture from the
-  healthy server sidecar, by design. Unit 2088, UI **63** (+1 `TrashRepairUITests`).
-- **PR #153** `feat/small-debt-2026-09-06` — Closes #71; #67 items 2, 3, 4 (commented,
-  not closed). Out-of-span glyph + detail sentence, flagged never blocked;
-  `PlaceRouting.reroute` keeps a pushed **entry** when a journals pull removes the
-  current journal (routing rule proven; the SwiftUI path-survival half is unverified and
-  unreachable from a UI test); `journalDateLines` once per rescan; `CaptureLiveBadge` is
-  the only `.elapsed` reader; `formatDuration` → `RecFormat.clock` (rounding became
-  truncation). Unit 2101.
-- **PR #151** `feat/archive-export` — the v1 export. About → Archive → Export archive…
-  → folder picker → byte-copy package with a derived `transcript.md`, sha256 for every
-  file, manifest written last, `.part` staging; `ArchiveVerifier` reads it back from its
-  own `revisions/` (with the C1 dedupe rule); `docs/export-format.md` incl. a
-  `jq | shasum -c` recipe; user-selected-files entitlement in all three files. Unit 2117.
-  New issues: #154 Verify archive… row, #155 `CaptureView.statusRow` per-tick
-  re-evaluation, #156 parked count on Debug/About.
-
-Process: 13 tasks, 8 task-level fix rounds, 4 branch fix waves, zero breaker trips, no
-rate-limit hit. One stall (Task 9: a foreground UI run past the Bash tool's 120 s default
-auto-backgrounded — new memory). One reviewer false positive (a fallback granted in the
-dispatch, invisible to the reviewer — new memory). One plan-authored test turned
-tautological by its own task's refactor, caught only at the Opus branch review — new
-memory. **All four PRs are fully green on CI: unit 2124 / 2088 / 2101 / 2117 and UI
-62 / 63 / 62 / 62 for #150 / #152 / #153 / #151, every count matching the local run.**
-Worktrees under `.worktrees/` are left in place until the PRs merge.
+- Readup + light resync: smoke **D (parked sync) PASS** — `sync/parked.json` absent on a synced
+  build 16. #147 was closed as a duplicate of #106 (no action). The T8 citation below was wrong:
+  the read-only reasons live in `EntryChainSnapshot.swift:31-34` (incl. `readOnlyNoTranscript`),
+  not on `TranscriptEditorModel`. Four merged worktrees and three merged remote branches removed.
+- Owner rulings (15-minute window): slate = #154, #156, #155, #148 on two branches; **T8 ruling 2**:
+  when the post-capture file pass FAILS, promote `live.jsonl` as a **provisional** revision zero,
+  replaced when a later retry succeeds (option a over "no transcript + retry" and "after N
+  failures"); the cloud container refreshes `docs/overview.md`; cleanup approved.
+- Plan `docs/plans/2026-09-07-batch-a-plan.md`, run via SDD from `main` `1684b214`: Sonnet
+  implementers and task reviewers, Opus whole-branch reviews, one fix wave + one scoped re-review
+  per branch; 4 tasks, zero task-level fix rounds, no stalls. Owner merges **#158 → Update branch
+  → #159**.
+- **PR #158** `feat/154-156-verify-archive-parked-count` — Closes #154, #156. About → Archive →
+  **Verify archive…** runs `ArchiveVerifier` on a picked package (`ExportRunner.verify(package:)`,
+  `.verified`, `.running(verifying:)`, `Problem.summary`, one `.fileImporter` with a mode captured
+  at button time; result row keeps `about.export.result`; failure copy now `Failed: …`).
+  `SyncStatus.parked` + Parked rows on the shared Sync section (Debug and About); no UI test —
+  the coordinator is nil under the harness by design. Unit **2188** (CI confirmed, 1 skipped), UI 63.
+- **PR #159** `feat/155-148-capture-tick-journal-link` — Closes #155, #148. `CaptureStatusReadout`
+  and `CaptureMicMeterReadout` own the capture screen's two tick-rate reads. **The Opus review
+  caught that `micLevel` is assigned in the same 100 ms `tick()` as `elapsed`** — the issue and
+  the plan named only `elapsed`, so the task-level result was a zero-gain change with a false
+  comment; real cadence is ~10 Hz, not once a second (new memory). Pin test covers both. Entry
+  detail gets a journal row (`detail.journalLink` / `detail.journalUnfiled` /
+  `detail.journalMissing`) navigating via `router.select(.journal(id))`, one end-to-end UI test.
+  Unit 2185, UI **64** expected. #67 commented: item 3 complete, issue stays open.
+- Cloud task ready, **not launched**: branch `docs/overview-refresh-2026-09-07` (from main) and
+  prompt `docs/cloud-tasks/overview-refresh-2026-09-07.txt`.
+- CI at handoff: #158 unit green, UI pending; #159 both pending.
+- Parked by ruling (not defects): a directory-wide containment pin over `Capture/UI`;
+  `SidebarRowInsetTests` now holds capture pins (name drift); the journal link's macOS click
+  target is the label's own bounds; "Unfiled" as an entry's first line and the 24 pt gap — owner
+  judges on the smoke.
 
 **Next steps:**
-1. **Mac smoke of build 16 — PARTIALLY RUN, resume here.** The signed build is at
-   `~/Desktop/Raconte.app` (`main` `35bbc068`, `CFBundleVersion` 16, UUID
-   `FB163BF4-E599-390F-A3CC-7684A5B805E9`, real iCloud entitlements so it CAN sync).
-   Step 0 for every test: About → App → Build must read `build 16: 2026-09-07`.
-   - **A. Archive export (#151) — PASS.** Exported and verified to an external location.
-     Owner asked for two follow-ups, filed as **#157** (confirmation warning before writing;
-     selective export by journal/entry instead of all-or-nothing). Not defects.
-   - **B. Quarantine (#152) — NOT RUN.** Blocked on picking a subject. Owner wants a
-     **purpose-made test entry**, not a real one: the test overwrites `entry.json` with
-     `not json`, which destroys that entry's journal/date/trash metadata (the audio is
-     never at risk). Record a throwaway entry first, then use the NEWEST capture id —
-     ULIDs sort by creation, so `ls -t ~/Library/Application\ Support/Raconte/captures/ | head -1`
-     names it. Back up its `entry.json` before overwriting either way.
-   - **C. Out-of-span glyph + one clock (#153) — NOT RUN.** Owner said the ask was unclear
-     and needs rewriting before he runs it. The confusing part is step 2: it requires a
-     journal that HAS entries, then setting that journal's span so it EXCLUDES at least one
-     of them. Rewrite as: open the journal, note its entries' dates, then set the span to a
-     range that leaves one out. Expected: calendar-with-exclamation glyph on that row, and
-     "Dated outside <journal>'s range (<span>)." above the transcript. Nothing disabled.
-   - **D. Parked sync (#150) — NOT RUN.** One command; passes if the file is absent:
-     `ls ~/Library/Application\ Support/Raconte/sync/parked.json`
-   - **iPhone build 15 smoke — NOT RUN.** record → BN flips to LN → live band dims/brightens
-     → stop → receipt card with no "Record another" → tap card → back to Capture via the
-     sidebar → must read Ready.
-   **Process note from the owner: hand him ONE smoke at a time.** Five at once was too many.
-2. **T8 design session — IN PROGRESS, one question outstanding.** Classified
-   **architectural** (spec → plan → build). Owner ruling stands from 2026-09-07: canonical
-   transcript comes from a **post-capture final pass over the m4a**, **editing locked until
-   it lands**, build it the simple way, timing harness explicitly declined.
-   **The finding that reshapes it — verify before building on it:** the codebase already
-   anticipated this. `TranscriptResult.range` is on the capture-frame axis specifically so
-   "a live result and one re-derived from `final/recording.m4a` are directly comparable"
-   (`Raconte/Transcription/TranscriptionEngine.swift:9`). `TranscriptRevisionStore.promoteIfNeeded`
-   (~line 1112) ALREADY mints revision zero of the canonical chain exactly once, and already
-   refuses until `final/recording.m4a` exists (`.skippedNoAudio`). `TranscriptEditorModel.isEditable`
-   (line 181) already has a `.readOnly` state that renders as an explanatory sentence rather
-   than a disabled box. So T8 is mostly **changing what revision zero derives from** — a fresh
-   file pass instead of `live.jsonl` — plus one new read-only reason. Much smaller than it looked.
-   **Open question 1, put to the owner, unanswered:** when the file pass fails, what does the
-   entry show? (a) fall back to promoting `live.jsonl`, marked provisional, replaceable later —
-   my lean, since "an entry with no text" contradicts the app's hardest promise and live.jsonl
-   is written to disk anyway; (b) no transcript + a "pending, retry" state retried on launch
-   and foreground like `retryParked`, which keeps live.jsonl genuinely disposable; (c) fall
-   back only after N failures. Still unasked after that: background-survival for long entries
-   (must NOT hang off a view lifecycle), and what happens to existing entries that already
-   carry live transcripts and edits. #38 contextual biasing rides along in the same call.
-3. **SDD Batch A, from main**: #154 Verify archive… row, #155 `CaptureView.statusRow` per-tick
-   re-evaluation, #156 parked count on Debug/About. #154 is sequenced **before** the M4 gate
-   so the gate is verified in-app rather than with the `jq | shasum -c` recipe.
-4. **M4 acceptance gate, never run** — synced Mac: quit, move `~/Library/Application
-   Support/Raconte` aside (never delete), relaunch, let sync settle, export, verify, compare
-   counts with the iPhone. Only after this passes does any recountly teardown get scheduled
-   (the backup at `~/recountly-export-2026-09-06/` stands).
-5. **`docs/overview.md` is stale** — last updated 2026-08-16, still calls M4 unmerged and
-   verified export unbuilt. Refresh alongside the next build. The unified editor (#60, #59)
-   is explicitly **after** T8.
+1. **Merge #158, Update branch on #159, merge #159** once CI is green (UI counts must read 63 and 64).
+2. **Build 17, then ONE smoke at a time**, step 0 always About → App → Build reads `build 17: <date>`:
+   - **C. Out-of-span glyph (#153):** sidebar → a journal with ≥2 entries → note two entries'
+     dates → click the cover band at the top (opens the journal editor) → Date Range: set Start/End
+     so one entry is inside and one outside → back. Pass: the excluded row shows a
+     calendar-with-exclamation glyph, and opening it shows "Dated outside <journal>'s range
+     (<span>)." above the transcript; nothing disabled. Restore the span after.
+   - **Verify archive… (#158):** About → Archive → Verify archive… → pick the *package* folder
+     (the timestamped one containing `raconte-export.json`), not its parent. Pass: `Verified
+     <package>: N files, no problems`.
+   - **Journal link (#159):** All Entries → open an entry → first line names its journal (or
+     "Unfiled") → click it → the journal opens with that name in its header.
+   - **B. Quarantine (#152):** record a throwaway entry first; newest capture id =
+     `ls -t ~/Library/Application\ Support/Raconte/captures/ | head -1`; back up its
+     `entry.json`, overwrite with `not json`, relaunch → Trash → Unreadable entries → Quarantine.
+   - **iPhone build 15:** record → BN flips to LN → live band dims/brightens → stop → receipt
+     card with no "Record another" → tap card → back to Capture via the sidebar → reads Ready.
+3. **Cloud overview refresh:** launch a cloud session on `docs/overview-refresh-2026-09-07` with
+   the prompt "Read docs/cloud-tasks/overview-refresh-2026-09-07.txt in this repo and do exactly
+   what it says. Docs-only, end at an open PR, do not merge." Review the PR (no CI on docs-only).
+4. **T8 spec** (architectural: spec → plan → build). Rulings 1 and 2 are recorded; still open:
+   background survival for long entries (must not hang off a view lifecycle) and what happens to
+   existing entries that already carry live transcripts and edits. #38 rides along.
+5. **M4 acceptance gate, never run** — after #158 merges it is checkable in-app: quit, move
+   `~/Library/Application Support/Raconte` aside (never delete), relaunch, let sync settle,
+   export, Verify archive…, compare counts with the iPhone.
 
 ## What Raconte is
 

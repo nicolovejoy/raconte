@@ -69,7 +69,8 @@ Fields (`ExportManifest`):
   package** after the copy, not from the source — the digest a later reader will be
   checked against is the package's own bytes, not a claim about the source container.
 - `warnings` — from the walk: an entry with no final audio, an unreadable sidecar, a
-  capture directory whose name isn't a well-formed ULID, an unreadable `journals.json`.
+  capture directory whose name isn't a well-formed ULID, an unreadable `journals.json`,
+  an unrecognized file the walker left out of the package.
 
 ## Skipped on purpose
 
@@ -78,6 +79,12 @@ Fields (`ExportManifest`):
 originals), and anything outside `captures/` / `journals.json` / `journals/` entirely:
 `trash-pending/`, `quarantine/`, `sync/`. None of these are the owner's data — they are
 either derived caches or the app's own bookkeeping.
+
+Anything else the walker doesn't recognize — inside a capture directory, `transcript/`,
+or `images/` — is also left out, but never silently: it appends a warning naming the
+file (`"entries/<id>: unrecognized file <relative name>, not exported"`) instead. This
+is how a stray `canonical-<n>.json.<uuid>.part` body (nothing sweeps those today) or a
+file shape a future app version adds gets surfaced rather than vanishing unremarked.
 
 ## Verification semantics
 
@@ -106,6 +113,33 @@ Six problem shapes, kept distinct rather than collapsed into one another:
 
 A `Report` is `ok` exactly when its `problems` list is empty; `checkedFiles` is the
 manifest's own file count, for a quick "did it check what I expected" sanity read.
+
+## Verifying a package by hand
+
+No app is required to re-check a package's checksums — the manifest is plain JSON, and
+`jq`+`shasum` on any Unix machine reproduces exactly what `ArchiveVerifier` does for the
+file-level checks. Run this from inside the package directory itself:
+
+```
+jq -r '.files | to_entries[] | "\(.value.sha256)  \(.key)"' raconte-export.json | shasum -a 256 -c
+```
+
+Every line should read `OK`; a line reading `FAILED` names a file whose bytes no longer
+match what the manifest recorded. To spot a file that exists on disk but isn't in the
+manifest at all (an `.unlistedFile`, in the app's own terms), compare a plain file
+listing against the manifest's own key list:
+
+```
+find . -type f | sort
+jq -r '.files | keys[]' raconte-export.json | sort
+```
+
+Anything in the first list but not the second (besides `raconte-export.json` itself,
+which is never listed) is unlisted.
+
+These checksums detect **rot and truncation, not tampering** — anyone who edits a file
+can simply regenerate the manifest to match, so a checksum match proves the package
+hasn't silently decayed, not that its contents are what the app originally wrote.
 
 ## What a smoke of this looks like
 

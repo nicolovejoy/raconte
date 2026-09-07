@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Model-to-model rescan notification (#62, nav redesign §5.1). `CaptureScreenModel`
 /// conforms so `LibraryScreenModel.rescan()` can tell it directly that the world may
@@ -197,6 +198,9 @@ final class LibraryScreenModel {
             // attached, for the library-row-thumbnail and remove-round-trip UI tests.
             // No-op unless asked for.
             UITestImageSeed.seedIfRequested(capturesRoot: capturesRoot)
+            // #81 Task 6: a complete entry whose entry.json is present but unreadable,
+            // for the Trash screen's repair UI test. No-op unless asked for.
+            UITestUnreadableEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif
@@ -355,6 +359,30 @@ final class LibraryScreenModel {
         items.first { $0.captureID == captureID }
             ?? allEntries.first { $0.captureID == captureID }
             ?? trashed.first { $0.captureID == captureID }
+    }
+
+    /// Live and trashed items whose `entry.json` sidecar could not be read (#81). Empty
+    /// in a healthy archive. This is the same `.metadataUnreadable` degradation
+    /// `emptinessVerdict(forJournal:)` already vetoes every journal's deletion over —
+    /// surfaced here as its own list so a repair UI (Task 6) has something to act on.
+    var unreadableEntries: [EntryListItem] {
+        (allEntries + trashed).filter { $0.degradations.contains(.metadataUnreadable) }
+    }
+
+    /// Moves an unreadable-sidecar capture out of `captures/` into `quarantine/` and
+    /// rescans (#81). Never deletes: the whole point is that audio is ground truth and
+    /// an unreadable sidecar is not a reason to lose it. Throws whatever
+    /// `StagedRemover.quarantine` throws — most usefully `.captureDirectoryMissing` if
+    /// the row the caller acted from is already stale.
+    func quarantineUnreadable(captureID: String) async throws {
+        let remover = self.remover
+        let name = try await Task.detached(priority: .userInitiated) {
+            try remover.quarantine(captureID: captureID)
+        }.value
+        let quarantineURL = AppContainer.quarantineURL(containerRoot: remover.containerRoot, name: name)
+        Logger(subsystem: "org.pianohouseproject.raconte", category: "library")
+            .notice("library: quarantined \(captureID, privacy: .public) → \(quarantineURL.path, privacy: .public)")
+        await rescan()
     }
 
     // MARK: - Entry edits (detail screen)

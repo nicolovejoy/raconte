@@ -43,6 +43,14 @@ struct TrashView: View {
     /// failed ids re-selected (see `finishBulkAction`).
     @State private var bulkFailure: BulkFailureReport?
 
+    /// The unreadable-sidecar entry (#81) awaiting quarantine confirmation. An item
+    /// rather than a flag, same reasoning as `pendingPermanentDelete`: the dialog names
+    /// what it is about to move.
+    @State private var pendingQuarantine: EntryListItem?
+    /// A `quarantineUnreadable` call that threw — surfaced, never swallowed, same
+    /// `try?`-with-a-flag family as `restoreFailed`/`permanentDeleteFailed` above.
+    @State private var quarantineFailed = false
+
     private struct BulkFailureReport {
         var title: String
         var succeeded: Int
@@ -52,7 +60,7 @@ struct TrashView: View {
     var body: some View {
         // Dialog groups live in helper functions, matching `LibraryView`'s split (one
         // monolithic modifier chain stops type-checking once a second mode joins it).
-        withBulkDialogs(withSingleEntryDialogs(screenBody))
+        withUnreadableDialogs(withBulkDialogs(withSingleEntryDialogs(screenBody)))
             .navigationTitle("Trash")
             .task { await model.rescan() }
             .toolbar { toolbarContent }
@@ -60,23 +68,37 @@ struct TrashView: View {
 
     private var screenBody: some View {
         Group {
-            if model.trashed.isEmpty {
+            // The unreadable-entries section (#81) must render whenever there is
+            // something in it, whether or not `trashed` is — an archive can have a
+            // corrupt sidecar and an otherwise-empty trash at the same time, and the
+            // owner needs a way out of that state without a developer. So the plain
+            // centered `trash.empty` placeholder only wins when BOTH are empty; any
+            // other combination goes through the `List` below.
+            if model.trashed.isEmpty && model.unreadableEntries.isEmpty {
                 emptyState
             } else {
                 List {
-                    ForEach(model.trashed) { item in
-                        if selection.isActive {
-                            selectableRow(item)
-                        } else {
-                            TrashEntryRow(item: item,
-                                          onRestore: {
-                                              Task {
-                                                  if !(await model.restoreEntry(item.captureID)) {
-                                                      restoreFailed = true
+                    unreadableSection
+                    if model.trashed.isEmpty {
+                        Section {
+                            Text("Trash is empty")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ForEach(model.trashed) { item in
+                            if selection.isActive {
+                                selectableRow(item)
+                            } else {
+                                TrashEntryRow(item: item,
+                                              onRestore: {
+                                                  Task {
+                                                      if !(await model.restoreEntry(item.captureID)) {
+                                                          restoreFailed = true
+                                                      }
                                                   }
-                                              }
-                                          },
-                                          onDeleteNow: { pendingPermanentDelete = item })
+                                              },
+                                              onDeleteNow: { pendingPermanentDelete = item })
+                            }
                         }
                     }
                 }
@@ -86,6 +108,99 @@ struct TrashView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if selection.isActive { selectionBar }
+        }
+    }
+
+    // MARK: - Unreadable entries (#81 Task 6)
+
+    @ViewBuilder
+    private var unreadableSection: some View {
+        if !model.unreadableEntries.isEmpty {
+            // The identifier goes on the HEADER text alone, never on the `Section`
+            // itself: a `Section`-level `.accessibilityIdentifier` cascades to every
+            // descendant (header, each row, footer) and silently overwrites their own
+            // — measured, not assumed, the same container-identifier trap
+            // `TrashEntryRow`'s comment and `unreadableRow` below both call out. The
+            // section's presence is what `trash.unreadable.section` names, so the
+            // header carrying it is enough.
+            Section {
+                ForEach(model.unreadableEntries) { item in
+                    unreadableRow(item)
+                }
+            } header: {
+                Text("Unreadable entries")
+                    .accessibilityIdentifier("trash.unreadable.section")
+            } footer: {
+                Text("These entries’ settings files could not be read. Quarantine moves "
+                     + "the whole entry, audio included, out of the library into the "
+                     + "app’s quarantine folder. Nothing is deleted.")
+            }
+        }
+    }
+
+    /// One row's own identifier goes on the row's CONTAINER with
+    /// `.accessibilityElement(children: .contain)` — an identifier there otherwise
+    /// overwrites its children's (repo memory: `TrashEntryRow`'s own comment above,
+    /// and the container-identifier trap generally), which would make the
+    /// `trash.unreadable.quarantine` button inside unreachable. `.contain` restores
+    /// the children but empties the container's own accessibility label, so the label
+    /// is set explicitly rather than left to auto-compute from the children's text.
+    private func unreadableRow(_ item: EntryListItem) -> some View {
+        let dateText = item.capturedAt.formatted(date: .abbreviated, time: .omitted)
+        return HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(dateText)
+                    .font(.system(size: 16, weight: .semibold))
+                Text("Entry settings unreadable")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Quarantine") {
+                pendingQuarantine = item
+            }
+            .font(.system(size: 16))
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("trash.unreadable.quarantine")
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("trash.unreadable.row")
+        .accessibilityLabel("\(dateText) — entry settings unreadable")
+    }
+
+    /// Attached to the screen's outer view (matching `withSingleEntryDialogs`'/
+    /// `withBulkDialogs`' own note): a `.confirmationDialog` on a `Section` silently
+    /// never presents on iOS 26.
+    private func withUnreadableDialogs(_ base: some View) -> some View {
+        base
+        .confirmationDialog(
+            "Quarantine this entry?",
+            isPresented: Binding(get: { pendingQuarantine != nil },
+                                 set: { if !$0 { pendingQuarantine = nil } }),
+            presenting: pendingQuarantine
+        ) { item in
+            Button("Quarantine") {
+                let captureID = item.captureID
+                pendingQuarantine = nil
+                Task {
+                    do {
+                        try await model.quarantineUnreadable(captureID: captureID)
+                    } catch {
+                        quarantineFailed = true
+                    }
+                }
+            }
+            .accessibilityIdentifier("trash.unreadable.confirm")
+            Button("Cancel", role: .cancel) { pendingQuarantine = nil }
+        } message: { _ in
+            Text("The whole entry, audio included, moves out of the library into the "
+                 + "app’s quarantine folder. Nothing is deleted.")
+        }
+        .alert("Couldn’t quarantine this entry", isPresented: $quarantineFailed) {
+            Button("OK") { quarantineFailed = false }
+        } message: {
+            Text("Try again, or restart the app.")
         }
     }
 

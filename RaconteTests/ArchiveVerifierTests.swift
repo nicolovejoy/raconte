@@ -266,6 +266,42 @@ final class ArchiveVerifierTests: XCTestCase {
                                      found: manifest.counts.entries - 1)]
         XCTAssertEqual(report.problems, expected)
     }
+
+    // MARK: (8) Fix wave Finding 1 — a duplicate-id revision file at a HIGHER file
+    // number must not override the true current revision, matching
+    // `TranscriptRevisionStore.rawLoad`'s C1 rule (the lowest file number claiming an
+    // id wins; a later file sharing that id is dropped from the chain).
+    //
+    // A byte-for-byte copy of an existing revision file can never demonstrate this: the
+    // total order is `(createdAt, id)`, so two files sharing both fields are literally
+    // indistinguishable to `TranscriptChain.ordered`/`.current` — whichever one "wins"
+    // the tie has identical content either way. The actual failure mode the C1 rule
+    // guards against is the "hand-corrupted tree" case its own doc comment names: a
+    // LATER file reusing an EARLIER revision's id but carrying different (corrupted)
+    // content. Old code (no dedupe, and `names.sorted()` — lexicographic, not numeric)
+    // decodes that as a second, distinct chain entry that legitimately outraces the
+    // real current revision by `createdAt`, producing a false `.transcriptMismatch`
+    // against a package the exporter wrote correctly.
+    func testDuplicateIDAtHigherFileNumberWithLaterCreatedAtDoesNotOverrideCurrent() async throws {
+        let (packageURL, fixture) = try await exportPackage()
+        let revisionsDir = packageURL.appendingPathComponent("entries/\(fixture.idAudio)/revisions")
+
+        let corrupted = TranscriptRevision(
+            id: fixture.revision1.id, // same id as the TRUE current revision (canonical-1)
+            source: .machineLive,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_020), // later than revision1's
+            spans: [TranscriptSpan(text: "corrupted", anchor: .none)])
+        let data = try CaptureCoding.encoder().encode(corrupted)
+        try data.write(to: revisionsDir.appendingPathComponent("canonical-3.json"))
+
+        let report = ArchiveVerifier.verify(packageURL: packageURL)
+
+        // The manifest never knew about canonical-3.json, so it's rightly `.unlistedFile`
+        // — the point under test is that it is the ONLY problem: no `.transcriptMismatch`.
+        XCTAssertEqual(report.problems, [
+            .unlistedFile("entries/\(fixture.idAudio)/revisions/canonical-3.json"),
+        ])
+    }
 }
 
 private typealias Problem = ArchiveVerifier.Problem

@@ -136,6 +136,43 @@ final class EntryListItemTests: XCTestCase {
         XCTAssertTrue(EntryListFilter(trash: .trashedOnly).apply(to: [degraded]).isEmpty)
     }
 
+    // MARK: isDatedOutsideJournalSpan (#71) — owner ruling 4: flagged, never blocked.
+
+    func testIsDatedOutsideJournalSpanIsTrueWhenEffectiveDateFallsOutsideTheJournalsSpan() throws {
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 1998))
+        let journal = Journal(id: "J1", name: "1998 Journal", createdAt: date(0), span: span)
+        let entry = item("A", capturedAt: 1_000,
+                         originalDate: PartialDate(year: 2001, month: 1, day: 1),
+                         journal: journal)
+        XCTAssertTrue(entry.isDatedOutsideJournalSpan)
+    }
+
+    func testIsDatedOutsideJournalSpanIsFalseWhenJournalIsNil() {
+        let entry = item("A", capturedAt: 1_000,
+                         originalDate: PartialDate(year: 2001, month: 1, day: 1))
+        XCTAssertNil(entry.journal)
+        XCTAssertFalse(entry.isDatedOutsideJournalSpan)
+    }
+
+    // MARK: Source pin (#71) — LibraryView and EntryDetailView must both render the
+    // out-of-span marker; there is no unit-testable view output otherwise.
+
+    private func fileSource(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // RaconteTests
+            .deletingLastPathComponent()      // repo root
+            .appendingPathComponent(relativePath)
+        return strippingComments(try String(contentsOf: url))
+    }
+
+    func testLibraryRowRendersTheOutOfSpanMarker() throws {
+        XCTAssertTrue(try fileSource("Raconte/Library/UI/LibraryView.swift").contains("library.outOfSpan"))
+    }
+
+    func testEntryDetailRendersTheOutOfSpanSentence() throws {
+        XCTAssertTrue(try fileSource("Raconte/Library/UI/EntryDetailView.swift").contains("detail.outOfSpan"))
+    }
+
     // MARK: Filtering — journal
 
     func testJournalScopeFiltersOnTheRawID() {

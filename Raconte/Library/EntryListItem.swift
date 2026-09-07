@@ -264,6 +264,12 @@ struct EntryListItem: Sendable, Equatable, Identifiable {
     /// A journal was named and could not be resolved. Distinct from unfiled.
     var hasDanglingJournal: Bool { journalID != nil && journal == nil }
 
+    /// #71: this entry's effective date falls outside its journal's declared span.
+    /// Flagged, never blocked (owner ruling 4, 2026-08-18) — must never gate a write,
+    /// disable a control, or change what any entry-list filter returns. `journal == nil`
+    /// and a journal with no `span` both give `false` (`JournalSpan.flags`'s own rule).
+    var isDatedOutsideJournalSpan: Bool { JournalSpan.flags(journal?.span, effectiveDate) }
+
     /// There is transcript text to show. Deliberately not the same as
     /// `transcript == .present`: an empty log is readable and says nothing.
     var hasTranscriptText: Bool { snippet?.isEmpty == false }

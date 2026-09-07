@@ -71,6 +71,17 @@ struct JournalSpan: Sendable, Equatable, Hashable {
     }
 }
 
+extension JournalSpan {
+    /// Flagged, never blocked (owner ruling 4, 2026-08-18). A nil span makes no claim —
+    /// a journal that never stated a range cannot have an entry fall outside it — so
+    /// this must never gate a write, disable a control, or change what any entry-list
+    /// filter returns; it only decides whether a quiet marker is shown.
+    static func flags(_ span: JournalSpan?, _ date: Date, calendar: Calendar = .gregorianCurrent) -> Bool {
+        guard let span else { return false }
+        return !span.contains(date, calendar: calendar)
+    }
+}
+
 /// Which date line a journal shows (spec ruling 3): the stored span if it has one, else
 /// what its entries imply, else nothing. One rule, one place, so the sidebar row, the
 /// journal header and the editor cannot disagree.

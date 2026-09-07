@@ -653,6 +653,10 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
         var toResend: [SyncRecordName] = []
+        // One `UnknownItemResend.Outcome` per `.recreate` failure, logged only once the
+        // whole event's plan is known (#91) — a child with nothing archived may still
+        // be resendable if its parent Entry is being recreated in this same event.
+        var recreateOutcomes: [(outcome: UnknownItemResend.Outcome, recordName: String, errorDescription: String)] = []
         for failure in failures {
             let recordName = failure.record.recordID.recordName
             let name = SyncCloudIdentifiers.name(of: failure.record.recordID)
@@ -677,19 +681,17 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 }
             case .recreate:
                 guard let name else { break }
-                if await exchange.resolveUnknownItem(for: name) {
-                    log.notice("""
-                        sync: \(recordName, privacy: .public) save rejected — unknownItem; \
-                        archived server state dropped, re-enqueued as a create
-                        """)
-                    toResend.append(name)
-                } else {
-                    log.error("""
-                        sync: \(recordName, privacy: .public) save rejected — unknownItem with \
-                        nothing archived; left for the reconciliation scan
-                        """)
-                    lastError = failure.error.localizedDescription
-                }
+                let hadServerState = await exchange.resolveUnknownItem(for: name)
+                let parent = name.parentEntry ?? {
+                    guard let ref = failure.record[SyncChildAssetField.entryRef] as? CKRecord.Reference
+                    else { return nil }
+                    return SyncCloudIdentifiers.name(of: ref.recordID)
+                }()
+                recreateOutcomes.append((
+                    outcome: UnknownItemResend.Outcome(name: name, hadServerState: hadServerState, parent: parent),
+                    recordName: recordName,
+                    errorDescription: failure.error.localizedDescription
+                ))
             case .retry:
                 guard let name else { break }
                 log.notice("sync: \(recordName, privacy: .public) fell with its batch — re-enqueued")
@@ -700,6 +702,34 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
                 lastError = failure.error.localizedDescription
+            }
+        }
+        if !recreateOutcomes.isEmpty {
+            let resend = UnknownItemResend.plan(recreateOutcomes.map(\.outcome))
+            let resendSet = Set(resend)
+            toResend += resend
+            for entry in recreateOutcomes {
+                if entry.outcome.hadServerState {
+                    log.notice("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem; \
+                        archived server state dropped, re-enqueued as a create
+                        """)
+                } else if resendSet.contains(entry.outcome.name) {
+                    // #91: nothing archived for this child on its own, but its parent
+                    // Entry is being recreated in this SAME event — resend it right
+                    // behind the parent rather than waiting for a launch-only reconcile.
+                    log.notice("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem with \
+                        nothing archived; its parent Entry is being recreated in this event, \
+                        resending alongside it
+                        """)
+                } else {
+                    log.error("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem with \
+                        nothing archived; left for the reconciliation scan
+                        """)
+                    lastError = entry.errorDescription
+                }
             }
         }
         var settled: [SyncRecordName] = []

@@ -112,6 +112,22 @@ enum SyncRecordName: Equatable, Hashable, Sendable {
     }
 }
 
+extension SyncRecordName {
+    /// The Entry this child belongs to, for the four cases that carry a captureID.
+    /// `.revision` carries only its own id — callers pass the record's entryRef instead
+    /// (#91: `handleFailedSaves` reads `SyncChildAssetField.entryRef` off the failed
+    /// `CKRecord` and resolves it through `SyncCloudIdentifiers.name(of:)`).
+    var parentEntry: SyncRecordName? {
+        switch self {
+        case .audio(let captureID), .liveLog(let captureID),
+             .markerStream(let captureID, deviceID: _), .image(let captureID, imageID: _):
+            return .entry(captureID: captureID)
+        case .journal, .entry, .revision:
+            return nil
+        }
+    }
+}
+
 /// One artifact's state as seen by a tree scan: which record it maps to, and a digest
 /// of the source bytes that record's content is built from (T3 digest definitions —
 /// see `SyncTreeScanner`). `bytes` is the length of exactly the bytes `sha256` was

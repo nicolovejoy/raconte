@@ -1654,8 +1654,10 @@ actor SyncRecordExchange: CloudRecordExchange {
     // after a relaunch pick up exactly where a torn-down one left off.)
 
     private func ingestEntry(_ record: CKRecord, captureID: String) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — entry ingest skipped")
+            log.notice("sync: no container root wired — Entry \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
         guard let fields = RemoteEntryFields(record: record) else {
@@ -1676,8 +1678,9 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not persist pending entry state for \(captureID, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
+                \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)

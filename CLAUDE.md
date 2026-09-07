@@ -46,13 +46,13 @@ rate-limit hit. One stall (Task 9: a foreground UI run past the Bash tool's 120 
 auto-backgrounded — new memory). One reviewer false positive (a fallback granted in the
 dispatch, invisible to the reviewer — new memory). One plan-authored test turned
 tautological by its own task's refactor, caught only at the Opus branch review — new
-memory. **The UI CI jobs on all four PRs were still running at handoff (~37 min each,
-queued behind one another); unit CI matched the local counts exactly on #150/#151/#152.**
+memory. **All four PRs are fully green on CI: unit 2124 / 2088 / 2101 / 2117 and UI
+62 / 63 / 62 / 62 for #150 / #152 / #153 / #151, every count matching the local run.**
 Worktrees under `.worktrees/` are left in place until the PRs merge.
 
 **Next steps:**
-1. **Merge #150 → #152 → #153 → #151** after confirming each PR's UI job is green (`gh pr
-   checks N`; expected UI 62 / 63 / 62 / 62) and hitting **Update branch** before each.
+1. **Merge #150 → #152 → #153 → #151**, hitting **Update branch** before each so its CI
+   tests the actual combination (all four are green on their own base already).
    The four branches have disjoint file sets, so conflicts are not expected; the
    update-branch CI run is the proof.
 2. **Device smoke, build 15 first** (unchanged from the last handoff), then a **Mac smoke

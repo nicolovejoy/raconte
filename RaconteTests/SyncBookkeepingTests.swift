@@ -30,6 +30,10 @@ final class SyncBookkeepingTests: XCTestCase {
         SyncBookkeepingStore(root: syncRoot)
     }
 
+    private func makeStore(now: @escaping @Sendable () -> Date = { Date() }) -> SyncBookkeepingStore {
+        SyncBookkeepingStore(root: syncRoot, now: now)
+    }
+
     // MARK: Path math (AppContainer)
 
     func testSyncRootSitsBesideCapturesNotInsideIt() {
@@ -304,4 +308,91 @@ final class SyncBookkeepingTests: XCTestCase {
         let after = await s.hasBookkeeping()
         XCTAssertTrue(after)
     }
+
+    // MARK: Parked records (#85, part 1)
+
+    func testParkedRecordsStartEmpty() async {
+        let store = makeStore()
+        let parked = await store.parkedRecords()
+        XCTAssertTrue(parked.isEmpty)
+    }
+
+    func testParkRoundTripsThroughDiskAndSurvivesANewStoreInstance() async {
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = makeStore(now: { t0 })
+        await store.park("audio-01ABC", reason: "missing sha256 field")
+        let reopened = makeStore(now: { t0 })
+        let parked = await reopened.parkedRecords()
+        XCTAssertEqual(parked["audio-01ABC"],
+                       ParkedRecord(reason: "missing sha256 field", attempts: 0,
+                                    firstParkedAt: t0, lastAttemptAt: nil))
+    }
+
+    func testParkingTwiceKeepsFirstParkedAtAndAttemptsButReplacesTheReason() async {
+        let clock = Clock(now: Date(timeIntervalSince1970: 1_700_000_000))
+        let store = makeStore(now: { clock.now })
+        await store.park("audio-01ABC", reason: "first")
+        await store.noteRetryAttempt("audio-01ABC")
+        clock.now += 60
+        await store.park("audio-01ABC", reason: "second")
+        let record = await store.parkedRecords()["audio-01ABC"]
+        XCTAssertEqual(record?.reason, "second")
+        XCTAssertEqual(record?.attempts, 1)
+        XCTAssertEqual(record?.firstParkedAt, Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    func testNoteRetryAttemptIncrementsAndStampsOnlyParkedNames() async {
+        let clock = Clock(now: Date(timeIntervalSince1970: 1_700_000_000))
+        let store = makeStore(now: { clock.now })
+        await store.park("a", reason: "r")
+        clock.now += 5
+        await store.noteRetryAttempt("a")
+        await store.noteRetryAttempt("never-parked")
+        let parked = await store.parkedRecords()
+        XCTAssertEqual(parked["a"]?.attempts, 1)
+        XCTAssertEqual(parked["a"]?.lastAttemptAt, clock.now)
+        XCTAssertNil(parked["never-parked"])
+    }
+
+    func testUnparkRemovesOnlyThatName() async {
+        let store = makeStore()
+        await store.park("a", reason: "r")
+        await store.park("b", reason: "r")
+        await store.unpark("a")
+        let parked = await store.parkedRecords()
+        XCTAssertEqual(Set(parked.keys), ["b"])
+    }
+
+    func testWipeClearsParkedRecords() async throws {
+        let store = makeStore()
+        await store.park("a", reason: "r")
+        try await store.wipe()
+        let parked = await store.parkedRecords()
+        XCTAssertTrue(parked.isEmpty)
+    }
+
+    func testUndecodableParkedFileIsQuarantinedNotLost() async throws {
+        let url = SyncBookkeepingStore.parkedURL(root: syncRoot)
+        try FileManager.default.createDirectory(at: syncRoot, withIntermediateDirectories: true)
+        let garbage = Data("not json at all".utf8)
+        try garbage.write(to: url)
+
+        let parked = await makeStore().parkedRecords()
+
+        XCTAssertTrue(parked.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: syncRoot.path)
+        let quarantined = siblings.filter { $0.hasPrefix("parked-unreadable-") && $0.hasSuffix(".json") }
+        XCTAssertEqual(quarantined.count, 1)
+        let quarantinedData = try Data(contentsOf: syncRoot.appendingPathComponent(quarantined[0]))
+        XCTAssertEqual(quarantinedData, garbage)
+    }
+}
+
+/// A tiny mutable clock for tests that need to advance time between two calls — a
+/// captured `var` cannot cross a `@Sendable` closure boundary under Swift 6.
+private final class Clock: @unchecked Sendable {
+    var now: Date
+    init(now: Date) { self.now = now }
 }

@@ -167,4 +167,38 @@ final class SyncRecordNameTests: XCTestCase {
     func testInitRejectsImageWithAGarbageImageID() {
         XCTAssertNil(SyncRecordName(rawValue: "i.\(ulidA).not-a-ulid"))
     }
+
+    // MARK: parentEntry (#91)
+
+    func testAudioParentEntryIsTheEntryWithTheSameCaptureID() {
+        XCTAssertEqual(SyncRecordName.audio(captureID: ulidA).parentEntry, .entry(captureID: ulidA))
+    }
+
+    func testLiveLogParentEntryIsTheEntryWithTheSameCaptureID() {
+        XCTAssertEqual(SyncRecordName.liveLog(captureID: ulidA).parentEntry, .entry(captureID: ulidA))
+    }
+
+    func testMarkerStreamParentEntryIsTheEntryWithTheSameCaptureID() {
+        XCTAssertEqual(SyncRecordName.markerStream(captureID: ulidA, deviceID: ulidB).parentEntry,
+                       .entry(captureID: ulidA))
+    }
+
+    func testImageParentEntryIsTheEntryWithTheSameCaptureID() {
+        XCTAssertEqual(SyncRecordName.image(captureID: ulidA, imageID: ulidB).parentEntry,
+                       .entry(captureID: ulidA))
+    }
+
+    /// `.revision` carries only its own id — there is no captureID to derive a parent
+    /// from. Callers recover the parent from the failed record's `entryRef` field.
+    func testRevisionParentEntryIsNil() {
+        XCTAssertNil(SyncRecordName.revision(id: ulidA).parentEntry)
+    }
+
+    func testEntryParentEntryIsNil() {
+        XCTAssertNil(SyncRecordName.entry(captureID: ulidA).parentEntry)
+    }
+
+    func testJournalParentEntryIsNil() {
+        XCTAssertNil(SyncRecordName.journal(id: ulidA).parentEntry)
+    }
 }

@@ -702,4 +702,41 @@ final class SyncEntryIngestTests: XCTestCase {
         let parked = await bookkeeping().parkedRecords()
         XCTAssertNil(parked[record.recordID.recordName])
     }
+
+    // MARK: Extra item — ingestEntry's two remaining unparked returns (#85, controller ruling)
+
+    /// The `ingestEntry` mirror of `testWithNoContainerRootWiredTheRecordNameIsParked`:
+    /// with no container root wired, the Entry record's name — the only thing left to
+    /// hold onto — must be parked rather than silently dropped.
+    func testWithNoContainerRootWiredTheEntryRecordNameIsParked() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let ex = SyncRecordExchange(
+            journalStore: store, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: "device-low")   // no containerRoot
+
+        let when = stamp(0)
+        let record = entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when)
+        await ex.acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "no container root wired")
+    }
+
+    /// The `ingestEntry` mirror of `testALocalWriteFailureForAudioIsParked`: forced via a
+    /// real filesystem collision (a plain file squatting where `sync/staging/<captureID>/`
+    /// must be a directory), not a mock.
+    func testALocalWriteFailureForEntryIsParked() async throws {
+        try FileManager.default.createDirectory(
+            at: AppContainer.syncStagingRoot(containerRoot: containerRoot), withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: stagingDirectory)
+
+        let when = stamp(0)
+        let record = entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when)
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
+    }
 }

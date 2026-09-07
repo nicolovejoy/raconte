@@ -36,11 +36,33 @@ protocol CloudEngineControl: Sendable {
     /// is for the moments the app knows about and the engine doesn't.
     func fetchNow() async
 
+    /// #85 part 3: re-asks the server, by exact record name, for names inbound sync
+    /// PARKED. `CKSyncEngine`'s own zone fetch (`fetchNow()`) is token-based and has
+    /// already advanced past whatever change caused the original refusal by the time it
+    /// is parked — a name once missed is never redelivered by a later `fetchNow()`
+    /// alone, so this is the only way back. Each fetched record is run through the same
+    /// exchange path a zone fetch uses for a modified record.
+    func refetch(recordNames: [String]) async -> RefetchOutcome
+
     /// Debug-surface snapshot (M4 T12): live pending-change counts plus the last
     /// account/error state the engine's delegate callbacks observed. Never a live
     /// CloudKit query — nothing here can delay or wait on anything (design §8) — and
     /// never awaited by anything but the Debug screen.
     func snapshot() async -> EngineSnapshot
+}
+
+/// What `CloudEngineControl.refetch(recordNames:)` hands back (#85 part 3). No CloudKit
+/// type crosses the protocol — a name in, a name out, sorted into exactly one of three
+/// buckets.
+struct RefetchOutcome: Equatable, Sendable {
+    /// Names successfully fetched and handed to `CloudRecordExchange.acceptRemote`.
+    var delivered: [String] = []
+    /// Names the server answered `CKError.unknownItem` for — the terminal case.
+    /// `SyncCoordinator.retryParked()` unparks these with a `.notice`, never silently.
+    var goneFromServer: [String] = []
+    /// Names that failed for any other reason. Left parked; retried on the next
+    /// `retryParked()`.
+    var failed: [String] = []
 }
 
 /// What `CloudEngineControl.snapshot()` hands back. `accountState`/`lastError` are
@@ -434,6 +456,57 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
             log.error("sync: fetch failed: \(error.localizedDescription, privacy: .public)")
             lastError = error.localizedDescription
         }
+    }
+
+    /// #85 part 3: `database.records(for:)` fetches by explicit `CKRecord.ID`, unlike
+    /// `fetchChanges()`'s token-based zone fetch, which has already advanced past
+    /// whatever caused the original refusal. Each success runs through the exact same
+    /// `exchange.acceptRemote` call the `fetchedRecordZoneChanges` branch above uses for
+    /// a modified record — refetch and the ordinary zone fetch land through one path.
+    ///
+    /// `.unknownItem` is decided PER RECORD, not per batch: `database.records(for:)`
+    /// answers one `Result` per requested id, so one name the server no longer has never
+    /// masks the outcome of the others in the same call.
+    func refetch(recordNames: [String]) async -> RefetchOutcome {
+        guard !recordNames.isEmpty else { return RefetchOutcome() }
+        let ids = recordNames.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+        let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+        let results: [CKRecord.ID: Result<CKRecord, Error>]
+        do {
+            results = try await database.records(for: ids)
+        } catch {
+            log.error("""
+                sync: refetch batch failed — \(recordNames.count, privacy: .public) name(s) stay \
+                parked: \(error.localizedDescription, privacy: .public)
+                """)
+            return RefetchOutcome(failed: recordNames)
+        }
+        var outcome = RefetchOutcome()
+        for id in ids {
+            let name = id.recordName
+            switch results[id] {
+            case .success(let record):
+                await exchange.acceptRemote(record)
+                outcome.delivered.append(name)
+            case .failure(let error):
+                if let ckError = error as? CKError, ckError.code == .unknownItem {
+                    log.notice("sync: refetch of \(name, privacy: .public) — gone from server")
+                    outcome.goneFromServer.append(name)
+                } else {
+                    log.error("""
+                        sync: refetch of \(name, privacy: .public) failed: \
+                        \(error.localizedDescription, privacy: .public) — stays parked
+                        """)
+                    outcome.failed.append(name)
+                }
+            case .none:
+                // Should not happen — `database.records(for:)` documents one `Result`
+                // per requested id — but a missing answer is a retry, never silent loss.
+                log.error("sync: refetch of \(name, privacy: .public) — no answer from the server")
+                outcome.failed.append(name)
+            }
+        }
+        return outcome
     }
 
     /// M4 T12: pending counts come straight from `CKSyncEngine.State` (or, before the

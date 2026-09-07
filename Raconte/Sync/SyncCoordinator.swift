@@ -66,6 +66,7 @@ actor SyncCoordinator: SyncHooks {
         await engine.start(stateData: state)
         await reconcile()
         await fetchNow()
+        await retryParked()
     }
 
     /// #90: before the engine resumes from `engine-state.bin`, make sure every
@@ -120,11 +121,33 @@ actor SyncCoordinator: SyncHooks {
     /// scene becomes active (see `RaconteApp`'s `scenePhase` wiring).
     func foregrounded() async {
         await fetchNow()
+        await retryParked()
     }
 
     private func fetchNow() async {
         await engine.fetchNow()
         lastFetchAt = now()
+    }
+
+    /// #85 part 3: refetches every currently-parked record name. Stamps an attempt on
+    /// EACH name first, before the refetch runs — so a batch that fails outright (the
+    /// engine's `refetch` catch) still leaves a rising `attempts` count in `parked.json`,
+    /// not just a per-name success path. A name the server says it no longer has is
+    /// unparked with a `.notice`: the terminal case, never silent (memory: inbound sync
+    /// must land or park — and a park that can never be retried again is the same silent
+    /// loss with extra steps).
+    func retryParked() async {
+        let parked = await bookkeeping.parkedRecords()
+        guard !parked.isEmpty else { return }
+        let names = Array(parked.keys)
+        for name in names {
+            await bookkeeping.noteRetryAttempt(name)
+        }
+        let outcome = await engine.refetch(recordNames: names)
+        for name in outcome.goneFromServer {
+            log.notice("sync: \(name, privacy: .public) is gone from the server — unparked")
+            await bookkeeping.unpark(name)
+        }
     }
 
     /// M4 T12: a snapshot for the Debug screen. Timestamps and their own recency are

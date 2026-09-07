@@ -51,6 +51,20 @@ final class SyncCoordinatorTests: XCTestCase {
         SyncCoordinator(bookkeeping: store, scanner: scanner(), engine: engine, now: now)
     }
 
+    /// Task 3's factory: bookkeeping + fake engine + coordinator, pre-tagged `.production`
+    /// so the environment gate (#90) never wipes a name a test parks before calling
+    /// `launch()`/`foregrounded()`/`retryParked()` — the same reason every gate test above
+    /// tags its own store before exercising `launch()`. `bookkeeping()` points at a fresh
+    /// root each call, so this factory always starts from empty parked state.
+    private func makeCoordinator() async throws -> (SyncCoordinator, FakeCloudEngine, SyncBookkeepingStore) {
+        let store = bookkeeping()
+        try await store.saveEnvironmentTag(.production)
+        let engine = FakeCloudEngine()
+        let coordinator = SyncCoordinator(bookkeeping: store, scanner: scanner(), engine: engine,
+                                          environment: .production)
+        return (coordinator, engine, store)
+    }
+
     /// Advances on every call — the frozen-clock trap (memory:
     /// frozen-clock-two-mints-coin-flip-order applies to any two writes compared for
     /// ordering): a launch-then-change sequence sharing one frozen clock could stamp
@@ -513,6 +527,72 @@ final class SyncCoordinatorTests: XCTestCase {
         let started = await engine.startedWith
         XCTAssertEqual(started, [nil])
     }
+
+    // MARK: Refetch parked records on launch and foreground (#85 part 3)
+
+    /// Real ULID-shaped audio record name — a short fake id would parse to nil and skip
+    /// the code under test (repo idiom: real ULIDs in fixtures).
+    private var parkedAudioName: String { "a.\(idOne).0" }
+
+    func testLaunchRefetchesParkedNames() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+
+        await coordinator.launch()
+
+        let calls = await engine.refetchCalls
+        XCTAssertEqual(calls, [[parkedAudioName]])
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[parkedAudioName]?.attempts, 1)
+    }
+
+    func testForegroundedRefetchesParkedNames() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+
+        await coordinator.foregrounded()
+
+        let calls = await engine.refetchCalls
+        XCTAssertEqual(calls, [[parkedAudioName]])
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[parkedAudioName]?.attempts, 1)
+    }
+
+    func testNothingParkedMeansNoRefetchCall() async throws {
+        let (coordinator, engine, _) = try await makeCoordinator()
+
+        await coordinator.foregrounded()
+
+        let calls = await engine.refetchCalls
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func testANameGoneFromTheServerIsUnparked() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        await engine.setRefetchOutcome(RefetchOutcome(delivered: [], goneFromServer: [parkedAudioName], failed: []))
+
+        await coordinator.retryParked()
+
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertNil(parked[parkedAudioName])
+    }
+
+    /// The mirror of the test above: a refetch that fails for any OTHER reason leaves
+    /// the name parked (so the next `retryParked()` tries again), but the attempt still
+    /// counted — without this, an implementation that unparked on ANY outcome, not just
+    /// `.unknownItem`, would still pass `testANameGoneFromTheServerIsUnparked` alone.
+    func testAFailedRefetchStaysParked() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        await engine.setRefetchOutcome(RefetchOutcome(delivered: [], goneFromServer: [], failed: [parkedAudioName]))
+
+        await coordinator.retryParked()
+
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[parkedAudioName]?.attempts, 1)
+        XCTAssertEqual(parked[parkedAudioName]?.reason, "sha256 mismatch")
+    }
 }
 
 /// A `CloudEngineControl` that records what it was asked to do. An actor because the
@@ -531,6 +611,12 @@ actor FakeCloudEngine: CloudEngineControl {
     /// child record must be withdrawn, never sent.
     private(set) var droppedNames: [[SyncRecordName]] = []
     private(set) var fetchCallCount = 0
+    /// #85 part 3: every `refetch(recordNames:)` call, in order.
+    private(set) var refetchCalls: [[String]] = []
+    /// #85 part 3: what the next (and every subsequent) `refetch` call answers — a test
+    /// drives it through `setRefetchOutcome`, never a direct assignment across the actor
+    /// boundary, matching this type's existing test-driver methods below.
+    var refetchOutcome = RefetchOutcome(delivered: [], goneFromServer: [], failed: [])
     private let persistState: SyncEngineStatePersistence?
 
     // M4 T12: live pending sets (mirrors `CKSyncEngine.State.pendingRecordZoneChanges`
@@ -575,6 +661,16 @@ actor FakeCloudEngine: CloudEngineControl {
     }
 
     func fetchNow() async { fetchCallCount += 1 }
+
+    func refetch(recordNames: [String]) async -> RefetchOutcome {
+        refetchCalls.append(recordNames)
+        return refetchOutcome
+    }
+
+    /// Test-only driver — sets what the next `refetch` call answers.
+    func setRefetchOutcome(_ outcome: RefetchOutcome) {
+        refetchOutcome = outcome
+    }
 
     func snapshot() async -> EngineSnapshot {
         EngineSnapshot(accountState: accountState, pendingSaveCount: pendingSaveNames.count,

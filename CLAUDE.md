@@ -51,44 +51,62 @@ memory. **All four PRs are fully green on CI: unit 2124 / 2088 / 2101 / 2117 and
 Worktrees under `.worktrees/` are left in place until the PRs merge.
 
 **Next steps:**
-1. **Main is GREEN with all four merged** — `5cd5b7f7`, run `34086540448`: unit **2184**
-   (1 skipped), UI **63**, both jobs success.
-   https://github.com/nicolovejoy/raconte/actions/runs/34086540448
-   The four PRs (#150, #152, #153, #151) merged within ~7 minutes and none used
-   **Update branch**, so GitHub cancelled the intermediate runs and this was the only run
-   that ever tested the combination. It passed, so the risk did not land — but the batch
-   was verified *after* merging, not before, which is the thing the convention exists to
-   avoid. The counts reconcile exactly against a pre-batch base of 2082 (#150 +42,
-   #152 +6, #153 +19, #151 +35 = 2184; UI 62 +1 from `TrashRepairUITests` = 63), so
-   nothing was silently dropped or skipped. **Batch complete.** The four `.worktrees/`
-   checkouts can now be removed.
-2. **Smoke tests (tomorrow, with the T8 design session)** — device smoke build 15, then a
-   Mac smoke of merged main as build 16: export to an external volume and verify; corrupt
-   one `entry.json` → Trash shows the section → quarantine → journal deletes; span a
-   journal → glyph and sentence; record past the sidebar clock. Steps are in each PR body.
-3. **T8 design session (tomorrow) — owner ruling 2026-09-07 already taken.** The canonical
-   transcript is produced by a **post-capture final pass over the m4a**, and **editing stays
-   locked until it lands**. "Patience before editing is fine." Build it the simple way; the
-   owner explicitly **declined** a timing-measurement harness first. This ruling deletes the
-   accept/decline merge-policy problem for the first pass — nothing to reconcile if the good
-   transcript precedes every human edit. Live transcript demotes to a disposable real-time
-   display. Still to settle in the session: what shows if the pass fails or the app dies
-   mid-pass (the live transcript probably has to survive as a fallback, or an entry can exist
-   with no text — which violates "nothing real is lost"); background-survival rules for long
-   entries (must NOT hang off a view lifecycle); and what happens to existing entries that
-   already carry live transcripts and edits. Re-running over already-edited entries revives
-   the merge problem, but as a rare opt-in batch — deliberately deferred, not solved.
-   #38 contextual biasing ("LN" → "ellen") rides along in the same call.
-4. **SDD Batch A, from verified main**: #154 Verify archive… row, #155 `CaptureView.statusRow`
-   per-tick re-evaluation, #156 parked count on Debug/About. #154 is sequenced **before** the
-   M4 gate so the gate is verified in-app, not with the `jq | shasum -c` recipe.
-5. **M4 acceptance gate, never run** — synced Mac: quit, move `~/Library/Application
+1. **Mac smoke of build 16 — PARTIALLY RUN, resume here.** The signed build is at
+   `~/Desktop/Raconte.app` (`main` `35bbc068`, `CFBundleVersion` 16, UUID
+   `FB163BF4-E599-390F-A3CC-7684A5B805E9`, real iCloud entitlements so it CAN sync).
+   Step 0 for every test: About → App → Build must read `build 16: 2026-09-07`.
+   - **A. Archive export (#151) — PASS.** Exported and verified to an external location.
+     Owner asked for two follow-ups, filed as **#157** (confirmation warning before writing;
+     selective export by journal/entry instead of all-or-nothing). Not defects.
+   - **B. Quarantine (#152) — NOT RUN.** Blocked on picking a subject. Owner wants a
+     **purpose-made test entry**, not a real one: the test overwrites `entry.json` with
+     `not json`, which destroys that entry's journal/date/trash metadata (the audio is
+     never at risk). Record a throwaway entry first, then use the NEWEST capture id —
+     ULIDs sort by creation, so `ls -t ~/Library/Application\ Support/Raconte/captures/ | head -1`
+     names it. Back up its `entry.json` before overwriting either way.
+   - **C. Out-of-span glyph + one clock (#153) — NOT RUN.** Owner said the ask was unclear
+     and needs rewriting before he runs it. The confusing part is step 2: it requires a
+     journal that HAS entries, then setting that journal's span so it EXCLUDES at least one
+     of them. Rewrite as: open the journal, note its entries' dates, then set the span to a
+     range that leaves one out. Expected: calendar-with-exclamation glyph on that row, and
+     "Dated outside <journal>'s range (<span>)." above the transcript. Nothing disabled.
+   - **D. Parked sync (#150) — NOT RUN.** One command; passes if the file is absent:
+     `ls ~/Library/Application\ Support/Raconte/sync/parked.json`
+   - **iPhone build 15 smoke — NOT RUN.** record → BN flips to LN → live band dims/brightens
+     → stop → receipt card with no "Record another" → tap card → back to Capture via the
+     sidebar → must read Ready.
+   **Process note from the owner: hand him ONE smoke at a time.** Five at once was too many.
+2. **T8 design session — IN PROGRESS, one question outstanding.** Classified
+   **architectural** (spec → plan → build). Owner ruling stands from 2026-09-07: canonical
+   transcript comes from a **post-capture final pass over the m4a**, **editing locked until
+   it lands**, build it the simple way, timing harness explicitly declined.
+   **The finding that reshapes it — verify before building on it:** the codebase already
+   anticipated this. `TranscriptResult.range` is on the capture-frame axis specifically so
+   "a live result and one re-derived from `final/recording.m4a` are directly comparable"
+   (`Raconte/Transcription/TranscriptionEngine.swift:9`). `TranscriptRevisionStore.promoteIfNeeded`
+   (~line 1112) ALREADY mints revision zero of the canonical chain exactly once, and already
+   refuses until `final/recording.m4a` exists (`.skippedNoAudio`). `TranscriptEditorModel.isEditable`
+   (line 181) already has a `.readOnly` state that renders as an explanatory sentence rather
+   than a disabled box. So T8 is mostly **changing what revision zero derives from** — a fresh
+   file pass instead of `live.jsonl` — plus one new read-only reason. Much smaller than it looked.
+   **Open question 1, put to the owner, unanswered:** when the file pass fails, what does the
+   entry show? (a) fall back to promoting `live.jsonl`, marked provisional, replaceable later —
+   my lean, since "an entry with no text" contradicts the app's hardest promise and live.jsonl
+   is written to disk anyway; (b) no transcript + a "pending, retry" state retried on launch
+   and foreground like `retryParked`, which keeps live.jsonl genuinely disposable; (c) fall
+   back only after N failures. Still unasked after that: background-survival for long entries
+   (must NOT hang off a view lifecycle), and what happens to existing entries that already
+   carry live transcripts and edits. #38 contextual biasing rides along in the same call.
+3. **SDD Batch A, from main**: #154 Verify archive… row, #155 `CaptureView.statusRow` per-tick
+   re-evaluation, #156 parked count on Debug/About. #154 is sequenced **before** the M4 gate
+   so the gate is verified in-app rather than with the `jq | shasum -c` recipe.
+4. **M4 acceptance gate, never run** — synced Mac: quit, move `~/Library/Application
    Support/Raconte` aside (never delete), relaunch, let sync settle, export, verify, compare
    counts with the iPhone. Only after this passes does any recountly teardown get scheduled
    (the backup at `~/recountly-export-2026-09-06/` stands).
-6. **`docs/overview.md` is stale** — last updated 2026-08-16, still calls M4 unmerged and
-   verified export unbuilt; its "Next, in order" list is not a usable roadmap. Refresh it
-   alongside the next build. The unified editor (#60, #59) is now explicitly **after** T8.
+5. **`docs/overview.md` is stale** — last updated 2026-08-16, still calls M4 unmerged and
+   verified export unbuilt. Refresh alongside the next build. The unified editor (#60, #59)
+   is explicitly **after** T8.
 
 ## What Raconte is
 

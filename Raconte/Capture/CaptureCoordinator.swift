@@ -880,9 +880,16 @@ extension CaptureCoordinator {
         ULID.make(now: now)
     }
 
+    /// One clock, not two (#67 item 4): delegates to `RecFormat.clock`, which is
+    /// hours-aware. This used to be its own `"%d:%02d"` — no hours field, so a full hour
+    /// read "60:00" instead of "1:00:00". Also a rounding-vs-truncation change: the old
+    /// formatter used `Int(seconds.rounded())`, `RecFormat.clock` truncates
+    /// (`Int(max(0, seconds))`) — truncation is the right convention for an elapsed-time
+    /// display (11.98s reads "0:11", not a rounded-up "0:12" that implies more time
+    /// passed than actually did), noted here so a later diff reader does not mistake the
+    /// switch for a regression.
     nonisolated static func formatDuration(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        return String(format: "%d:%02d", total / 60, total % 60)
+        RecFormat.clock(seconds)
     }
 }
 

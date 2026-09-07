@@ -167,6 +167,37 @@ enum PlaceRouting {
         }
     }
 
+    /// The pair `resolve` alone cannot express (#67 item 2): what happens to the
+    /// pushed detail path when a background journals pull (CloudKit) removes the
+    /// journal you're currently in. `resolve` always lands `.capture` for a vanished
+    /// journal, which is the right answer only when nothing is pushed — routing a
+    /// vanished journal through `AppRouter.select` unconditionally clears the path
+    /// (`detailPath(afterSelecting:from:path:)` always returns `[]`), which pops the
+    /// owner straight out of the entry they were reading. `reroute` carries the path
+    /// decision `resolve` cannot: same place → unchanged; otherwise the path is
+    /// preserved ONLY when its LAST element is `.entry(...)` — that entry still exists
+    /// (now unfiled) and All Entries contains it, so the destination becomes
+    /// `.allEntries` with the path kept. Every other case (an empty path, or a path
+    /// whose last element is `.journalEditor(...)`) clears the path and lands wherever
+    /// `resolve` says: a `.journalEditor(J)` for the very journal that vanished is a
+    /// dead screen, not a survivor — preserving it would push the owner onto an editor
+    /// for a journal that no longer exists.
+    struct Reroute: Equatable {
+        var place: Place
+        var detailPath: [LibraryDestination]
+    }
+
+    static func reroute(_ place: Place, journals: [Journal], detailPath: [LibraryDestination]) -> Reroute {
+        let resolved = resolve(place, journals: journals)
+        guard resolved != place else {
+            return Reroute(place: place, detailPath: detailPath)
+        }
+        if let last = detailPath.last, case .entry = last {
+            return Reroute(place: .allEntries, detailPath: detailPath)
+        }
+        return Reroute(place: resolved, detailPath: [])
+    }
+
     /// The scope the entry list must run under. `nil` for places that are not entry
     /// lists. No `default:`, same reasoning as `resolve`.
     static func journalScope(for place: Place) -> JournalScope? {
@@ -206,6 +237,16 @@ final class AppRouter {
     func select(_ place: Place) {
         detailPath = PlaceRouting.detailPath(afterSelecting: place, from: self.place, path: detailPath)
         self.place = place
+    }
+
+    /// Applies a `PlaceRouting.Reroute` directly — sets `place` and `detailPath`
+    /// verbatim, unlike `select`, which always clears the path. `ContentView`'s
+    /// `.onChange(of: services.library.journals)` uses this (#67 item 2): a
+    /// background journals pull that removes the current journal must not pop the
+    /// entry the owner is reading, which `select`'s unconditional clear would do.
+    func apply(_ reroute: PlaceRouting.Reroute) {
+        place = reroute.place
+        detailPath = reroute.detailPath
     }
 
     /// Pops `detailPath` if non-empty; no-op otherwise.

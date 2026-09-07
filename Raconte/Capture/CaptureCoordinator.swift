@@ -880,9 +880,11 @@ extension CaptureCoordinator {
         ULID.make(now: now)
     }
 
+    /// One clock, not two (#67 item 4): delegates to `RecFormat.clock`, which is
+    /// hours-aware. This used to be its own `"%d:%02d"` — no hours field, so a full hour
+    /// read "60:00" instead of "1:00:00".
     nonisolated static func formatDuration(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        return String(format: "%d:%02d", total / 60, total % 60)
+        RecFormat.clock(seconds)
     }
 }
 

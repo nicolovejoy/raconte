@@ -77,4 +77,59 @@ final class JournalDateLineTests: XCTestCase {
                        "a hardcoded .gregorianCurrent inside JournalDateLine.text would "
                        + "report the Gregorian year here regardless of what was passed in")
     }
+
+    // MARK: - journalDateLines (#67 item 3): one grouped pass per rescan, not one
+    // `dateLine(forJournal:)` filter of `allEntries` per journal per sidebar body eval.
+
+    /// Cardinality 3, on purpose: two journals WITH entries (so "matches for every
+    /// journal" isn't vacuously true for a single one) and one journal with NONE, which
+    /// must be absent from the dictionary rather than present with a nil/empty value —
+    /// `dateLine(forJournal:)` already returns nil for that case (`testNothingToSayReturnsNil`
+    /// above), so the dictionary must agree.
+    @MainActor
+    func testJournalDateLinesMatchesDateLineForEveryJournalAndOmitsOnesWithNoEntries() async throws {
+        let containerRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("JournalDateLines-\(UUID().uuidString)", isDirectory: true)
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        try FileManager.default.createDirectory(at: capturesRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: containerRoot) }
+
+        let j1 = Journal(id: ULID.make(), name: "1987", createdAt: Date(timeIntervalSince1970: 0))
+        let j2 = Journal(id: ULID.make(), name: "France", createdAt: Date(timeIntervalSince1970: 100))
+        let j3 = Journal(id: ULID.make(), name: "Empty", createdAt: Date(timeIntervalSince1970: 200))
+        try JournalStore.encode(JournalRegistry(journals: [j1, j2, j3]))
+            .write(to: AppContainer.journalsURL(containerRoot: containerRoot))
+
+        func writeCapture(_ id: String, capturedAt: Double, journalID: String) throws {
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
+            try FileManager.default.createDirectory(at: segs, withIntermediateDirectories: true)
+            try Data(count: 48_000 * 4).write(to: SegmentLayout.pcmURL(segmentsDirectory: segs, index: 0))
+            let format = AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
+                                               commonFormat: .pcmFormatFloat32,
+                                               interleaved: false, bytesPerFrame: 4)
+            let created = Date(timeIntervalSince1970: capturedAt)
+            let manifest = Manifest(captureID: id, createdAt: created, state: .captured,
+                                    stateSeq: 1, stateUpdatedAt: created, format: format)
+            try CaptureCoding.encoder().encode(manifest)
+                .write(to: SegmentLayout.manifestURL(captureDirectory: dir))
+            try EntryMetadataStore.write(EntryMetadata(journalID: journalID),
+                                         url: SegmentLayout.entryMetadataURL(captureDirectory: dir))
+        }
+
+        try writeCapture(ULID.make(), capturedAt: 1_000, journalID: j1.id)
+        try writeCapture(ULID.make(), capturedAt: 2_000, journalID: j2.id)
+        // j3 gets no entries at all.
+
+        let model = LibraryScreenModel(capturesRoot: capturesRoot, journalsContainerRoot: containerRoot)
+        await model.rescan()
+
+        for journal in [j1, j2] {
+            XCTAssertEqual(model.journalDateLines[journal.id], model.dateLine(forJournal: journal.id),
+                           "\(journal.name)")
+            XCTAssertNotNil(model.journalDateLines[journal.id], "\(journal.name) has an entry")
+        }
+        XCTAssertNil(model.journalDateLines[j3.id],
+                     "a journal with no entries must be absent, not present with an empty/nil line")
+    }
 }

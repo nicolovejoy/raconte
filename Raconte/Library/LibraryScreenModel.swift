@@ -81,6 +81,17 @@ final class LibraryScreenModel {
     /// capture header both read this rather than hitting the store themselves, the same
     /// "one scan, multiple derived lists" shape `items`/`trashed` already use.
     private(set) var journalCovers: [String: Data] = [:]
+    /// The one date line per journal (#67 item 3), journal id -> `dateLine(forJournal:)`'s
+    /// answer — absent for a journal with nothing to say (see `JournalDateLine.text`).
+    /// Recomputed once per `rescan()` from a SINGLE grouped pass over `allEntries`
+    /// (`Dictionary(grouping:by:)`), not per-journal-per-sidebar-body-eval: `dateLine`
+    /// used to re-filter the WHOLE of `allEntries` for every journal on every call, which
+    /// `SidebarView.rows` did once per journal on every body evaluation —
+    /// O(journals × allEntries) work the sidebar paid even while nothing changed.
+    /// `rescan()` is the only writer of `allEntries`/`journals` on this model (checked:
+    /// `private(set)`, both assigned only there), so it is the only place this needs
+    /// rebuilding.
+    private(set) var journalDateLines: [String: String] = [:]
     /// `journals.json` exists and did not decode. Rendered by `LibraryView`: without it
     /// every filed entry reads as having a dangling journal, with no way to tell why.
     private(set) var journalsUnreadable = false
@@ -284,6 +295,19 @@ final class LibraryScreenModel {
         trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
         skipped = result.skipped
         allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
+
+        // One grouped pass over `allEntries` for every journal's date line (#67 item 3),
+        // instead of `dateLine(forJournal:)`'s old per-journal filter of the whole list.
+        let entriesByJournal = Dictionary(grouping: allEntries, by: \.journalID)
+        var lines: [String: String] = [:]
+        for journal in journals {
+            let derived = JournalDateRange.compute(from: entriesByJournal[journal.id] ?? [])
+            if let line = JournalDateLine.text(span: journal.span, derived: derived) {
+                lines[journal.id] = line
+            }
+        }
+        journalDateLines = lines
+
         isLoading = false
         // Model-to-model, no view in the loop (#62, nav redesign §5.1). Placed after
         // every published assignment and after the superseded-scan guard above: the
@@ -324,10 +348,10 @@ final class LibraryScreenModel {
     }
 
     /// The one date line for a journal, span-first. `SidebarView` and the journal header
-    /// both read this rather than deciding for themselves.
+    /// both read this rather than deciding for themselves. A lookup into
+    /// `journalDateLines`, not a recompute — see that property's doc comment for why.
     func dateLine(forJournal journalID: String) -> String? {
-        JournalDateLine.text(span: journals.first { $0.id == journalID }?.span,
-                             derived: dateRange(forJournal: journalID))
+        journalDateLines[journalID]
     }
 
     /// The one entry-count rule for a journal (#75): live entries filed under it, from

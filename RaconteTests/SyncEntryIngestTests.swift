@@ -740,6 +740,23 @@ final class SyncEntryIngestTests: XCTestCase {
         XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
     }
 
+    /// Fix wave (finding 1): a record whose `originalDate` fails to parse makes
+    /// `RemoteEntryFields.init?` return nil — the same fixture as
+    /// `testRemoteEntryFieldsFailsOnAnUnparseableOriginalDate` above, but exercised
+    /// through the orchestrator. `CKSyncEngine` never redelivers a consumed record, so a
+    /// decode refusal that merely logs and returns is permanent silent loss; it must
+    /// park instead, exactly as the local-write-failure case above does.
+    func testAnUndecodableEntryRecordIsParkedNotIgnored() async throws {
+        let when = stamp(0)
+        let record = entryRecord(metadata: .defaults, manifestJSON: manifestJSON(at: when), at: when)
+        record[SyncEntryField.originalDate] = "not-a-partial-date"
+
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "entry fields could not be decoded")
+    }
+
     /// Fix round 1 (Important 1): `ingestEntry`'s success path — mirroring
     /// `testACleanAudioIngestUnparksThatName` — must unpark, or a name parked by either
     /// of the two branches above is refetched and re-ingested on every launch and

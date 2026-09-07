@@ -1661,7 +1661,8 @@ actor SyncRecordExchange: CloudRecordExchange {
             return
         }
         guard let fields = RemoteEntryFields(record: record) else {
-            log.notice("sync: fetched Entry record could not be decoded — ignored")
+            log.notice("sync: fetched Entry record could not be decoded — parked")
+            await bookkeeping.park(name, reason: "entry fields could not be decoded")
             return
         }
         // `manifestSnapshot` is read here, not through `RemoteEntryFields` (see that

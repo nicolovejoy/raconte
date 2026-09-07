@@ -30,7 +30,7 @@ struct EntryDetailView: View {
     /// #148: navigate to the entry's journal. Wired by `ContentView` to
     /// `router.select(.journal(id))`, which pops this screen — the same shape as
     /// `onPage`, and the same no-op default `LibraryView.onEditJournal` uses for previews.
-    var onOpenJournal: (String) -> Void = { _ in }
+    let onOpenJournal: (String) -> Void
 
     @State private var item: EntryListItem
     @State private var playback: CapturePlayback?

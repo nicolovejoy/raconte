@@ -39,18 +39,26 @@ final class SidebarRowInsetTests: XCTestCase {
 
     // MARK: - Capture screen containment (#155): the same read, moved out of CaptureView
 
-    /// `CaptureStatusReadout` is the only view on the capture screen that may read
-    /// `.elapsed`; `CaptureView` must no longer re-evaluate its whole body once per
-    /// second while recording. Same shape as the sidebar pin above — a source pin,
-    /// because `@Observable` invalidation granularity is not assertable from XCTest.
-    func testCaptureViewNoLongerReadsElapsedAndTheReadoutDoes() throws {
+    /// `CaptureStatusReadout` and `CaptureMicMeterReadout` are the only views on the
+    /// capture screen that may read tick-rate coordinator state (`.elapsed`, `.micLevel`
+    /// — both assigned by `CaptureCoordinator.tick()` on its ~100 ms loop); `CaptureView`
+    /// must no longer re-evaluate its whole body on every tick while recording. Same shape
+    /// as the sidebar pin above — a source pin, because `@Observable` invalidation
+    /// granularity is not assertable from XCTest.
+    func testCaptureViewNoLongerReadsTickRateStateAndTheReadoutsDo() throws {
         let captureView = try source("Raconte/Capture/UI/CaptureView.swift")
         XCTAssertFalse(captureView.contains(".elapsed"),
                        "CaptureView must not read .elapsed itself — CaptureStatusReadout owns that read")
+        XCTAssertFalse(captureView.contains(".micLevel"),
+                       "CaptureView must not read .micLevel itself — CaptureMicMeterReadout owns that read")
 
         let readout = try source("Raconte/Capture/UI/CaptureStatusReadout.swift")
         XCTAssertTrue(readout.contains(".elapsed"),
                       "CaptureStatusReadout must be the view that reads .elapsed")
+
+        let micReadout = try source("Raconte/Capture/UI/CaptureMicMeterReadout.swift")
+        XCTAssertTrue(micReadout.contains(".micLevel"),
+                      "CaptureMicMeterReadout must be the view that reads .micLevel")
     }
 
     /// Repo-relative source, comments stripped, for the containment pins below.

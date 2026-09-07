@@ -8,6 +8,30 @@ import CryptoKit
 /// import across test files) — a two-capture archive: one with audio, two revisions,
 /// own+foreign markers, a live log, an entry log and one image; one with no final audio
 /// and a garbage `entry.json`. Plus one journal with a cover.
+/// A thread-safe `now()` stub for Fix wave Finding 4's test — needs to hand out a
+/// DIFFERENT date on a second call so a bug that calls `now()` twice (directory stamp,
+/// then `exportedAt`) is observable as a mismatch, while a `@Sendable` closure capturing
+/// mutable state satisfies Swift 6 strict concurrency.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callCount = 0
+    private let dates: [Date]
+
+    init(dates: [Date]) { self.dates = dates }
+
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return callCount
+    }
+
+    func next() -> Date {
+        lock.lock(); defer { lock.unlock() }
+        let date = dates[min(callCount, dates.count - 1)]
+        callCount += 1
+        return date
+    }
+}
+
 final class ArchiveExporterTests: XCTestCase {
 
     private var containerRoot: URL!
@@ -321,5 +345,46 @@ final class ArchiveExporterTests: XCTestCase {
         let report = try await exporter().export(into: destinationRoot)
 
         XCTAssertEqual(report.packageURL.lastPathComponent, "Raconte-export-20260906-233000")
+    }
+
+    // MARK: (h) Fix wave Finding 4 — `now()` is hoisted to ONE call, used for both the
+    // directory stamp and `manifest.exportedAt`. A stub that returns a DIFFERENT date on
+    // its second call catches a regression: two calls would stamp the directory from the
+    // FIRST date but the manifest from the SECOND, an inconsistency this asserts against
+    // directly (call count) rather than merely hoping the two happen to agree.
+
+    func testDirectoryStampAndManifestExportedAtComeFromTheSameSingleNowCall() async throws {
+        try buildFixture()
+        let counter = CallCounter(dates: [fixedNow, fixedNow.addingTimeInterval(3600)])
+        let exporter = ArchiveExporter(containerRoot: containerRoot, appVersion: "9.9", build: "test-build",
+                                       now: { counter.next() })
+
+        let report = try await exporter.export(into: destinationRoot)
+
+        XCTAssertEqual(counter.count, 1, "now() must be called exactly once per export")
+        XCTAssertEqual(report.packageURL.lastPathComponent, "Raconte-export-20260906-233000")
+
+        let manifestURL = report.packageURL.appendingPathComponent("raconte-export.json")
+        let manifest = try CaptureCoding.decoder().decode(ExportManifest.self,
+                                                          from: try Data(contentsOf: manifestURL))
+        XCTAssertEqual(manifest.exportedAt, fixedNow)
+    }
+
+    // MARK: (i) Fix wave Finding 5 — a stale `.part` staging directory left behind by a
+    // prior aborted export (a kill mid-write, never cleaned by the exporter's own
+    // catch-and-remove since that only runs for a throw IT catches) is cleared before
+    // staging fresh, so nothing it held rides along into the finished package.
+
+    func testStalePartDirectoryIsClearedBeforeExport() async throws {
+        try buildFixture()
+        let stalePart = destinationRoot.appendingPathComponent("Raconte-export-20260906-233000.part",
+                                                               isDirectory: true)
+        try FileManager.default.createDirectory(at: stalePart, withIntermediateDirectories: true)
+        try Data("leftover-from-a-crashed-export".utf8).write(to: stalePart.appendingPathComponent("junk.txt"))
+
+        let report = try await exporter().export(into: destinationRoot)
+
+        let packageContents = try FileManager.default.contentsOfDirectory(atPath: report.packageURL.path)
+        XCTAssertFalse(packageContents.contains("junk.txt"))
     }
 }

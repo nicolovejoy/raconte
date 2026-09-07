@@ -156,17 +156,33 @@ enum ArchiveVerifier {
     /// problem exists in this format — its bytes, if they differ from what the
     /// manifest recorded, are already caught above as a `.checksumMismatch` on that
     /// path).
+    ///
+    /// Files are visited in ASCENDING REVISION NUMBER order — parsed via
+    /// `SegmentLayout.canonicalRevision(fromFileName:)`, never `names.sorted()`
+    /// (lexicographic: `canonical-10.json` sorts before `canonical-2.json`) — and a
+    /// revision whose id was already claimed by a LOWER file number is dropped (Fix
+    /// wave Finding 1), matching `TranscriptRevisionStore.rawLoad`'s C1 rule exactly.
+    /// Without this, a duplicate/hand-corrupted-tree id at a higher file number can be
+    /// decoded as a second, distinct chain entry and wrongly win the `(createdAt, id)`
+    /// tiebreak, producing a false `.transcriptMismatch` against a package the exporter
+    /// itself wrote correctly.
     private static func rebuiltPlainText(captureID: String, packageURL: URL) -> String {
         let revisionsDir = packageURL.appendingPathComponent("entries/\(captureID)/revisions")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: revisionsDir.path)) ?? []
 
+        let numberedNames = names.compactMap { name -> (number: Int, name: String)? in
+            guard let number = SegmentLayout.canonicalRevision(fromFileName: name) else { return nil }
+            return (number, name)
+        }.sorted { $0.number < $1.number }
+
         let decoder = CaptureCoding.decoder()
         var revisions: [TranscriptRevision] = []
-        for name in names.sorted() {
-            guard SegmentLayout.canonicalRevision(fromFileName: name) != nil else { continue }
+        var seenIDs: Set<String> = []
+        for (_, name) in numberedNames {
             guard let data = try? Data(contentsOf: revisionsDir.appendingPathComponent(name)),
                   let revision = try? decoder.decode(TranscriptRevision.self, from: data)
             else { continue }
+            guard seenIDs.insert(revision.id).inserted else { continue }
             revisions.append(revision)
         }
 

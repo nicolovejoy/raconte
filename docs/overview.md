@@ -1,7 +1,7 @@
 # Raconte — how it works (current plan, plain words)
 
 A map of the system as it stands and where it's going. Mental models only — the
-reasoning and history live in the linked design docs. Updated 2026-08-16.
+reasoning and history live in the linked design docs. Updated 2026-09-07.
 
 ## The one idea
 
@@ -78,6 +78,15 @@ swept. Permanent deletion first renames the whole directory into a staging area
 so a half-finished delete can't resurrect an entry. Nothing in the app ever
 writes into a trashed or deleted capture.
 
+**Quarantine** extends the same promise to a corrupt sidecar. If `entry.json`
+exists but can't be parsed, the entry can't be filed, trashed or deleted the
+normal way — the Trash screen lists it under "Unreadable entries" and offers one
+action: quarantine. That renames `captures/<id>/` to
+`quarantine/<ULID>-<id>/`, out of reach of the scanner, of sync and of the
+permanent-delete sweep, and logs where it went. Nothing is destroyed; the
+directory just stops being live. On a device that also syncs, a later pull
+re-creates the entry from the healthy copy on the server, which is the point.
+
 Details: [M3 dogfood plan](plans/2026-08-02-m3-dogfood-mvp-plan.md),
 [staged removal](plans/archive/2026-08-05-staged-removal-build-prompts.md)
 
@@ -137,7 +146,7 @@ The mental model is closest to **a tiny git for one entry's transcript**:
   once, never edited. Higher file numbers do NOT mean newer.
 - Every revision names its **parent**, so revisions form a chain. Two kinds:
   **machine** revisions (the transcriber produced this) and **human** revisions
-  (you edited, or you accepted/declined a machine's proposal).
+  (you edited it, or you reverted to an older one).
 - **"Current" is computed, never stored**: the newest revision on the human
   side of the chain wins. `head.json` just caches that answer — delete it and
   the same answer is re-derived from the revision files.
@@ -147,20 +156,19 @@ The mental model is closest to **a tiny git for one entry's transcript**:
 ```mermaid
 flowchart LR
     live["live.jsonl\n(machine log)"] -- "promotion\n(automatic)" --> r0["rev 0\nmachine"]
+    m4a["recording.m4a"] -. "final pass\n(T8, ruled, unbuilt)" .-> r0
     r0 -- "you edit\n(splice)" --> r1["rev 1\nhuman"]
     r1 --> r2["rev 2\nhuman"]
-    r2 -- "revert" --> r0
-    retr["retranscription\n(T8, future)"] -. proposes .-> m2["rev M\nmachine"]
-    m2 -- "accept / decline\n(T8, future)" --> r3["rev 3\nhuman"]
-    r2 --> r3
+    r2 -- "revert to rev 0" --> r3["rev 3\nhuman\n(rev 0's text)"]
 ```
 
 **Promotion** (automatic, invisible): the live machine log is folded into
 revision 0, so the chain always starts from what the machine actually heard.
-Runs at finalize, at app launch, and when you open an entry.
+Runs at finalize, at app launch, and when you open an entry. T8 changes where
+revision 0 comes from — see below — but not that there is one.
 
-**Editing (T7 — built, on `t7/editor-ui`, pending Gate B + PR).** A full-screen,
-plain-text editor (Done only — no discard; see revert below for the undo story).
+**Editing (T7 — shipped).** A full-screen, plain-text editor (Done only — no
+discard; see revert below for the undo story).
 While you type, your text sits in a `draft.json`. When the edit session ends
 (done, 90 s idle, 60 min cap, or crash recovery), the draft is **spliced**
 against the text you were editing — a diff figures out which pieces you kept
@@ -178,8 +186,9 @@ remembers which audio frames it came from, with an honesty grade:
 - **none** — typed from nothing; no audio claim at all
 
 Edits can only *degrade* precision (exact → inherited → none), never invent it.
-The one exception: accepting a machine revision adopts its measured anchors
-verbatim. This is what will make tap-a-word-to-play-the-audio honest (#13).
+The one exception is a machine revision: a pass over the audio measures its own
+frames, so it arrives **exact** by construction rather than inheriting anything.
+This is what will make tap-a-word-to-play-the-audio honest (#13).
 One more exception, owner-ruled and shipped (Task 9b): retyping a whole word
 with no letters in common ("Ellen" → "LN") **inherits the replaced word's own
 frames**. It used to land as a zero-length **inherited** point pinned at the end
@@ -209,19 +218,36 @@ just not wired to this screen yet.
 
 **Revision history + revert (T7 Task 8).** A separate screen lists the WHOLE
 chain — current, its ancestors, and every detached machine revision, clearly
-labeled — and lets you revert to any of them. Revert mints a new revision (nothing
-is ever destroyed); it is the editor's entire undo story, since the editor itself
-has no discard.
+labeled — and lets you revert to any **machine** revision. (Reverting onto a
+human revision is refused: your own older text is reachable by editing, and the
+thing worth going back to is what the machine actually heard.) Revert mints a
+new revision — nothing is ever destroyed — and it is the editor's entire undo
+story, since the editor itself has no discard.
 
 **Metadata audit log (T7 Task 7).** Journal moves, backdates, and trash/restore
 are appended to `entry-log.jsonl` — written and exported, no UI yet (deliberate
 v1 scope; see §7 of the T6 design).
 
-**Retranscription (T8, future):** a better model re-reads the m4a and proposes a
-new machine revision. It never touches your text — you **accept** it (it becomes
-current), **decline** it (recorded, stays visible off to the side), or later
-**revert** to it using the mechanism T7 already built. All three are just new
-revisions; nothing is ever destroyed.
+**Retranscription (T8 — direction ruled 2026-09-07, not built).** The live
+transcript is a by-product of recording, not the transcript: it is what a
+streaming model could hear in real time, under whatever the microphone was doing
+at the moment. So the canonical transcript will come from a **post-capture final
+pass over `recording.m4a`** — a file the model can read at its own pace, whole.
+Two consequences, both deliberate:
+
+- **Editing is locked until that pass lands.** You never edit a transcript that
+  is about to be replaced, which deletes the merge problem outright rather than
+  solving it.
+- **If the pass fails, `live.jsonl` is promoted as a *provisional* revision
+  zero**, replaced when a later retry succeeds. You are never left with no
+  transcript, and a provisional one is never mistaken for the real one.
+
+Nothing here is written yet: the spec is the next architectural piece of work,
+and two questions are still open — how a long entry's pass survives in the
+background (it must not hang off a view's lifecycle), and what happens to
+entries that already carry a live transcript plus edits. An earlier plan had T8
+proposing a machine revision for you to accept or decline; **that is no longer
+the plan.**
 
 Details: [T6 design](plans/2026-08-03-t6-revision-chain-design.md) (§15/§15b =
 T6 as-built rulings, §16 = T7 as-built rulings, §17 = mark-voices as-built),
@@ -256,22 +282,29 @@ intrinsic size rather than the frame SwiftUI gave it — a full-resolution cover
 covered the whole capture screen and pushed the picker itself off the window. Moving the
 cover out of any `Menu` label removes the failure mode outright, not just the symptom.
 
-Entries dated outside their journal's span are meant to get a visible flag — cut from
-this build to keep it shorter, tracked separately. The span type and its containment
-check already ship; only the two display sites (`LibraryEntryRow`, `EntryDetailView`)
-don't yet.
+Entries dated outside their journal's span now carry a visible flag: a
+calendar-with-exclamation glyph on the library row, and a line above the transcript
+reading "Dated outside <journal>'s range (<span>)." It is a **flag, never a block** —
+nothing is disabled, nothing is refused, nothing is moved. The span is your claim about
+the paper journal; a date outside it is worth noticing, not worth arguing with.
 
 Details: [journal-editing IA design](plans/2026-08-18-journal-editing-ia-design.md).
 
-## 7. Navigation: a sidebar of places (nav — built, on `nav/split-view`, pending Gate B + PR)
+## 7. Navigation: a sidebar of places
 
 The app is one `NavigationSplitView` on both platforms. The sidebar lists **places** —
-Capture, one row per journal, All Entries, Trash, and (debug builds only) Debug — and
-selecting one shows that place in the detail column. **Capture is selected the moment
-the app launches.** On iPhone the split view collapses to a stack whose root is the
-places list, so the phone still opens straight into the capture screen exactly as
-before; the only visible change is a back chevron that reveals the sidebar. On Mac and
-iPad both columns show at once, Mail-style.
+Home, Capture, one row per journal, All Entries, Trash, About, and (debug builds only)
+Debug — and selecting one shows that place in the detail column. **Home is selected the
+moment the app launches**: a bookshelf of your journals, the most active few face-out,
+the rest as spines, with one New entry button. (Capture was the launch place until the
+bookshelf landed; the app is now a reading surface you record from, not a recorder you
+can browse from.) Journal rows are in display order — created-at, not per-device
+insertion history, or the same archive would sort differently on every device.
+
+On iPhone the split view collapses to a stack whose root is the places list, and the
+phone still lands directly on Home with no taps; the only visible change from the old
+world is a back chevron that reveals the sidebar. On Mac and iPad both columns show at
+once, Mail-style.
 
 While a recording is running, the Capture row in the sidebar shows a live indicator
 (red dot + elapsed time) — so a recording started, then navigated away from, is never
@@ -281,19 +314,32 @@ capture screen, so leaving the screen no longer risks the capture.
 Inside the detail column, the existing pushes are unchanged in kind: an entry list
 pushes to an entry's detail, which pushes to its transcript editor, Mark voices, or
 revision history. Back-is-Done still applies to all three — pressing back saves before
-leaving (on Mac, ⌘[ walks the list→detail hop).
+leaving (on Mac, ⌘[ walks the list→detail hop). Selecting a sidebar place clears that
+pushed path, which is why any screen that holds edits commits them on the way out
+rather than on a Done button; the one exception is a *background* change (a sync pull
+that removes the journal you were reading in), which reroutes to All Entries and keeps
+the entry you had open.
+
+Entry detail names its journal on its first line — or "Unfiled" — and that name is a
+link back to the journal's place, so an entry reached from All Entries is never
+context-free.
 
 ```mermaid
 flowchart LR
-    S["Sidebar\n(places)"] -->|"select"| P1["Capture"]
+    S["Sidebar\n(places)"] -->|"select, at launch"| P0["Home\n(bookshelf)"]
+    S -->|"select"| P1["Capture"]
     S -->|"select"| P2["Journal row"]
     S -->|"select"| P3["All Entries"]
     S -->|"select"| P4["Trash"]
+    S -->|"select"| P6["About"]
     S -->|"select, DEBUG only"| P5["Debug"]
+    P0 -->|"open a journal"| P2
     P2 --> L["Entry list\n(detail column)"]
     P3 --> L
     L -->|"push"| ED["Entry detail"]
     ED -->|"push"| EE["Transcript editor /\nMark voices /\nrevision history"]
+    ED -->|"journal link"| P2
+    P2 -->|"push (header tap)"| JE["Journal editor"]
 ```
 
 Two things this replaced, both load-bearing hacks tied to the capture screen's view
@@ -305,10 +351,16 @@ dispatch of finished-transcription/finalize-queue work had been running off a
 view-mounted hook too, and needed the same fix, or a capture finished while you were
 browsing elsewhere would silently never get encoded.
 
-Details: [navigation redesign design](plans/2026-08-17-navigation-redesign-design.md)
-(§11 = as-built rulings the design doc didn't anticipate).
+The capture screen itself was rebuilt on top of this once it was no longer permanently
+mounted: a fixed control bar a growing transcript cannot move, a live band, and a
+post-stop receipt card that tells you what you just recorded.
 
-## 8. Sync: your devices agree (M4)
+Details: [navigation redesign design](plans/2026-08-17-navigation-redesign-design.md)
+(§11 = as-built rulings the design doc didn't anticipate),
+[home bookshelf](plans/2026-08-29-home-bookshelf-design.md),
+[capture screen](plans/2026-08-30-118-capture-screen-design.md).
+
+## 8. Sync: your devices agree (M4 — shipped)
 
 **Each device tells iCloud what it wrote; immutable things upload once; the
 chain means edits never conflict.** Every device — phone, mini, laptop — holds
@@ -325,7 +377,8 @@ comes back from iCloud.
   done.** Nothing about them can conflict, because nothing about them can
   change. Two devices editing offline just mint two revisions off the same
   parent; once synced, both exist, "current" is computed the same way on every
-  device, and the other edit sits in history as a fork you can revert to.
+  device, and the other edit sits in history as a visible fork — nothing is
+  lost, and nothing had to be merged.
 - **Metadata that can change (a backdate, a journal's name, an entry's trash
   state) uses last-writer-wins, one field at a time.** A backdate set on the
   phone and a journal renamed on the Mac both survive, because they touched
@@ -338,25 +391,71 @@ comes back from iCloud.
   already handed to a device is never handed to it again, so anything that
   can't be used the moment it arrives has to be kept somewhere safe until it
   can be, not thrown away.
+- **Land or park — never drop.** That last rule is now enforced rather than
+  intended. iCloud hands a device each record exactly once, so an arrival the
+  app can't use yet (an asset that hasn't landed, a child whose parent hasn't
+  come down, an unreadable payload) used to be a permanent, silent loss. Every
+  such refusal now writes the record's name into a durable `sync/parked.json`
+  with the reason it was parked and how many times it's been retried. Parked
+  names are re-fetched from iCloud on every launch and again each time the app
+  comes to the foreground, and a clean ingest unparks. Two deliberate limits: a
+  name that has failed too many times is skipped on foreground but always
+  retried on a fresh launch, and a record that is simply gone from the server
+  unparks **loudly** in the log rather than sitting in the file forever. An
+  empty parked file is the healthy state.
 - **Trash is a synced flag, not a delete.** Only an actual permanent deletion —
   the 30-day sweep, or Delete Now — removes the record from iCloud, and that
   removal is final: there's no automatic re-send for a deleted entry, unlike a
   journal, which does get one (a deleted entry stays deleted; deleting a
   journal doesn't delete the entries in it, so nothing there is lost by
   re-sending it).
-- **A Debug screen (device builds only) shows the raw state**: is this device
-  currently connected to iCloud, when it last pushed, when it last pulled, how
-  many changes are still waiting to go out, and the last thing that went wrong.
-  Nothing user-facing surfaces sync status yet — that's later polish.
+- **The raw state is readable in the app**: account state, when this device last
+  pushed and last pulled, how many changes are still waiting to go out, the last
+  thing that went wrong, and the parked count with one row per parked name.
+  These rows are one shared section shown in two places — the Debug screen
+  (debug builds) and **About** (every build), so a release build on the phone
+  can still answer "is sync actually working."
 
 Details: [M4 sync design](plans/2026-08-17-m4-sync-design.md) (§10 = as-built
 deviations from the approved design).
+
+## 9. Export: the archive, off the app, in the open
+
+**iCloud is transport. The export package is longevity.** About → Archive →
+**Export archive…** writes the whole archive to a folder you pick: one directory
+per entry holding the audio, the sidecar, the marker files, every revision, and
+one derived, human-readable `transcript.md`. **Verify archive…** points at a
+package you already have and reads it back.
+
+Three rules make the package trustworthy:
+
+- **Everything is a byte-for-byte copy** except two files — `transcript.md`,
+  which is rendered fresh from the entry's current revision, and the manifest.
+  Nothing is reformatted, re-encoded or normalized, and an unreadable sidecar is
+  copied *as it is*, with a warning, never quietly excluded. You are archiving
+  what exists, not a curated subset.
+- **Every file carries a sha256, and the manifest is written last.** That
+  ordering is the whole invariant: `raconte-export.json` exists only if the copy
+  actually finished, so its mere presence is the completeness signal. The
+  package is staged under a `.part` name and renamed at the end, so a killed
+  export leaves nothing that looks finished.
+- **The verifier proves the package against itself**, never against the app's
+  container — the manifest it shipped, and the revision files inside the package.
+  It has to work on a USB stick years from now with nothing else around. It
+  distinguishes "the manifest is unreadable" from "a promised file is missing"
+  from "the bytes don't match the digest", and it never writes to the package.
+
+An export ends by verifying what it just wrote, so the two buttons are the same
+check run at two different moments.
+
+Details: [export package format](export-format.md) (layout, manifest fields, and
+a `jq | shasum -c` recipe for checking a package with no app at all).
 
 ## Where the project is
 
 ```mermaid
 flowchart LR
-    M1["M1 capture ✅"] --> M2["M2 live transcript ✅"] --> M3["M3 journals + library ✅\n(search pending)"] --> T6["T6 revision chain ✅"] --> T7["T7 editor UI ✅"] --> T8["T8 retranscribe"] --> M4["M4 iCloud sync"] --> M5["M5 reading polish\n+ export + migration"]
+    M1["M1 capture ✅"] --> M2["M2 live transcript ✅"] --> M3["M3 journals + library ✅\n(search pending)"] --> T6["T6 revision chain ✅"] --> T7["T7 editor UI ✅"] --> NAV["nav + home + capture screen ✅"] --> M4["M4 iCloud sync ✅\n(+ park/refetch)"] --> EX["export + verify ✅"] --> T8["T8 final pass\n(ruled, unbuilt)"] --> UE["unified editor"] --> M5["M5 reading polish\n+ search + migration"]
 ```
 
 Shipped and dogfooding on the phone and Mac: indestructible capture, live
@@ -364,23 +463,38 @@ on-device transcription, journals, backdates with spoken-date detection,
 library, trash, markers with voice rendering, the revision chain (T6), and the
 editor on top of it (T7 — editing, voice attribution surviving edits, marker
 correction, revision history and revert, metadata audit log). Since then: Mark
-voices mode for fixing attribution by hand, a fixed capture control bar that a
-growing transcript cannot move, and a post-stop receipt that tells you what you
-just recorded.
+voices mode for fixing attribution by hand; the sidebar-of-places navigation and
+the Home bookshelf; a rebuilt capture screen (fixed control bar, live band,
+post-stop receipt); iCloud sync, including park-never-drop for inbound records;
+quarantine for an unreadable sidecar; the out-of-span date flag; and the archive
+export with its verifier.
+
+The current Mac smoke build is **build 17 (2026-09-07)**, on which Verify
+archive… and the entry→journal link both passed. Build numbers and what each one
+carries are in [builds.md](builds.md); About → App → Build reads the number back.
 
 Next, in order:
 
-1. **T8 — retranscription** from the m4a, plus contextual biasing so "LN" stops
-   transcribing as "ellen" (#38), and the accept/decline UI T7 left uncalled.
+1. **T8 — the post-capture final pass** (§5). The direction is ruled; the spec is
+   the next architectural piece of work, and it is spec → plan → build, not a
+   patch. Two questions are open inside it: how a long entry's pass survives in
+   the background, and what happens to entries that already carry a live
+   transcript plus edits. Contextual biasing so "LN" stops transcribing as
+   "ellen" (#38) rides along with it.
 2. **The unified editor** (#60, #59) — one editor showing visible paragraph and
-   voice structure, replacing Mark voices mode; undo falls out of it. Two design
-   rulings still open.
-3. **M4 — CloudKit sync** (private iCloud DB). Built on `m4/sync` (§8 above);
-   final adversarial review and the acceptance gate — delete the app, reinstall,
-   everything comes back — remain before it merges to main. Only after that:
-   migrate the 36 frozen recountly.org entries in and tear the web app down
+   voice structure, replacing Mark voices mode; undo falls out of it. It comes
+   **after** T8, because T8 changes what a transcript is before you edit it. Two
+   design rulings still open.
+3. **The M4 acceptance gate — designed, never run.** Sync has run for three weeks,
+   but the promise it exists for has not been tested end to end: quit, move the
+   app container aside (never delete), relaunch, let sync settle, then export and
+   verify and compare the counts with the phone. Everything comes back, or M4
+   isn't done.
+4. **Migration and teardown** — bring the 36 frozen recountly.org entries in, then
+   take the web app down
    ([data model + migration](plans/2026-07-29-data-model-and-migration.md)).
-4. **M5 — reading polish**, search, verified open-format export.
+5. **M5 — reading polish** and search (the FTS index §2 promises; there is still
+   no database).
 
 Smaller queued work lives in the GitHub issues, not here.
 

@@ -3,6 +3,102 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-06/07 (laptop — overnight SDD run #2: 13 tasks, four PRs open, unit CI green)
+
+Reviewed the week, took four rulings from the owner before he left (slate = Phase 1
+hardening + export; #2 held; full-fidelity export with a folder picker; the M4 reinstall
+gate has NEVER been run), wrote `docs/plans/2026-09-06-overnight-hardening-export-plan.md`
+and ran it via SDD: four worktrees from `main` `2a1b4fbd`, two implementers at a time on
+disjoint branches, Sonnet for implementers and task reviewers, Opus for the four
+whole-branch reviews, one fix wave + one scoped re-review per branch. Owner merges in
+order **#150 → #152 → #153 → #151**, "Update branch" between each.
+
+- **PR #150** `feat/sync-land-or-park` — Closes #85, #91. Durable `sync/parked.json`;
+  every refusal in six ingest functions parks with a distinct reason and a clean ingest
+  unparks (three reviewers walked every early `return`); new engine verb
+  `refetch(recordNames:)` (chunked at 100, same `acceptRemote` path) run by
+  `retryParked` on launch (all names) and foreground (attempts < 10), gone-from-server
+  unparks loudly; `UnknownItemResend.plan` resends a NOT_FOUND child with its Entry in
+  the same event; `IngestDropReason` deleted as dead code. **Fixes FUTURE losses only**
+  — earlier drops were never parked. Unit **2124** (CI matched).
+- **PR #152** `feat/81-unreadable-entry-repair` — Closes #81. `StagedRemover.quarantine`
+  renames `captures/<id>/` into `<container>/quarantine/<ULID>-<id>/` (not backup-excluded,
+  invisible to sync and to `purge()`); Trash screen "Unreadable entries" section with a
+  confirmed Quarantine action; destination logged at `.notice`. Recovery by hand is
+  macOS-only (iOS container is not browsable). A resync re-creates the capture from the
+  healthy server sidecar, by design. Unit 2088, UI **63** (+1 `TrashRepairUITests`).
+- **PR #153** `feat/small-debt-2026-09-06` — Closes #71; #67 items 2, 3, 4 (commented,
+  not closed). Out-of-span glyph + detail sentence, flagged never blocked;
+  `PlaceRouting.reroute` keeps a pushed **entry** when a journals pull removes the
+  current journal (routing rule proven; the SwiftUI path-survival half is unverified and
+  unreachable from a UI test); `journalDateLines` once per rescan; `CaptureLiveBadge` is
+  the only `.elapsed` reader; `formatDuration` → `RecFormat.clock` (rounding became
+  truncation). Unit 2101.
+- **PR #151** `feat/archive-export` — the v1 export. About → Archive → Export archive…
+  → folder picker → byte-copy package with a derived `transcript.md`, sha256 for every
+  file, manifest written last, `.part` staging; `ArchiveVerifier` reads it back from its
+  own `revisions/` (with the C1 dedupe rule); `docs/export-format.md` incl. a
+  `jq | shasum -c` recipe; user-selected-files entitlement in all three files. Unit 2117.
+  New issues: #154 Verify archive… row, #155 `CaptureView.statusRow` per-tick
+  re-evaluation, #156 parked count on Debug/About.
+
+Process: 13 tasks, 8 task-level fix rounds, 4 branch fix waves, zero breaker trips, no
+rate-limit hit. One stall (Task 9: a foreground UI run past the Bash tool's 120 s default
+auto-backgrounded — new memory). One reviewer false positive (a fallback granted in the
+dispatch, invisible to the reviewer — new memory). One plan-authored test turned
+tautological by its own task's refactor, caught only at the Opus branch review — new
+memory. **The UI CI jobs on all four PRs were still running at handoff (~37 min each,
+queued behind one another); unit CI matched the local counts exactly on #150/#151/#152.**
+Worktrees under `.worktrees/` are left in place until the PRs merge.
+## Session 2026-09-06 (laptop — merge sequence: #142 in, #143 conflict resolved and pushed)
+
+Owner merged **PR #142**; main went green (**unit 2051 (1 skipped), UI 61** — matching the
+plan's prediction exactly). Resolved **#143**'s predicted conflict locally, since GitHub's
+**Update branch** cannot auto-merge a content conflict: `origin/main` merged into the branch,
+one conflict in `CaptureScreenModel.finishCurrentCapture`, resolved to main's tail plus the
+new line (`buildReceipt(for: transcribed)` → `advanceBackdateForNextEntry()` →
+`coordinator = spawn()`). Straggler grep across all three targets for `discardingID`,
+`showDiscardNotice`, `discardNotice`, `discardNoticeTask`: zero hits. Merge commit `23354e54`
+pushed; #143 is MERGEABLE with unit CI green at 2064.
+
+- **A branch that adds a SOURCE file needs `xcodegen generate` too, not just a test file.**
+  The first local build after checking out #143 failed `Cannot find 'Clipboard' in scope` —
+  `Raconte/App/Clipboard.swift` is new on that branch and the gitignored `.xcodeproj` predated
+  the checkout. Reads exactly like a bad merge and is not one. Regen before blaming the code.
+- **Re-derive predicted test counts against the CURRENT base, never the PR body's.** #143's
+  body predicted 2073/63 against a pre-#142 main (2060/62); #142 removed the discard path and
+  its tests, dropping main to 2051/61, so the real target was **2064/62**. Both the body's
+  absolutes were wrong and its deltas were right — the dangerous shape.
+- **The UI job costs ~37 minutes of wall clock every push** (2190 s for 61 tests). Three PRs
+  still to update-and-merge means roughly two more hours of runner time in the sequence.
+
+## Session 2026-09-06 (laptop — slate merged, build 14 smoked 8/8, build 15 to TestFlight)
+
+Owner merged **#143 → #144 → #145 → #146**. Main's tip run tested the whole combination and
+is green: **unit 2082 (1 skipped), UI 62, 0 failures** — that is the baseline, read out of
+run `34046973383`. The #144 and #145 runs show `cancelled` because the merges landed within
+90 seconds of each other and the tip run superseded them; that is fine here only because the
+tip run tested everything at once.
+
+Built macOS **build 14** from `28dbf0c2`, verified it carried #143/#145/#146 symbols and the
+iCloud entitlement, and smoked it: **8/8 pass** — build stamp, sidebar indent, no Discard,
+Copy transcript, next-day backdate (and correctly NOT advancing at Month precision), the live
+¶ break at the tap, and the break surviving the commit.
+
+- **Three stale build-13 `Raconte.app` bundles were sitting in DerivedData**, all plain-named,
+  all ranking in Spotlight beside the staged build. The owner relaunched via Spotlight and
+  reported two real-looking failures (¶ break "definitely did not work"; stop took him to "an
+  old screen") that were only build 13. Deleted them. **New protocol, at his request:** every
+  smoke request states the build number, step 1 is "About shows build N", and the app is
+  handed over as a clickable bare `file://` URL — never a Spotlight search. New memory.
+- **`Raconte/Info.plist` is tracked generated output and had drifted.** #141 bumped
+  `project.yml` 13 → 14 without committing the regenerated plist, so the checked-in plist
+  still read 13; only a local `xcodegen generate` made the build honest. Now committed in step.
+- **Build 14 is the Mac smoke; TestFlight is 15.** `project.yml`'s own rule is to bump for
+  every owner-facing build, smoke or TestFlight, so the handoff note saying "TestFlight uses
+  14" went stale the moment the Mac build was handed over. Uploaded 15 via
+  `scripts/upload_testflight.sh ios` — archive and upload both succeeded, 14:58 PT.
+
 ## Session 2026-09-05/06 (laptop — overnight SDD run: 13 tasks, five PRs open, CI green)
 
 Owner approved the slate at 21:00 and went to bed; the run ended at 04:00 with five PRs open

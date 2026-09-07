@@ -391,7 +391,7 @@ final class ArchiveExporterTests: XCTestCase {
     // MARK: (j) Fix wave Finding 9 — `ExportRunner.cancelled()` returns to `.idle`
     // regardless of what state it was in, so `AboutView`'s `.fileImporter` routing a
     // `CocoaError.userCancelled` failure there (instead of `fail(_:)`) never leaves the
-    // screen showing an "Export failed" row for the owner simply dismissing the picker.
+    // screen showing a "Failed: …" row for the owner simply dismissing the picker.
 
     @MainActor
     func testExportRunnerCancelledReturnsToIdle() {

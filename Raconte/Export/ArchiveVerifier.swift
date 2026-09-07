@@ -58,7 +58,7 @@ enum ArchiveVerifier {
             manifest = try CaptureCoding.decoder().decode(ExportManifest.self, from: data)
         } catch {
             return Report(checkedFiles: 0,
-                          problems: [.manifestUnreadable("\(manifestFileName): \(error)")])
+                          problems: [.manifestUnreadable("\(manifestFileName): \(error.localizedDescription)")])
         }
 
         let onDiskPaths = onDiskRelativePaths(under: packageURL, excluding: manifestFileName)

@@ -93,7 +93,7 @@ struct AboutView: View {
                     showingArchivePicker = true
                 }
                 .accessibilityIdentifier("about.export")
-                .disabled(exportRunner.state == .running)
+                .disabled(exportRunner.isRunning)
 
                 // #154: the same verifier the export runs, over a package picked from
                 // anywhere — a years-old copy on a USB stick, or the M4 gate's fresh
@@ -103,12 +103,16 @@ struct AboutView: View {
                     showingArchivePicker = true
                 }
                 .accessibilityIdentifier("about.verify")
-                .disabled(exportRunner.state == .running)
+                .disabled(exportRunner.isRunning)
 
-                if exportRunner.state == .running {
+                // Fix wave Finding 2: the label reads the RUNNER's own state, not
+                // view-local `archivePickerMode` — navigating away from About mid-verify
+                // and back must still show "Verifying…", not whatever the picker mode
+                // happened to be left at.
+                if case let .running(verifying) = exportRunner.state {
                     HStack {
                         ProgressView()
-                        Text(archivePickerMode == .verify ? "Verifying…" : "Exporting…")
+                        Text(verifying ? "Verifying…" : "Exporting…")
                             .font(.body)
                     }
                     .accessibilityIdentifier("about.export.progress")
@@ -174,7 +178,7 @@ struct AboutView: View {
     private var exportResultText: String? {
         switch exportRunner.state {
         case .idle, .running:
-            return nil
+            return nil // .running matches regardless of `verifying:` payload
         case let .finished(report, verification):
             let folderName = report.packageURL.deletingLastPathComponent().lastPathComponent
             if verification.ok {

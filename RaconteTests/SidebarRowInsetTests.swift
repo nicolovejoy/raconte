@@ -28,14 +28,6 @@ final class SidebarRowInsetTests: XCTestCase {
     /// not a behavioral test — SwiftUI's fine-grained `@Observable` invalidation isn't
     /// otherwise directly assertable from XCTest.
     func testSidebarViewNoLongerReadsElapsedAndTheBadgeDoes() throws {
-        func source(_ relativePath: String) throws -> String {
-            let url = URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()      // RaconteTests
-                .deletingLastPathComponent()      // repo root
-                .appendingPathComponent(relativePath)
-            return strippingComments(try String(contentsOf: url, encoding: .utf8))
-        }
-
         let sidebarView = try source("Raconte/App/SidebarView.swift")
         XCTAssertFalse(sidebarView.contains(".elapsed"),
                        "SidebarView must not read .elapsed itself — CaptureLiveBadge owns that read")
@@ -43,5 +35,38 @@ final class SidebarRowInsetTests: XCTestCase {
         let badge = try source("Raconte/App/CaptureLiveBadge.swift")
         XCTAssertTrue(badge.contains(".elapsed"),
                       "CaptureLiveBadge must be the view that reads .elapsed")
+    }
+
+    // MARK: - Capture screen containment (#155): the same read, moved out of CaptureView
+
+    /// `CaptureStatusReadout` and `CaptureMicMeterReadout` are the only views on the
+    /// capture screen that may read tick-rate coordinator state (`.elapsed`, `.micLevel`
+    /// — both assigned by `CaptureCoordinator.tick()` on its ~100 ms loop); `CaptureView`
+    /// must no longer re-evaluate its whole body on every tick while recording. Same shape
+    /// as the sidebar pin above — a source pin, because `@Observable` invalidation
+    /// granularity is not assertable from XCTest.
+    func testCaptureViewNoLongerReadsTickRateStateAndTheReadoutsDo() throws {
+        let captureView = try source("Raconte/Capture/UI/CaptureView.swift")
+        XCTAssertFalse(captureView.contains(".elapsed"),
+                       "CaptureView must not read .elapsed itself — CaptureStatusReadout owns that read")
+        XCTAssertFalse(captureView.contains(".micLevel"),
+                       "CaptureView must not read .micLevel itself — CaptureMicMeterReadout owns that read")
+
+        let readout = try source("Raconte/Capture/UI/CaptureStatusReadout.swift")
+        XCTAssertTrue(readout.contains(".elapsed"),
+                      "CaptureStatusReadout must be the view that reads .elapsed")
+
+        let micReadout = try source("Raconte/Capture/UI/CaptureMicMeterReadout.swift")
+        XCTAssertTrue(micReadout.contains(".micLevel"),
+                      "CaptureMicMeterReadout must be the view that reads .micLevel")
+    }
+
+    /// Repo-relative source, comments stripped, for the containment pins below.
+    private func source(_ relativePath: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()      // RaconteTests
+            .deletingLastPathComponent()      // repo root
+            .appendingPathComponent(relativePath)
+        return strippingComments(try String(contentsOf: url, encoding: .utf8))
     }
 }

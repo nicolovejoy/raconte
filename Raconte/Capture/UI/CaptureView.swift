@@ -197,8 +197,7 @@ struct CaptureView: View {
         VStack(spacing: CaptureControlBarMetrics.rowSpacing) {
             statusRow
 
-            MicMeter(level: model.coordinator.micLevel,
-                     isLive: model.coordinator.phase == .recording)
+            CaptureMicMeterReadout(coordinator: model.coordinator)
 
             recordRow
         }
@@ -222,11 +221,14 @@ struct CaptureView: View {
     /// build measured 151 pt of exactly that before reserving space in every phase. The
     /// status string is the variable-length part and `RecStatusLine` shrinks it instead of
     /// wrapping; Done is reserved here for the same reason it was reserved before.
+    ///
+    /// The tick-rate `elapsed` read lives in `CaptureStatusReadout`, and the `micLevel`
+    /// read lives in `CaptureMicMeterReadout`, not here (#155) — this row itself reads
+    /// nothing that changes on `CaptureCoordinator.tick()`'s ~100 ms loop, so recording
+    /// no longer re-evaluates the whole screen roughly ten times a second.
     private var statusRow: some View {
         HStack(spacing: 12) {
-            RecStatusLine(phase: model.coordinator.phase,
-                          canResume: model.coordinator.canResume,
-                          elapsed: model.coordinator.elapsed)
+            CaptureStatusReadout(coordinator: model.coordinator)
 
             Spacer(minLength: 8)
 

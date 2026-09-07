@@ -103,4 +103,42 @@ final class EntryDetailSheetUITests: XCTestCase {
         XCTAssertTrue(sheet.waitForNonExistence(timeout: 10), "info sheet still present after Copy transcript")
         XCTAssertTrue(more.exists, "detail screen's `⋯` button should still be present after the sheet dismisses")
     }
+
+    /// #148: the detail screen names its journal and the name opens that journal.
+    /// The seed's entry starts unfiled, so the test files it first through the existing
+    /// info-sheet → Move → New Journal… flow, then reads the link that appears.
+    func testJournalRowNamesTheJournalAndOpensIt() {
+        let app = launchApp()
+        openFirstEntry(app)
+
+        let unfiled = app.descendants(matching: .any).matching(identifier: "detail.journalUnfiled").firstMatch
+        XCTAssertTrue(unfiled.waitForExistence(timeout: 15), "an unfiled entry must say so")
+
+        let more = app.buttons["detail.moreButton"].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 15))
+        more.tap()
+        let sheet = app.descendants(matching: .any).matching(identifier: "detail.infoSheet").firstMatch
+        XCTAssertTrue(sheet.waitForExistence(timeout: 15))
+        app.descendants(matching: .any).matching(identifier: "detail.journalPicker").firstMatch.tap()
+
+        let newJournal = app.descendants(matching: .any).matching(identifier: "journalPicker.new").firstMatch
+        XCTAssertTrue(newJournal.waitForExistence(timeout: 15), "picker has no New Journal… row")
+        newJournal.tap()
+        // #66: a SwiftUI identifier on an `.alert` TextField does not bridge onto the
+        // UIAlertController field; it is the only text field on screen here.
+        let field = app.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 15))
+        field.tap()
+        field.typeText("Blue rabbit 2027")
+        app.buttons["Create"].firstMatch.tap()
+
+        let link = app.descendants(matching: .any).matching(identifier: "detail.journalLink").firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 15), "a filed entry shows no journal link")
+        XCTAssertTrue(link.label.contains("Blue rabbit 2027"), "link label was: \(link.label)")
+        link.tap()
+
+        let header = app.descendants(matching: .any).matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15), "the link did not open the journal")
+        XCTAssertTrue(header.label.contains("Blue rabbit 2027"), "header label was: \(header.label)")
+    }
 }

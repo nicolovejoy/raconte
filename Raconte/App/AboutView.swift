@@ -120,7 +120,14 @@ struct AboutView: View {
                      allowsMultipleSelection: false) { result in
             switch result {
             case .failure(let error):
-                exportRunner.fail(String(describing: error))
+                // Fix wave Finding 9: dismissing the picker without choosing a folder
+                // is not a failure — route it to `.idle`, not `.failed`, and keep the
+                // raw error text for every other (real) failure.
+                if (error as? CocoaError)?.code == .userCancelled {
+                    exportRunner.cancelled()
+                } else {
+                    exportRunner.fail(String(describing: error))
+                }
             case .success(let urls):
                 guard let destination = urls.first else { return }
                 Task {

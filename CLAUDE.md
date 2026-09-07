@@ -2,128 +2,72 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-05/06 (laptop — overnight SDD run: 13 tasks, five PRs open, CI green)
+## Session 2026-09-06/07 (laptop — overnight SDD run #2: 13 tasks, four PRs open, unit CI green)
 
-Planned and ran the owner-approved overnight slate via SDD
-(`docs/plans/2026-09-05-overnight-fixes-plan.md`): one plan, five branches from `main`
-`95c1c0b5`, each ending at an open PR for the owner to merge in order. Per-task spec +
-quality reviews on every task; whole-branch Opus reviews on PRs 1, 2 and 4 (PRs 3 and 5
-are single-task, so the task review was the branch review). Every PR's CI counts were read
-out of the job logs and matched the plan's predictions exactly.
+Reviewed the week, took four rulings from the owner before he left (slate = Phase 1
+hardening + export; #2 held; full-fidelity export with a folder picker; the M4 reinstall
+gate has NEVER been run), wrote `docs/plans/2026-09-06-overnight-hardening-export-plan.md`
+and ran it via SDD: four worktrees from `main` `2a1b4fbd`, two implementers at a time on
+disjoint branches, Sonnet for implementers and task reviewers, Opus for the four
+whole-branch reviews, one fix wave + one scoped re-review per branch. Owner merges in
+order **#150 → #152 → #153 → #151**, "Update branch" between each.
 
-- **PR #142** capture: Discard button AND the whole discard path removed (#140, #123 moot);
-  `selectedJournalCover` deleted (#130); **#122 fixed** — `finalizeQueue` was append-only, so
-  the launch-recovered backlog stayed queued and the next capture's early `.captured` flip
-  drained it, respawned the coordinator and orphaned the real capture; fix is
-  `CaptureCoordinator.consumeFinalized(_:)` after bootstrap's drain, RED proven in two stages.
-  Unit 2051, UI 61.
-- **PR #143** small fixes: sidebar journal rows indented (#139); one
-  `entryCount(forJournal:)` rule (#75); span round-trip pin (#77); day-precision backdate
-  pre-fills the NEXT day after a capture commits, `.day` only, never future (#47 — the
-  year-month guard test was vacuous until a mutation proof caught it); Copy transcript row in
-  the ⋯ sheet, `Clipboard.copy` UIKit/AppKit split (#105). Unit 2073, UI 63. **Expected
-  one-hunk conflict with #142 in `finishCurrentCapture`** — resolution is in the PR body.
-- **PR #144** About → Build reads `build 14: <date>`; `CFBundleVersion` 13 → 14;
-  `docs/builds.md` starts at 14 (#141). Unit 2064, UI 62.
-- **PR #145** core hardening: per-call staging name for `createExclusively` (#43);
-  `TranscriptChain.mintInstant` ms-truncated and strictly after the tip (#43/#51 local half);
-  `Journal`/`EntryMetadata` preserve unknown JSON keys via `JSONValue`, encode side filters
-  claimed keys (#70 on-disk half). **Does not close #51 or #70** — residual comments posted on
-  both (cross-device equal-ms tie; CloudKit record builders read only named fields). Unit 2069.
-- **PR #146** live transcript shows the ¶ break at the tap's frame; the nearer-edge cut rule is
-  now one shared `TranscriptAttribution.cutIndex(forFrame:ranges:)` so live and post-hoc agree
-  (#136). Unit 2065. Owner smoke is the only end-to-end check.
+- **PR #150** `feat/sync-land-or-park` — Closes #85, #91. Durable `sync/parked.json`;
+  every refusal in six ingest functions parks with a distinct reason and a clean ingest
+  unparks (three reviewers walked every early `return`); new engine verb
+  `refetch(recordNames:)` (chunked at 100, same `acceptRemote` path) run by
+  `retryParked` on launch (all names) and foreground (attempts < 10), gone-from-server
+  unparks loudly; `UnknownItemResend.plan` resends a NOT_FOUND child with its Entry in
+  the same event; `IngestDropReason` deleted as dead code. **Fixes FUTURE losses only**
+  — earlier drops were never parked. Unit **2124** (CI matched).
+- **PR #152** `feat/81-unreadable-entry-repair` — Closes #81. `StagedRemover.quarantine`
+  renames `captures/<id>/` into `<container>/quarantine/<ULID>-<id>/` (not backup-excluded,
+  invisible to sync and to `purge()`); Trash screen "Unreadable entries" section with a
+  confirmed Quarantine action; destination logged at `.notice`. Recovery by hand is
+  macOS-only (iOS container is not browsable). A resync re-creates the capture from the
+  healthy server sidecar, by design. Unit 2088, UI **63** (+1 `TrashRepairUITests`).
+- **PR #153** `feat/small-debt-2026-09-06` — Closes #71; #67 items 2, 3, 4 (commented,
+  not closed). Out-of-span glyph + detail sentence, flagged never blocked;
+  `PlaceRouting.reroute` keeps a pushed **entry** when a journals pull removes the
+  current journal (routing rule proven; the SwiftUI path-survival half is unverified and
+  unreachable from a UI test); `journalDateLines` once per rescan; `CaptureLiveBadge` is
+  the only `.elapsed` reader; `formatDuration` → `RecFormat.clock` (rounding became
+  truncation). Unit 2101.
+- **PR #151** `feat/archive-export` — the v1 export. About → Archive → Export archive…
+  → folder picker → byte-copy package with a derived `transcript.md`, sha256 for every
+  file, manifest written last, `.part` staging; `ArchiveVerifier` reads it back from its
+  own `revisions/` (with the C1 dedupe rule); `docs/export-format.md` incl. a
+  `jq | shasum -c` recipe; user-selected-files entitlement in all three files. Unit 2117.
+  New issues: #154 Verify archive… row, #155 `CaptureView.statusRow` per-tick
+  re-evaluation, #156 parked count on Debug/About.
 
-Process notes: the account rate limit hit at 22:16 and reset at 01:40 (3.4 h lost); two
-implementers stalled on the same Task 8 UI test (a runner-side `UIPasteboard` read hangs
-XCUITest — new memory); one implementer's report cited a brief note that did not exist and
-was corrected. `caffeinate -ims -w <claude pid> -t 32400` kept the laptop awake.
+Process: 13 tasks, 8 task-level fix rounds, 4 branch fix waves, zero breaker trips, no
+rate-limit hit. One stall (Task 9: a foreground UI run past the Bash tool's 120 s default
+auto-backgrounded — new memory). One reviewer false positive (a fallback granted in the
+dispatch, invisible to the reviewer — new memory). One plan-authored test turned
+tautological by its own task's refactor, caught only at the Opus branch review — new
+memory. **The UI CI jobs on all four PRs were still running at handoff (~37 min each,
+queued behind one another); unit CI matched the local counts exactly on #150/#151/#152.**
+Worktrees under `.worktrees/` are left in place until the PRs merge.
 
 **Next steps:**
-1. **Device smoke on the iPhone — build 15**, uploaded to TestFlight 2026-09-06 14:58 PT.
-   Confirm TestFlight shows **15** and About → App → Build reads `build 15: Sep 6` BEFORE
-   testing anything. Then: record → BN flips to LN → live band dims the hypothesis but not
-   the settled tail → ¶ break lands at the tap → stop → receipt card with Open → no Discard
-   anywhere. Fill in the outcome on `docs/builds.md` row 15.
-2. **Deferred minors** (ledger, all non-blocking): `JournalPickerSheet.entryCount` closure is
-   `Int?` for no caller; `advanceBackdateForNextEntry(now:)` seam never injected; `copyText`
-   drops voice labels; `TranscriptRevisionStore` `mintInstant(now:after: [])` cosmetic;
-   nothing sweeps `transcript/*.part` strays. **Invite Lori** (unchanged). **Parked:** #86,
-   #91/#85, `MarkerControlsModel`'s two constant show flags.
-3. **recountly.org teardown is HELD — do not delete anything.** The owner asked to retire
-   it on the belief it held only test data. It does not: **36 entries, 4 journals, 34 audio
-   files, 39.5 MB**, of which **18 are substantive personal entries** and **23 of the audio
-   files are the `imp_`-prefixed paper-archive imports** the plan of record names (they
-   belong to no journal, which is why "Nicholas' travel notes 1998" reads as empty). Owner
-   accepted the correction. **Full backup taken: `~/recountly-export-2026-09-06/`** — all
-   rows as JSON with full transcripts, all 34 audio files, sha256 manifest, README
-   inventory. Nothing was torn down. Live resources still up: Vercel project `recountly`
-   (`prj_IxCq9E2HyOjOrLgWdoDQM9a8ZMf9`), Neon `recountly-db`
-   (`billowing-sky-08777171`), blob store `recountly-audio-priv`
-   (`store_TRuOEBLTjj2ja7QE`). The GitHub repo is already archived. `recountly.org` is a
-   third-party-registered domain, so keeping it needs no action. **Migrate before tearing
-   down** — the open fork is whether migrated audio gets re-transcribed on device (real
-   frame anchors, markable) or carries the web transcript with `none`-grade anchors.
-4. **Read `docs/plans/2026-09-06-roadmap-review-and-phases.md`** — an unattended review of
-   all 40 open issues proposing a seven-phase order. Headline, verified against the code:
-   **export, migration and search — the three things the plan of record called
-   non-negotiable for v1 — are the three things not built.** Four open questions at the
-   end need owner answers, chiefly whether the M4 acceptance gate (delete the app,
-   reinstall, archive reconstructs from CloudKit) has ever actually been run.
-5. **New from the build 14 smoke:** #148 (Open from the receipt should leave the capture
-   space and land on the entry inside its journal — the sidebar stays on Capture today, so
-   the detail view has no journal context), #149 (backdate sheet UX pass + a design system;
-   the too-light text is a blanket `.opacity(0.45)` stacking on `.disabled`, not a colour
-   token). #106 now carries the cover-lightbox proposal (#147 closed as its duplicate).
-
-## Session 2026-09-06 (laptop — merge sequence: #142 in, #143 conflict resolved and pushed)
-
-Owner merged **PR #142**; main went green (**unit 2051 (1 skipped), UI 61** — matching the
-plan's prediction exactly). Resolved **#143**'s predicted conflict locally, since GitHub's
-**Update branch** cannot auto-merge a content conflict: `origin/main` merged into the branch,
-one conflict in `CaptureScreenModel.finishCurrentCapture`, resolved to main's tail plus the
-new line (`buildReceipt(for: transcribed)` → `advanceBackdateForNextEntry()` →
-`coordinator = spawn()`). Straggler grep across all three targets for `discardingID`,
-`showDiscardNotice`, `discardNotice`, `discardNoticeTask`: zero hits. Merge commit `23354e54`
-pushed; #143 is MERGEABLE with unit CI green at 2064.
-
-- **A branch that adds a SOURCE file needs `xcodegen generate` too, not just a test file.**
-  The first local build after checking out #143 failed `Cannot find 'Clipboard' in scope` —
-  `Raconte/App/Clipboard.swift` is new on that branch and the gitignored `.xcodeproj` predated
-  the checkout. Reads exactly like a bad merge and is not one. Regen before blaming the code.
-- **Re-derive predicted test counts against the CURRENT base, never the PR body's.** #143's
-  body predicted 2073/63 against a pre-#142 main (2060/62); #142 removed the discard path and
-  its tests, dropping main to 2051/61, so the real target was **2064/62**. Both the body's
-  absolutes were wrong and its deltas were right — the dangerous shape.
-- **The UI job costs ~37 minutes of wall clock every push** (2190 s for 61 tests). Three PRs
-  still to update-and-merge means roughly two more hours of runner time in the sequence.
-
-## Session 2026-09-06 (laptop — slate merged, build 14 smoked 8/8, build 15 to TestFlight)
-
-Owner merged **#143 → #144 → #145 → #146**. Main's tip run tested the whole combination and
-is green: **unit 2082 (1 skipped), UI 62, 0 failures** — that is the baseline, read out of
-run `34046973383`. The #144 and #145 runs show `cancelled` because the merges landed within
-90 seconds of each other and the tip run superseded them; that is fine here only because the
-tip run tested everything at once.
-
-Built macOS **build 14** from `28dbf0c2`, verified it carried #143/#145/#146 symbols and the
-iCloud entitlement, and smoked it: **8/8 pass** — build stamp, sidebar indent, no Discard,
-Copy transcript, next-day backdate (and correctly NOT advancing at Month precision), the live
-¶ break at the tap, and the break surviving the commit.
-
-- **Three stale build-13 `Raconte.app` bundles were sitting in DerivedData**, all plain-named,
-  all ranking in Spotlight beside the staged build. The owner relaunched via Spotlight and
-  reported two real-looking failures (¶ break "definitely did not work"; stop took him to "an
-  old screen") that were only build 13. Deleted them. **New protocol, at his request:** every
-  smoke request states the build number, step 1 is "About shows build N", and the app is
-  handed over as a clickable bare `file://` URL — never a Spotlight search. New memory.
-- **`Raconte/Info.plist` is tracked generated output and had drifted.** #141 bumped
-  `project.yml` 13 → 14 without committing the regenerated plist, so the checked-in plist
-  still read 13; only a local `xcodegen generate` made the build honest. Now committed in step.
-- **Build 14 is the Mac smoke; TestFlight is 15.** `project.yml`'s own rule is to bump for
-  every owner-facing build, smoke or TestFlight, so the handoff note saying "TestFlight uses
-  14" went stale the moment the Mac build was handed over. Uploaded 15 via
-  `scripts/upload_testflight.sh ios` — archive and upload both succeeded, 14:58 PT.
+1. **Merge #150 → #152 → #153 → #151** after confirming each PR's UI job is green (`gh pr
+   checks N`; expected UI 62 / 63 / 62 / 62) and hitting **Update branch** before each.
+   The four branches have disjoint file sets, so conflicts are not expected; the
+   update-branch CI run is the proof.
+2. **Device smoke, build 15 first** (unchanged from the last handoff), then a **Mac smoke
+   of the merged main** as build 16: export to an external volume and verify; corrupt one
+   `entry.json` → Trash shows the section → quarantine → journal deletes; span a journal
+   → glyph and sentence; record past the sidebar clock. Self-contained steps are in each
+   PR body.
+3. **M4 acceptance gate, never run** — with a synced Mac: quit, move
+   `~/Library/Application Support/Raconte` aside (never delete), relaunch, let sync settle,
+   export with #151's action, verify, compare counts with the iPhone. Only after this
+   passes does any recountly teardown get scheduled (the backup at
+   `~/recountly-export-2026-09-06/` stands).
+4. Owner questions still open from the roadmap review: re-transcribe migrated audio or
+   carry the web transcript; #133 v1 or v2. #50 needs its own design pass (head.json
+   fingerprint) — deliberately not built. #2 held.
 
 ## What Raconte is
 

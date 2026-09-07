@@ -607,4 +607,99 @@ final class SyncEntryIngestTests: XCTestCase {
         await ex.acceptRemote(audioRecord(bytes: Data("m4a-bytes".utf8)))
         // No assertion beyond "did not crash" — there is nothing to check without a root.
     }
+
+    /// Fix round 1 (Important 4): with no container root wired, `bookkeeping` is still
+    /// reachable — it is a separate constructor parameter, wired to a real
+    /// `SyncBookkeepingStore` over the TEST's own container root, independent of the
+    /// exchange's own optional `containerRoot`. The record name — the only thing left
+    /// to hold onto — must be parked rather than silently dropped.
+    func testWithNoContainerRootWiredTheRecordNameIsParked() async throws {
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let ex = SyncRecordExchange(
+            journalStore: store, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: "device-low")   // no containerRoot
+
+        let record = audioRecord(bytes: Data("m4a-bytes".utf8))
+        await ex.acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "no container root wired")
+    }
+
+    /// Fix round 1 (Important 5): a local write failure right before persist (here, a
+    /// plain file squatting where `final/` must be a directory) used to return unparked
+    /// — the guard/sha checks all passed, so the bytes were validated and then lost with
+    /// no diagnostic trail. Forced via a real filesystem collision, not a mock.
+    func testALocalWriteFailureForAudioIsParked() async throws {
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: SegmentLayout.finalDirectory(captureDirectory: stagingDirectory))
+
+        let record = audioRecord(bytes: Data("m4a-bytes".utf8))
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
+    }
+
+    /// Same fix, the `ingestLiveLog` side: a plain file squatting where `transcript/`
+    /// must be a directory.
+    func testALocalWriteFailureForLiveLogIsParked() async throws {
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(
+            to: SegmentLayout.transcriptDirectory(captureDirectory: stagingDirectory))
+
+        let record = liveLogRecord(bytes: Data("{}\n".utf8))
+        await exchange().acceptRemote(record)
+
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "local write failed")
+    }
+
+    /// Fix round 1 (Critical 1): with the capture ALREADY existing locally but no
+    /// `TranscriptRevisionStore` wired (`exchange()` wires none by default — a build/test
+    /// that never composed one, the same scenario `ingestImage`'s own no-store branch
+    /// handles), validated revision bytes must be staged via `parkRevision`, never
+    /// dropped, and the guard-level bookkeeping park is resolved.
+    func testARevisionWithNoStoreWiredForAnExistingCaptureIsStaged() async throws {
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+
+        let record = revisionRecord(bytes: Data("revision-bytes".utf8))
+        await exchange().acceptRemote(record)
+
+        let parkURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot, captureID: captureID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path),
+                      "validated revision bytes must be staged, not dropped, when no store is wired")
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertNil(parked[record.recordID.recordName])
+    }
+
+    /// Fix round 1 (Critical 2): any ingest failure OTHER than `.trashedCapture` — here,
+    /// forced via a corrupt `entry.json` sidecar so `guardWritable` throws a plain
+    /// `EntryMetadataError`, not a `TranscriptRevisionStoreError` — used to drop the
+    /// validated revision bytes unparked. It must stage through `parkRevision` instead,
+    /// exactly like `ingestImage`'s own write-failure catch.
+    func testARevisionIngestFailureOtherThanTrashedCaptureIsStaged() async throws {
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        try Data("not valid entry metadata json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory))
+
+        let store = JournalStore(containerRoot: containerRoot)
+        let covers = JournalCoverStore(containerRoot: containerRoot, journalStore: store)
+        let ex = SyncRecordExchange(
+            journalStore: store, coverStore: covers,
+            bookkeeping: SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot)),
+            deviceID: "device-low", containerRoot: containerRoot,
+            transcriptRevisionStore: TranscriptRevisionStore(capturesRoot: capturesRoot))
+
+        let record = revisionRecord(bytes: Data("revision-bytes".utf8))
+        await ex.acceptRemote(record)
+
+        let parkURL = AppContainer.syncStagingPendingRevisionsURL(containerRoot: containerRoot, captureID: captureID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path),
+                      "validated revision bytes must be staged, not dropped, on a non-trashedCapture failure")
+        let parked = await bookkeeping().parkedRecords()
+        XCTAssertNil(parked[record.recordID.recordName])
+    }
 }

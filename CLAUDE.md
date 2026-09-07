@@ -51,12 +51,17 @@ memory. **All four PRs are fully green on CI: unit 2124 / 2088 / 2101 / 2117 and
 Worktrees under `.worktrees/` are left in place until the PRs merge.
 
 **Next steps:**
-1. **Verify main's combined CI** — all four PRs (#150, #152, #153, #151) were merged
-   2026-09-07 within ~7 minutes, none of them with **Update branch** first, so GitHub
-   cancelled the intermediate runs. Run `34086540448` on `5cd5b7f7` is the **only**
-   evidence for the whole batch: https://github.com/nicolovejoy/raconte/actions/runs/34086540448
-   Baseline to beat — main after #150 alone was unit **2124** (1 skipped) / UI **62**.
-   Red here means untangling four PRs at once; check it before anything else.
+1. **Main is GREEN with all four merged** — `5cd5b7f7`, run `34086540448`: unit **2184**
+   (1 skipped), UI **63**, both jobs success.
+   https://github.com/nicolovejoy/raconte/actions/runs/34086540448
+   The four PRs (#150, #152, #153, #151) merged within ~7 minutes and none used
+   **Update branch**, so GitHub cancelled the intermediate runs and this was the only run
+   that ever tested the combination. It passed, so the risk did not land — but the batch
+   was verified *after* merging, not before, which is the thing the convention exists to
+   avoid. The counts reconcile exactly against a pre-batch base of 2082 (#150 +42,
+   #152 +6, #153 +19, #151 +35 = 2184; UI 62 +1 from `TrashRepairUITests` = 63), so
+   nothing was silently dropped or skipped. **Batch complete.** The four `.worktrees/`
+   checkouts can now be removed.
 2. **Smoke tests (tomorrow, with the T8 design session)** — device smoke build 15, then a
    Mac smoke of merged main as build 16: export to an external volume and verify; corrupt
    one `entry.json` → Trash shows the section → quarantine → journal deletes; span a

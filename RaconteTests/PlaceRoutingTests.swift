@@ -75,6 +75,39 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertEqual(PlaceRouting.resolve(.about, journals: []), .about)
     }
 
+    // #67 item 2: a background journals pull (CloudKit) must not pop the entry the
+    // owner is reading. `resolve` alone can't express this — it always lands
+    // `.capture` for a vanished journal, which is right when nothing was pushed but
+    // wrong once a pushed `.entry` exists, because `select`-shaped rerouting always
+    // clears the path. `reroute` carries the path decision `resolve` cannot.
+
+    func testRerouteLeavesAPresentJournalAndItsPathAlone() {
+        let path: [LibraryDestination] = [.entry("A")]
+        let r = PlaceRouting.reroute(.journal("j1"), journals: [journal("j1", "1987")], detailPath: path)
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .journal("j1"), detailPath: path))
+    }
+
+    func testRerouteWithAnEmptyPathMatchesTheExistingCaptureFallback() {
+        let r = PlaceRouting.reroute(.journal("gone"), journals: [journal("j1", "1987")], detailPath: [])
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .capture, detailPath: []),
+                       "must match PlaceRouting.resolve's .capture fallback (testAJournalPlace…) "
+                       + "when nothing was pushed")
+    }
+
+    func testRerouteWithAPushedEntryGoesToAllEntriesAndKeepsThePath() {
+        let path: [LibraryDestination] = [.entry("A")]
+        let r = PlaceRouting.reroute(.journal("gone"), journals: [journal("j1", "1987")], detailPath: path)
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .allEntries, detailPath: path),
+                       "the journal vanished but the entry the owner is reading still exists — land "
+                       + "on All Entries (which contains it, now unfiled) rather than popping them out")
+    }
+
+    func testRerouteOnAPlaceThatNeverVanishesIsUnaffectedByAPushedPath() {
+        let path: [LibraryDestination] = [.entry("A")]
+        let r = PlaceRouting.reroute(.allEntries, journals: [], detailPath: path)
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .allEntries, detailPath: path))
+    }
+
     func testJournalScopePerPlace() {
         XCTAssertEqual(PlaceRouting.journalScope(for: .allEntries), .all)
         XCTAssertEqual(PlaceRouting.journalScope(for: .journal("j1")), .journal("j1"))

@@ -197,6 +197,9 @@ final class LibraryScreenModel {
             // attached, for the library-row-thumbnail and remove-round-trip UI tests.
             // No-op unless asked for.
             UITestImageSeed.seedIfRequested(capturesRoot: capturesRoot)
+            // #81 Task 6: a complete entry whose entry.json is present but unreadable,
+            // for the Trash screen's repair UI test. No-op unless asked for.
+            UITestUnreadableEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif

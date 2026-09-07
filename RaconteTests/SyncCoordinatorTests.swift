@@ -572,7 +572,7 @@ final class SyncCoordinatorTests: XCTestCase {
         await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
         await engine.setRefetchOutcome(RefetchOutcome(delivered: [], goneFromServer: [parkedAudioName], failed: []))
 
-        await coordinator.retryParked()
+        await coordinator.retryParked(includingExhausted: true)
 
         let parked = await bookkeeping.parkedRecords()
         XCTAssertNil(parked[parkedAudioName])
@@ -587,11 +587,75 @@ final class SyncCoordinatorTests: XCTestCase {
         await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
         await engine.setRefetchOutcome(RefetchOutcome(delivered: [], goneFromServer: [], failed: [parkedAudioName]))
 
-        await coordinator.retryParked()
+        await coordinator.retryParked(includingExhausted: true)
 
         let parked = await bookkeeping.parkedRecords()
         XCTAssertEqual(parked[parkedAudioName]?.attempts, 1)
         XCTAssertEqual(parked[parkedAudioName]?.reason, "sha256 mismatch")
+    }
+
+    // MARK: Fix wave finding 2 — retryParked's retry budget
+
+    /// A name that has already exhausted `SyncCoordinator.maxRetryAttempts` (10) must
+    /// still be retried by `launch()` — a fresh app launch is exactly the moment a stuck
+    /// record deserves another try, regardless of how many times it has already failed.
+    func testLaunchRefetchesAnExhaustedParkedName() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        for _ in 0..<10 { await bookkeeping.noteRetryAttempt(parkedAudioName) }
+        let parkedBefore = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parkedBefore[parkedAudioName]?.attempts, 10)
+
+        await coordinator.launch()
+
+        let calls = await engine.refetchCalls
+        XCTAssertEqual(calls.last, [parkedAudioName])
+    }
+
+    /// The mirror: `foregrounded()` must NOT retry a name whose `attempts` already
+    /// reached the budget — a foreground happens far more often than a launch, and
+    /// retrying a name that will never resolve on every foreground forever is exactly
+    /// the unbounded behavior this finding fixes.
+    func testForegroundedSkipsAnExhaustedParkedName() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        for _ in 0..<10 { await bookkeeping.noteRetryAttempt(parkedAudioName) }
+
+        await coordinator.foregrounded()
+
+        let calls = await engine.refetchCalls
+        XCTAssertTrue(calls.isEmpty, "an exhausted name must not be refetched by foregrounded()")
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[parkedAudioName]?.attempts, 10, "and its attempts count must not rise either")
+    }
+
+    /// A name one attempt short of exhausted (9) is still within budget: `launch()`
+    /// retries it. Pins the boundary at `< 10`, not `<= 10` or `< 9`. Companion to
+    /// `testANameWithNineAttemptsIsRefetchedByForegrounded` immediately below — two
+    /// separate coordinators/stores, since `makeCoordinator()` shares this test
+    /// method's one `containerRoot` and a single combined test would double-count
+    /// attempts across both calls.
+    func testANameWithNineAttemptsIsRefetchedByLaunch() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        for _ in 0..<9 { await bookkeeping.noteRetryAttempt(parkedAudioName) }
+
+        await coordinator.launch()
+
+        let calls = await engine.refetchCalls
+        XCTAssertEqual(calls.last, [parkedAudioName])
+    }
+
+    /// The `foregrounded()` half of the pin above.
+    func testANameWithNineAttemptsIsRefetchedByForegrounded() async throws {
+        let (coordinator, engine, bookkeeping) = try await makeCoordinator()
+        await bookkeeping.park(parkedAudioName, reason: "sha256 mismatch")
+        for _ in 0..<9 { await bookkeeping.noteRetryAttempt(parkedAudioName) }
+
+        await coordinator.foregrounded()
+
+        let calls = await engine.refetchCalls
+        XCTAssertEqual(calls.last, [parkedAudioName])
     }
 }
 

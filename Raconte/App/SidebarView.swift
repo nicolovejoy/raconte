@@ -44,7 +44,8 @@ struct SidebarView: View {
             ForEach(rows) { row in
                 SidebarRowView(row: row,
                                cover: row.journalID.flatMap { services.library.journalCovers[$0] },
-                               live: row.place == .capture ? captureLiveRow : nil)
+                               liveBadge: row.place == .capture && isCaptureLive
+                                   ? CaptureLiveBadge(services: services) : nil)
                     .tag(row.place)
                     .accessibilityIdentifier(row.accessibilityIdentifier)
             }
@@ -78,15 +79,18 @@ struct SidebarView: View {
 
     /// Design §5's visibility guarantee: "the coordinator already lives in
     /// `CaptureScreenModel`, owned at the app root; unmounting the capture view must not
-    /// touch it. The sidebar's live indicator is the visibility guarantee." Read fresh
-    /// on every body evaluation, which — since `elapsed` is an `@Observable` published
-    /// property read directly here — re-evaluates the sidebar once per timer tick while a
-    /// capture is live. Accepted cost: the sidebar is a handful of rows, and the only
-    /// alternative (a coarser "something is recording" flag with no running time) throws
-    /// away the reason a live indicator exists in the first place.
-    private var captureLiveRow: CaptureSidebarRow {
-        CaptureSidebarRow.make(phase: services.capture.coordinator.phase,
-                               elapsed: services.capture.coordinator.elapsed)
+    /// touch it. The sidebar's live indicator is the visibility guarantee." Containment
+    /// (#67 item 3): this reads `phase` only — never `elapsed` — to decide WHETHER to
+    /// embed `CaptureLiveBadge` in the Capture row at all. Phase changes only a handful
+    /// of times per capture (idle -> preparing -> recording -> ... -> idle), so this
+    /// re-evaluates the sidebar rarely. `CaptureLiveBadge`
+    /// (`Raconte/App/CaptureLiveBadge.swift`) owns the `elapsed` read and is the only
+    /// view invalidated by its once-a-second tick — a live capture no longer
+    /// re-evaluates the whole sidebar (the list, every row, every journal's date-line
+    /// lookup) once per second, which is what happened when this file read `elapsed`
+    /// directly.
+    private var isCaptureLive: Bool {
+        CaptureSidebarRow.make(phase: services.capture.coordinator.phase, elapsed: 0).isLive
     }
 
     private var rows: [PlaceRow] {
@@ -110,13 +114,15 @@ struct SidebarView: View {
 /// One sidebar row: a system icon (Capture, All Entries, Trash, Debug) or a journal cover
 /// thumbnail, the title, and an optional subtitle (a journal's derived date range).
 ///
-/// `live` is non-nil only for the Capture row (nav T6, design §5) — the sidebar's own
-/// visibility guarantee for a recording that's running under a DIFFERENT place. Every
-/// other row passes `nil`.
+/// `liveBadge` is non-nil only for the Capture row while a capture is running (nav T6,
+/// design §5) — the sidebar's own visibility guarantee for a recording under a DIFFERENT
+/// place. Every other row passes `nil`. It carries an already-constructed
+/// `CaptureLiveBadge` rather than the elapsed text itself (#67 item 3): the badge owns
+/// its own `elapsed` read, so building this value here does not.
 struct SidebarRowView: View {
     let row: PlaceRow
     let cover: Data?
-    let live: CaptureSidebarRow?
+    let liveBadge: CaptureLiveBadge?
 
     @ViewBuilder private var titleGroup: some View {
         HStack(spacing: 10) {
@@ -159,7 +165,7 @@ struct SidebarRowView: View {
     }
 
     var body: some View {
-        if let live, live.isLive, let elapsedText = live.elapsedText {
+        if let liveBadge {
             // The live-Capture-row shape ONLY: two independently addressable accessibility
             // children (the title group, and the live badge), so `sidebar.capture.live`
             // has its own queryable identifier distinct from the row's own. `.combine` on
@@ -186,22 +192,17 @@ struct SidebarRowView: View {
             // the SAME element. That query only exists for journal rows, which never
             // carry a live badge, so scoping this shape to "only while the badge renders"
             // fixes the regression while keeping the fix.
+            //
+            // The badge itself (`CaptureLiveBadge`) owns the dot + elapsed text + its own
+            // accessibility identifier/label — moved there wholesale (#67 item 3) so it is
+            // the only piece re-evaluated by the once-a-second `elapsed` tick.
             HStack(spacing: 10) {
                 titleGroup
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(row.subtitle.map { "\(row.title), \($0)" } ?? row.title)
 
                 Spacer()
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 8, height: 8)
-                    Text(elapsedText)
-                        .monospacedDigit()
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("sidebar.capture.live")
-                .accessibilityLabel("Recording, \(elapsedText)")
+                liveBadge
             }
             .accessibilityElement(children: .contain)
             .padding(.vertical, 2)

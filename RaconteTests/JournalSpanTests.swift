@@ -148,6 +148,36 @@ final class JournalSpanTests: XCTestCase {
                                       calendar: cal))
     }
 
+    // MARK: flags(_:_:calendar:) — #71, owner ruling 4 (2026-08-18): flagged, never
+    // blocked. A nil span makes no claim, so nothing in it is ever flagged.
+
+    func testFlagsIsFalseWhenSpanIsNil() {
+        XCTAssertFalse(JournalSpan.flags(nil, date(2001, 1, 1), calendar: cal))
+    }
+
+    func testFlagsIsFalseWhenDateIsInsideTheSpan() throws {
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001))
+        XCTAssertFalse(JournalSpan.flags(span, date(1999, 6, 1), calendar: cal))
+    }
+
+    func testFlagsIsTrueWhenDateIsBeforeTheSpanStart() throws {
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001))
+        XCTAssertTrue(JournalSpan.flags(span, date(1997, 12, 31), calendar: cal))
+    }
+
+    func testFlagsIsFalseForAnOpenEndedSpanAfterItsStart() throws {
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: nil)
+        XCTAssertFalse(JournalSpan.flags(span, date(2026, 8, 18), calendar: cal))
+    }
+
+    /// Reuses the containment boundary fixture above: the last sub-second of a
+    /// year-precision end bound must not be flagged.
+    func testFlagsYearPrecisionEndCoversTheLastInstantOfTheYear() throws {
+        let span = try JournalSpan(start: PartialDate(year: 1998), end: PartialDate(year: 2001))
+        XCTAssertFalse(JournalSpan.flags(span, instant(2001, 12, 31, 23, 59, 59, nanosecond: 999_000_000),
+                                          calendar: cal))
+    }
+
     // MARK: formatted
 
     func testFormattedOpenEndedSpanShowsStartWithATrailingDash() throws {

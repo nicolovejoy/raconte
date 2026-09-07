@@ -112,24 +112,36 @@ struct ContentView: View {
         }
         // A deleted journal's place must not keep pointing at nothing forever — falls
         // back to `.capture` rather than showing an empty list with no way out. Routed
-        // through `router.select`, not a direct `router.place =` assignment (task review,
-        // minor 3): a direct assignment bypasses `AppRouter.select`'s clear-the-path
-        // contract, so a stale `detailPath` from the deleted journal's place could survive
-        // the fallback and push against a place it no longer belongs to.
+        // through `router.apply(_:)`, not a direct `router.place =` assignment (task
+        // review, minor 3): a direct assignment would let a stale `detailPath` from
+        // the deleted journal's place survive the fallback and push against a place it
+        // no longer belongs to.
         //
-        // Guarded to fire only when `resolve` actually disagrees with the current place
-        // (nav T9): `library.journals` changes on EVERY rescan — creating a journal
-        // (sidebar `+`), renaming one, setting a cover — and `router.select` unconditionally
-        // clears `detailPath` (`PlaceRouting.detailPath` always returns `[]`). Before this
-        // guard, the sidebar `+`'s create-then-push-editor sequence lost its own push the
-        // instant `createJournal`'s rescan landed here: this handler re-selected the SAME
-        // place a moment later and wiped the just-appended `.journalEditor` destination.
-        // Reproduced empirically (a UI test landed on the journal's library screen instead
-        // of its editor) before being traced to this unconditional call.
+        // `apply` rather than `select` (#67 item 2): `select`'s clear-the-path
+        // contract exists for a person clicking a sidebar row, but `library.journals`
+        // also changes on a BACKGROUND CloudKit pull — one that can remove the very
+        // journal the owner is mid-read in, with an `.entry` pushed on the path. Going
+        // through `select` there would pop them straight out of the entry they were
+        // reading. `PlaceRouting.reroute` carries the path decision: nothing pushed
+        // stays on `resolve`'s existing `.capture` fallback with an empty path;
+        // something pushed reroutes to `.allEntries` instead, WITH the path intact —
+        // the entry still exists, now unfiled, and All Entries contains it.
+        //
+        // Guarded to fire only when `reroute` actually disagrees with the current
+        // place (nav T9): `library.journals` changes on EVERY rescan — creating a
+        // journal (sidebar `+`), renaming one, setting a cover — and the old
+        // `select`-based version unconditionally cleared `detailPath`
+        // (`PlaceRouting.detailPath` always returns `[]`). Before this guard, the
+        // sidebar `+`'s create-then-push-editor sequence lost its own push the instant
+        // `createJournal`'s rescan landed here: this handler re-selected the SAME
+        // place a moment later and wiped the just-appended `.journalEditor`
+        // destination. Reproduced empirically (a UI test landed on the journal's
+        // library screen instead of its editor) before being traced to this
+        // unconditional call.
         .onChange(of: services.library.journals) { _, journals in
-            let resolved = PlaceRouting.resolve(router.place, journals: journals)
-            if resolved != router.place {
-                router.select(resolved)
+            let r = PlaceRouting.reroute(router.place, journals: journals, detailPath: router.detailPath)
+            if r.place != router.place {
+                router.apply(r)
             }
         }
         // ⌘N (nav T8, `RaconteCommands`) must work from any place — All Entries, Trash,

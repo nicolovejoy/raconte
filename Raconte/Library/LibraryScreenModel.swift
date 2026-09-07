@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Model-to-model rescan notification (#62, nav redesign §5.1). `CaptureScreenModel`
 /// conforms so `LibraryScreenModel.rescan()` can tell it directly that the world may
@@ -375,9 +376,12 @@ final class LibraryScreenModel {
     /// the row the caller acted from is already stale.
     func quarantineUnreadable(captureID: String) async throws {
         let remover = self.remover
-        try await Task.detached(priority: .userInitiated) {
+        let name = try await Task.detached(priority: .userInitiated) {
             try remover.quarantine(captureID: captureID)
         }.value
+        let quarantineURL = AppContainer.quarantineURL(containerRoot: remover.containerRoot, name: name)
+        Logger(subsystem: "org.pianohouseproject.raconte", category: "library")
+            .notice("library: quarantined \(captureID, privacy: .public) → \(quarantineURL.path, privacy: .public)")
         await rescan()
     }
 

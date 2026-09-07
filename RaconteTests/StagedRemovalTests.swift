@@ -246,6 +246,50 @@ final class StagedRemovalTests: XCTestCase {
         XCTAssertEqual(values.isExcludedFromBackup, true)
     }
 
+    // MARK: - #81: quarantine (repair primitive, never a deletion)
+
+    /// Mirrors `testStageRenamesTheWholeDirectoryOutOfCapturesRoot` — same one-way
+    /// `rename(2)`, different destination. The garbage `entry.json` is the whole reason
+    /// this exists (#81): quarantine must move it intact, not attempt to read or repair it.
+    func testQuarantineMovesTheWholeCaptureDirectoryOutOfCaptures() throws {
+        let id = "idA"
+        try writeCapture(id, trashedAt: nil)
+        try Data("{ not json".utf8).write(
+            to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(id)))
+
+        let name = try remover().quarantine(captureID: id)
+
+        XCTAssertFalse(exists(captureDir(id)), "captures/idA must be gone")
+        let moved = AppContainer.quarantineURL(containerRoot: containerRoot, name: name)
+        XCTAssertTrue(exists(SegmentLayout.finalRecordingURL(captureDirectory: moved)),
+                      "the audio must survive intact under quarantine/")
+        XCTAssertTrue(name.hasSuffix("-\(id)"))
+    }
+
+    func testQuarantineOfAMissingCaptureThrowsCaptureDirectoryMissing() {
+        XCTAssertThrowsError(try remover().quarantine(captureID: "nope")) { error in
+            XCTAssertEqual(error as? StagedRemovalError, .captureDirectoryMissing)
+        }
+    }
+
+    /// `purge()` only ever visits `trash-pending/` — a quarantined capture must survive
+    /// a purge untouched, since quarantine is a repair holding pen, not a deletion stage.
+    func testPurgeLeavesQuarantineAlone() throws {
+        let id = "idA"
+        let otherID = "idB"
+        try writeCapture(id, trashedAt: nil)
+        try writeCapture(otherID, trashedAt: now)
+        let r = remover()
+
+        _ = try r.quarantine(captureID: id)
+        _ = try r.stage(captureID: otherID)
+        _ = r.purge()
+
+        let quarantined = try FileManager.default.contentsOfDirectory(
+            atPath: AppContainer.quarantineRoot(containerRoot: containerRoot).path)
+        XCTAssertEqual(quarantined.count, 1)
+    }
+
     // MARK: - 1.13 — crash-then-next-launch sweep
 
     func testStageThenCrashLeavesNothingScannableAndIsSweptByTheNextPurge() throws {

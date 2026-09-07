@@ -55,7 +55,12 @@ enum BuildInfo {
         }
     }
 
-    static let stamp: String = stampText(
-        build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-        builtAt: builtAt)
+    /// `CFBundleVersion`, raw off the bundle — the one place this Info.plist key is
+    /// read. `stamp` below reuses it (so it can't drift from what this returns), and
+    /// T13's `AppServices` reuses it again for `ArchiveExporter`'s `build:` field via
+    /// `AppVersion.displayString(short: nil, build:)`, which applies the same
+    /// empty-is-absent normalization `stampText` already gives this value.
+    static let buildNumber: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+    static let stamp: String = stampText(build: buildNumber, builtAt: builtAt)
 }

@@ -224,7 +224,7 @@ struct ContentView: View {
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .about:
-            AboutView(sync: services.sync)
+            AboutView(sync: services.sync, exportRunner: services.exportRunner)
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .debug:

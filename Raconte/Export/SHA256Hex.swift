@@ -10,11 +10,4 @@ enum SHA256Hex {
     static func of(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
-
-    /// Same digest, read from disk. `.mappedIfSafe` avoids fully residentizing a large
-    /// file (the final m4a can be tens of MB) just to hash it.
-    static func ofFile(at url: URL) throws -> String {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        return of(data)
-    }
 }

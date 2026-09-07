@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One digest of what was last durably uploaded for a CloudKit record: its content hash
 /// and byte count. T3 (upload queue) diffs a record's current bytes against this to
@@ -7,6 +8,17 @@ import Foundation
 struct UploadedDigest: Codable, Equatable, Sendable {
     var sha256: String
     var bytes: Int
+}
+
+/// A record a later sync pass couldn't land (inbound processing failed for it) but must
+/// not lose track of — "inbound sync must land or park": a refusal that returns without
+/// parking is permanent silent loss, since CKSyncEngine never redelivers a consumed
+/// record. `reason` is a human-readable diagnostic, not parsed by anything.
+struct ParkedRecord: Codable, Equatable, Sendable {
+    var reason: String
+    var attempts: Int
+    var firstParkedAt: Date
+    var lastAttemptAt: Date?
 }
 
 /// Bookkeeping for the M4 sync engine, under `sync/` beside `captures/`
@@ -36,14 +48,19 @@ actor SyncBookkeepingStore {
     private static let systemFieldsDirectoryName = "system-fields"
     private static let ledgerFileName = "ledger.json"
     private static let environmentTagFileName = "environment"
+    private static let parkedFileName = "parked.json"
+    private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync")
 
     /// Always `AppContainer.syncRoot(containerRoot:)` in production — this store never
     /// derives it itself, matching `JournalCoverStore`'s pattern of taking the path it
     /// needs rather than reconstructing it from a parent root.
     nonisolated let root: URL
 
-    init(root: URL) {
+    private let now: @Sendable () -> Date
+
+    init(root: URL, now: @escaping @Sendable () -> Date = { Date() }) {
         self.root = root
+        self.now = now
     }
 
     // MARK: Engine state
@@ -97,6 +114,57 @@ actor SyncBookkeepingStore {
         var current = ledger()
         current.removeValue(forKey: recordName)
         try Self.saveLedger(current, root: root)
+    }
+
+    // MARK: Parked records (#85)
+
+    /// Record names inbound sync couldn't land, keyed by `SyncRecordName.rawValue`. An
+    /// absent `parked.json` is an empty dictionary, per the type's governing collapse
+    /// rule. An undecodable one is NOT simply forgotten, unlike the ledger: the
+    /// unreadable file is moved aside to `parked-unreadable-<stamp>.json` (never
+    /// deleted — a human or a future migration can still recover it) and the loss is
+    /// logged, since a park list silently going empty is the difference between
+    /// "retried later" and "lost".
+    func parkedRecords() -> [String: ParkedRecord] {
+        let url = Self.parkedURL(root: root)
+        guard let data = Self.read(url: url) else { return [:] }
+        guard let decoded = try? CaptureCoding.decoder().decode([String: ParkedRecord].self, from: data) else {
+            Self.quarantineUnreadableParked(at: url, now: now())
+            return [:]
+        }
+        return decoded
+    }
+
+    /// Idempotent: a second park of the same name keeps `firstParkedAt` and `attempts`,
+    /// replacing only `reason` — parking again isn't a fresh failure, it's the same one
+    /// recurring.
+    func park(_ recordName: String, reason: String) {
+        var current = parkedRecords()
+        if var existing = current[recordName] {
+            existing.reason = reason
+            current[recordName] = existing
+        } else {
+            current[recordName] = ParkedRecord(reason: reason, attempts: 0,
+                                                firstParkedAt: now(), lastAttemptAt: nil)
+        }
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "park")
+    }
+
+    func unpark(_ recordName: String) {
+        var current = parkedRecords()
+        current.removeValue(forKey: recordName)
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "unpark")
+    }
+
+    /// Increments `attempts` and stamps `lastAttemptAt` for a parked name; a no-op for a
+    /// name that was never parked.
+    func noteRetryAttempt(_ recordName: String) {
+        var current = parkedRecords()
+        guard var existing = current[recordName] else { return }
+        existing.attempts += 1
+        existing.lastAttemptAt = now()
+        current[recordName] = existing
+        Self.saveParkedOrLog(current, root: root, recordName: recordName, operation: "noteRetryAttempt")
     }
 
     // MARK: Environment tag (#90)
@@ -162,6 +230,10 @@ actor SyncBookkeepingStore {
         root.appendingPathComponent(environmentTagFileName)
     }
 
+    static func parkedURL(root: URL) -> URL {
+        root.appendingPathComponent(parkedFileName)
+    }
+
     private static func read(url: URL) -> Data? {
         try? Data(contentsOf: url)
     }
@@ -184,5 +256,47 @@ actor SyncBookkeepingStore {
     private static func saveLedger(_ ledger: [String: UploadedDigest], root: URL) throws {
         let data = try CaptureCoding.lineEncoder().encode(ledger)
         try write(data, url: ledgerURL(root: root))
+    }
+
+    private static func saveParked(_ parked: [String: ParkedRecord], root: URL) throws {
+        let data = try CaptureCoding.encoder().encode(parked)
+        try write(data, url: parkedURL(root: root))
+    }
+
+    /// `park`/`unpark`/`noteRetryAttempt` are non-throwing by contract (Tasks 2 and 3
+    /// depend on that shape) — a write failure here must never be silent, since a
+    /// caller of `park` that gets no error believes the record is durably parked. Log
+    /// at `.notice` naming the record, the operation, and the underlying error.
+    private static func saveParkedOrLog(_ parked: [String: ParkedRecord], root: URL,
+                                         recordName: String, operation: String) {
+        do {
+            try saveParked(parked, root: root)
+        } catch {
+            log.notice("""
+                sync: \(operation, privacy: .public)(\(recordName, privacy: .public)) failed to \
+                write parked.json: \(String(describing: error), privacy: .public)
+                """)
+        }
+    }
+
+    /// Moves an unreadable `parked.json` aside rather than discarding it — the file
+    /// still holds bytes that were once a durable park record, so a rename (never a
+    /// delete) leaves a trail a human or a future migration could still recover.
+    private static func quarantineUnreadableParked(at url: URL, now: Date) {
+        let stamp = CaptureCoding.iso8601Formatter().string(from: now)
+        let quarantineURL = url.deletingLastPathComponent()
+            .appendingPathComponent("parked-unreadable-\(stamp).json")
+        do {
+            try FileManager.default.moveItem(at: url, to: quarantineURL)
+            log.notice("""
+                sync: parked.json undecodable — moved aside from \(url.path, privacy: .public) \
+                to \(quarantineURL.path, privacy: .public)
+                """)
+        } catch {
+            log.notice("""
+                sync: parked.json undecodable and could not be moved aside from \
+                \(url.path, privacy: .public): \(String(describing: error), privacy: .public)
+                """)
+        }
     }
 }

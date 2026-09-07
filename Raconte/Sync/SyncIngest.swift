@@ -1654,12 +1654,15 @@ actor SyncRecordExchange: CloudRecordExchange {
     // after a relaunch pick up exactly where a torn-down one left off.)
 
     private func ingestEntry(_ record: CKRecord, captureID: String) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — entry ingest skipped")
+            log.notice("sync: no container root wired — Entry \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
         guard let fields = RemoteEntryFields(record: record) else {
-            log.notice("sync: fetched Entry record could not be decoded — ignored")
+            log.notice("sync: fetched Entry record could not be decoded — parked")
+            await bookkeeping.park(name, reason: "entry fields could not be decoded")
             return
         }
         // `manifestSnapshot` is read here, not through `RemoteEntryFields` (see that
@@ -1676,31 +1679,42 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not persist pending entry state for \(captureID, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
+                \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 
     private func ingestAudio(_ record: CKRecord, captureID: String) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — entry ingest skipped")
+            log.notice("sync: no container root wired — AudioAsset \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
-        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
-              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
-            let reason = IngestDropReason.childAsset(record) ?? "guard/reason drift"
-            log.notice("""
-                sync: fetched AudioAsset \(record.recordID.recordName, privacy: .public) \
-                dropped — \(reason, privacy: .public)
-                """)
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset else {
+            log.notice("sync: fetched AudioAsset \(name, privacy: .public) parked — missing file asset")
+            await bookkeeping.park(name, reason: "missing file asset")
+            return
+        }
+        guard let url = asset.fileURL else {
+            log.notice("sync: fetched AudioAsset \(name, privacy: .public) parked — asset has no local fileURL")
+            await bookkeeping.park(name, reason: "asset has no local fileURL")
+            return
+        }
+        guard let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
+            log.notice("sync: fetched AudioAsset \(name, privacy: .public) parked — missing sha256 field")
+            await bookkeeping.park(name, reason: "missing sha256 field")
             return
         }
         // `.mappedIfSafe` (final review M1): identical hash-and-check read to
         // `SyncTreeScanner`'s, and identically mapped rather than slurped.
         guard let bytes = try? Data(contentsOf: url, options: .mappedIfSafe) else {
-            log.error("sync: could not read the fetched AudioAsset bytes for \(captureID, privacy: .public)")
+            log.notice("sync: fetched AudioAsset \(name, privacy: .public) parked — asset bytes unreadable")
+            await bookkeeping.park(name, reason: "asset bytes unreadable")
             return
         }
         // Verified BEFORE anything is persisted — the whole point of the fix round: a
@@ -1708,10 +1722,8 @@ actor SyncRecordExchange: CloudRecordExchange {
         // discover the mismatch later, and must never poison a sibling piece that
         // arrived correctly.
         guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
-            log.error("""
-                sync: AudioAsset sha256 mismatch for \(captureID, privacy: .public) — refused, \
-                never persisted
-                """)
+            log.notice("sync: fetched AudioAsset \(name, privacy: .public) parked — sha256 mismatch")
+            await bookkeeping.park(name, reason: "sha256 mismatch")
             return
         }
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
@@ -1722,36 +1734,45 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not persist staged audio for \(captureID, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
+                \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 
     private func ingestLiveLog(_ record: CKRecord, captureID: String) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — entry ingest skipped")
+            log.notice("sync: no container root wired — LiveLog \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
-        guard let asset = record[SyncChildAssetField.file] as? CKAsset, let url = asset.fileURL,
-              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
-            let reason = IngestDropReason.childAsset(record) ?? "guard/reason drift"
-            log.notice("""
-                sync: fetched LiveLog \(record.recordID.recordName, privacy: .public) \
-                dropped — \(reason, privacy: .public)
-                """)
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset else {
+            log.notice("sync: fetched LiveLog \(name, privacy: .public) parked — missing file asset")
+            await bookkeeping.park(name, reason: "missing file asset")
+            return
+        }
+        guard let url = asset.fileURL else {
+            log.notice("sync: fetched LiveLog \(name, privacy: .public) parked — asset has no local fileURL")
+            await bookkeeping.park(name, reason: "asset has no local fileURL")
+            return
+        }
+        guard let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
+            log.notice("sync: fetched LiveLog \(name, privacy: .public) parked — missing sha256 field")
+            await bookkeeping.park(name, reason: "missing sha256 field")
             return
         }
         guard let bytes = try? Data(contentsOf: url) else {
-            log.error("sync: could not read the fetched LiveLog bytes for \(captureID, privacy: .public)")
+            log.notice("sync: fetched LiveLog \(name, privacy: .public) parked — asset bytes unreadable")
+            await bookkeeping.park(name, reason: "asset bytes unreadable")
             return
         }
         guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
-            log.error("""
-                sync: LiveLog sha256 mismatch for \(captureID, privacy: .public) — refused, \
-                never persisted
-                """)
+            log.notice("sync: fetched LiveLog \(name, privacy: .public) parked — sha256 mismatch")
+            await bookkeeping.park(name, reason: "sha256 mismatch")
             return
         }
         let stagingDir = AppContainer.syncStagingCaptureURL(containerRoot: containerRoot, captureID: captureID)
@@ -1762,10 +1783,12 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not persist staged liveLog for \(captureID, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
+                \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 
@@ -1790,33 +1813,48 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// `SyncRevisionField`'s doc comment for why `entryRef` is what supplies the
     /// captureID a fetched Revision has no other way to say.
     private func ingestRevision(_ record: CKRecord, revisionID: String) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — revision ingest skipped")
+            log.notice("sync: no container root wired — Revision \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
-        guard let asset = record[SyncRevisionField.body] as? CKAsset, let url = asset.fileURL,
-              let claimedSHA256 = record[SyncChildAssetField.sha256] as? String,
-              let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference,
-              case .entry(let captureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID) else {
-            let reason = IngestDropReason.revision(record) ?? "guard/reason drift"
-            log.notice("""
-                sync: fetched Revision \(record.recordID.recordName, privacy: .public) \
-                dropped — \(reason, privacy: .public)
-                """)
+        guard let asset = record[SyncRevisionField.body] as? CKAsset else {
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — missing file asset")
+            await bookkeeping.park(name, reason: "missing file asset")
+            return
+        }
+        guard let url = asset.fileURL else {
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — asset has no local fileURL")
+            await bookkeeping.park(name, reason: "asset has no local fileURL")
+            return
+        }
+        guard let claimedSHA256 = record[SyncChildAssetField.sha256] as? String else {
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — missing sha256 field")
+            await bookkeeping.park(name, reason: "missing sha256 field")
+            return
+        }
+        guard let entryRef = record[SyncChildAssetField.entryRef] as? CKRecord.Reference else {
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — missing entryRef")
+            await bookkeeping.park(name, reason: "missing entryRef")
+            return
+        }
+        guard case .entry(let captureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID) else {
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — entryRef is not an entry name")
+            await bookkeeping.park(name, reason: "entryRef is not an entry name")
             return
         }
         guard let bytes = try? Data(contentsOf: url) else {
-            log.error("sync: could not read the fetched Revision bytes for \(revisionID, privacy: .public)")
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — asset bytes unreadable")
+            await bookkeeping.park(name, reason: "asset bytes unreadable")
             return
         }
         // Verified BEFORE anything is persisted — same discipline as
         // `ingestAudio`/`ingestLiveLog`: a mismatched piece must never sit on disk
         // waiting to be discovered later.
         guard SyncTreeScanner.sha256Hex(bytes) == claimedSHA256 else {
-            log.error("""
-                sync: Revision sha256 mismatch for \(revisionID, privacy: .public) — refused, \
-                never persisted
-                """)
+            log.notice("sync: fetched Revision \(name, privacy: .public) parked — sha256 mismatch")
+            await bookkeeping.park(name, reason: "sha256 mismatch")
             return
         }
 
@@ -1827,12 +1865,24 @@ actor SyncRecordExchange: CloudRecordExchange {
         guard captureExists else {
             parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
                         knownToExist: false, containerRoot: containerRoot)
+            // The record's own asset/sha/entryRef are all valid — any earlier
+            // guard-parked state for THIS record name is resolved, even though the
+            // bytes land in the pending-revisions.json staging file rather than
+            // directly, since CKSyncEngine will never redeliver this record either way.
+            await bookkeeping.unpark(name)
             await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
             return
         }
 
         guard let transcriptRevisionStore else {
-            log.debug("sync: no revision store wired — revision ingest skipped")
+            // Fix round 1 (Critical 1): an optional dependency being absent is not a
+            // reason to lose validated revision bytes — same reasoning as `ingestImage`'s
+            // own no-store branch. `knownToExist: true` since this device just confirmed
+            // the capture directory is real.
+            log.notice("sync: no revision store wired — revision \(revisionID, privacy: .public) parked instead")
+            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
+                        knownToExist: true, containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         }
         do {
@@ -1850,14 +1900,23 @@ actor SyncRecordExchange: CloudRecordExchange {
             // reconcile.
             parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
                         knownToExist: true, containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         } catch {
+            // Fix round 1 (Critical 2): any OTHER `TranscriptRevisionStoreError` (or a
+            // filesystem error from the store's own write) is transient/local in the
+            // same sense a trashed capture is — park it durably rather than dropping
+            // validated bytes, mirroring `ingestImage`'s write-failure catch.
             log.error("""
                 sync: revision \(revisionID, privacy: .public) ingest failed for \
-                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public) — parked
                 """)
+            parkRevision(captureID: captureID, revisionID: revisionID, body: bytes,
+                        knownToExist: true, containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         }
+        await bookkeeping.unpark(name)
         await localStoreDidChange?()
     }
 
@@ -2154,8 +2213,10 @@ actor SyncRecordExchange: CloudRecordExchange {
             // sibling and never parked — there is nothing to recover here.
             return
         }
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — marker stream ingest skipped")
+            log.notice("sync: no container root wired — MarkerStream \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
         guard let content = record[SyncMarkerStreamField.content] as? String,
@@ -2163,9 +2224,10 @@ actor SyncRecordExchange: CloudRecordExchange {
               case .entry(let refCaptureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID),
               refCaptureID == captureID else {
             log.notice("""
-                sync: fetched MarkerStream record missing content/entryRef, or entryRef \
-                disagrees with the record name — ignored
+                sync: fetched MarkerStream record \(name, privacy: .public) parked — missing \
+                content/entryRef, or entryRef disagrees with the record name
                 """)
+            await bookkeeping.park(name, reason: "marker stream content could not be decoded")
             return
         }
         let bytes = Data(content.utf8)
@@ -2192,10 +2254,12 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not materialize marker stream \(streamDeviceID, privacy: .public) for \
-                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await localStoreDidChange?()
     }
 
@@ -2422,15 +2486,39 @@ actor SyncRecordExchange: CloudRecordExchange {
     /// outright: parking it would durably preserve bytes already known to be wrong, and
     /// they can only ever fail the same check again.
     private func ingestImage(_ record: CKRecord) async {
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — image ingest skipped")
+            log.notice("sync: no container root wired — Image \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
+            return
+        }
+        guard let asset = record[SyncChildAssetField.file] as? CKAsset else {
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — missing file asset")
+            await bookkeeping.park(name, reason: "missing file asset")
+            return
+        }
+        guard asset.fileURL != nil else {
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — asset has no local fileURL")
+            await bookkeeping.park(name, reason: "asset has no local fileURL")
+            return
+        }
+        guard record[SyncChildAssetField.sha256] as? String != nil else {
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — missing sha256 field")
+            await bookkeeping.park(name, reason: "missing sha256 field")
             return
         }
         guard let fields = RemoteImageFields(record: record) else {
-            log.notice("""
-                sync: fetched Image \(record.recordID.recordName, privacy: .public) \
-                missing its file/sha256, or unnamed — ignored
-                """)
+            // Fix round 1 (Critical 3): REACHABLE, not defense-in-depth — the guard
+            // above only requires `sha256` to be present, but `RemoteImageFields.init?`
+            // also requires it non-EMPTY (`!sha256.isEmpty`). A record whose sha256 is
+            // `""` passes the guard above and fails here. Treated as the same sub-cause
+            // as an absent field: an empty sha256 names nothing to verify against,
+            // which is what "missing" means. (`RemoteImageFields.init?`'s other checks —
+            // record TYPE, record NAME — are genuinely unreachable here, since
+            // `acceptRemote` already confirmed both before ever dispatching to this
+            // function, but that no longer makes this whole guard unreachable.)
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — missing sha256 field")
+            await bookkeeping.park(name, reason: "missing sha256 field")
             return
         }
         // A plain, non-mapping read — deliberately NOT `.mappedIfSafe`, which
@@ -2441,14 +2529,13 @@ actor SyncRecordExchange: CloudRecordExchange {
         // thing to be holding for that, and an image is small enough that residency
         // costs nothing — the same call `ingestLiveLog`/`ingestRevision` already make.
         guard let bytes = try? Data(contentsOf: fields.fileURL) else {
-            log.error("sync: could not read the fetched Image bytes for \(fields.imageID, privacy: .public)")
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — asset bytes unreadable")
+            await bookkeeping.park(name, reason: "asset bytes unreadable")
             return
         }
         guard SyncTreeScanner.sha256Hex(bytes) == fields.sha256 else {
-            log.error("""
-                sync: Image sha256 mismatch for \(fields.imageID, privacy: .public) — refused, \
-                never persisted
-                """)
+            log.notice("sync: fetched Image \(name, privacy: .public) parked — sha256 mismatch")
+            await bookkeeping.park(name, reason: "sha256 mismatch")
             return
         }
         let pending = PendingImage(id: fields.imageID, sidecar: fields.sidecar(bytes: bytes.count),
@@ -2462,6 +2549,11 @@ actor SyncRecordExchange: CloudRecordExchange {
         guard captureExists else {
             parkImage(captureID: captureID, pending: pending, knownToExist: false,
                       containerRoot: containerRoot)
+            // The record's own asset/sha are valid — any earlier guard-parked state for
+            // THIS record name is resolved, even though the bytes land in
+            // pending-images.json rather than directly (same reasoning as
+            // `ingestRevision`'s unknown-capture branch).
+            await bookkeeping.unpark(name)
             await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
             return
         }
@@ -2469,6 +2561,7 @@ actor SyncRecordExchange: CloudRecordExchange {
         guard !isTrashedOrUnreadable(captureDirectory: directory) else {
             parkImage(captureID: captureID, pending: pending, knownToExist: true,
                       containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         }
 
@@ -2480,6 +2573,7 @@ actor SyncRecordExchange: CloudRecordExchange {
             log.notice("sync: no image store wired — image \(pending.id, privacy: .public) parked instead")
             parkImage(captureID: captureID, pending: pending, knownToExist: true,
                       containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         }
         do {
@@ -2495,8 +2589,10 @@ actor SyncRecordExchange: CloudRecordExchange {
                 """)
             parkImage(captureID: captureID, pending: pending, knownToExist: true,
                       containerRoot: containerRoot)
+            await bookkeeping.unpark(name)
             return
         }
+        await bookkeeping.unpark(name)
         await localStoreDidChange?()
     }
 

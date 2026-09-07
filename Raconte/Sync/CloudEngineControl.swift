@@ -36,11 +36,52 @@ protocol CloudEngineControl: Sendable {
     /// is for the moments the app knows about and the engine doesn't.
     func fetchNow() async
 
+    /// #85 part 3: re-asks the server, by exact record name, for names inbound sync
+    /// PARKED. `CKSyncEngine`'s own zone fetch (`fetchNow()`) is token-based and has
+    /// already advanced past whatever change caused the original refusal by the time it
+    /// is parked — a name once missed is never redelivered by a later `fetchNow()`
+    /// alone, so this is the only way back. Each fetched record is run through the same
+    /// exchange path a zone fetch uses for a modified record.
+    func refetch(recordNames: [String]) async -> RefetchOutcome
+
     /// Debug-surface snapshot (M4 T12): live pending-change counts plus the last
     /// account/error state the engine's delegate callbacks observed. Never a live
     /// CloudKit query — nothing here can delay or wait on anything (design §8) — and
     /// never awaited by anything but the Debug screen.
     func snapshot() async -> EngineSnapshot
+}
+
+/// Fix wave finding 6: `database.records(for:)` takes one request for the whole id
+/// list it is handed — CloudKit documents a per-call cap on how many ids one
+/// `CKFetchRecordsOperation`-backed call will accept, and a launch's parked backlog
+/// (design §3: first-enable sync can enqueue the entire existing archive across many
+/// parked names) can exceed it. Pure and total — no CloudKit, no IO — so it is tested
+/// directly with plain arrays rather than through `CloudKitEngineControl`'s CloudKit
+/// dependency.
+enum RefetchChunking {
+    /// Splits `names` into chunks of at most `size`, preserving order, with the last
+    /// chunk taking whatever remains (never padded, never dropped). An empty input
+    /// produces an empty output rather than one empty chunk.
+    static func chunks(_ names: [String], size: Int) -> [[String]] {
+        guard !names.isEmpty, size > 0 else { return [] }
+        return stride(from: 0, to: names.count, by: size).map {
+            Array(names[$0..<Swift.min($0 + size, names.count)])
+        }
+    }
+}
+
+/// What `CloudEngineControl.refetch(recordNames:)` hands back (#85 part 3). No CloudKit
+/// type crosses the protocol — a name in, a name out, sorted into exactly one of three
+/// buckets.
+struct RefetchOutcome: Equatable, Sendable {
+    /// Names successfully fetched and handed to `CloudRecordExchange.acceptRemote`.
+    var delivered: [String] = []
+    /// Names the server answered `CKError.unknownItem` for — the terminal case.
+    /// `SyncCoordinator.retryParked()` unparks these with a `.notice`, never silently.
+    var goneFromServer: [String] = []
+    /// Names that failed for any other reason. Left parked; retried on the next
+    /// `retryParked()`.
+    var failed: [String] = []
 }
 
 /// What `CloudEngineControl.snapshot()` hands back. `accountState`/`lastError` are
@@ -436,6 +477,69 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
         }
     }
 
+    /// #85 part 3: `database.records(for:)` fetches by explicit `CKRecord.ID`, unlike
+    /// `fetchChanges()`'s token-based zone fetch, which has already advanced past
+    /// whatever caused the original refusal. Each success runs through the exact same
+    /// `exchange.acceptRemote` call the `fetchedRecordZoneChanges` branch above uses for
+    /// a modified record — refetch and the ordinary zone fetch land through one path.
+    ///
+    /// `.unknownItem` is decided PER RECORD, not per batch: `database.records(for:)`
+    /// answers one `Result` per requested id, so one name the server no longer has never
+    /// masks the outcome of the others in the same call.
+    ///
+    /// Fix wave finding 6: chunked at `refetchChunkSize` names per `records(for:)` call
+    /// (`RefetchChunking.chunks`) and the outcomes merged — a chunk that throws marks
+    /// only that chunk's names `.failed`, never the whole request, so one oversized
+    /// backlog batch failing (or a transient error on one chunk) cannot mask the
+    /// per-record answers a sibling chunk already got back cleanly.
+    static let refetchChunkSize = 100
+
+    func refetch(recordNames: [String]) async -> RefetchOutcome {
+        guard !recordNames.isEmpty else { return RefetchOutcome() }
+        let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
+        var outcome = RefetchOutcome()
+        for chunk in RefetchChunking.chunks(recordNames, size: Self.refetchChunkSize) {
+            let ids = chunk.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+            let results: [CKRecord.ID: Result<CKRecord, Error>]
+            do {
+                results = try await database.records(for: ids)
+            } catch {
+                log.error("""
+                    sync: refetch batch failed — \(chunk.count, privacy: .public) name(s) stay \
+                    parked: \(error.localizedDescription, privacy: .public)
+                    """)
+                outcome.failed.append(contentsOf: chunk)
+                continue
+            }
+            for id in ids {
+                let name = id.recordName
+                switch results[id] {
+                case .success(let record):
+                    await exchange.acceptRemote(record)
+                    outcome.delivered.append(name)
+                case .failure(let error):
+                    if let ckError = error as? CKError, ckError.code == .unknownItem {
+                        log.notice("sync: refetch of \(name, privacy: .public) — gone from server")
+                        outcome.goneFromServer.append(name)
+                    } else {
+                        log.error("""
+                            sync: refetch of \(name, privacy: .public) failed: \
+                            \(error.localizedDescription, privacy: .public) — stays parked
+                            """)
+                        outcome.failed.append(name)
+                    }
+                case .none:
+                    // Should not happen — `database.records(for:)` documents one
+                    // `Result` per requested id — but a missing answer is a retry,
+                    // never silent loss.
+                    log.error("sync: refetch of \(name, privacy: .public) — no answer from the server")
+                    outcome.failed.append(name)
+                }
+            }
+        }
+        return outcome
+    }
+
     /// M4 T12: pending counts come straight from `CKSyncEngine.State` (or, before the
     /// engine exists, the pre-start buffer) — live, not remembered — since that state IS
     /// the authoritative "what still has to go out."
@@ -580,6 +684,10 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                                    syncEngine: CKSyncEngine) async {
         var conflicts: [CKRecord] = []
         var toResend: [SyncRecordName] = []
+        // One `UnknownItemResend.Outcome` per `.recreate` failure, logged only once the
+        // whole event's plan is known (#91) — a child with nothing archived may still
+        // be resendable if its parent Entry is being recreated in this same event.
+        var recreateOutcomes: [(outcome: UnknownItemResend.Outcome, recordName: String, errorDescription: String)] = []
         for failure in failures {
             let recordName = failure.record.recordID.recordName
             let name = SyncCloudIdentifiers.name(of: failure.record.recordID)
@@ -604,19 +712,17 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 }
             case .recreate:
                 guard let name else { break }
-                if await exchange.resolveUnknownItem(for: name) {
-                    log.notice("""
-                        sync: \(recordName, privacy: .public) save rejected — unknownItem; \
-                        archived server state dropped, re-enqueued as a create
-                        """)
-                    toResend.append(name)
-                } else {
-                    log.error("""
-                        sync: \(recordName, privacy: .public) save rejected — unknownItem with \
-                        nothing archived; left for the reconciliation scan
-                        """)
-                    lastError = failure.error.localizedDescription
-                }
+                let hadServerState = await exchange.resolveUnknownItem(for: name)
+                let parent = name.parentEntry ?? {
+                    guard let ref = failure.record[SyncChildAssetField.entryRef] as? CKRecord.Reference
+                    else { return nil }
+                    return SyncCloudIdentifiers.name(of: ref.recordID)
+                }()
+                recreateOutcomes.append((
+                    outcome: UnknownItemResend.Outcome(name: name, hadServerState: hadServerState, parent: parent),
+                    recordName: recordName,
+                    errorDescription: failure.error.localizedDescription
+                ))
             case .retry:
                 guard let name else { break }
                 log.notice("sync: \(recordName, privacy: .public) fell with its batch — re-enqueued")
@@ -627,6 +733,34 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     \(failure.error.localizedDescription, privacy: .public)
                     """)
                 lastError = failure.error.localizedDescription
+            }
+        }
+        if !recreateOutcomes.isEmpty {
+            let resend = UnknownItemResend.plan(recreateOutcomes.map(\.outcome))
+            let resendSet = Set(resend)
+            toResend += resend
+            for entry in recreateOutcomes {
+                if entry.outcome.hadServerState {
+                    log.notice("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem; \
+                        archived server state dropped, re-enqueued as a create
+                        """)
+                } else if resendSet.contains(entry.outcome.name) {
+                    // #91: nothing archived for this child on its own, but its parent
+                    // Entry is being recreated in this SAME event — resend it right
+                    // behind the parent rather than waiting for a launch-only reconcile.
+                    log.notice("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem with \
+                        nothing archived; its parent Entry is being recreated in this event, \
+                        resending alongside it
+                        """)
+                } else {
+                    log.error("""
+                        sync: \(entry.recordName, privacy: .public) save rejected — unknownItem with \
+                        nothing archived; left for the reconciliation scan
+                        """)
+                    lastError = entry.errorDescription
+                }
             }
         }
         var settled: [SyncRecordName] = []

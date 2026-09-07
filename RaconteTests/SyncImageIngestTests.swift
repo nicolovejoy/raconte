@@ -265,6 +265,37 @@ final class SyncImageIngestTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: parkURL.path))
     }
 
+    /// #85 part 2: an image record whose file asset is missing entirely must be PARKED
+    /// (in the bookkeeping store's diagnostic sense, distinct from the
+    /// `pending-images.json` staging mechanism above) rather than dropped — the same
+    /// land-or-park guarantee `SyncEntryIngestTests` pins for audio/liveLog/revision.
+    func testAnImageMissingItsFileAssetIsParked() async throws {
+        let record = try imageRecord(id: imageID, bytes: pngBytes())
+        record[SyncChildAssetField.file] = nil
+
+        await exchange().acceptRemote(record)
+
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing file asset")
+    }
+
+    /// Fix round 1 (Critical 3): the sha256-present guard only checks non-nil, but
+    /// `RemoteImageFields.init?` also requires non-EMPTY — a record whose sha256 is `""`
+    /// passed the guard and fell into `RemoteImageFields`'s own failure, which used to
+    /// drop unparked. An empty sha256 names nothing to verify against, so it is treated
+    /// as the same sub-cause as an absent field.
+    func testAnImageWithAnEmptySHA256IsParkedAsMissing() async throws {
+        let record = try imageRecord(id: imageID, bytes: pngBytes())
+        record[SyncChildAssetField.sha256] = ""
+
+        await exchange().acceptRemote(record)
+
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing sha256 field")
+    }
+
     // MARK: Ingest — unknown capture: park, then rehydrate in the SAME commit
 
     func testAnImageForAnUnknownCaptureParksAndLeavesCapturesUntouched() async throws {

@@ -280,6 +280,22 @@ final class SyncImageIngestTests: XCTestCase {
         XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing file asset")
     }
 
+    /// Fix round 1 (Critical 3): the sha256-present guard only checks non-nil, but
+    /// `RemoteImageFields.init?` also requires non-EMPTY — a record whose sha256 is `""`
+    /// passed the guard and fell into `RemoteImageFields`'s own failure, which used to
+    /// drop unparked. An empty sha256 names nothing to verify against, so it is treated
+    /// as the same sub-cause as an absent field.
+    func testAnImageWithAnEmptySHA256IsParkedAsMissing() async throws {
+        let record = try imageRecord(id: imageID, bytes: pngBytes())
+        record[SyncChildAssetField.sha256] = ""
+
+        await exchange().acceptRemote(record)
+
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let parked = await bookkeeping.parkedRecords()
+        XCTAssertEqual(parked[record.recordID.recordName]?.reason, "missing sha256 field")
+    }
+
     // MARK: Ingest — unknown capture: park, then rehydrate in the SAME commit
 
     func testAnImageForAnUnknownCaptureParksAndLeavesCapturesUntouched() async throws {

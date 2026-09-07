@@ -32,6 +32,22 @@ actor SyncCoordinator: SyncHooks {
     /// #90: which CloudKit environment this binary talks to — the gate's other
     /// input, alongside whatever tag `bookkeeping` was last stamped with.
     private let environment: CloudKitEnvironment
+    /// Fix wave finding 5: `launch()` and `foregrounded()` can overlap (a foreground
+    /// landing while launch's own `retryParked` is still awaiting the engine, or two
+    /// rapid foregrounds) — without this guard both calls would stamp `noteRetryAttempt`
+    /// on the same names and issue two concurrent `refetch`s for the same record set, a
+    /// double-stamp/double-download that wastes work without corrupting anything (the
+    /// refetch and the stamp are both idempotent-ish per call), but is pointless enough
+    /// to just refuse outright. Not exercised by a test — reentrancy through two
+    /// overlapping actor calls needs real concurrent scheduling to prove, and this
+    /// project's fakes run synchronously under `await`.
+    private var retryInFlight = false
+    /// Fix wave finding 2: the retry budget `foregrounded()` respects. A launch always
+    /// retries every parked name regardless of `attempts` (a fresh launch deserves
+    /// another try); a foreground only retries names that have not yet exhausted this
+    /// budget, so a name that will never resolve (a permanently malformed record, say)
+    /// doesn't get hammered every time the app comes to the foreground forever.
+    static let maxRetryAttempts = 10
 
     init(bookkeeping: SyncBookkeepingStore, scanner: SyncTreeScanner, engine: any CloudEngineControl,
          log: Logger = Logger(subsystem: "org.pianohouseproject.raconte", category: "sync"),
@@ -66,7 +82,7 @@ actor SyncCoordinator: SyncHooks {
         await engine.start(stateData: state)
         await reconcile()
         await fetchNow()
-        await retryParked()
+        await retryParked(includingExhausted: true)
     }
 
     /// #90: before the engine resumes from `engine-state.bin`, make sure every
@@ -121,7 +137,7 @@ actor SyncCoordinator: SyncHooks {
     /// scene becomes active (see `RaconteApp`'s `scenePhase` wiring).
     func foregrounded() async {
         await fetchNow()
-        await retryParked()
+        await retryParked(includingExhausted: false)
     }
 
     private func fetchNow() async {
@@ -129,21 +145,44 @@ actor SyncCoordinator: SyncHooks {
         lastFetchAt = now()
     }
 
-    /// #85 part 3: refetches every currently-parked record name. Stamps an attempt on
-    /// EACH name first, before the refetch runs — so a batch that fails outright (the
-    /// engine's `refetch` catch) still leaves a rising `attempts` count in `parked.json`,
-    /// not just a per-name success path. A name the server says it no longer has is
-    /// unparked with a `.notice`: the terminal case, never silent (memory: inbound sync
-    /// must land or park — and a park that can never be retried again is the same silent
-    /// loss with extra steps).
-    func retryParked() async {
+    /// #85 part 3, fix wave findings 2 and 5: refetches parked record names. Stamps an
+    /// attempt on EACH name actually retried first, before the refetch runs — so a batch
+    /// that fails outright (the engine's `refetch` catch) still leaves a rising
+    /// `attempts` count in `parked.json`, not just a per-name success path. A name the
+    /// server says it no longer has is unparked with a `.notice`: the terminal case,
+    /// never silent (memory: inbound sync must land or park — and a park that can never
+    /// be retried again is the same silent loss with extra steps).
+    ///
+    /// `includingExhausted` is the retry-budget ruling: `launch()` passes `true` (every
+    /// parked name, however many times it has already failed — a fresh launch deserves
+    /// another try), `foregrounded()` passes `false` (a name whose `attempts` already
+    /// reached `Self.maxRetryAttempts` is skipped, so a name that will never resolve
+    /// doesn't get hammered every time the app comes to the foreground, forever). The
+    /// skip is logged once per call, not once per skipped name — a device with many
+    /// exhausted names would otherwise flood the log on every foreground.
+    func retryParked(includingExhausted: Bool) async {
+        guard !retryInFlight else { return }
+        retryInFlight = true
+        defer { retryInFlight = false }
+
         let parked = await bookkeeping.parkedRecords()
         guard !parked.isEmpty else { return }
-        let names = Array(parked.keys)
-        for name in names {
+        let eligible: [String]
+        if includingExhausted {
+            eligible = Array(parked.keys)
+        } else {
+            eligible = parked.filter { $0.value.attempts < Self.maxRetryAttempts }.map(\.key)
+        }
+        let skipped = parked.count - eligible.count
+        if skipped > 0 {
+            log.notice("sync: skipped \(skipped) parked record(s) that exhausted their retry budget")
+        }
+        guard !eligible.isEmpty else { return }
+
+        for name in eligible {
             await bookkeeping.noteRetryAttempt(name)
         }
-        let outcome = await engine.refetch(recordNames: names)
+        let outcome = await engine.refetch(recordNames: eligible)
         for name in outcome.goneFromServer {
             log.notice("sync: \(name, privacy: .public) is gone from the server — unparked")
             await bookkeeping.unpark(name)

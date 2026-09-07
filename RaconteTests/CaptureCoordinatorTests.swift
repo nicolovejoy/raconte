@@ -1448,4 +1448,20 @@ final class CaptureCoordinatorTests: XCTestCase {
 
         await coordinator.done()
     }
+
+    // MARK: - Duration formatting (#67 item 4): one clock, not two
+
+    /// `formatDuration` and `RecFormat.clock` used to be two independent implementations
+    /// of the same "seconds to a readable clock" rule; `formatDuration` must now delegate
+    /// rather than duplicate.
+    func testFormatDurationDelegatesToRecFormatClock() {
+        XCTAssertEqual(CaptureCoordinator.formatDuration(3_661), RecFormat.clock(3_661))
+    }
+
+    /// The bug the duplication produced: `formatDuration`'s own `"%d:%02d"` had no hours
+    /// component, so a full hour read "60:00" instead of "1:00:00".
+    func testFormatDurationIsHoursAwarePastAnHour() {
+        XCTAssertEqual(CaptureCoordinator.formatDuration(3_600), "1:00:00",
+                       "a two-field %d:%02d formatter loses the hour and reads 60:00 here")
+    }
 }

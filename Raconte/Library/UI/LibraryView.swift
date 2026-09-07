@@ -689,6 +689,16 @@ struct LibraryEntryRow: View {
                         .accessibilityIdentifier("library.row.degradedMarker")
                 }
 
+                // #71: flagged, never blocked (owner ruling 4) — a quiet marker only,
+                // never a gate on any control or filter.
+                if item.isDatedOutsideJournalSpan {
+                    Image(systemName: "calendar.badge.exclamationmark")
+                        .font(.caption2)
+                        .foregroundStyle(InkTone.inkSecondary.color)
+                        .accessibilityLabel("Dated outside this journal's range")
+                        .accessibilityIdentifier("library.outOfSpan")
+                }
+
                 Spacer()
 
                 Text(durationText)

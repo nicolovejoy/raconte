@@ -548,11 +548,15 @@ final class CaptureUITests: XCTestCase {
         return nil
     }
 
-    /// Parses the `m:ss` / `mm:ss` shape `CaptureCoordinator.formatDuration` emits.
+    /// Parses the `m:ss` / `h:mm:ss` shape `CaptureCoordinator.formatDuration`
+    /// (`RecFormat.clock`) emits — hours-aware once past an hour, so a two-part label
+    /// is `m:ss` and a three-part label is `h:mm:ss`; a `guard parts.count == 2` here
+    /// used to return `nil` for any hour-long recording.
     private static func seconds(_ label: String) -> Double? {
         let parts = label.split(separator: ":").compactMap { Double($0) }
-        guard parts.count == 2 else { return nil }
-        return parts[0] * 60 + parts[1]
+        guard parts.count == 2 || parts.count == 3 else { return nil }
+        let weights: [Double] = parts.count == 3 ? [3_600, 60, 1] : [60, 1]
+        return zip(parts, weights).reduce(0) { $0 + $1.0 * $1.1 }
     }
 
 }

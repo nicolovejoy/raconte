@@ -26,7 +26,11 @@ import Foundation
 /// Skipped on purpose (matches the plan's "Skipped on purpose" list): `segments/`
 /// (deleted at finalize anyway), `transcript/head.json` (a cache), `images/thumbnails/`,
 /// and anything outside `captures/`/`journals.json`/`journals/` entirely
-/// (`trash-pending/`, `quarantine/`, `sync/`).
+/// (`trash-pending/`, `quarantine/`, `sync/`). Anything else this format doesn't
+/// recognize — a stray `canonical-<n>.json.<uuid>.part` body nothing sweeps, a
+/// directory under `images/` other than `thumbnails/`, a name a future app version
+/// adds — is warned about and left out of the package; never copied, and never
+/// silently dropped without a trace (Fix wave Finding 2).
 /// A container root that doesn't exist (or isn't a directory) at all is a real failure —
 /// collapsing it to the same empty `Listing` a legitimately-empty archive produces would
 /// be silent data loss on an export path. A root that DOES exist but has no `captures/`
@@ -148,15 +152,53 @@ enum ArchiveWalker {
                                     relativePath: "\(base)/\(SegmentLayout.entryLogFileName)"))
         }
 
-        files += transcriptFiles(base: base, directory: directory)
-        files += imageFiles(base: base, directory: directory)
+        files += transcriptFiles(base: base, directory: directory, warnings: &warnings)
+        files += imageFiles(base: base, directory: directory, warnings: &warnings)
+        warnings += topLevelUnrecognizedWarnings(base: base, directory: directory)
 
         return files
     }
 
+    // MARK: Top-level capture directory — anything not one of the known files/
+    // directories is unrecognized (Fix wave Finding 2). `segments/` is the one
+    // documented skip at this level (deleted at finalize anyway); everything else
+    // recognized here is handled by its own dedicated check above or by
+    // `transcriptFiles`/`imageFiles` below.
+
+    private static func topLevelUnrecognizedWarnings(base: String, directory: URL) -> [String] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [] }
+
+        let recognizedFiles: Set<String> = [
+            SegmentLayout.manifestFileName,
+            SegmentLayout.entryMetadataFileName,
+            SegmentLayout.entryLogFileName,
+        ]
+        let recognizedDirectories: Set<String> = [
+            SegmentLayout.finalDirName,
+            SegmentLayout.transcriptDirName,
+            SegmentLayout.imagesDirName,
+            SegmentLayout.segmentsDirName, // documented skip — deleted at finalize
+        ]
+
+        var warnings: [String] = []
+        for name in names.sorted() {
+            var isDirectory: ObjCBool = false
+            fm.fileExists(atPath: directory.appendingPathComponent(name).path, isDirectory: &isDirectory)
+            let recognized = isDirectory.boolValue
+                ? recognizedDirectories.contains(name)
+                : recognizedFiles.contains(name)
+            if !recognized {
+                warnings.append("\(base): unrecognized file \(name), not exported")
+            }
+        }
+        return warnings
+    }
+
     // MARK: transcript/ — revisions + draft, markers (own AND foreign), live log
 
-    private static func transcriptFiles(base: String, directory: URL) -> [ExportFile] {
+    private static func transcriptFiles(base: String, directory: URL,
+                                        warnings: inout [String]) -> [ExportFile] {
         let fm = FileManager.default
         let transcriptDir = SegmentLayout.transcriptDirectory(captureDirectory: directory)
         guard let names = try? fm.contentsOfDirectory(atPath: transcriptDir.path) else { return [] }
@@ -174,25 +216,44 @@ enum ArchiveWalker {
                 files.append(ExportFile(source: source, relativePath: "\(base)/markers/\(name)"))
             } else if name == SegmentLayout.liveTranscriptFileName {
                 files.append(ExportFile(source: source, relativePath: "\(base)/\(name)"))
+            } else if name == SegmentLayout.transcriptHeadFileName {
+                continue // documented skip — a cache, rebuildable from the revisions
+            } else {
+                // Anything else here — a stray `canonical-<n>.json.<uuid>.part` body
+                // nothing sweeps, or a name a future app version adds — is warned
+                // about, never silently dropped (Fix wave Finding 2).
+                warnings.append("\(base): unrecognized file \(SegmentLayout.transcriptDirName)/\(name), not exported")
             }
-            // `head.json` (a cache) and any stray `.part` file match none of the above
-            // and are silently excluded — package layout, "Skipped on purpose".
         }
         return files
     }
 
     // MARK: images/ — originals + sidecars, never thumbnails/
 
-    private static func imageFiles(base: String, directory: URL) -> [ExportFile] {
+    private static func imageFiles(base: String, directory: URL,
+                                   warnings: inout [String]) -> [ExportFile] {
         let fm = FileManager.default
         let imagesDir = SegmentLayout.imagesDirectory(captureDirectory: directory)
         guard let names = try? fm.contentsOfDirectory(atPath: imagesDir.path) else { return [] }
 
-        return names.sorted()
-            .filter { $0 != SegmentLayout.imageThumbnailsDirName }
-            .map { name in
-                ExportFile(source: imagesDir.appendingPathComponent(name),
-                          relativePath: "\(base)/\(SegmentLayout.imagesDirName)/\(name)")
+        var files: [ExportFile] = []
+        for name in names.sorted() {
+            if name == SegmentLayout.imageThumbnailsDirName { continue } // documented skip
+
+            let source = imagesDir.appendingPathComponent(name)
+            var isDirectory: ObjCBool = false
+            fm.fileExists(atPath: source.path, isDirectory: &isDirectory)
+            if isDirectory.boolValue {
+                // Fix wave Finding 8: a stray directory under `images/` (other than
+                // `thumbnails/`) is not a file to list — it goes through the same
+                // "unrecognized" warning as Finding 2, never silently listed as if it
+                // were one exportable file.
+                warnings.append("\(base): unrecognized file \(SegmentLayout.imagesDirName)/\(name), not exported")
+                continue
             }
+            files.append(ExportFile(source: source,
+                                    relativePath: "\(base)/\(SegmentLayout.imagesDirName)/\(name)"))
+        }
+        return files
     }
 }

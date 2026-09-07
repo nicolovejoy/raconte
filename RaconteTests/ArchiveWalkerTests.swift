@@ -410,4 +410,49 @@ final class ArchiveWalkerTests: XCTestCase {
         ])
         XCTAssertEqual(result.files.count, 2)
     }
+
+    // MARK: Fix wave Finding 2 — a stray revision-body `.part` file (nothing sweeps
+    // those today) and an arbitrary top-level file are both warned about and never
+    // exported, rather than silently vanishing.
+
+    func testUnrecognizedFilesProduceWarningsAndAreNeverExported() throws {
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_070))
+        try writeFinalM4A(id)
+
+        let strayPartName = "canonical-1.json.abc.part"
+        try FileManager.default.createDirectory(at: transcriptDir(id), withIntermediateDirectories: true)
+        try Data("part-bytes".utf8).write(to: transcriptDir(id).appendingPathComponent(strayPartName))
+        try Data("notes".utf8).write(to: captureDir(id).appendingPathComponent("notes.txt"))
+
+        let result = try ArchiveWalker.list(containerRoot: containerRoot)
+
+        XCTAssertTrue(result.warnings.contains(
+            "entries/\(id): unrecognized file transcript/\(strayPartName), not exported"))
+        XCTAssertTrue(result.warnings.contains("entries/\(id): unrecognized file notes.txt, not exported"))
+
+        let paths = result.files.map(\.relativePath)
+        XCTAssertFalse(paths.contains { $0.contains(strayPartName) })
+        XCTAssertFalse(paths.contains { $0.hasSuffix("notes.txt") })
+    }
+
+    // MARK: Fix wave Finding 8 — a stray directory under `images/` (other than
+    // `thumbnails/`) is warned about via the same mechanism, never listed as if it
+    // were itself one exportable file.
+
+    func testStrayDirectoryUnderImagesProducesWarningAndIsNotExported() throws {
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_080))
+        try writeFinalM4A(id)
+
+        let strayDir = SegmentLayout.imagesDirectory(captureDirectory: captureDir(id))
+            .appendingPathComponent("stray", isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        try Data("x-bytes".utf8).write(to: strayDir.appendingPathComponent("x.bin"))
+
+        let result = try ArchiveWalker.list(containerRoot: containerRoot)
+
+        XCTAssertTrue(result.warnings.contains("entries/\(id): unrecognized file images/stray, not exported"))
+        XCTAssertFalse(result.files.map(\.relativePath).contains { $0.contains("images/stray") })
+    }
 }

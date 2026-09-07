@@ -72,7 +72,9 @@ before search rather than after.
 - **Open-format export + verification.** Per-entry directories (`audio.m4a`,
   `transcript.md`, `entry.json`, photos), manifest, checksums. The spec is already
   written in `plans/2026-07-29-data-model-and-migration.md`. Export is the longevity
-  story — CloudKit is only transport.
+  story — CloudKit is only transport. **Built 2026-09-06 on branch `feat/archive-export`**
+  — exporter, verifier and the About → Archive → "Export archive…" action all exist
+  (`docs/export-format.md`); PR pending.
 - **Migrate the frozen web entries.** Counted directly against the live Neon database on
   2026-09-06 — **36 entries, 4 journals, 34 audio files, 39.5 MB, 53k characters of
   transcript, 63 minutes of audio.** The breakdown matters:
@@ -228,9 +230,9 @@ Three claims, stated plainly so they can be rejected:
 
 ## Open questions for the owner
 
-1. **Has the M4 acceptance gate been run** — delete the app from a Mac, reinstall, confirm
+1. ~~Has the M4 acceptance gate been run — delete the app from a Mac, reinstall, confirm
    the full archive reconstructs from CloudKit? Phase 2 tears down the other copy, so this
-   is load-bearing.
+   is load-bearing.~~ **Answered 2026-09-06: never run.**
 2. ~~How many entries are actually on recountly.org?~~ **Answered 2026-09-06: 36 entries,
    34 audio files, of which 23 are the paper-archive imports. Backed up to
    `~/recountly-export-2026-09-06/`.** The owner's initial recollection was that this was

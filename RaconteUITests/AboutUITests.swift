@@ -66,5 +66,8 @@ final class AboutUITests: XCTestCase {
         XCTAssertTrue(revealRow(app, "about.sync.unavailable").exists,
                       "harness builds have no sync coordinator — the Sync section must "
                       + "degrade to its explanatory row, never hide")
+
+        // T13: the Archive section comes after Sync in document order.
+        XCTAssertTrue(revealRow(app, "about.export").exists, "export archive row missing")
     }
 }

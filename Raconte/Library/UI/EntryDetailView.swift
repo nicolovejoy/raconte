@@ -123,6 +123,17 @@ struct EntryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                // #71: flagged, never blocked (owner ruling 4) — a quiet sentence only,
+                // never a gate on any control. `isDatedOutsideJournalSpan` already
+                // implies `item.journal?.span != nil`, but the `let` keeps this honest
+                // about the sentence's only inputs.
+                if item.isDatedOutsideJournalSpan, let journal = item.journal {
+                    Text(outOfSpanSentence(journal: journal))
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("detail.outOfSpan")
+                }
+
                 // Task 6 (#55): images strip first (only when non-empty), transcript
                 // immediately after — no header row, no date/journal/trash sections;
                 // all of that now lives in the `⋯` info sheet (`EntryInfoSheet`).
@@ -647,6 +658,17 @@ struct EntryDetailView: View {
     /// button is the first task of the deferred #107 creation-flow pass.
     static func inviteRecordingVisible(hasAudio: Bool, imageCount: Int) -> Bool {
         !hasAudio && imageCount > 0
+    }
+
+    /// #71's sentence, broken out of the view body: a single nested string-interpolation
+    /// expression inline in `Text(...)` blew the type-checker's time budget.
+    private func outOfSpanSentence(journal: Journal) -> String {
+        var sentence = "Dated outside \(journal.name)'s range"
+        if let span = journal.span {
+            sentence += " (\(span.formatted()))"
+        }
+        sentence += "."
+        return sentence
     }
 
     @ViewBuilder

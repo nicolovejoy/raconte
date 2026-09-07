@@ -79,7 +79,8 @@ pending, folded into M5 below rather than M3 as originally scoped). M4/M5 not st
 4. **CloudKit replication** — CKSyncEngine, immutable assets, conflict policy, tombstones.
    Done = delete app from a Mac, reinstall, full archive reconstructs from CloudKit.
 5. **Reading polish + enrichment + export** — Mac three-pane reading, typography
-   (Newsreader idea carries over), Claude enrichment, open-format export + verification.
+   (Newsreader idea carries over), Claude enrichment, open-format export + verification
+   (export + verification built 2026-09-06, branch `feat/archive-export`).
 
 ## The web app / server during and after
 

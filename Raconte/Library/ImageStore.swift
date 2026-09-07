@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -267,8 +266,10 @@ actor ImageStore {
 
     // MARK: Pure seams (sync; no actor hop, so format/decode logic is testable on its own)
 
+    /// Delegates to `SHA256Hex.of` (T11) — kept as its own name so existing call sites
+    /// (and any test computing an expected digest against it) need no change.
     static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256Hex.of(data)
     }
 
     static func decodeSidecar(_ data: Data) throws -> ImageSidecar {

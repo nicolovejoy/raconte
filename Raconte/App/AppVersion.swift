@@ -24,4 +24,15 @@ enum AppVersion {
         displayString(short: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
                       build: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
     }
+
+    /// T13: `CFBundleShortVersionString` alone, normalized through the same
+    /// empty-is-absent rule `displayString` already applies to it — the source
+    /// `AppServices` reads for `ArchiveExporter`'s `appVersion:` field, so the export
+    /// manifest and this screen's own "Version" row can never independently decide
+    /// what "unknown" means, and there is exactly one place that knows this Info.plist
+    /// key.
+    static func shortVersion(bundle: Bundle = .main) -> String {
+        displayString(short: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+                      build: nil)
+    }
 }

@@ -403,4 +403,57 @@ final class ArchiveExporterTests: XCTestCase {
 
         XCTAssertEqual(runner.state, .idle)
     }
+
+    // MARK: (k) #154 — ExportRunner.verify(package:) runs the verifier alone on an
+    // existing package and publishes `.verified`, so About's "Verify archive…" row can
+    // check a years-old package without re-exporting.
+
+    @MainActor
+    func testExportRunnerVerifyPublishesVerifiedForACleanPackage() async throws {
+        try buildFixture()
+        let written = try await exporter().export(into: destinationRoot)
+        let runner = ExportRunner(exporter: exporter())
+
+        await runner.verify(package: written.packageURL)
+
+        guard case let .verified(packageName, verification) = runner.state else {
+            return XCTFail("expected .verified, got \(runner.state)")
+        }
+        XCTAssertEqual(packageName, written.packageURL.lastPathComponent)
+        XCTAssertTrue(verification.ok, "clean package must verify: \(verification.problems)")
+        XCTAssertGreaterThan(verification.checkedFiles, 0)
+    }
+
+    @MainActor
+    func testExportRunnerVerifyOnAFolderWithoutAManifestReportsManifestUnreadable() async throws {
+        let notAPackage = destinationRoot.appendingPathComponent("not-a-package", isDirectory: true)
+        try FileManager.default.createDirectory(at: notAPackage, withIntermediateDirectories: true)
+        let runner = ExportRunner(exporter: exporter())
+
+        await runner.verify(package: notAPackage)
+
+        guard case let .verified(packageName, verification) = runner.state else {
+            return XCTFail("expected .verified, got \(runner.state)")
+        }
+        XCTAssertEqual(packageName, "not-a-package")
+        XCTAssertFalse(verification.ok)
+        guard case .manifestUnreadable = verification.problems.first else {
+            return XCTFail("expected .manifestUnreadable first, got \(verification.problems)")
+        }
+    }
+
+    func testProblemSummaryNamesTheFileOrFieldForEveryCase() {
+        XCTAssertEqual(ArchiveVerifier.Problem.manifestUnreadable("no such file").summary,
+                       "manifest unreadable: no such file")
+        XCTAssertEqual(ArchiveVerifier.Problem.missingFile("entries/x/audio.m4a").summary,
+                       "missing entries/x/audio.m4a")
+        XCTAssertEqual(ArchiveVerifier.Problem.checksumMismatch("entries/x/audio.m4a").summary,
+                       "checksum mismatch entries/x/audio.m4a")
+        XCTAssertEqual(ArchiveVerifier.Problem.unlistedFile("stray.txt").summary,
+                       "unlisted stray.txt")
+        XCTAssertEqual(ArchiveVerifier.Problem.transcriptMismatch(captureID: "01X").summary,
+                       "transcript mismatch for 01X")
+        XCTAssertEqual(ArchiveVerifier.Problem.countMismatch(field: "entries", manifest: 3, found: 2).summary,
+                       "entries: manifest says 3, found 2")
+    }
 }

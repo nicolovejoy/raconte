@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Walks the on-disk archive and reports every sync-eligible artifact plus a digest of
 /// the content that artifact's record is built from (T3). Pure IO + digest computation —
@@ -326,9 +325,10 @@ struct SyncTreeScanner {
 
     /// Full lowercase-hex sha256 — the one hashing formula every digest definition
     /// above uses. Internal, not `private`, so tests compute the same expected values
-    /// without duplicating the formula.
+    /// without duplicating the formula. Delegates to `SHA256Hex.of` (T11) — kept as its
+    /// own name/signature so `SyncTreeScannerTests` needs no change.
     static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256Hex.of(data)
     }
 }
 

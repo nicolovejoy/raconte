@@ -14,6 +14,13 @@ final class AppServices {
     /// UI-test harness. Nothing on screen depends on it: sync is a background concern
     /// that never blocks or delays capture (M4 design §8).
     let sync: SyncCoordinator?
+    /// T13: `AboutView`'s "Export archive…" action. Built here, once, at app-composition
+    /// time — never as a view's own `@State` default, which would run
+    /// `AppContainer.root()`'s directory-creating file I/O every time that view value
+    /// gets constructed. `AppVersion`/`BuildInfo` are the same two bundle-reading types
+    /// the About rows already read, so this is the only place that pairs
+    /// `CFBundleShortVersionString`/`CFBundleVersion` for the export manifest.
+    let exportRunner: ExportRunner
 
     init() {
         let library = LibraryScreenModel.live()
@@ -23,6 +30,10 @@ final class AppServices {
         // Built from the library's own stores, never its own copies — see
         // `SyncCoordinator.live(library:)`.
         self.sync = SyncCoordinator.live(library: library)
+        self.exportRunner = ExportRunner(exporter: ArchiveExporter(
+            containerRoot: AppContainer.root(),
+            appVersion: AppVersion.shortVersion(),
+            build: AppVersion.displayString(short: nil, build: BuildInfo.buildNumber)))
         // M4 T6: the finalize-completion choke point (`CaptureScreenModel
         // .finishCurrentCapture` → `FinalizeArtifactPush.push`) needs a `SyncHooks` of
         // its own — it fires `.audio`/`.liveLog` too, which are not

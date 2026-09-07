@@ -97,6 +97,12 @@ targets:
         # Required under the macOS sandbox for CloudKit to reach the network at all;
         # without it every sync call fails with a connection error on the Mac only.
         com.apple.security.network.client: true
+        # T13: the "Export archive…" action's `.fileImporter` hands back a
+        # security-scoped folder URL the owner picked outside the sandbox — without
+        # this key macOS silently refuses every write under it. iOS ignores this key
+        # (its document picker is scoped by the system regardless), same as the other
+        # macOS-only sandbox keys above.
+        com.apple.security.files.user-selected.read-write: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.pianohouseproject.raconte

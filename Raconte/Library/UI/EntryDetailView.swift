@@ -27,6 +27,10 @@ struct EntryDetailView: View {
     /// `router.replaceTopEntry(with:)`. A closure, not the router, following the
     /// established seam (`LibraryView.onCreateEntry`).
     let onPage: (String) -> Void
+    /// #148: navigate to the entry's journal. Wired by `ContentView` to
+    /// `router.select(.journal(id))`, which pops this screen — the same shape as
+    /// `onPage`, and the same no-op default `LibraryView.onEditJournal` uses for previews.
+    var onOpenJournal: (String) -> Void = { _ in }
 
     @State private var item: EntryListItem
     @State private var playback: CapturePlayback?
@@ -106,11 +110,13 @@ struct EntryDetailView: View {
 
     @MainActor
     init(model: LibraryScreenModel, item: EntryListItem,
-         pagingEnabled: Bool, onPage: @escaping (String) -> Void) {
+         pagingEnabled: Bool, onPage: @escaping (String) -> Void,
+         onOpenJournal: @escaping (String) -> Void = { _ in }) {
         self.model = model
         self.captureID = item.captureID
         self.pagingEnabled = pagingEnabled
         self.onPage = onPage
+        self.onOpenJournal = onOpenJournal
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
@@ -123,6 +129,12 @@ struct EntryDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                // #148: which journal this is. Coming from All Entries, search or a
+                // receipt card there was nothing on screen that said. Pulled out to its
+                // own computed property (like `imagesSection`/`transcriptSection` below)
+                // — inlined here, the compiler timed out type-checking this VStack.
+                journalRow
+
                 // #71: flagged, never blocked (owner ruling 4) — a quiet sentence only,
                 // never a gate on any control. `isDatedOutsideJournalSpan` already
                 // implies `item.journal?.span != nil`, but the `let` keeps this honest
@@ -669,6 +681,43 @@ struct EntryDetailView: View {
         }
         sentence += "."
         return sentence
+    }
+
+    /// #148: the accessibility label for `journalRow`'s link, broken out of the view body
+    /// for the same reason as `outOfSpanSentence` above — an inline string interpolation
+    /// blew the type-checker's time budget once combined with the rest of this VStack.
+    private func journalLinkAccessibilityLabel(journal: Journal) -> String {
+        "In \(journal.name)"
+    }
+
+    /// #148: which journal this entry is in — a Button, not a NavigationLink, since the
+    /// destination is a sidebar PLACE and `select` clears the detail path on the way
+    /// there. Pulled out of `body` for the same time-budget reason as `imagesSection`.
+    @ViewBuilder
+    private var journalRow: some View {
+        if let journal = item.journal {
+            Button {
+                onOpenJournal(journal.id)
+            } label: {
+                Label(journal.name, systemImage: "book.closed")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("detail.journalLink")
+            .accessibilityLabel(journalLinkAccessibilityLabel(journal: journal))
+            .accessibilityHint("Opens the journal")
+        } else if item.hasDanglingJournal {
+            Text("Journal missing")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("detail.journalMissing")
+        } else {
+            Text("Unfiled")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("detail.journalUnfiled")
+        }
     }
 
     @ViewBuilder

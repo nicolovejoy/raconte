@@ -32,7 +32,12 @@ struct AboutView: View {
     /// inline in `body` (same idiom as `DebugMenuView.buildInfo`).
     @State private var environment: CloudKitEnvironment?
 
-    @State private var showingExportPicker = false
+    /// #154: one `.fileImporter` serves both Archive buttons. The MODE is set by whichever
+    /// button opens the picker and never cleared, so the completion closure can read it
+    /// after the picker has dismissed; only the flag flips.
+    private enum ArchivePickerMode { case export, verify }
+    @State private var archivePickerMode: ArchivePickerMode = .export
+    @State private var showingArchivePicker = false
 
     var body: some View {
         List {
@@ -83,19 +88,35 @@ struct AboutView: View {
             SyncStatusSectionView(sync: sync, idPrefix: "about")
 
             Section("Archive") {
-                Button("Export archive…") { showingExportPicker = true }
-                    .accessibilityIdentifier("about.export")
-                    .disabled(exportRunner.state == .running)
+                Button("Export archive…") {
+                    archivePickerMode = .export
+                    showingArchivePicker = true
+                }
+                .accessibilityIdentifier("about.export")
+                .disabled(exportRunner.isRunning)
 
-                if exportRunner.state == .running {
+                // #154: the same verifier the export runs, over a package picked from
+                // anywhere — a years-old copy on a USB stick, or the M4 gate's fresh
+                // export from a reinstalled Mac.
+                Button("Verify archive…") {
+                    archivePickerMode = .verify
+                    showingArchivePicker = true
+                }
+                .accessibilityIdentifier("about.verify")
+                .disabled(exportRunner.isRunning)
+
+                // Fix wave Finding 2: the label reads the RUNNER's own state, not
+                // view-local `archivePickerMode` — navigating away from About mid-verify
+                // and back must still show "Verifying…", not whatever the picker mode
+                // happened to be left at.
+                if case let .running(verifying) = exportRunner.state {
                     HStack {
                         ProgressView()
-                        Text("Exporting…")
+                        Text(verifying ? "Verifying…" : "Exporting…")
                             .font(.body)
                     }
                     .accessibilityIdentifier("about.export.progress")
                 }
-
                 if let resultText = exportResultText {
                     Text(resultText)
                         .font(.body)
@@ -115,7 +136,7 @@ struct AboutView: View {
         // T13: attached to the LIST — the screen's outer view — never to a `Section`;
         // a `.fileImporter` on a `Section` silently never presents on iOS 26 (standing
         // lesson, `.sheet` has the same failure mode).
-        .fileImporter(isPresented: $showingExportPicker,
+        .fileImporter(isPresented: $showingArchivePicker,
                      allowedContentTypes: [.folder],
                      allowsMultipleSelection: false) { result in
             switch result {
@@ -129,28 +150,35 @@ struct AboutView: View {
                     exportRunner.fail(String(describing: error))
                 }
             case .success(let urls):
-                guard let destination = urls.first else { return }
+                guard let url = urls.first else { return }
+                let mode = archivePickerMode
                 Task {
-                    guard destination.startAccessingSecurityScopedResource() else {
-                        exportRunner.fail("could not access the selected folder")
+                    guard url.startAccessingSecurityScopedResource() else {
+                        exportRunner.fail(mode == .verify
+                                          ? "could not access the selected package"
+                                          : "could not access the selected folder")
                         return
                     }
-                    defer { destination.stopAccessingSecurityScopedResource() }
-                    await exportRunner.run(into: destination)
+                    defer { url.stopAccessingSecurityScopedResource() }
+                    switch mode {
+                    case .export: await exportRunner.run(into: url)
+                    case .verify: await exportRunner.verify(package: url)
+                    }
                 }
             }
         }
     }
 
-    /// `about.export.result`'s text, per T13's exact three shapes: verified success,
-    /// success with verification problems, and outright failure. The folder name comes
+    /// `about.export.result`'s text, per its four shapes: verified export success,
+    /// export success with verification problems, a standalone verify run (#154,
+    /// itself clean or with problems), and outright failure. The folder name comes
     /// back out of the written package's own URL — `ArchiveExporter.export(into:)`
     /// writes its timestamped package directory directly inside the picked folder, so
     /// the package URL's parent IS the folder the owner chose.
     private var exportResultText: String? {
         switch exportRunner.state {
         case .idle, .running:
-            return nil
+            return nil // .running matches regardless of `verifying:` payload
         case let .finished(report, verification):
             let folderName = report.packageURL.deletingLastPathComponent().lastPathComponent
             if verification.ok {
@@ -158,8 +186,17 @@ struct AboutView: View {
             } else {
                 return "Exported, but verification found \(verification.problems.count) problems"
             }
+        case let .verified(packageName, verification):
+            if verification.ok {
+                return "Verified \(packageName): \(verification.checkedFiles) files, no problems"
+            } else {
+                let count = verification.problems.count
+                let noun = count == 1 ? "problem" : "problems"
+                let first = verification.problems[0].summary
+                return "Verification of \(packageName) found \(count) \(noun) — first: \(first)"
+            }
         case let .failed(reason):
-            return "Export failed: \(reason)"
+            return "Failed: \(reason)"
         }
     }
 }

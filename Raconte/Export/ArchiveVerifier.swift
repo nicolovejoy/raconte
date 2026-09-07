@@ -26,6 +26,20 @@ enum ArchiveVerifier {
         case unlistedFile(String)
         case transcriptMismatch(captureID: String)
         case countMismatch(field: String, manifest: Int, found: Int)
+
+        /// One line the About screen can show for the FIRST problem — enough to know
+        /// which file or count to go look at; the full list stays in the `Report`.
+        var summary: String {
+            switch self {
+            case .manifestUnreadable(let why): return "manifest unreadable: \(why)"
+            case .missingFile(let path): return "missing \(path)"
+            case .checksumMismatch(let path): return "checksum mismatch \(path)"
+            case .unlistedFile(let path): return "unlisted \(path)"
+            case .transcriptMismatch(let captureID): return "transcript mismatch for \(captureID)"
+            case .countMismatch(let field, let manifest, let found):
+                return "\(field): manifest says \(manifest), found \(found)"
+            }
+        }
     }
 
     struct Report: Equatable, Sendable {
@@ -44,7 +58,7 @@ enum ArchiveVerifier {
             manifest = try CaptureCoding.decoder().decode(ExportManifest.self, from: data)
         } catch {
             return Report(checkedFiles: 0,
-                          problems: [.manifestUnreadable("\(manifestFileName): \(error)")])
+                          problems: [.manifestUnreadable("\(manifestFileName): \(error.localizedDescription)")])
         }
 
         let onDiskPaths = onDiskRelativePaths(under: packageURL, excluding: manifestFileName)

@@ -195,12 +195,16 @@ actor SyncCoordinator: SyncHooks {
     /// best-effort where the timestamps are not).
     func status() async -> SyncStatus {
         let snapshot = await engine.snapshot()
+        let parked = await bookkeeping.parkedRecords()
+            .map { ParkedSummary(name: $0.key, reason: $0.value.reason, attempts: $0.value.attempts) }
+            .sorted { $0.name < $1.name }
         return SyncStatus(accountState: snapshot.accountState,
                           lastPushAt: lastPushAt,
                           lastFetchAt: lastFetchAt,
                           pendingSaveCount: snapshot.pendingSaveCount,
                           pendingDeleteCount: snapshot.pendingDeleteCount,
-                          lastError: snapshot.lastError)
+                          lastError: snapshot.lastError,
+                          parked: parked)
     }
 
     /// The hook entry point for the six local write chokepoints (design §3). Enqueues
@@ -274,6 +278,14 @@ actor SyncCoordinator: SyncHooks {
     }
 }
 
+/// #156: one parked record as the Debug/About screens show it. `name` is the
+/// `SyncRecordName` raw value; `reason` is the free-text diagnostic `park` recorded.
+struct ParkedSummary: Equatable, Sendable {
+    var name: String
+    var reason: String
+    var attempts: Int
+}
+
 /// M4 T12: the Debug screen's status snapshot (design §8's "status line: last push, last
 /// fetch, pending counts, last error"). Exactly the brief's five fields, nothing more —
 /// user-facing surfacing is later polish (design §8), this is debug-only.
@@ -284,6 +296,9 @@ struct SyncStatus: Equatable, Sendable {
     var pendingSaveCount: Int
     var pendingDeleteCount: Int
     var lastError: String?
+    /// #156: everything in `sync/parked.json`, sorted by name. Empty on a healthy
+    /// install — a non-empty list is the one diagnostic #150 asks the owner to look at.
+    var parked: [ParkedSummary] = []
 }
 
 extension SyncCoordinator {

@@ -116,9 +116,14 @@ manifest's own file count, for a quick "did it check what I expected" sanity rea
 
 ## Verifying a package by hand
 
-No app is required to re-check a package's checksums — the manifest is plain JSON, and
-`jq`+`shasum` on any Unix machine reproduces exactly what `ArchiveVerifier` does for the
-file-level checks. Run this from inside the package directory itself:
+In the app: About → Archive → **Verify archive…** → pick the package folder. The row under
+the buttons reads `Verified <package>: N files, no problems`, or names the count and the
+first problem found. It runs the same `ArchiveVerifier` the export runs, so a package
+copied to a USB stick years ago can be checked on any Mac or iPhone with the app.
+
+No app is required, though — the manifest is plain JSON, and `jq`+`shasum` on any Unix
+machine reproduces exactly what `ArchiveVerifier` does for the file-level checks. Run this
+from inside the package directory itself:
 
 ```
 jq -r '.files | to_entries[] | "\(.value.sha256)  \(.key)"' raconte-export.json | shasum -a 256 -c

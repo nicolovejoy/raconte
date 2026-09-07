@@ -69,5 +69,9 @@ final class AboutUITests: XCTestCase {
 
         // T13: the Archive section comes after Sync in document order.
         XCTAssertTrue(revealRow(app, "about.export").exists, "export archive row missing")
+
+        // #154: Verify archive… sits directly under Export in the same section. The
+        // picker itself cannot be driven from XCUITest, so presence is the whole claim.
+        XCTAssertTrue(revealRow(app, "about.verify").exists, "verify archive row missing")
     }
 }

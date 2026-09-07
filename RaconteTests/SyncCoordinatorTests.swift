@@ -337,6 +337,34 @@ final class SyncCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(status, SyncStatus(accountState: "unknown", lastPushAt: nil, lastFetchAt: nil,
                                           pendingSaveCount: 0, pendingDeleteCount: 0, lastError: nil))
+        XCTAssertEqual(status.parked, [], "a fresh store parks nothing")
+    }
+
+    /// #156: `status()` surfaces every parked name with its reason and attempt count,
+    /// sorted by name so the Debug/About rows are stable across refreshes. Fix wave
+    /// Finding 3: FOUR names inserted out of order — with only two, a coin-flip
+    /// dictionary iteration order can still land in sorted order by chance and pass
+    /// vacuously; four makes that far less likely, and the second assertion (parked
+    /// names already sorted) independently pins the property rather than just the one
+    /// fixture's exact order.
+    func testStatusListsParkedRecordsSortedByNameWithReasonAndAttempts() async throws {
+        let (coordinator, _, store) = try await makeCoordinator()
+        await store.park("entry:01ZZZZZZZZZZZZZZZZZZZZZZZZ", reason: "asset not yet arrived")
+        await store.park("entry:01AAAAAAAAAAAAAAAAAAAAAAAA", reason: "unknown item")
+        await store.park("entry:01MMMMMMMMMMMMMMMMMMMMMMMM", reason: "unresolved reference")
+        await store.park("entry:01CCCCCCCCCCCCCCCCCCCCCCCC", reason: "checksum pending")
+        await store.noteRetryAttempt("entry:01AAAAAAAAAAAAAAAAAAAAAAAA")
+
+        let status = await coordinator.status()
+
+        XCTAssertEqual(status.parked, [
+            ParkedSummary(name: "entry:01AAAAAAAAAAAAAAAAAAAAAAAA", reason: "unknown item", attempts: 1),
+            ParkedSummary(name: "entry:01CCCCCCCCCCCCCCCCCCCCCCCC", reason: "checksum pending", attempts: 0),
+            ParkedSummary(name: "entry:01MMMMMMMMMMMMMMMMMMMMMMMM", reason: "unresolved reference", attempts: 0),
+            ParkedSummary(name: "entry:01ZZZZZZZZZZZZZZZZZZZZZZZZ", reason: "asset not yet arrived", attempts: 0),
+        ])
+        XCTAssertEqual(status.parked.map(\.name), status.parked.map(\.name).sorted(),
+                       "parked rows must be in sorted-by-name order")
     }
 
     /// `launch()` now ends with a fetch kick (M4 T12, design §3) — `lastFetchAt` moves,

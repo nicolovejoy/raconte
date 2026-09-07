@@ -1,0 +1,56 @@
+Refresh docs/overview.md in nicolovejoy/raconte so it describes the app as it is on
+`main` today (2026-09-07). Docs-only task: touch ONLY docs/overview.md. Do not edit
+CLAUDE.md, docs/devlog.md, or any Swift file.
+
+The file was last updated 2026-08-16 and is wrong in these known ways (verify each
+against the code before rewriting — cite nothing you have not grepped):
+
+1. §7 Navigation says the sidebar nav is "built, on nav/split-view, pending Gate B + PR".
+   It merged on 2026-08-17 (PR #64) and the capture screen was redone on top of it
+   (#118, PR #126). Read Raconte/App/Place.swift, Raconte/App/ContentView.swift and
+   Raconte/Library/UI/LibraryView.swift for what the places actually are today.
+2. §8 Sync describes M4 as unmerged. It merged 2026-08-17 and has run for three weeks.
+   Add what PR #150 (2026-09-07) changed: inbound records that cannot be ingested are
+   PARKED in sync/parked.json (never dropped), refetched on launch and foreground, and a
+   record gone from the server unparks loudly. Read Raconte/Sync/ — the engine, the
+   bookkeeping store (parkedRecords), and the retryParked/refetch path.
+3. There is no section for the archive export. PR #151 (2026-09-07) added About →
+   Archive → Export archive…: a byte-copy package with a derived transcript.md, a sha256
+   per file, a manifest written last, and a verifier that reads the package back. The
+   format is specified in docs/export-format.md; the code is in Raconte/Export/. Add a
+   short §9 in the same voice as the others (what it is, why, the one invariant).
+4. PR #152 (2026-09-07) added quarantine: an entry whose entry.json is unreadable can be
+   moved from captures/<id>/ to quarantine/<ULID>-<id>/ from the Trash screen, where sync
+   and purge cannot see it. Read Raconte/Library/StagedRemover.swift (quarantine). Mention
+   it in §1 or §2 where the recovery scan is described — it is the same promise (nothing
+   real is auto-deleted) extended to a corrupt sidecar.
+5. "Where the project is" (the milestone diagram and the numbered next list) is stale.
+   M4 is done; verified export is done; the acceptance gate ("delete the app, reinstall,
+   everything comes back") has NEVER been run and stays a named next step. T8's direction
+   was ruled on 2026-09-07: the canonical transcript will come from a post-capture final
+   pass over recording.m4a, editing is locked until that pass lands, and if the pass
+   fails the live transcript is promoted as a provisional revision zero that a later
+   retry replaces. The unified editor (#60, #59) comes AFTER T8. Rewrite the diagram
+   (M4 ✅, export ✅) and the list from docs/builds.md, the "Session 2026-09-06/07"
+   block at the top of CLAUDE.md, and the latest entries of docs/devlog.md.
+6. §5 (transcript chain, T6/T7) may mention "the accept/decline UI T7 left uncalled" —
+   that is now explicitly NOT the plan (see item 5). Fix any sentence that still
+   presents it as the next step.
+
+Voice and shape: this file is "how it works, in plain words" — mental models only,
+terse, no history and no grandiose prose. Keep the existing section structure and the
+mermaid diagrams (update, do not remove). Update the "Updated" date in the intro.
+Keep every internal link relative and verify each linked file exists.
+
+Environment facts: you are in a Linux container with NO Swift toolchain — do not try
+xcodebuild, xcodegen or swiftc. That is fine here: grep and read are all this task
+needs. CI skips docs-only pushes (paths-ignore on docs/**), so the PR will show no
+checks. That is expected, not a failure.
+
+Branch: work on `docs/overview-refresh-2026-09-07` (already created from main and pushed;
+check it out, do not create another). Commit with a conventional message
+(`docs: refresh overview.md to main as of 2026-09-07`). End at an OPEN pull request
+against main, body written via `--body-file` (never a heredoc). The body lists each
+section you changed and the file:line or PR you verified it against. Do NOT merge —
+merges are the owner's. Do not write a close-verb plus an issue number anywhere in
+the body.

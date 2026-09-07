@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The sidebar's live-recording indicator (design §5's visibility guarantee, nav T6),
 /// factored out of `SidebarRowView` for containment (#67 item 3): this is the ONLY view
-/// in the app that reads `CaptureCoordinator.elapsed`. Before this existed, `SidebarView`
+/// in the SIDEBAR that reads `CaptureCoordinator.elapsed` — the capture screen's own
+/// read lives in `CaptureStatusReadout` (#155). Before this existed, `SidebarView`
 /// read `elapsed` directly to build the whole Capture row, which — since `elapsed` is an
 /// `@Observable` published property read on every body evaluation — re-evaluated the
 /// ENTIRE sidebar (the list, every row, every journal's date-line lookup) once per second

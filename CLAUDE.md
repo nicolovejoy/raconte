@@ -51,23 +51,31 @@ memory. **All four PRs are fully green on CI: unit 2124 / 2088 / 2101 / 2117 and
 Worktrees under `.worktrees/` are left in place until the PRs merge.
 
 **Next steps:**
-1. **Merge #150 → #152 → #153 → #151**, hitting **Update branch** before each so its CI
-   tests the actual combination (all four are green on their own base already).
-   The four branches have disjoint file sets, so conflicts are not expected; the
-   update-branch CI run is the proof.
-2. **Device smoke, build 15 first** (unchanged from the last handoff), then a **Mac smoke
-   of the merged main** as build 16: export to an external volume and verify; corrupt one
-   `entry.json` → Trash shows the section → quarantine → journal deletes; span a journal
-   → glyph and sentence; record past the sidebar clock. Self-contained steps are in each
-   PR body.
-3. **M4 acceptance gate, never run** — with a synced Mac: quit, move
+1. **Finish the merge sequence — #150 is IN** (`f5f43f71`, main unit **2124**/1 skipped,
+   green). Remaining: **#152 → #153 → #151**, hitting **Update branch** on each before
+   merging so its CI tests the actual combination. Disjoint file sets, so conflicts are
+   not expected; the update-branch run is the proof, not the hope.
+2. **Device smoke, build 15**, then a **Mac smoke of the merged main** as build 16: export
+   to an external volume and verify; corrupt one `entry.json` → Trash shows the section →
+   quarantine → journal deletes; span a journal → glyph and sentence; record past the
+   sidebar clock. Self-contained steps are in each PR body.
+3. **SDD Batch A, from merged main** (owner approved 2026-09-07): #154 Verify archive… row,
+   #155 `CaptureView.statusRow` per-tick re-evaluation, #156 parked count on Debug/About.
+   #154 is deliberately sequenced **before** the M4 gate so the gate can be verified
+   in-app rather than with the `jq | shasum -c` recipe. #154 cannot start until #151 lands.
+4. **M4 acceptance gate, never run** — with a synced Mac: quit, move
    `~/Library/Application Support/Raconte` aside (never delete), relaunch, let sync settle,
-   export with #151's action, verify, compare counts with the iPhone. Only after this
-   passes does any recountly teardown get scheduled (the backup at
-   `~/recountly-export-2026-09-06/` stands).
-4. Owner questions still open from the roadmap review: re-transcribe migrated audio or
-   carry the web transcript; #133 v1 or v2. #50 needs its own design pass (head.json
-   fingerprint) — deliberately not built. #2 held.
+   export, verify, compare counts with the iPhone. Only after this passes does any
+   recountly teardown get scheduled (the backup at `~/recountly-export-2026-09-06/` stands).
+5. **Then a design pass, not a dispatch** — T8 retranscription (+ #38 biasing, T7's
+   uncalled accept/decline UI) vs. the unified editor (#60, #59). Owner is weighing them;
+   the recommendation on the table is T8 first (self-contained, value independent of
+   taste), the editor second (deletes Mark voices mode, two design rulings still open).
+   Both need brainstorming before any SDD run. Also open: re-transcribe migrated audio or
+   carry the web transcript; #133 v1 or v2; #50 needs its own design pass. #2 held.
+6. **`docs/overview.md` is stale** — last updated 2026-08-16, still calls M4 unmerged and
+   verified export unbuilt. Its "Next, in order" list is not a reliable guide. Refresh it
+   alongside the next build rather than as its own errand.
 
 ## What Raconte is
 

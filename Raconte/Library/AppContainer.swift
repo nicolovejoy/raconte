@@ -13,6 +13,7 @@ import Foundation
 ///       journals.json          journals registry (M3 T1)
 ///       journals/<ULID>/cover.jpg   journal cover image, optional (issue #14 part 3)
 ///       trash-pending/<name>/  staged-removal holding pen (#25)
+///       quarantine/<name>/     repaired-out unreadable-sidecar captures (#81, never deleted)
 ///       sync/                  sync bookkeeping cache, disposable (M4 T2)
 ///       sync/staging/<ULID>/   new-entry ingest assembly area, disposable (M4 T7)
 enum AppContainer {
@@ -32,6 +33,20 @@ enum AppContainer {
     /// still holds `final/recording.m4a`, so being unreachable by that walk is what keeps
     /// the quarantine rule from adopting it forever.
     static let trashPendingDirectoryName = "trash-pending"
+    /// #81: where a capture whose `entry.json` sidecar cannot be read is moved out of
+    /// `captures/` for repair — never deleted, since audio is ground truth. A sibling of
+    /// `captures/`, never inside it, for the same reason this type's header gives for
+    /// every other sibling: a stray child of `captures/` is walked by
+    /// `DirectorySnapshot.gather` and handed to the recovery planner. Unlike
+    /// `trash-pending/`, this directory is deliberately NOT excluded from backup — it is
+    /// the owner's real audio, just filed where nothing can act on it by accident.
+    ///
+    /// A directory here is a different thing from `RecoveryPlanner
+    /// .quarantineCaptureDirectory` (see `RecoveryExecutor.swift`'s handling of that
+    /// case): that quarantine is a no-op flag left in place under `captures/`, the
+    /// opposite of this one's actual `rename(2)` out of it — same word, two unrelated
+    /// mechanisms.
+    static let quarantineDirectoryName = "quarantine"
     /// M4: root of the sync engine's on-disk bookkeeping (`SyncBookkeepingStore`) — a
     /// sibling of `captures/`, never inside it, for the reason this type's header
     /// already gives: a stray child of `captures/` is walked by `DirectorySnapshot.gather`
@@ -88,6 +103,14 @@ enum AppContainer {
 
     static func trashPendingURL(containerRoot: URL, name: String) -> URL {
         trashPendingRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
+    }
+
+    static func quarantineRoot(containerRoot: URL) -> URL {
+        containerRoot.appendingPathComponent(quarantineDirectoryName, isDirectory: true)
+    }
+
+    static func quarantineURL(containerRoot: URL, name: String) -> URL {
+        quarantineRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
     }
 
     static func syncRoot(containerRoot: URL) -> URL {

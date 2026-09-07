@@ -250,6 +250,33 @@ enum UITestVoiceMarkingSeed {
     }
 }
 
+/// A "complete" entry (a real, finalized manifest — the same shape `BlankEntryMinter`
+/// mints) whose `entry.json` sidecar is present but is not valid JSON at all. Feeds
+/// #81's repair UI test (Task 6): `LibraryScreenModel.unreadableEntries`/
+/// `quarantineUnreadable(captureID:)` need a fixture whose sidecar EXISTS and fails to
+/// parse, which is a different shape from an ABSENT sidecar (`EntryMetadata.defaults`,
+/// no degradation at all — see `EntryMetadataStore.read`). `journalID: nil` on the
+/// `BlankEntryMinter.create` call is deliberate: that path only writes `entry.json`
+/// when a journal is given, leaving this fixture free to write the file's bytes itself.
+///
+/// Env-gated (`RACONTE_UITEST_SEED_UNREADABLE_ENTRY`) and idempotent, same shape as the
+/// other seeds — the idempotency guard checks the LAST file this seed writes
+/// (`entry.json`), matching `UITestEntrySeed`'s guard on its own last-written file.
+enum UITestUnreadableEntrySeed {
+    static let captureID = "01KYX77KK5QM15915EZBVXTQZC"
+
+    static func seedIfRequested(capturesRoot: URL) {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_UNREADABLE_ENTRY"] != nil else { return }
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: captureID)
+        let entryURL = SegmentLayout.entryMetadataURL(captureDirectory: captureDirectory)
+        guard !FileManager.default.fileExists(atPath: entryURL.path) else { return }
+        guard BlankEntryMinter.create(capturesRoot: capturesRoot, journalID: nil,
+                                      captureID: captureID) != nil else { return }
+        try? Data("not json".utf8).write(to: entryURL)
+    }
+}
+
 extension CaptureScreenModel {
     /// `library` is threaded through (M3 T4.5) rather than dropped: `ContentView`'s
     /// `navigationDestination(for: LibraryDestination.self)` reads its OWN

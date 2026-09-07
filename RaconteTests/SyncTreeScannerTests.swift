@@ -233,6 +233,24 @@ final class SyncTreeScannerTests: XCTestCase {
         XCTAssertFalse(result.skipped.contains(idTrashPending))
     }
 
+    /// #81: `quarantine/` is a sibling of `captures/`, exactly like `trash-pending/`, so
+    /// the scanner must never even look there — sync deletes are explicit, never inferred
+    /// from a scan, and a repair holding pen is not a deletion.
+    func testAQuarantinedCaptureIsInvisibleToTheScan() throws {
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_005))
+        try writeFinalM4A(id)
+
+        let remover = StagedRemover(capturesRoot: capturesRoot, containerRoot: containerRoot)
+        _ = try remover.quarantine(captureID: id)
+
+        let result = scanner().scan()
+
+        XCTAssertNil(artifact(result, named: .entry(captureID: id)))
+        XCTAssertNil(artifact(result, named: .audio(captureID: id)))
+        XCTAssertFalse(result.skipped.contains(id))
+    }
+
     /// IMPORTANT 3 (review): the manifest-unreadable skip must be the bare captureID —
     /// meaning "the whole capture is excluded" — and nothing else in this suite may
     /// reuse that exact string for a narrower, single-artifact failure. Checked here by

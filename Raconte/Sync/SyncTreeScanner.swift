@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Walks the on-disk archive and reports every sync-eligible artifact plus a digest of
 /// the content that artifact's record is built from (T3). Pure IO + digest computation —

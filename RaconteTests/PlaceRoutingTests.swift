@@ -102,6 +102,27 @@ final class PlaceRoutingTests: XCTestCase {
                        + "on All Entries (which contains it, now unfiled) rather than popping them out")
     }
 
+    // The doc comment on `Reroute` used to claim a pushed path always survives because
+    // "the entry still exists (now unfiled) and All Entries contains it" — false for a
+    // path ending in `.journalEditor(J)` where J is the journal that vanished: that
+    // screen is now editing nothing. Only a path ending in `.entry(...)` survives.
+
+    func testRerouteWithAPushedJournalEditorForTheVanishedJournalClearsThePath() {
+        let path: [LibraryDestination] = [.journalEditor("gone")]
+        let r = PlaceRouting.reroute(.journal("gone"), journals: [journal("j1", "1987")], detailPath: path)
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .capture, detailPath: []),
+                       "a journal editor pushed for the journal that just vanished is a dead screen, "
+                       + "not a survivor — it must clear exactly like the empty-path fallback")
+    }
+
+    func testRerouteWithAnEntryThenAJournalEditorOnTopStillClearsThePath() {
+        let path: [LibraryDestination] = [.entry("A"), .journalEditor("gone")]
+        let r = PlaceRouting.reroute(.journal("gone"), journals: [journal("j1", "1987")], detailPath: path)
+        XCTAssertEqual(r, PlaceRouting.Reroute(place: .capture, detailPath: []),
+                       "only the LAST element of the path decides survival — an .entry lower in the "
+                       + "stack does not rescue a .journalEditor pushed on top of it")
+    }
+
     func testRerouteOnAPlaceThatNeverVanishesIsUnaffectedByAPushedPath() {
         let path: [LibraryDestination] = [.entry("A")]
         let r = PlaceRouting.reroute(.allEntries, journals: [], detailPath: path)

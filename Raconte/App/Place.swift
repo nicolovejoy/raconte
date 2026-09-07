@@ -174,10 +174,14 @@ enum PlaceRouting {
     /// vanished journal through `AppRouter.select` unconditionally clears the path
     /// (`detailPath(afterSelecting:from:path:)` always returns `[]`), which pops the
     /// owner straight out of the entry they were reading. `reroute` carries the path
-    /// decision `resolve` cannot: same place → unchanged; vanished with nothing pushed
-    /// → `.capture`/`[]`, exactly `resolve`'s existing fallback; vanished with
-    /// something pushed → `.allEntries` with the path PRESERVED, since the entry
-    /// itself still exists (now unfiled) and All Entries contains it.
+    /// decision `resolve` cannot: same place → unchanged; otherwise the path is
+    /// preserved ONLY when its LAST element is `.entry(...)` — that entry still exists
+    /// (now unfiled) and All Entries contains it, so the destination becomes
+    /// `.allEntries` with the path kept. Every other case (an empty path, or a path
+    /// whose last element is `.journalEditor(...)`) clears the path and lands wherever
+    /// `resolve` says: a `.journalEditor(J)` for the very journal that vanished is a
+    /// dead screen, not a survivor — preserving it would push the owner onto an editor
+    /// for a journal that no longer exists.
     struct Reroute: Equatable {
         var place: Place
         var detailPath: [LibraryDestination]
@@ -188,10 +192,10 @@ enum PlaceRouting {
         guard resolved != place else {
             return Reroute(place: place, detailPath: detailPath)
         }
-        guard detailPath.isEmpty else {
+        if let last = detailPath.last, case .entry = last {
             return Reroute(place: .allEntries, detailPath: detailPath)
         }
-        return Reroute(place: resolved, detailPath: detailPath)
+        return Reroute(place: resolved, detailPath: [])
     }
 
     /// The scope the entry list must run under. `nil` for places that are not entry

@@ -37,13 +37,25 @@ struct ArchiveExporter: Sendable {
     func export(into destination: URL) async throws -> Report {
         let listing = try ArchiveWalker.list(containerRoot: containerRoot)
 
-        let stamp = Self.stampFormatter().string(from: now())
+        // Hoisted once (Fix wave Finding 4): the directory stamp and `exportedAt` must
+        // name the SAME instant, not two separate `now()` calls that could straddle a
+        // clock tick.
+        let timestamp = now()
+        let stamp = Self.stampFormatter().string(from: timestamp)
         let packageName = "Raconte-export-\(stamp)"
         let finalURL = destination.appendingPathComponent(packageName, isDirectory: true)
         let partURL = destination.appendingPathComponent("\(packageName).part", isDirectory: true)
 
         let fm = FileManager.default
         do {
+            // Fix wave Finding 5: a `.part` staging directory can survive a prior crash
+            // (the exporter's own cleanup only runs on a throw it catches itself, not on
+            // e.g. the process being killed). Clear any stale one before staging fresh —
+            // otherwise a leftover file from a previous aborted export rides along into
+            // the finished package via the `moveItem` below.
+            if fm.fileExists(atPath: partURL.path) {
+                try fm.removeItem(at: partURL)
+            }
             try fm.createDirectory(at: partURL, withIntermediateDirectories: true)
 
             var files: [String: FileDigest] = [:]
@@ -73,7 +85,7 @@ struct ArchiveExporter: Sendable {
             let manifest = ExportManifest(
                 format: ExportManifest.format,
                 schemaVersion: ExportManifest.schemaVersion,
-                exportedAt: now(),
+                exportedAt: timestamp,
                 appVersion: appVersion,
                 build: build,
                 counts: ExportManifest.Counts(
@@ -144,7 +156,11 @@ struct ArchiveExporter: Sendable {
             transcriptCharacterCount: current.map { TranscriptChain.plainText($0).count } ?? 0,
             sidecarReadable: sidecarReadable)
 
-        return (relativePath, FileDigest(sha256: SHA256Hex.of(data), bytes: data.count), summary)
+        // Fix wave Finding 6: digest re-read from the just-written PACKAGE file, the
+        // same `digest(of:)` every copied file goes through below — so
+        // `docs/export-format.md`'s "re-reading the file back out of the package" is
+        // universally true, not true for every file except this one.
+        return (relativePath, try Self.digest(of: url), summary)
     }
 
     // MARK: Digest of a just-copied file (re-read from the PACKAGE, not the source —

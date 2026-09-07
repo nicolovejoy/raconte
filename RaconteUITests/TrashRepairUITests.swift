@@ -18,6 +18,10 @@ final class TrashRepairUITests: XCTestCase {
         app.launch()
         openPlace(app, "sidebar.trash")
 
+        let section = app.staticTexts["trash.unreadable.section"].firstMatch
+        XCTAssertTrue(section.waitForExistence(timeout: 5),
+                      "the Unreadable entries section header never appeared")
+
         let row = app.otherElements["trash.unreadable.row"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5),
                       "the unreadable-entries section never showed the seeded row")

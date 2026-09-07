@@ -16,8 +16,8 @@ Verified against `main`, not against the doc prose:
   and CloudKit sync (`Raconte/Sync/` is on main, 11 files).
 - **There is no search.** Zero hits for FTS5 or any search surface anywhere in the app.
   M3 shipped without it; `overview.md` folds it into M5. A grepless archive.
-- **There is no export.** The plan of record calls export "a v1 acceptance criterion, not
-  a later feature." It does not exist.
+- **There was no export until 2026-09-06 (branch `feat/archive-export`, PR pending).**
+  The plan of record calls export "a v1 acceptance criterion, not a later feature."
 - **There is no migration script.** `scripts/` holds TestFlight and provisioning tooling
   only. The frozen entries on recountly.org have never been brought over.
 - **T8 retranscription does not exist** beyond comments anticipating it.

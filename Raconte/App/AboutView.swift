@@ -18,6 +18,13 @@ struct AboutView: View {
     /// explanatory row rather than hiding, same contract as the Debug screen.
     let sync: SyncCoordinator?
 
+    /// Built in `AppServices` (T13, composition root — same reasoning as `sync` above)
+    /// and threaded straight through, never a view-local `@State` default: constructing
+    /// an `ArchiveExporter` reads `AppContainer.root()`, which creates a directory on
+    /// disk, and that must happen once at app launch, not every time this view's
+    /// default state initializer runs.
+    let exportRunner: ExportRunner
+
     /// Detected here rather than plumbed from `SyncCoordinator` so the row still
     /// renders when sync is unavailable — and it is byte-for-byte the same detection
     /// the environment gate uses (`CloudKitEnvironment.detectFromBundle`). Reading
@@ -25,18 +32,6 @@ struct AboutView: View {
     /// inline in `body` (same idiom as `DebugMenuView.buildInfo`).
     @State private var environment: CloudKitEnvironment?
 
-    /// Built here, not threaded through `AppServices` (T13): `AppServices.init()` is
-    /// already the app-wide composition root for capture/library/sync, and the
-    /// exporter needs nothing from that graph — just `AppContainer.root()` and the two
-    /// bundle-version strings `AppVersion`/`BuildInfo` already read for the rows above.
-    /// Keeping it local also means the harness/preview builds that never construct
-    /// `AppServices` for this screen still get a working exporter for free.
-    @State private var exportRunner = ExportRunner(exporter: ArchiveExporter(
-        containerRoot: AppContainer.root(),
-        appVersion: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
-            .flatMap { $0.isEmpty ? nil : $0 } ?? "unknown",
-        build: (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.isEmpty ? nil : $0 } ?? "unknown"))
     @State private var showingExportPicker = false
 
     var body: some View {
@@ -163,5 +158,9 @@ struct AboutView: View {
 }
 
 #Preview {
-    NavigationStack { AboutView(sync: nil) }
+    NavigationStack {
+        AboutView(sync: nil, exportRunner: ExportRunner(exporter: ArchiveExporter(
+            containerRoot: FileManager.default.temporaryDirectory,
+            appVersion: "1.0", build: "1")))
+    }
 }

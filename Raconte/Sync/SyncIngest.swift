@@ -2213,8 +2213,10 @@ actor SyncRecordExchange: CloudRecordExchange {
             // sibling and never parked — there is nothing to recover here.
             return
         }
+        let name = record.recordID.recordName
         guard let containerRoot else {
-            log.debug("sync: no container root wired — marker stream ingest skipped")
+            log.notice("sync: no container root wired — MarkerStream \(name, privacy: .public) parked")
+            await bookkeeping.park(name, reason: "no container root wired")
             return
         }
         guard let content = record[SyncMarkerStreamField.content] as? String,
@@ -2222,9 +2224,10 @@ actor SyncRecordExchange: CloudRecordExchange {
               case .entry(let refCaptureID)? = SyncCloudIdentifiers.name(of: entryRef.recordID),
               refCaptureID == captureID else {
             log.notice("""
-                sync: fetched MarkerStream record missing content/entryRef, or entryRef \
-                disagrees with the record name — ignored
+                sync: fetched MarkerStream record \(name, privacy: .public) parked — missing \
+                content/entryRef, or entryRef disagrees with the record name
                 """)
+            await bookkeeping.park(name, reason: "marker stream content could not be decoded")
             return
         }
         let bytes = Data(content.utf8)
@@ -2251,10 +2254,12 @@ actor SyncRecordExchange: CloudRecordExchange {
         } catch {
             log.error("""
                 sync: could not materialize marker stream \(streamDeviceID, privacy: .public) for \
-                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public)
+                \(captureID, privacy: .public): \(error.localizedDescription, privacy: .public) — parked
                 """)
+            await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await localStoreDidChange?()
     }
 

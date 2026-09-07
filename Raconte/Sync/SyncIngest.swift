@@ -1683,6 +1683,7 @@ actor SyncRecordExchange: CloudRecordExchange {
             await bookkeeping.park(name, reason: "local write failed")
             return
         }
+        await bookkeeping.unpark(name)
         await attemptEntryAssembly(captureID: captureID, containerRoot: containerRoot)
     }
 

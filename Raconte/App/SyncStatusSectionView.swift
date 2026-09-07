@@ -2,6 +2,8 @@ import SwiftUI
 
 /// The read-only sync status rows, shared verbatim between the Debug screen (where
 /// they lived since M4 T12) and the About page (#89) — one rendering, no drift.
+/// Account, last push/fetch, pending counts, last error, and (#156) a parked-record
+/// count plus one row per parked name with its reason and attempt count.
 ///
 /// `idPrefix` keeps each host's accessibility namespace: "debug" preserves the
 /// pre-existing `debug.sync.refresh`; "about" yields `about.sync.*`.
@@ -31,6 +33,20 @@ struct SyncStatusSectionView: View {
                     LabeledContent("Pending saves", value: "\(syncStatus.pendingSaveCount)")
                     LabeledContent("Pending deletes", value: "\(syncStatus.pendingDeleteCount)")
                     LabeledContent("Last error", value: syncStatus.lastError ?? "none")
+                    // #156: parked.json made visible. The count row is always present so
+                    // "0" is a positive statement; the per-name rows appear only when
+                    // there is something to look at.
+                    LabeledContent("Parked", value: "\(syncStatus.parked.count)")
+                        .accessibilityIdentifier("\(idPrefix).sync.parked")
+                    ForEach(syncStatus.parked, id: \.name) { record in
+                        LabeledContent(record.name) {
+                            Text("\(record.reason) · \(record.attempts) "
+                                 + (record.attempts == 1 ? "attempt" : "attempts"))
+                                .multilineTextAlignment(.trailing)
+                        }
+                        .font(.caption)
+                        .accessibilityIdentifier("\(idPrefix).sync.parked.\(record.name)")
+                    }
                 } else {
                     Text("Loading…")
                         .task { syncStatus = await sync.status() }

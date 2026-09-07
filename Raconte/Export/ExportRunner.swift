@@ -12,13 +12,18 @@ import Foundation
 ///
 /// Security-scoped access to the picked folder is this type's caller's concern, not
 /// this type's: `AboutView`'s `.fileImporter` callback starts it and stops it (via
-/// `defer`) around the call to `run(into:)`, so the scope's lifetime is visible in one
-/// place rather than split across two.
+/// `defer`) around the call to `run(into:)` or `verify(package:)`, so the scope's
+/// lifetime is visible in one place rather than split across two.
 @MainActor @Observable
 final class ExportRunner {
     enum State: Equatable {
         case idle
-        case running
+        /// Fix wave Finding 2: `verifying` tells the label which of the two flows is
+        /// running — `false` for an export (which itself ends by verifying what it just
+        /// wrote), `true` for a standalone `verify(package:)`. Carried in the runner's
+        /// own state rather than left to view-local `@State` so a still-running verify
+        /// reads correctly even after `AboutView` is navigated away from and back.
+        case running(verifying: Bool)
         case finished(ArchiveExporter.Report, ArchiveVerifier.Report)
         /// #154: a verify-only run over a package the owner picked — nothing was
         /// written. `packageName` is the picked folder's last path component.
@@ -29,6 +34,13 @@ final class ExportRunner {
     private(set) var state: State = .idle
     private let exporter: ArchiveExporter
 
+    /// Fix wave Finding 2: `true` for either running case, regardless of which flow —
+    /// the one place both "disable the buttons" call sites need to ask.
+    var isRunning: Bool {
+        if case .running = state { return true }
+        return false
+    }
+
     init(exporter: ArchiveExporter) {
         self.exporter = exporter
     }
@@ -37,7 +49,7 @@ final class ExportRunner {
     /// creates its own timestamped package directory inside it, so this never writes
     /// directly into a folder the owner did not choose.
     func run(into destination: URL) async {
-        state = .running
+        state = .running(verifying: false)
         let exporter = self.exporter
         do {
             let (report, verification) = try await Task.detached(priority: .utility) {
@@ -57,7 +69,7 @@ final class ExportRunner {
     /// as a report whose first problem is `.manifestUnreadable`, which is the honest
     /// answer for "I picked the wrong folder".
     func verify(package: URL) async {
-        state = .running
+        state = .running(verifying: true)
         let report = await Task.detached(priority: .utility) {
             ArchiveVerifier.verify(packageURL: package)
         }.value
@@ -74,7 +86,7 @@ final class ExportRunner {
     /// anything is not a failure — `.fileImporter` reports it as a `.failure(
     /// CocoaError.userCancelled)`, and `AboutView` routes that specific case here
     /// instead of `fail(_:)` so the screen goes back to quiet `.idle` rather than
-    /// showing an alarming "Export failed" row for a no-op.
+    /// showing an alarming "Failed: …" row for a no-op.
     func cancelled() {
         state = .idle
     }

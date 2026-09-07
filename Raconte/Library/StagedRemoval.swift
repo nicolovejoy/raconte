@@ -61,6 +61,48 @@ struct StagedRemover: Sendable {
         return name
     }
 
+    /// One-way move of `captures/<captureID>/` to `<container>/quarantine/<ULID>-<captureID>/`
+    /// (#81). Same `rename(2)` `stage` uses, a different destination and no backup
+    /// exclusion — this is the owner's audio, filed somewhere no scanner or sweeper can
+    /// touch it while it waits for repair. Never called on a healthy capture; the caller
+    /// is responsible for having a reason (an unreadable `entry.json`), since this moves
+    /// the directory unread and unrepaired. `purge()` never visits this tree.
+    ///
+    /// Local-disk-only, on purpose, not the opposite of `RecoveryPlanner
+    /// .quarantineCaptureDirectory` (`RecoveryExecutor.swift`'s
+    /// `.quarantineCaptureDirectory` case) even though the two share a name: that one
+    /// means "leave the directory exactly where it is, just flag it" — the opposite
+    /// filesystem behaviour from this one's actual `rename(2)` out of `captures/`.
+    ///
+    /// The CloudKit copy of this capture, if any, is untouched and survives: the sidecar
+    /// that failed to decode was never pushed as an `Entry` record in the first place
+    /// (`entryRecordToPush` only builds a record from a sidecar that decodes), so the
+    /// server still holds the last version that DID decode. An ordinary incremental
+    /// CKSyncEngine fetch will not redeliver that unchanged record — but any remote edit,
+    /// or a full resync, re-creates `captures/<captureID>/` fresh from the healthy server
+    /// sidecar. That is desirable repair-by-resync, and it leaves the quarantined copy
+    /// under `quarantine/` as an inert duplicate — nothing reconciles the two, and nothing
+    /// needs to: the quarantined directory is never scanned again once it's here.
+    func quarantine(captureID: String) throws -> String {
+        let fm = FileManager.default
+        let source = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw StagedRemovalError.captureDirectoryMissing
+        }
+
+        let quarantineRoot = AppContainer.quarantineRoot(containerRoot: containerRoot)
+        try fm.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
+
+        let name = "\(mintStagingID())-\(captureID)"
+        let destination = AppContainer.quarantineURL(containerRoot: containerRoot, name: name)
+
+        guard rename(source.path, destination.path) == 0 else {
+            throw StagedRemovalError.posix(operation: "rename", code: errno)
+        }
+        return name
+    }
+
     /// Remove everything in `trash-pending/`. Best effort: a child that will not delete is
     /// reported and left for the next launch. An absent staging root is an empty success —
     /// that is a fresh install, not a failure.

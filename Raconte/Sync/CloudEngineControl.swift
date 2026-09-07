@@ -51,6 +51,25 @@ protocol CloudEngineControl: Sendable {
     func snapshot() async -> EngineSnapshot
 }
 
+/// Fix wave finding 6: `database.records(for:)` takes one request for the whole id
+/// list it is handed — CloudKit documents a per-call cap on how many ids one
+/// `CKFetchRecordsOperation`-backed call will accept, and a launch's parked backlog
+/// (design §3: first-enable sync can enqueue the entire existing archive across many
+/// parked names) can exceed it. Pure and total — no CloudKit, no IO — so it is tested
+/// directly with plain arrays rather than through `CloudKitEngineControl`'s CloudKit
+/// dependency.
+enum RefetchChunking {
+    /// Splits `names` into chunks of at most `size`, preserving order, with the last
+    /// chunk taking whatever remains (never padded, never dropped). An empty input
+    /// produces an empty output rather than one empty chunk.
+    static func chunks(_ names: [String], size: Int) -> [[String]] {
+        guard !names.isEmpty, size > 0 else { return [] }
+        return stride(from: 0, to: names.count, by: size).map {
+            Array(names[$0..<Swift.min($0 + size, names.count)])
+        }
+    }
+}
+
 /// What `CloudEngineControl.refetch(recordNames:)` hands back (#85 part 3). No CloudKit
 /// type crosses the protocol — a name in, a name out, sorted into exactly one of three
 /// buckets.
@@ -467,43 +486,55 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
     /// `.unknownItem` is decided PER RECORD, not per batch: `database.records(for:)`
     /// answers one `Result` per requested id, so one name the server no longer has never
     /// masks the outcome of the others in the same call.
+    ///
+    /// Fix wave finding 6: chunked at `refetchChunkSize` names per `records(for:)` call
+    /// (`RefetchChunking.chunks`) and the outcomes merged — a chunk that throws marks
+    /// only that chunk's names `.failed`, never the whole request, so one oversized
+    /// backlog batch failing (or a transient error on one chunk) cannot mask the
+    /// per-record answers a sibling chunk already got back cleanly.
+    static let refetchChunkSize = 100
+
     func refetch(recordNames: [String]) async -> RefetchOutcome {
         guard !recordNames.isEmpty else { return RefetchOutcome() }
-        let ids = recordNames.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
         let database = CKContainer(identifier: containerIdentifier).privateCloudDatabase
-        let results: [CKRecord.ID: Result<CKRecord, Error>]
-        do {
-            results = try await database.records(for: ids)
-        } catch {
-            log.error("""
-                sync: refetch batch failed — \(recordNames.count, privacy: .public) name(s) stay \
-                parked: \(error.localizedDescription, privacy: .public)
-                """)
-            return RefetchOutcome(failed: recordNames)
-        }
         var outcome = RefetchOutcome()
-        for id in ids {
-            let name = id.recordName
-            switch results[id] {
-            case .success(let record):
-                await exchange.acceptRemote(record)
-                outcome.delivered.append(name)
-            case .failure(let error):
-                if let ckError = error as? CKError, ckError.code == .unknownItem {
-                    log.notice("sync: refetch of \(name, privacy: .public) — gone from server")
-                    outcome.goneFromServer.append(name)
-                } else {
-                    log.error("""
-                        sync: refetch of \(name, privacy: .public) failed: \
-                        \(error.localizedDescription, privacy: .public) — stays parked
-                        """)
+        for chunk in RefetchChunking.chunks(recordNames, size: Self.refetchChunkSize) {
+            let ids = chunk.map { CKRecord.ID(recordName: $0, zoneID: zoneID) }
+            let results: [CKRecord.ID: Result<CKRecord, Error>]
+            do {
+                results = try await database.records(for: ids)
+            } catch {
+                log.error("""
+                    sync: refetch batch failed — \(chunk.count, privacy: .public) name(s) stay \
+                    parked: \(error.localizedDescription, privacy: .public)
+                    """)
+                outcome.failed.append(contentsOf: chunk)
+                continue
+            }
+            for id in ids {
+                let name = id.recordName
+                switch results[id] {
+                case .success(let record):
+                    await exchange.acceptRemote(record)
+                    outcome.delivered.append(name)
+                case .failure(let error):
+                    if let ckError = error as? CKError, ckError.code == .unknownItem {
+                        log.notice("sync: refetch of \(name, privacy: .public) — gone from server")
+                        outcome.goneFromServer.append(name)
+                    } else {
+                        log.error("""
+                            sync: refetch of \(name, privacy: .public) failed: \
+                            \(error.localizedDescription, privacy: .public) — stays parked
+                            """)
+                        outcome.failed.append(name)
+                    }
+                case .none:
+                    // Should not happen — `database.records(for:)` documents one
+                    // `Result` per requested id — but a missing answer is a retry,
+                    // never silent loss.
+                    log.error("sync: refetch of \(name, privacy: .public) — no answer from the server")
                     outcome.failed.append(name)
                 }
-            case .none:
-                // Should not happen — `database.records(for:)` documents one `Result`
-                // per requested id — but a missing answer is a retry, never silent loss.
-                log.error("sync: refetch of \(name, privacy: .public) — no answer from the server")
-                outcome.failed.append(name)
             }
         }
         return outcome

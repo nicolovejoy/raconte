@@ -81,11 +81,20 @@ final class JournalDateLineTests: XCTestCase {
     // MARK: - journalDateLines (#67 item 3): one grouped pass per rescan, not one
     // `dateLine(forJournal:)` filter of `allEntries` per journal per sidebar body eval.
 
-    /// Cardinality 3, on purpose: two journals WITH entries (so "matches for every
-    /// journal" isn't vacuously true for a single one) and one journal with NONE, which
-    /// must be absent from the dictionary rather than present with a nil/empty value —
-    /// `dateLine(forJournal:)` already returns nil for that case (`testNothingToSayReturnsNil`
-    /// above), so the dictionary must agree.
+    /// Cardinality 4, on purpose: two journals WITH entries (so "matches for every
+    /// journal" isn't vacuously true for a single one), one SPANLESS journal with NONE
+    /// (must be absent from the dictionary rather than present with a nil/empty value —
+    /// `dateLine(forJournal:)` already returns nil for that case, `testNothingToSayReturnsNil`
+    /// above, so the dictionary must agree), and one journal that HAS a span but no
+    /// entries (must be PRESENT with the span's text — `JournalDateLine.text` returns the
+    /// span regardless of `derived`, spec ruling 3 — so "no entries" alone is never
+    /// sufficient to omit a journal; the earlier version of this test only ever exercised
+    /// the spanless case and its assertion message overclaimed the rule).
+    ///
+    /// The equality checks below recompute the expected line independently via
+    /// `JournalDateRange.compute` + `JournalDateLine.text` rather than calling
+    /// `dateLine(forJournal:)` — after Task 9's refactor that method IS the dictionary
+    /// lookup under test, so comparing against it would make the assertion tautological.
     @MainActor
     func testJournalDateLinesMatchesDateLineForEveryJournalAndOmitsOnesWithNoEntries() async throws {
         let containerRoot = FileManager.default.temporaryDirectory
@@ -97,7 +106,10 @@ final class JournalDateLineTests: XCTestCase {
         let j1 = Journal(id: ULID.make(), name: "1987", createdAt: Date(timeIntervalSince1970: 0))
         let j2 = Journal(id: ULID.make(), name: "France", createdAt: Date(timeIntervalSince1970: 100))
         let j3 = Journal(id: ULID.make(), name: "Empty", createdAt: Date(timeIntervalSince1970: 200))
-        try JournalStore.encode(JournalRegistry(journals: [j1, j2, j3]))
+        let spanOnly = try JournalSpan(start: PartialDate(year: 1998), end: nil)
+        let j4 = Journal(id: ULID.make(), name: "Paper only", createdAt: Date(timeIntervalSince1970: 300),
+                          span: spanOnly)
+        try JournalStore.encode(JournalRegistry(journals: [j1, j2, j3, j4]))
             .write(to: AppContainer.journalsURL(containerRoot: containerRoot))
 
         func writeCapture(_ id: String, capturedAt: Double, journalID: String) throws {
@@ -125,11 +137,15 @@ final class JournalDateLineTests: XCTestCase {
         await model.rescan()
 
         for journal in [j1, j2] {
-            XCTAssertEqual(model.journalDateLines[journal.id], model.dateLine(forJournal: journal.id),
-                           "\(journal.name)")
+            let expected = JournalDateLine.text(
+                span: journal.span,
+                derived: JournalDateRange.compute(from: model.allEntries.filter { $0.journalID == journal.id }))
+            XCTAssertEqual(model.journalDateLines[journal.id], expected, "\(journal.name)")
             XCTAssertNotNil(model.journalDateLines[journal.id], "\(journal.name) has an entry")
         }
         XCTAssertNil(model.journalDateLines[j3.id],
-                     "a journal with no entries must be absent, not present with an empty/nil line")
+                     "a SPANLESS journal with no entries must be absent, not present with an empty/nil line")
+        XCTAssertEqual(model.journalDateLines[j4.id], spanOnly.formatted(calendar: cal),
+                       "a journal with a stored span but no entries must still be present, showing the span")
     }
 }

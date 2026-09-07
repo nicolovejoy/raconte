@@ -39,7 +39,9 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
   judges on the smoke.
 
 **Next steps:**
-1. **Merge #158, Update branch on #159, merge #159** once CI is green (UI counts must read 63 and 64).
+1. **Both merged** (#158 `e9f385c5`, #159 `589e4a17`, 2026-09-07 evening) — main's CI runs for the
+   merges were still in progress at close; confirm green and read the counts (expect unit 2189,
+   1 skipped; UI 64) before building 17.
 2. **Build 17, then ONE smoke at a time**, step 0 always About → App → Build reads `build 17: <date>`:
    - **C. Out-of-span glyph (#153):** sidebar → a journal with ≥2 entries → note two entries'
      dates → click the cover band at the top (opens the journal editor) → Date Range: set Start/End
@@ -56,9 +58,10 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
      `entry.json`, overwrite with `not json`, relaunch → Trash → Unreadable entries → Quarantine.
    - **iPhone build 15:** record → BN flips to LN → live band dims/brightens → stop → receipt
      card with no "Record another" → tap card → back to Capture via the sidebar → reads Ready.
-3. **Cloud overview refresh:** launch a cloud session on `docs/overview-refresh-2026-09-07` with
-   the prompt "Read docs/cloud-tasks/overview-refresh-2026-09-07.txt in this repo and do exactly
-   what it says. Docs-only, end at an open PR, do not merge." Review the PR (no CI on docs-only).
+3. **Overview refresh — do it here via SDD next session** (owner chose not to launch the cloud
+   session). The brief is complete: `docs/cloud-tasks/overview-refresh-2026-09-07.txt`, branch
+   `docs/overview-refresh-2026-09-07` already pushed from main (rebase it onto the merged main
+   first). Docs-only PR, no CI. Delete the remote branch if the work lands another way.
 4. **T8 spec** (architectural: spec → plan → build). Rulings 1 and 2 are recorded; still open:
    background survival for long entries (must not hang off a view lifecycle) and what happens to
    existing entries that already carry live transcripts and edits. #38 rides along.

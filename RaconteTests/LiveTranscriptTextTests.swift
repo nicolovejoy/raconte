@@ -136,4 +136,21 @@ final class LiveTranscriptTextTests: XCTestCase {
                                               ink: .white, dim: .gray)
         XCTAssertEqual(String(s.characters), "LN: one two")
     }
+
+    /// A re-tap of the voice already in force changes nothing — the persisted view breaks only
+    /// on a change of voice, and the live band agrees.
+    func testARepeatedVoiceMarkNeitherBreaksNorLabels() {
+        let runs = [run("one", 0..<100), run("two", 100..<200), run("three", 200..<300)]
+        let s = LiveTranscriptText.attributed(runs, voiceMarks: [mark(100, "ln"), mark(200, "ln")], ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "one\n\nLN: two three")
+    }
+
+    /// A mark after the last run is dropped for now (recognition lags the tap) and re-placed
+    /// once a run starting at or after its frame arrives — same as the ¶ rule.
+    func testAVoiceMarkPastTheLastRunIsDroppedUntilTextArrives() {
+        let runs = [run("one", 0..<100)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, voiceMarks: [mark(500, "ln")], ink: .white, dim: .gray).characters), "one")
+        let later = [run("one", 0..<100), run("two", 500..<600)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(later, voiceMarks: [mark(500, "ln")], ink: .white, dim: .gray).characters), "one\n\nLN: two")
+    }
 }

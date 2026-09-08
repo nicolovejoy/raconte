@@ -21,7 +21,8 @@ enum InkTone: CaseIterable, Sendable {
     /// The app's one loud colour; shared with capture's record button.
     case record
     /// #161: a marker that must be seen — the out-of-span glyph, the quarantine block's
-    /// bar. Darkened safety orange (#D2570A, ~4.1:1 on paper); lightens on dark paper.
+    /// bar. Darkened safety orange (#D2570A, ~3.7:1 on paper, ~3.5:1 on paperInset); lightens
+    /// on dark paper.
     case warning
     /// The capture screen's fixed near-black. Pinned to `CaptureSurface.backgroundWhite`.
     case studio

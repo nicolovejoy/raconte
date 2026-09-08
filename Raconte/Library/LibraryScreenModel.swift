@@ -281,7 +281,7 @@ final class LibraryScreenModel {
         let loadedJournals = try? await journalStore.list()
         #if DEBUG
         await UITestJournalCoverSeed.seedIfRequested(store: journalCoverStore,
-                                                     journalIDs: (loadedJournals ?? []).map(\.id))
+                                                     journalIDs: (loadedJournals ?? []).displayOrdered.map(\.id))
         #endif
         var loadedCovers: [String: Data] = [:]
         for journal in loadedJournals ?? [] {

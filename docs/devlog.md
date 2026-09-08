@@ -3,6 +3,44 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-07/08 (laptop — build 17 smokes 4/4, iPhone 4/4, overview #160 merged, Batch B #165/#166 merged, therapist one-pager brief)
+
+- Build 17 (main `05c19d88`, then `3a175a14` bump) built with real signing, ditto'd to
+  `~/Desktop/Raconte.app`, UUID `D6248064`. Owner smokes, one at a time, **all PASS**: Verify
+  archive… (334 files, no problems), entry→journal link, out-of-span glyph (#153), quarantine
+  (#152). **Trap found and fixed in CLAUDE.md:** the quarantine smoke pointed at the bare
+  `~/Library/Application Support/Raconte`, a stale unsandboxed Aug-15 copy the sandboxed app never
+  reads — the corruption changed nothing; the real container is
+  `~/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte`.
+  The stale file was restored from its backup. iPhone build 15: 4/4 pass.
+- Feedback filed: #161 glyph too subtle (safety orange, +30%), #162 macOS type +30% / iOS graded
+  (owner ruling on the issue: Home relative-time +30%, face-out titles +20%, spine titles +10%,
+  "Raconte" unchanged), #163 quarantine block visually distinct from trash, #164 live voice mark
+  in the band like the live ¶ break. #106 (full cover image) re-flagged. Loop/ladybug bug-report
+  widget: exists in MusicForge only; nothing in Raconte, no issue.
+- **PR #160 overview refresh merged** — done locally via one Opus implementer (resumed after the
+  owner stopped the first) + Sonnet reviewer; every cited claim verified; two extra corrections
+  (revert is machine-lineage only).
+- **Batch B via SDD** from plan `docs/plans/2026-09-08-batch-b-plan.md` (base `9109f570`), two
+  parallel branches in worktrees, Sonnet implementers/task reviewers, Opus whole-branch reviews:
+  **#165** (Closes #161, #163; refs #162) and **#166** (Closes #106, #164), both merged evening
+  2026-09-08 (`2e1409d3`, `d095fc7b`). 5 tasks, 0 task-level fix rounds, one fix wave per branch.
+  **The Opus review of #165 measured `.dynamicTypeSize` INERT on macOS 26** (harness: `.font(.body)`
+  and `@ScaledMetric` unchanged at every size while the environment value propagated) — the
+  macOS root bump was dropped; #162 stays open for a point-size token sweep (option b), finding
+  recorded on the issue. Other review-driven changes: HomeView token pin, corrected contrast
+  comment (~3.7:1, not 4.1), the Trash bar drawn in the row background, lightbox fallback when
+  the cover vanishes mid-view, macOS sheet min 560×420, live band breaks only on a CHANGE of voice
+  (matches the persisted view), seed uses display order. Rulings recorded in the session's final
+  message: #149 excluded (design-system ask); the opening voice marker labels the top of every
+  multi-voice live band "BN:" after the first tap — owner judges on the smoke.
+- Counts after both merges (local): unit **2197** (CI shows 1 skipped), UI **65** expected.
+- Therapist one-pager: cloud brief `docs/cloud-tasks/therapist-onepager-2026-09-08.txt` on branch
+  `docs/therapist-onepager` (from main `b695d8d7`): survey the field with cited/dated cells,
+  matrix with Raconte first, plain-words privacy page, app palette from `InkSurface.swift`, two-page
+  PDF rendered in-container, docs-only PR. Guardrails in the brief: single-user by design, no
+  HIPAA/BAA/E2E claims, the ADP caveat.
+
 ## Session 2026-09-07 (laptop — Batch A via SDD: PRs #158 and #159 open, T8 ruling 2, cloud overview task queued)
 
 - Readup + light resync: smoke **D (parked sync) PASS** — `sync/parked.json` absent on a synced

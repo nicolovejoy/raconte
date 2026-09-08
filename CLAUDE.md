@@ -2,75 +2,36 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-07 (laptop — Batch A via SDD: PRs #158 and #159 open, T8 ruling 2, cloud overview task queued)
+## Session 2026-09-07/08 (laptop — build 17 smokes pass, Batch B #165/#166 merged, therapist one-pager brief)
 
-- Readup + light resync: smoke **D (parked sync) PASS** — `sync/parked.json` absent on a synced
-  build 16. #147 was closed as a duplicate of #106 (no action). The T8 citation below was wrong:
-  the read-only reasons live in `EntryChainSnapshot.swift:31-34` (incl. `readOnlyNoTranscript`),
-  not on `TranscriptEditorModel`. Four merged worktrees and three merged remote branches removed.
-- Owner rulings (15-minute window): slate = #154, #156, #155, #148 on two branches; **T8 ruling 2**:
-  when the post-capture file pass FAILS, promote `live.jsonl` as a **provisional** revision zero,
-  replaced when a later retry succeeds (option a over "no transcript + retry" and "after N
-  failures"); the cloud container refreshes `docs/overview.md`; cleanup approved.
-- Plan `docs/plans/2026-09-07-batch-a-plan.md`, run via SDD from `main` `1684b214`: Sonnet
-  implementers and task reviewers, Opus whole-branch reviews, one fix wave + one scoped re-review
-  per branch; 4 tasks, zero task-level fix rounds, no stalls. Owner merges **#158 → Update branch
-  → #159**.
-- **PR #158** `feat/154-156-verify-archive-parked-count` — Closes #154, #156. About → Archive →
-  **Verify archive…** runs `ArchiveVerifier` on a picked package (`ExportRunner.verify(package:)`,
-  `.verified`, `.running(verifying:)`, `Problem.summary`, one `.fileImporter` with a mode captured
-  at button time; result row keeps `about.export.result`; failure copy now `Failed: …`).
-  `SyncStatus.parked` + Parked rows on the shared Sync section (Debug and About); no UI test —
-  the coordinator is nil under the harness by design. Unit **2188** (CI confirmed, 1 skipped), UI 63.
-- **PR #159** `feat/155-148-capture-tick-journal-link` — Closes #155, #148. `CaptureStatusReadout`
-  and `CaptureMicMeterReadout` own the capture screen's two tick-rate reads. **The Opus review
-  caught that `micLevel` is assigned in the same 100 ms `tick()` as `elapsed`** — the issue and
-  the plan named only `elapsed`, so the task-level result was a zero-gain change with a false
-  comment; real cadence is ~10 Hz, not once a second (new memory). Pin test covers both. Entry
-  detail gets a journal row (`detail.journalLink` / `detail.journalUnfiled` /
-  `detail.journalMissing`) navigating via `router.select(.journal(id))`, one end-to-end UI test.
-  Unit 2185, UI **64** expected. #67 commented: item 3 complete, issue stays open.
-- Cloud task ready, **not launched**: branch `docs/overview-refresh-2026-09-07` (from main) and
-  prompt `docs/cloud-tasks/overview-refresh-2026-09-07.txt`.
-- CI at handoff: #158 unit green, UI pending; #159 both pending.
-- Parked by ruling (not defects): a directory-wide containment pin over `Capture/UI`;
-  `SidebarRowInsetTests` now holds capture pins (name drift); the journal link's macOS click
-  target is the label's own bounds; "Unfiled" as an entry's first line and the 24 pt gap — owner
-  judges on the smoke.
+- Build 17 Mac smokes 4/4 and iPhone build 15 4/4. Feedback filed as #161–#164; #106 re-flagged.
+  Overview refresh **#160 merged**. Batch B via SDD from `docs/plans/2026-09-08-batch-b-plan.md`:
+  **#165** (#161 glyph in a new `InkTone.warning`, #163 Trash quarantine block, #162 partial) and
+  **#166** (#106 cover lightbox from the editor, #164 live voice labels) — both merged 2026-09-08.
+- **`.dynamicTypeSize` is inert on macOS 26** (measured in the #165 review). #162's macOS half is a
+  point-size token sweep, spec-first; the Home shelf's three sizes are already points per platform
+  in `Raconte/App/TypeScale.swift`.
+- The quarantine smoke's path was wrong (stale unsandboxed copy); corrected above — the app reads
+  `~/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte`.
+- Cloud task ready, **not launched**: branch `docs/therapist-onepager` (= main `b695d8d7`) and brief
+  `docs/cloud-tasks/therapist-onepager-2026-09-08.txt` — survey, matrix, two-page PDF, docs-only PR.
+- Counts (local, after both merges): unit 2197 (CI 1 skipped), UI 65 expected — read off main's CI.
 
 **Next steps:**
-1. **Both merged** (#158 `e9f385c5`, #159 `589e4a17`, 2026-09-07 evening) — main's CI runs for the
-   merges were still in progress at close; confirm green and read the counts (expect unit 2189,
-   1 skipped; UI 64) before building 17.
-2. **Build 17, then ONE smoke at a time**, step 0 always About → App → Build reads `build 17: <date>`:
-   - **C. Out-of-span glyph (#153):** sidebar → a journal with ≥2 entries → note two entries'
-     dates → click the cover band at the top (opens the journal editor) → Date Range: set Start/End
-     so one entry is inside and one outside → back. Pass: the excluded row shows a
-     calendar-with-exclamation glyph, and opening it shows "Dated outside <journal>'s range
-     (<span>)." above the transcript; nothing disabled. Restore the span after.
-   - **Verify archive… (#158):** About → Archive → Verify archive… → pick the *package* folder
-     (the timestamped one containing `raconte-export.json`), not its parent. Pass: `Verified
-     <package>: N files, no problems`.
-   - **Journal link (#159):** All Entries → open an entry → first line names its journal (or
-     "Unfiled") → click it → the journal opens with that name in its header.
-   - **B. Quarantine (#152):** record a throwaway entry first; newest capture id =
-     the newest ULID in the SANDBOX container, not the bare Application Support folder:
-     `ls "$HOME/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte/captures" | sort | tail -1`
-     (the bare `~/Library/Application Support/Raconte` is a stale unsandboxed copy the app
-     never reads — corrupting a file there changes nothing, bit us 2026-09-07); back up its
-     `entry.json`, overwrite with `not json`, relaunch → Trash → Unreadable entries → Quarantine.
-   - **iPhone build 15:** record → BN flips to LN → live band dims/brightens → stop → receipt
-     card with no "Record another" → tap card → back to Capture via the sidebar → reads Ready.
-3. **Overview refresh — do it here via SDD next session** (owner chose not to launch the cloud
-   session). The brief is complete: `docs/cloud-tasks/overview-refresh-2026-09-07.txt`, branch
-   `docs/overview-refresh-2026-09-07` already pushed from main (rebase it onto the merged main
-   first). Docs-only PR, no CI. Delete the remote branch if the work lands another way.
-4. **T8 spec** (architectural: spec → plan → build). Rulings 1 and 2 are recorded; still open:
-   background survival for long entries (must not hang off a view lifecycle) and what happens to
-   existing entries that already carry live transcripts and edits. #38 rides along.
-5. **M4 acceptance gate, never run** — after #158 merges it is checkable in-app: quit, move
-   `~/Library/Application Support/Raconte` aside (never delete), relaunch, let sync settle,
-   export, Verify archive…, compare counts with the iPhone.
+1. **Launch the therapist one-pager cloud session** on branch `docs/therapist-onepager` with the
+   brief above as the prompt. Review its survey.md citations before trusting the matrix; the PDF
+   must be exactly two pages.
+2. **Build 18, then ONE smoke at a time** (step 0: About → App → Build reads `build 18: <date>`):
+   Home on the Mac (three shelf texts larger, nothing else); a journal with an out-of-span entry
+   (orange glyph); Trash with an unreadable entry (tinted block, bar, count); journal editor →
+   click the cover strip → lightbox, Esc closes. iPhone: multi-voice record → tap voice → `LN:`
+   and a blank line where it landed, and `BN:` at the top of the band after the first tap.
+3. **Specs before code:** #162 macOS token sweep (sizes in points; clipping risks at
+   `CaptureControlBarMetrics` 36/76 pt and the 28 pt sidebar thumb) and #149 backdate-sheet
+   contrast (text-role tokens with stated floors). Then T8 (rulings 1–2 recorded; open: background
+   survival, existing entries with live transcripts; #38 rides along).
+4. **M4 acceptance gate, never run** — quit, move the container aside (never delete), relaunch,
+   let sync settle, export, Verify archive…, compare counts with the iPhone.
 
 ## What Raconte is
 

@@ -325,7 +325,7 @@ struct TrashView: View {
                 .disabled(selection.isEmpty)
                 .accessibilityIdentifier("trash.bulkDeleteNow")
         }
-        .font(.system(size: TypeScale.libraryRowMeta))
+        .font(.system(size: TypeScale.selectionBarText))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(InkTone.paperInset.color)

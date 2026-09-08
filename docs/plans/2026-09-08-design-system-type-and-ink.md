@@ -62,7 +62,8 @@ unless stated):
 - `homeChevron` 13 → macOS 15 (HomeView 125)
 - `homeNewEntryButton` 17 → macOS 19 (HomeView 147)
 - `homeEmptyTitle` 24 serif → macOS 28, `homeEmptyBody` 15 → macOS 17 (HomeView 163/166)
-- `libraryRowMeta` 13 → macOS 15 (LibraryView 300, 311; TrashView 174, 303, 320)
+- `libraryRowMeta` 13 → macOS 15 (LibraryView 300; TrashView 182, 311)
+- `selectionBarText` 15 → macOS 17 (LibraryView 311 selection bar; TrashView 328 selection bar)
 - `libraryOutOfSpanGlyph` 14 → macOS 16 (LibraryView 697; #161's glyph, keeps `.semibold`)
 - `trashUnreadableTitle` 16 → macOS 18 (TrashView 172, 181)
 - `libraryJournalTitle` 22 → macOS 24 (LibraryView 390)
@@ -79,8 +80,11 @@ Every `.font(.<style>)` and serif-body site in these files moves to a role:
 `LibraryView`, `TrashView`, `EntryDetailView`, `EntryInfoSheet`, `TranscriptEditorView`,
 `RevisionHistoryView`, `JournalPickerSheet`, `JournalSpanEditor`, `JournalEditorView`,
 `SidebarView`, `SyncStatusSectionView`, `AboutView`, `HomeView`, `PlaybackProgressLine`.
-`PlaybackProgressLine` and `VoiceMarkingView` are rendered on paper (entry detail), so they are
-in; `VoiceMarkingView` 43/149/162 too. Capture-only files listed in ruling 4 stay untouched.
+`VoiceMarkingView` is rendered on paper (entry detail), so it is in — 43/149/162.
+`PlaybackProgressLine` is dual-surface: it renders on paper (entry detail) AND inside
+`RecoveryBanner` on the studio surface, and takes the paper `label` role deliberately — 12 pt
+on macOS is closer to the studio floor than the old 10 pt. Capture-only files listed in ruling
+4 stay untouched.
 
 Straggler check: `grep -rn '\.font(\.\(caption\|caption2\|footnote\|subheadline\|body\|headline\))' Raconte` returns only capture-surface files after the sweep; `grep -rn 'system(size: [0-9]' Raconte` returns only `NeutralCoverTile`, `CaptureSurface`, `CaptureControlBarMetrics`, `RecStatusLine`, `RecordButton`, `LiveTranscriptText`.
 

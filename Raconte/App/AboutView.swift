@@ -124,6 +124,7 @@ struct AboutView: View {
                 }
             }
         }
+        .font(TypeRole.body.font)
         .navigationTitle("About")
         .accessibilityIdentifier("about.list")
         .task {

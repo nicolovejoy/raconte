@@ -338,8 +338,8 @@ enum TranscriptAttribution {
 
     // MARK: - Cut position
 
-    /// The one cut rule, shared with the live transcript (#136) so the break the owner
-    /// watched lands where the receipt's paragraph does. A frame strictly inside a range
+    /// The one cut rule, shared with the live transcript (#136, #164) so the break the
+    /// owner watched lands where the receipt's paragraph does. A frame strictly inside a range
     /// cuts at the nearer edge — text is never torn mid-word; otherwise it cuts before
     /// the first range whose start is at or after the frame.
     static func cutIndex(forFrame frame: Int64, ranges: [FrameRange]) -> Int {

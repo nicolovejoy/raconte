@@ -264,6 +264,10 @@ final class JournalEditorUITests: XCTestCase {
                       "the seeded cover did not render as a tappable preview")
         press(preview)
 
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(identifier: "journalCover.lightbox").firstMatch.waitForExistence(timeout: 15),
+            "the lightbox container never presented")
+
         let done = app.buttons["journalCover.lightbox.done"].firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 15), "the lightbox never presented")
         press(done)

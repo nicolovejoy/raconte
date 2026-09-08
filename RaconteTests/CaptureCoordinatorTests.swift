@@ -1180,6 +1180,27 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.paragraphFrames, [])
     }
 
+    /// #164: the live band needs each voice tap's frame AND voice off the coordinator, in
+    /// order — the same shape as `paragraphFrames` (#136) — reset with the wiring.
+    func testVoiceMarksAccumulateAndResetWithTheWiring() async throws {
+        let session = FakeSession(); let recorder = FakeRecorder()
+        let fixedNow = Date(timeIntervalSince1970: 1_650_000_000)
+        let coordinator = makeCoordinator(session: session, recorder: recorder, now: { fixedNow })
+
+        await coordinator.record()
+        recorder.feed(frames: 480)
+        coordinator.markVoice(StructureMarker.Voice.littleNico)
+        recorder.feed(frames: 240)
+        coordinator.markVoice(StructureMarker.Voice.bigNico)
+
+        XCTAssertEqual(coordinator.voiceMarks,
+                       [LiveVoiceMark(frame: 480, voice: "ln"), LiveVoiceMark(frame: 720, voice: "bn")])
+
+        await coordinator.done()
+
+        XCTAssertEqual(coordinator.voiceMarks, [])
+    }
+
     /// #63: the visual marker confirmation needs to know WHICH button's marker just
     /// landed, and `markerCount` alone cannot say. Same honesty rule as the haptic:
     /// `lastMarkerKind` reports what reached disk, so it follows the append, not the tap.

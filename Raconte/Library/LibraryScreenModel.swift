@@ -279,6 +279,10 @@ final class LibraryScreenModel {
         // with `try?` is the same mistake one level up from the store that draws the
         // line — the chips would silently show no journals over a registry that has them.
         let loadedJournals = try? await journalStore.list()
+        #if DEBUG
+        await UITestJournalCoverSeed.seedIfRequested(store: journalCoverStore,
+                                                     journalIDs: (loadedJournals ?? []).displayOrdered.map(\.id))
+        #endif
         var loadedCovers: [String: Data] = [:]
         for journal in loadedJournals ?? [] {
             if let data = await journalCoverStore.read(journalID: journal.id) {

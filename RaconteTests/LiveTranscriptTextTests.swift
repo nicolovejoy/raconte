@@ -96,4 +96,61 @@ final class LiveTranscriptTextTests: XCTestCase {
         let runs = [run("one", 0..<100), run("two", 100..<200)]
         XCTAssertEqual(String(LiveTranscriptText.attributed(runs, paragraphFrames: [100, 100], ink: .white, dim: .gray).characters), "one\n\ntwo")
     }
+
+    private func mark(_ frame: Int64, _ voice: String) -> LiveVoiceMark {
+        LiveVoiceMark(frame: frame, voice: voice)
+    }
+
+    /// #164: a voice tap between two runs starts a new line AND names the voice, with the
+    /// same fallback label the voice button shows (uppercased id) when the journal has none.
+    func testAVoiceMarkBetweenRunsBreaksTheLineAndPrefixesTheLabel() {
+        let runs = [run("one two", 0..<100), run("three", 100..<200)]
+        let s = LiveTranscriptText.attributed(runs, voiceMarks: [mark(100, "ln")], ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "one two\n\nLN: three")
+        let label = s.runs.first { String(s[$0.range].characters) == "LN: " }
+        XCTAssertNotNil(label, "the label is its own attributed run")
+        XCTAssertEqual(label?.inlinePresentationIntent, .stronglyEmphasized, "the label is semibold")
+    }
+
+    /// The journal's configured label wins over the id, exactly as on the voice button.
+    func testAVoiceMarkUsesTheJournalsConfiguredLabel() {
+        let runs = [run("one two", 0..<100), run("three", 100..<200)]
+        let s = LiveTranscriptText.attributed(runs, voiceMarks: [mark(100, "ln")],
+                                              voiceLabels: ["ln": "Little Nico"], ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "one two\n\nLittle Nico: three")
+    }
+
+    /// A ¶ and a voice tap at the same cut make ONE blank line, not two.
+    func testAVoiceMarkAndAParagraphAtTheSameCutMakeOneBreak() {
+        let runs = [run("one two", 0..<100), run("three", 100..<200)]
+        let s = LiveTranscriptText.attributed(runs, paragraphFrames: [100], voiceMarks: [mark(100, "ln")],
+                                              ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "one two\n\nLN: three")
+    }
+
+    /// A voice tap before any words labels the first run with no leading break; the later of
+    /// two marks at one cut wins.
+    func testAVoiceMarkAtTheStartLabelsTheFirstRunAndTheLaterMarkWins() {
+        let runs = [run("one", 0..<100), run("two", 100..<200)]
+        let s = LiveTranscriptText.attributed(runs, voiceMarks: [mark(0, "bn"), mark(0, "ln")],
+                                              ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "LN: one two")
+    }
+
+    /// A re-tap of the voice already in force changes nothing — the persisted view breaks only
+    /// on a change of voice, and the live band agrees.
+    func testARepeatedVoiceMarkNeitherBreaksNorLabels() {
+        let runs = [run("one", 0..<100), run("two", 100..<200), run("three", 200..<300)]
+        let s = LiveTranscriptText.attributed(runs, voiceMarks: [mark(100, "ln"), mark(200, "ln")], ink: .white, dim: .gray)
+        XCTAssertEqual(String(s.characters), "one\n\nLN: two three")
+    }
+
+    /// A mark after the last run is dropped for now (recognition lags the tap) and re-placed
+    /// once a run starting at or after its frame arrives — same as the ¶ rule.
+    func testAVoiceMarkPastTheLastRunIsDroppedUntilTextArrives() {
+        let runs = [run("one", 0..<100)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(runs, voiceMarks: [mark(500, "ln")], ink: .white, dim: .gray).characters), "one")
+        let later = [run("one", 0..<100), run("two", 500..<600)]
+        XCTAssertEqual(String(LiveTranscriptText.attributed(later, voiceMarks: [mark(500, "ln")], ink: .white, dim: .gray).characters), "one\n\nLN: two")
+    }
 }

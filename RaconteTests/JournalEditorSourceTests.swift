@@ -65,4 +65,23 @@ final class JournalEditorSourceTests: XCTestCase {
         let raw = try String(contentsOf: editorFileURL)
         XCTAssertTrue(raw.contains("#68"))
     }
+
+    /// #106: the cover strip is a button that opens the lightbox, and the lightbox is
+    /// presented from the Form's own modifier chain — at the same indentation as the
+    /// cover-picker sheet — never from inside `Section("Cover")` (the iOS 26 trap).
+    func testCoverLightboxIsPresentedFromTheFormNotTheSection() throws {
+        let source = try editorSource
+        XCTAssertTrue(source.contains("journalEditor.cover.preview"), "the strip is tappable")
+        let lines = source.components(separatedBy: "\n")
+        guard let picker = lines.first(where: { $0.contains(".sheet(isPresented: $showingCoverPicker)") }),
+              let lightbox = lines.first(where: { $0.contains("isPresented: $showingCoverLightbox)") }) else {
+            return XCTFail("cover picker sheet or cover lightbox presentation is missing")
+        }
+        func indent(_ line: String) -> Int { line.prefix { $0 == " " }.count }
+        XCTAssertEqual(indent(picker), indent(lightbox),
+                       "the lightbox must hang off the Form exactly where the picker sheet does")
+        XCTAssertTrue(source.contains(".fullScreenCover(isPresented: $showingCoverLightbox)"),
+                      "iOS presents full screen")
+        XCTAssertTrue(source.contains(".sheet(isPresented: $showingCoverLightbox)"), "macOS presents a sheet")
+    }
 }

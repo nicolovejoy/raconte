@@ -102,7 +102,8 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
   on `.foregroundStyle(.white)`, `Color.white.opacity(`, `Color.green`, `.tint(.white)`,
   `.tint(.red)` in `CaptureView.swift`. `SidebarRowInsetTests.testTheRowAppliesTheInsetRule`
   greps `SidebarView.swift` for the literal `leadingInset(isJournal: row.journalID != nil)`.
-  Neither file is edited by this plan; if a task finds it must, keep those literals intact.
+  Task 5 edits `CaptureView.swift` (one call site); `SidebarView.swift` is not edited. Keep
+  those literals intact either way.
 - `Logger` lines the owner may read back must be `.notice`, not `.info`.
 - Commit after each green step with a conventional message; the reviewer reads the diff,
   not the transcript.

@@ -2,16 +2,15 @@ import SwiftUI
 
 /// #162: the app's type-size decisions, in points, per platform (owner ruling 2026-09-08).
 ///
-/// Two levers. On macOS a single Dynamic Type bump at the scene root scales every semantic
-/// text style ~30% (the same style names are smaller in points on macOS than iOS —
-/// `.callout` is 16 pt on iOS and 12 pt on macOS — so "too small on the laptop" was mostly
-/// platform drift). `.font(.system(size:))` literals do NOT move with Dynamic Type, so the
-/// Home shelf's three literal sizes are stated here explicitly, graded on iOS: the
-/// smallest text up the most, the largest not at all.
+/// The plan assumed a root-level Dynamic Type bump would raise macOS text sizes; measured on
+/// 2026-09-08 in a standalone harness, `.dynamicTypeSize` (and `@ScaledMetric`) is inert on
+/// macOS 26 — `.font(.body)` does not change size at any setting. Dropped entirely. macOS sizes
+/// below are therefore stated in points, ×1.3 over the old literals; the rest of the macOS type
+/// (everything not on this shelf) still needs a token sweep later — #162 stays open for that.
+/// `.font(.system(size:))` literals do NOT move with Dynamic Type, so the Home shelf's three
+/// literal sizes are stated here explicitly, graded on iOS: the smallest text up the most, the
+/// largest not at all.
 enum TypeScale {
-    /// One step above the +24% `.xxLarge`: body 23 pt against the default 17 pt.
-    static let macDynamicTypeSize: DynamicTypeSize = .xxxLarge
-
     #if os(macOS)
     /// Was 13 — ×1.3.
     static let homeFaceOutTitle: CGFloat = 17

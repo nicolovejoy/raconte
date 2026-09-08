@@ -69,12 +69,7 @@ struct RaconteApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if os(macOS)
             ContentView(services: services)
-                .dynamicTypeSize(TypeScale.macDynamicTypeSize)
-            #else
-            ContentView(services: services)
-            #endif
         }
         #if os(macOS)
         .commands { RaconteCommands(services: services) }

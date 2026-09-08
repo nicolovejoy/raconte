@@ -87,7 +87,7 @@ enum UITestImageSeed {
     /// A 1×1 red PNG — the smallest fixture ImageIO will actually decode (pixel
     /// dimensions and all), so `ImageThumbnailer.generate`/`EntryDetailView`'s
     /// `AsyncCaptureImage` see the same real bytes a genuine capture would produce.
-    private static let onePixelRedPNGBase64 =
+    static let onePixelRedPNGBase64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 
     static func seedIfRequested(capturesRoot: URL) {
@@ -356,6 +356,21 @@ final class SyntheticRecorder: EngineRecording, @unchecked Sendable {
         task?.cancel()
         task = nil
         isRunning = false
+    }
+}
+
+/// #106: a real, decodable cover on the first journal, for the editor's lightbox UI test —
+/// XCUITest cannot drive a photo pick. Env-gated (`RACONTE_UITEST_SEED_JOURNAL_COVER`) and
+/// idempotent (no-op when the journal already has a cover). Runs inside
+/// `LibraryScreenModel.rescan()` — the only place that has both the registry's journal ids
+/// and the cover store — before the covers are read, so the same rescan publishes it.
+enum UITestJournalCoverSeed {
+    static func seedIfRequested(store: JournalCoverStore, journalIDs: [String]) async {
+        guard ProcessInfo.processInfo.environment["RACONTE_UITEST_SEED_JOURNAL_COVER"] != nil,
+              let journalID = journalIDs.first,
+              await store.read(journalID: journalID) == nil,
+              let data = Data(base64Encoded: UITestImageSeed.onePixelRedPNGBase64) else { return }
+        try? await store.write(imageData: data, journalID: journalID)
     }
 }
 #endif

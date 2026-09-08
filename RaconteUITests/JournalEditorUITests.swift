@@ -238,6 +238,41 @@ final class JournalEditorUITests: XCTestCase {
                       "Cancel should dismiss the sheet back to the still-open editor")
     }
 
+    /// #106: a journal WITH a cover shows the strip as a tappable preview; tapping it opens
+    /// the lightbox, Done closes it and the editor is still there. The cover is seeded by
+    /// `UITestJournalCoverSeed` because XCUITest cannot drive a real photo pick.
+    func testTappingTheCoverPreviewOpensTheLightbox() {
+        let app = XCUIApplication()
+        app.launchEnvironment["RACONTE_UITEST_ID"] = UUID().uuidString
+        app.launchEnvironment["RACONTE_UITEST_SEED_JOURNAL_COVER"] = "1"
+        app.launch()
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30),
+                      "capture screen never appeared after openCapture")
+
+        let journalRow = firstJournalRow(app)
+        XCTAssertTrue(journalRow.waitForExistence(timeout: 15))
+        press(journalRow)
+
+        let header = app.descendants(matching: .any)
+            .matching(identifier: "journal.header").firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15))
+        press(header)
+
+        let preview = app.buttons["journalEditor.cover.preview"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 15),
+                      "the seeded cover did not render as a tappable preview")
+        press(preview)
+
+        let done = app.buttons["journalCover.lightbox.done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 15), "the lightbox never presented")
+        press(done)
+
+        XCTAssertTrue(done.waitForNonExistence(timeout: 10), "the lightbox did not dismiss")
+        XCTAssertTrue(app.textFields["journalEditor.name"].firstMatch.waitForExistence(timeout: 10),
+                      "dismissing the lightbox should land back on the editor")
+    }
+
     /// A journal place shows the journal itself above its entries — All Entries does not.
     func testSelectingAJournalShowsItsHeader() {
         let app = launchApp()

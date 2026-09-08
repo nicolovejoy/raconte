@@ -131,24 +131,29 @@ struct TrashView: View {
             Section {
                 ForEach(model.unreadableEntries) { item in
                     unreadableRow(item)
-                        .padding(.leading, 8)
-                        .overlay(alignment: .leading) {
-                            Rectangle()
-                                .fill(InkTone.warning.color)
-                                .frame(width: 3)
-                        }
-                        .listRowBackground(InkTone.paperInset.color)
+                        .listRowBackground(unreadableRowBackground)
                 }
                 Text("These entries’ settings files could not be read. Quarantine moves "
                      + "the whole entry, audio included, out of the library into the "
                      + "app’s quarantine folder. Nothing is deleted.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .listRowBackground(InkTone.paperInset.color)
+                    .listRowBackground(unreadableRowBackground)
+                    .listRowSeparator(.hidden)
             } header: {
                 Text("Unreadable entries · \(model.unreadableEntries.count)")
                     .accessibilityIdentifier("trash.unreadable.section")
             }
+        }
+    }
+
+    /// #163: the block's ground with its warning bar — drawn in the row background so the
+    /// bar spans the full row height at the true leading edge, which an overlay on the
+    /// inset row content cannot do.
+    private var unreadableRowBackground: some View {
+        HStack(spacing: 0) {
+            Rectangle().fill(InkTone.warning.color).frame(width: 3)
+            InkTone.paperInset.color
         }
     }
 

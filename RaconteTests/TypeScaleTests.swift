@@ -67,7 +67,8 @@ final class TypeScaleTests: XCTestCase {
 
     /// The paper screens are on `TypeRole`/`TypeScale`, never a bare Apple style or a size
     /// literal — a bare style is 10–13 pt on macOS, which is #162 coming back. Capture-surface
-    /// files are deliberately absent from this list (spec ruling 4).
+    /// files are deliberately absent from this list (spec ruling 4). `Raconte/Capture/Debug` is
+    /// exempt (DEBUG-only tooling, spec inventory scope).
     private static let paperFiles = [
         "Raconte/Home/UI/HomeView.swift",
         "Raconte/App/SidebarView.swift",
@@ -84,7 +85,6 @@ final class TypeScaleTests: XCTestCase {
         "Raconte/Library/UI/JournalEditorView.swift",
         "Raconte/Library/UI/VoiceMarkingView.swift",
         "Raconte/Capture/UI/PlaybackProgressLine.swift",
-        "Raconte/Capture/Debug/DebugMenuView.swift",
     ]
 
     func testPaperScreensCarryNoBareTextStyleOrSizeLiteral() throws {

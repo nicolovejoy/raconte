@@ -54,7 +54,10 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
    - **Journal link (#159):** All Entries → open an entry → first line names its journal (or
      "Unfiled") → click it → the journal opens with that name in its header.
    - **B. Quarantine (#152):** record a throwaway entry first; newest capture id =
-     `ls -t ~/Library/Application\ Support/Raconte/captures/ | head -1`; back up its
+     the newest ULID in the SANDBOX container, not the bare Application Support folder:
+     `ls "$HOME/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte/captures" | sort | tail -1`
+     (the bare `~/Library/Application Support/Raconte` is a stale unsandboxed copy the app
+     never reads — corrupting a file there changes nothing, bit us 2026-09-07); back up its
      `entry.json`, overwrite with `not json`, relaunch → Trash → Unreadable entries → Quarantine.
    - **iPhone build 15:** record → BN flips to LN → live band dims/brightens → stop → receipt
      card with no "Record another" → tap card → back to Capture via the sidebar → reads Ready.

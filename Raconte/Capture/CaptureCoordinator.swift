@@ -52,6 +52,14 @@ typealias StoreFactory = @Sendable (_ captureID: String, _ format: AudioFormatDe
 /// `recorder.start` returns. Read `CaptureCoordinator.activeFormat` instead.
 typealias SecondarySinkFactory = @MainActor (_ captureID: String) -> (any PCMSink)?
 
+/// #164: one voice tap as the live transcript needs it — where it landed and which voice it
+/// switched to. The on-disk `StructureMarker` is the record; this is the in-memory mirror
+/// for the live band, the same relationship `paragraphFrames` has to ¶ markers (#136).
+struct LiveVoiceMark: Equatable, Sendable {
+    let frame: Int64
+    let voice: String
+}
+
 @MainActor
 @Observable
 final class CaptureCoordinator {
@@ -108,6 +116,9 @@ final class CaptureCoordinator {
     /// #136: the frames of this capture's ¶ taps, for the live transcript; reset with
     /// the wiring.
     private(set) var paragraphFrames: [Int64] = []
+    /// #164: this capture's voice taps (frame + voice), for the live transcript; reset with
+    /// the wiring, like `paragraphFrames`.
+    private(set) var voiceMarks: [LiveVoiceMark] = []
     /// What kind the most recent LANDED marker was (#63) — how the visual confirmation
     /// knows which button to flash when `markerCount` rises. Same honesty rule as the
     /// count: follows the append, never the tap, so a failed write flashes nothing.
@@ -340,6 +351,7 @@ final class CaptureCoordinator {
             // `seq` is stamped by the writer, which resumes numbering from the file.
             try writer.append(StructureMarker(seq: 0, frame: frame, kind: kind, voice: voice))
             if case .voice = kind { currentVoice = voice }
+            if case .voice = kind, let voice { voiceMarks.append(LiveVoiceMark(frame: frame, voice: voice)) }
             if case .paragraph = kind { paragraphFrames.append(frame) }
             lastMarkerKind = kind
             markerCount += 1
@@ -824,6 +836,7 @@ final class CaptureCoordinator {
         didWriteOpeningVoice = false
         markerCount = 0
         paragraphFrames = []
+        voiceMarks = []
         lastMarkerKind = nil
         activeFormat = nil
         activeCaptureID = nil

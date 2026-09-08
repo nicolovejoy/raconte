@@ -120,7 +120,7 @@ struct JournalEditorView: View {
                     // row is deliberately the OTHER half, since Task 7's span section is
                     // the one place the stored span itself becomes editable.
                     Text(derivedSummary)
-                        .font(.footnote)
+                        .font(TypeRole.footnote.font)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("journalEditor.derived")
                 }

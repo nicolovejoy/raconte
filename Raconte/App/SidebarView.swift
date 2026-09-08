@@ -136,7 +136,7 @@ struct SidebarRowView: View {
                 Text(row.title)
                 if let subtitle = row.subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(TypeRole.label.font)
                         .foregroundStyle(InkTone.inkSecondary.color)
                 }
             }

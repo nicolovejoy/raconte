@@ -136,7 +136,7 @@ struct TrashView: View {
                 Text("These entries’ settings files could not be read. Quarantine moves "
                      + "the whole entry, audio included, out of the library into the "
                      + "app’s quarantine folder. Nothing is deleted.")
-                    .font(.footnote)
+                    .font(TypeRole.footnote.font)
                     .foregroundStyle(.secondary)
                     .listRowBackground(unreadableRowBackground)
                     .listRowSeparator(.hidden)
@@ -169,16 +169,16 @@ struct TrashView: View {
         return HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(dateText)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: TypeScale.trashUnreadableTitle, weight: .semibold))
                 Text("Entry settings unreadable")
-                    .font(.system(size: 13))
+                    .font(.system(size: TypeScale.libraryRowMeta))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button("Quarantine") {
                 pendingQuarantine = item
             }
-            .font(.system(size: 16))
+            .font(.system(size: TypeScale.trashUnreadableTitle))
             .buttonStyle(.borderless)
             .accessibilityIdentifier("trash.unreadable.quarantine")
         }
@@ -300,7 +300,7 @@ struct TrashView: View {
     private var selectionBar: some View {
         HStack(spacing: 16) {
             Text("\(selection.count) selected")
-                .font(.system(size: 13).monospacedDigit())
+                .font(.system(size: TypeScale.libraryRowMeta).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("trash.selectionCount")
             Spacer()
@@ -317,7 +317,7 @@ struct TrashView: View {
                 .disabled(selection.isEmpty)
                 .accessibilityIdentifier("trash.bulkDeleteNow")
         }
-        .font(.system(size: 15))
+        .font(.system(size: TypeScale.libraryRowMeta))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(InkTone.paperInset.color)
@@ -431,10 +431,10 @@ struct TrashView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("Trash is empty")
-                .font(.headline)
+                .font(TypeRole.headline.font)
             Text("Deleted entries stay here for \(TrashPolicy.retentionDays) days "
                  + "before they’re erased.")
-                .font(.caption)
+                .font(TypeRole.label.font)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -463,23 +463,23 @@ struct TrashEntryRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(item.effectiveDate.formatted(date: .abbreviated, time: .omitted))
-                    .font(.subheadline.weight(.semibold))
+                    .font(TypeRole.secondary.font.weight(.semibold))
                     .accessibilityIdentifier("trash.row.date")
                 Spacer()
                 Text(CaptureCoordinator.formatDuration(item.durationSeconds))
-                    .font(.caption.monospacedDigit())
+                    .font(TypeRole.label.font.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
             if let snippet = item.snippet, !snippet.isEmpty {
                 Text(snippet)
-                    .font(.system(.body, design: .serif))
+                    .font(TypeRole.reading.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
 
             Text(remainingText)
-                .font(.caption)
+                .font(TypeRole.label.font)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("trash.row.remaining")
 
@@ -490,7 +490,7 @@ struct TrashEntryRow: View {
                     Button("Delete Now", role: .destructive, action: onDeleteNow)
                         .accessibilityIdentifier("trash.row.deleteNow")
                 }
-                .font(.caption)
+                .font(TypeRole.label.font)
                 .buttonStyle(.borderless)
             }
         }

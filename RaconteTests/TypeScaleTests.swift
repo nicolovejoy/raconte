@@ -91,6 +91,7 @@ final class TypeScaleTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
         let bare = [".font(.caption", ".font(.footnote", ".font(.subheadline",
+                    ".font(.callout",
                     ".font(.body", ".font(.headline", ".font(.system(.body",
                     ".font(.title", ".font(.largeTitle"]
         let literal = try NSRegularExpression(pattern: #"system\(size:\s*[0-9]"#)

@@ -22,6 +22,14 @@ final class TrashRepairUITests: XCTestCase {
         XCTAssertTrue(section.waitForExistence(timeout: 5),
                       "the Unreadable entries section header never appeared")
 
+        let deletedHeader = app.staticTexts["trash.deleted.section"].firstMatch
+        XCTAssertTrue(deletedHeader.waitForExistence(timeout: 5),
+                      "the Deleted entries section header never appeared (#168)")
+        XCTAssertTrue(deletedHeader.label.hasPrefix("Deleted entries"),
+                      "header reads \(deletedHeader.label)")
+        XCTAssertTrue(deletedHeader.label.contains("kept \(30) days"),
+                      "header must state the retention (#168): \(deletedHeader.label)")
+
         let row = app.otherElements["trash.unreadable.row"].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5),
                       "the unreadable-entries section never showed the seeded row")

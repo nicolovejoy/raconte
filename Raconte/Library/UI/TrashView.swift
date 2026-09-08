@@ -79,27 +79,35 @@ struct TrashView: View {
             } else {
                 List {
                     unreadableSection
-                    if model.trashed.isEmpty {
-                        Section {
+                    Section {
+                        if model.trashed.isEmpty {
                             Text("Trash is empty")
                                 .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        ForEach(model.trashed) { item in
-                            if selection.isActive {
-                                selectableRow(item)
-                            } else {
-                                TrashEntryRow(item: item,
-                                              onRestore: {
-                                                  Task {
-                                                      if !(await model.restoreEntry(item.captureID)) {
-                                                          restoreFailed = true
+                        } else {
+                            ForEach(model.trashed) { item in
+                                if selection.isActive {
+                                    selectableRow(item)
+                                } else {
+                                    TrashEntryRow(item: item,
+                                                  onRestore: {
+                                                      Task {
+                                                          if !(await model.restoreEntry(item.captureID)) {
+                                                              restoreFailed = true
+                                                          }
                                                       }
-                                                  }
-                                              },
-                                              onDeleteNow: { pendingPermanentDelete = item })
+                                                  },
+                                                  onDeleteNow: { pendingPermanentDelete = item })
+                                }
                             }
                         }
+                    } header: {
+                        // #168: the deleted rows had no header, so they read as a
+                        // continuation of the unreadable block. Same style as
+                        // `unreadableSection`'s header; the identifier goes on the Text,
+                        // never the Section (see the note there).
+                        Text("Deleted entries · \(model.trashed.count) · "
+                             + "kept \(TrashPolicy.retentionDays) days")
+                            .accessibilityIdentifier("trash.deleted.section")
                     }
                 }
                 .listStyle(.plain)

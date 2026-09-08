@@ -85,7 +85,7 @@ enum TypeScale {
     static let libraryRowMeta: CGFloat = 15
     static let libraryOutOfSpanGlyph: CGFloat = 16
     static let trashUnreadableTitle: CGFloat = 18
-    static let libraryJournalTitle: CGFloat = 24
+    static let libraryRecordGlyph: CGFloat = 24
     static let libraryCoverTitle: CGFloat = 28
     #else
     static let homeFaceOutTitle: CGFloat = 16
@@ -98,7 +98,7 @@ enum TypeScale {
     static let libraryRowMeta: CGFloat = 13
     static let libraryOutOfSpanGlyph: CGFloat = 14
     static let trashUnreadableTitle: CGFloat = 16
-    static let libraryJournalTitle: CGFloat = 22
+    static let libraryRecordGlyph: CGFloat = 22
     static let libraryCoverTitle: CGFloat = 26
     #endif
     static let detailPlayGlyph: CGFloat = 36
@@ -116,7 +116,7 @@ enum TypeScale {
         ("libraryRowMeta", libraryRowMeta, 13),
         ("libraryOutOfSpanGlyph", libraryOutOfSpanGlyph, 14),
         ("trashUnreadableTitle", trashUnreadableTitle, 16),
-        ("libraryJournalTitle", libraryJournalTitle, 22),
+        ("libraryRecordGlyph", libraryRecordGlyph, 22),
         ("libraryCoverTitle", libraryCoverTitle, 26),
         ("detailPlayGlyph", detailPlayGlyph, 36),
     ]

@@ -165,8 +165,18 @@ final class EntryListItemTests: XCTestCase {
         return strippingComments(try String(contentsOf: url))
     }
 
-    func testLibraryRowRendersTheOutOfSpanMarker() throws {
-        XCTAssertTrue(try fileSource("Raconte/Library/UI/LibraryView.swift").contains("library.outOfSpan"))
+    /// #71: the row renders the marker. #161: it is the warning tone at 14 pt semibold — a
+    /// marker the owner can see from laptop distance, still never a gate.
+    func testLibraryRowRendersTheOutOfSpanMarkerInTheWarningTone() throws {
+        let source = try fileSource("Raconte/Library/UI/LibraryView.swift")
+        guard let glyph = source.range(of: "calendar.badge.exclamationmark"),
+              let identifier = source.range(of: "library.outOfSpan", range: glyph.upperBound..<source.endIndex) else {
+            return XCTFail("the out-of-span glyph and its identifier are no longer together")
+        }
+        let block = source[glyph.upperBound..<identifier.lowerBound]
+        XCTAssertTrue(block.contains("InkTone.warning.color"), "the glyph is the warning tone")
+        XCTAssertTrue(block.contains(".font(.system(size: 14, weight: .semibold))"), "14 pt semibold")
+        XCTAssertFalse(block.contains("inkSecondary"), "the quiet tone is gone from this glyph")
     }
 
     func testEntryDetailRendersTheOutOfSpanSentence() throws {

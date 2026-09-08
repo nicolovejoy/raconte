@@ -44,7 +44,7 @@ struct SyncStatusSectionView: View {
                                  + (record.attempts == 1 ? "attempt" : "attempts"))
                                 .multilineTextAlignment(.trailing)
                         }
-                        .font(.caption)
+                        .font(TypeRole.label.font)
                         .accessibilityIdentifier("\(idPrefix).sync.parked.\(record.name)")
                     }
                 } else {

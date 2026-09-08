@@ -122,7 +122,7 @@ struct HomeView: View {
                                 .foregroundStyle(InkTone.ink.color)
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 13))
+                                .font(.system(size: TypeScale.homeChevron))
                                 .foregroundStyle(InkTone.inkSecondary.color)
                         }
                         .padding(.horizontal, 16)
@@ -144,7 +144,7 @@ struct HomeView: View {
             HStack(spacing: 10) {
                 Image(systemName: "mic.fill")
                 Text("New entry")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: TypeScale.homeNewEntryButton, weight: .semibold))
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
@@ -160,10 +160,10 @@ struct HomeView: View {
     private var emptyInvitation: some View {
         VStack(spacing: 14) {
             Text("Speak your first entry.")
-                .font(.system(size: 24, design: .serif))
+                .font(.system(size: TypeScale.homeEmptyTitle, design: .serif))
                 .foregroundStyle(InkTone.ink.color)
             Text("Your journals will appear here.")
-                .font(.system(size: 15))
+                .font(.system(size: TypeScale.homeEmptyBody))
                 .foregroundStyle(InkTone.inkSecondary.color)
         }
         .frame(maxHeight: .infinity)

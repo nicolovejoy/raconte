@@ -134,9 +134,10 @@ struct SidebarRowView: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(row.title)
+                    .font(TypeRole.body.font)
                 if let subtitle = row.subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(TypeRole.label.font)
                         .foregroundStyle(InkTone.inkSecondary.color)
                 }
             }

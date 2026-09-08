@@ -74,12 +74,12 @@ struct RevisionHistoryView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(row.source.isHumanLineage ? "Human" : "Machine")
-                        .font(.caption)
+                        .font(TypeRole.label.font)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
                     if row.isCurrent {
                         Text("Current")
-                            .font(.caption)
+                            .font(TypeRole.label.font)
                             .fontWeight(.semibold)
                             .foregroundStyle(.tint)
                     }
@@ -87,14 +87,14 @@ struct RevisionHistoryView: View {
                         // §12.8: "machine transcript, not applied" — never suggest this
                         // is what the entry currently shows.
                         Text("Machine transcript, not applied")
-                            .font(.caption)
+                            .font(TypeRole.label.font)
                             .foregroundStyle(.secondary)
                     }
                 }
                 Text(row.firstLine)
                     .lineLimit(2)
                 Text(row.createdAt, format: .dateTime)
-                    .font(.caption)
+                    .font(TypeRole.label.font)
                     .foregroundStyle(.secondary)
             }
             Spacer()

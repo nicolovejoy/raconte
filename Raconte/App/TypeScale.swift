@@ -53,9 +53,13 @@ enum TypeRole: CaseIterable, Sendable {
 
     var isSerif: Bool { self == .reading }
 
+    /// `.system(size:)` is regular weight; a role whose iOS style carries a weight must say so here
+    /// or the platforms silently disagree. `.headline` is semibold on both platforms.
+    var macOSWeight: Font.Weight { self == .headline ? .semibold : .regular }
+
     var font: Font {
         #if os(macOS)
-        .system(size: macOSPointSize, design: isSerif ? .serif : .default)
+        .system(size: macOSPointSize, weight: macOSWeight, design: isSerif ? .serif : .default)
         #else
         switch self {
         case .meta: .caption2
@@ -87,6 +91,7 @@ enum TypeScale {
     static let trashUnreadableTitle: CGFloat = 18
     static let libraryRecordGlyph: CGFloat = 24
     static let libraryCoverTitle: CGFloat = 28
+    static let selectionBarText: CGFloat = 17
     #else
     static let homeFaceOutTitle: CGFloat = 16
     static let homeSpineTitle: CGFloat = 19
@@ -100,6 +105,7 @@ enum TypeScale {
     static let trashUnreadableTitle: CGFloat = 16
     static let libraryRecordGlyph: CGFloat = 22
     static let libraryCoverTitle: CGFloat = 26
+    static let selectionBarText: CGFloat = 15
     #endif
     static let detailPlayGlyph: CGFloat = 36
 
@@ -118,6 +124,7 @@ enum TypeScale {
         ("trashUnreadableTitle", trashUnreadableTitle, 16),
         ("libraryRecordGlyph", libraryRecordGlyph, 22),
         ("libraryCoverTitle", libraryCoverTitle, 26),
+        ("selectionBarText", selectionBarText, 15),
         ("detailPlayGlyph", detailPlayGlyph, 36),
     ]
 }

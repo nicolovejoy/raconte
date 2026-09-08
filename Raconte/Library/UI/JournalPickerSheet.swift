@@ -70,6 +70,7 @@ struct JournalPickerSheet: View {
                 cover(for: journal)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(journal.name)
+                        .font(TypeRole.body.font)
                         .fontWeight(isCurrent ? .semibold : .regular)
                         .foregroundStyle(InkTone.ink.color)
                     let subtitle = Self.rowSubtitle(dateLine: dateLine(journal.id),

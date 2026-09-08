@@ -308,7 +308,7 @@ struct LibraryView: View {
                 .disabled(selection.isEmpty)
                 .accessibilityIdentifier("library.bulkTrash")
         }
-        .font(.system(size: TypeScale.libraryRowMeta))
+        .font(.system(size: TypeScale.selectionBarText))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(InkTone.paperInset.color)

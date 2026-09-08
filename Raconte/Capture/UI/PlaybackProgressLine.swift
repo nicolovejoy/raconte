@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// Dual-surface: renders on paper (entry detail) AND inside `RecoveryBanner` on the studio
+/// surface. It takes the paper `label` role deliberately — 12 pt on macOS is closer to the
+/// studio floor than the old 10 pt.
+///
 /// Elapsed / total + a draggable position handle for an active `CapturePlayback`
 /// (issue #3: no position feedback; issue #6: no way to move the playhead).
 /// Shown once playback has started; ticks via the observable `currentTime`.

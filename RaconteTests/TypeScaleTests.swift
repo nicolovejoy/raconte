@@ -47,6 +47,15 @@ final class TypeScaleTests: XCTestCase {
         XCTAssertEqual(TypeRole.allCases.filter(\.isSerif), [.reading])
     }
 
+    /// `.system(size:)` is regular weight; `.headline` must say semibold explicitly or macOS
+    /// silently disagrees with iOS's `Font.headline`.
+    func testHeadlineKeepsItsWeightOnMacOS() {
+        XCTAssertEqual(TypeRole.headline.macOSWeight, .semibold)
+        for role in TypeRole.allCases where role != .headline {
+            XCTAssertEqual(role.macOSWeight, .regular, "\(role)")
+        }
+    }
+
     /// Named literal constants: macOS never smaller than iOS, and the play glyph is the one
     /// deliberate exception that does not move at all (a glyph, not text).
     func testNamedSizesNeverShrinkOnMacOS() {
@@ -92,8 +101,8 @@ final class TypeScaleTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent()
         let bare = [".font(.caption", ".font(.footnote", ".font(.subheadline",
                     ".font(.callout",
-                    ".font(.body", ".font(.headline", ".font(.system(.body",
-                    ".font(.title", ".font(.largeTitle"]
+                    ".font(.body", ".font(.headline", ".font(.system(.",
+                    ".font(.title", ".font(.largeTitle", ".font(.custom("]
         let literal = try NSRegularExpression(pattern: #"system\(size:\s*[0-9]"#)
         for path in Self.paperFiles {
             let url = root.appendingPathComponent(path)

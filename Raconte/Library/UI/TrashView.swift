@@ -123,17 +123,31 @@ struct TrashView: View {
             // `TrashEntryRow`'s comment and `unreadableRow` below both call out. The
             // section's presence is what `trash.unreadable.section` names, so the
             // header carrying it is enough.
+            //
+            // #163: the block is visibly its own thing — inset ground and a warning bar
+            // on every row, the explanation as the block's last row on the same ground,
+            // and the count in the header — so it cannot read as the first few rows of
+            // the trash below it (the owner's "why so many?" on the build 17 smoke).
             Section {
                 ForEach(model.unreadableEntries) { item in
                     unreadableRow(item)
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(InkTone.warning.color)
+                                .frame(width: 3)
+                        }
+                        .listRowBackground(InkTone.paperInset.color)
                 }
-            } header: {
-                Text("Unreadable entries")
-                    .accessibilityIdentifier("trash.unreadable.section")
-            } footer: {
                 Text("These entries’ settings files could not be read. Quarantine moves "
                      + "the whole entry, audio included, out of the library into the "
                      + "app’s quarantine folder. Nothing is deleted.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(InkTone.paperInset.color)
+            } header: {
+                Text("Unreadable entries · \(model.unreadableEntries.count)")
+                    .accessibilityIdentifier("trash.unreadable.section")
             }
         }
     }

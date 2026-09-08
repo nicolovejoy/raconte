@@ -10,3 +10,4 @@ line here in the same commit as the build. Not retroactive — starts at 14 (#14
 | 15 | 2026-09-06 | `main` `e000ac24` | first TestFlight upload of the overnight slate; same source as 14, iOS. For the iPhone device smoke. |
 | 16 | 2026-09-07 | `main` `35bbc068` | Mac owner smoke of the merged overnight slate: #150 park/refetch, #152 quarantine, #153 out-of-span glyph + one clock, #151 archive export + verifier |
 | 17 | 2026-09-07 | `main` `05c19d88` | Mac owner smoke of Batch A: #158 Verify archive… + parked rows (#154/#156), #159 capture tick containment + entry→journal link (#155/#148) |
+| 18 | 2026-09-08 | `main` `dce1837a` | Mac owner smoke of Batch B: #165 (#161 warning glyph, #163 Trash quarantine block, #162 partial), #166 (#106 cover lightbox, #164 live voice labels), #160 overview refresh |

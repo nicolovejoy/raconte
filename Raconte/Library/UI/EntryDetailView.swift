@@ -141,7 +141,7 @@ struct EntryDetailView: View {
                 // about the sentence's only inputs.
                 if item.isDatedOutsideJournalSpan, let journal = item.journal {
                     Text(outOfSpanSentence(journal: journal))
-                        .font(.body)
+                        .font(TypeRole.body.font)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("detail.outOfSpan")
                 }
@@ -510,7 +510,7 @@ struct EntryDetailView: View {
         let text = Self.navigationTitleText(for: item)
         if item.isBackdated {
             Text(text)
-                .font(.headline)
+                .font(TypeRole.headline.font)
                 .contentShape(Rectangle())
                 .onTapGesture { openBackdateSheet() }
                 .accessibilityElement(children: .combine)
@@ -520,7 +520,7 @@ struct EntryDetailView: View {
                 .accessibilityHint("Edit backdate")
         } else {
             Text(text)
-                .font(.headline)
+                .font(TypeRole.headline.font)
                 .accessibilityIdentifier("detail.originalDate")
         }
     }
@@ -610,7 +610,7 @@ struct EntryDetailView: View {
         HStack(spacing: 12) {
             Button(action: togglePlayback) {
                 Image(systemName: (playback?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 36))
+                    .font(.system(size: TypeScale.detailPlayGlyph))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("detail.play")
@@ -700,7 +700,7 @@ struct EntryDetailView: View {
                 onOpenJournal(journal.id)
             } label: {
                 Label(journal.name, systemImage: "book.closed")
-                    .font(.subheadline)
+                    .font(TypeRole.secondary.font)
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -709,12 +709,12 @@ struct EntryDetailView: View {
             .accessibilityHint("Opens the journal")
         } else if item.hasDanglingJournal {
             Text("Journal missing")
-                .font(.subheadline)
+                .font(TypeRole.secondary.font)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("detail.journalMissing")
         } else {
             Text("Unfiled")
-                .font(.subheadline)
+                .font(TypeRole.secondary.font)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("detail.journalUnfiled")
         }
@@ -926,7 +926,7 @@ struct EntryDetailView: View {
                     .accessibilityIdentifier("detail.transcript.empty")
             case .plain(let text):
                 Text(text)
-                    .font(.system(.body, design: .serif))
+                    .font(TypeRole.reading.font)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("detail.transcript.text")
             case .attributed(let paragraphs):
@@ -980,7 +980,7 @@ struct EntryDetailView: View {
                             Group {
                                 attributedParagraph(paragraph, voiceLabels: voiceLabels)
                             }
-                                .font(.system(.body, design: .serif))
+                                .font(TypeRole.reading.font)
                                 .textSelection(.enabled)
                                 .accessibilityElement(children: .combine)
                                 .accessibilityLabel(paragraph.voice.map {
@@ -991,7 +991,7 @@ struct EntryDetailView: View {
                                     : "detail.transcript.paragraph.\(index)")
                             if paragraph.hasApproximateBoundary {
                                 Text("*")
-                                    .font(.caption2)
+                                    .font(TypeRole.meta.font)
                                     .foregroundStyle(.tertiary)
                                     .accessibilityLabel("approximate boundary")
                                     .accessibilityIdentifier(
@@ -1020,7 +1020,7 @@ struct EntryDetailView: View {
             if transcript.isTruncated {
                 Text("The end of this transcript is missing — the app closed before it "
                      + "finished writing. The recording itself is complete.")
-                    .font(.caption)
+                    .font(TypeRole.label.font)
                     .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.truncated")
             }

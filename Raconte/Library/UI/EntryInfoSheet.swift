@@ -105,16 +105,16 @@ struct EntryInfoSheet: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(EntryDetailView.navigationTitleText(for: item))
-                .font(.headline)
+                .font(TypeRole.headline.font)
                 .foregroundStyle(InkTone.ink.color)
 
             Text(Self.headerSubtitle(capturedAt: item.capturedAt, durationSeconds: item.durationSeconds))
-                .font(.subheadline)
+                .font(TypeRole.secondary.font)
                 .foregroundStyle(InkTone.inkSecondary.color)
 
             if item.backdateWasDetected {
                 Text("Detected from the recording")
-                    .font(.caption)
+                    .font(TypeRole.label.font)
                     .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.detectedDate")
             }
@@ -140,7 +140,7 @@ struct EntryInfoSheet: View {
                         .foregroundStyle(InkTone.inkSecondary.color)
                 }
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(TypeRole.label.font)
                     .foregroundStyle(InkTone.inkSecondary.color)
             }
             .padding(.vertical, 12)

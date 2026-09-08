@@ -58,7 +58,7 @@ struct JournalSpanEditor: View {
 
             if hasSpan {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Start").font(.caption).foregroundStyle(.secondary)
+                    Text("Start").font(TypeRole.label.font).foregroundStyle(.secondary)
                     PrecisionDatePicker(date: $startDate, precision: $startPrecision,
                                         idPrefix: "journalSpanStart")
                 }
@@ -68,7 +68,7 @@ struct JournalSpanEditor: View {
 
                 if !isOpenEnded {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("End").font(.caption).foregroundStyle(.secondary)
+                        Text("End").font(TypeRole.label.font).foregroundStyle(.secondary)
                         PrecisionDatePicker(date: $endDate, precision: $endPrecision,
                                             idPrefix: "journalSpanEnd")
                     }
@@ -76,7 +76,7 @@ struct JournalSpanEditor: View {
 
                 if let errorText {
                     Text(errorText)
-                        .font(.footnote)
+                        .font(TypeRole.footnote.font)
                         .foregroundStyle(.red)
                         .accessibilityIdentifier("journalSpanEditor.error")
                 }

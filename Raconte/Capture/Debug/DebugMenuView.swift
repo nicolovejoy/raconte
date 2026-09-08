@@ -83,11 +83,11 @@ struct DebugMenuView: View {
         let waiting = controller.isWaiting(state)
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(state.rawValue).font(.body.monospaced())
+                Text(state.rawValue).font(TypeRole.body.font.monospaced())
                 if waiting {
-                    Text("waiting — gate hit").font(.caption).foregroundStyle(.orange)
+                    Text("waiting — gate hit").font(TypeRole.meta.font).foregroundStyle(.orange)
                 } else if armed {
-                    Text("armed").font(.caption).foregroundStyle(.secondary)
+                    Text("armed").font(TypeRole.meta.font).foregroundStyle(.secondary)
                 }
             }
             Spacer()

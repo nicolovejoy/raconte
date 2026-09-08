@@ -123,18 +123,37 @@ struct TrashView: View {
             // `TrashEntryRow`'s comment and `unreadableRow` below both call out. The
             // section's presence is what `trash.unreadable.section` names, so the
             // header carrying it is enough.
+            //
+            // #163: the block is visibly its own thing — inset ground and a warning bar
+            // on every row, the explanation as the block's last row on the same ground,
+            // and the count in the header — so it cannot read as the first few rows of
+            // the trash below it (the owner's "why so many?" on the build 17 smoke).
             Section {
                 ForEach(model.unreadableEntries) { item in
                     unreadableRow(item)
+                        .listRowBackground(unreadableRowBackground)
                 }
-            } header: {
-                Text("Unreadable entries")
-                    .accessibilityIdentifier("trash.unreadable.section")
-            } footer: {
                 Text("These entries’ settings files could not be read. Quarantine moves "
                      + "the whole entry, audio included, out of the library into the "
                      + "app’s quarantine folder. Nothing is deleted.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(unreadableRowBackground)
+                    .listRowSeparator(.hidden)
+            } header: {
+                Text("Unreadable entries · \(model.unreadableEntries.count)")
+                    .accessibilityIdentifier("trash.unreadable.section")
             }
+        }
+    }
+
+    /// #163: the block's ground with its warning bar — drawn in the row background so the
+    /// bar spans the full row height at the true leading edge, which an overlay on the
+    /// inset row content cannot do.
+    private var unreadableRowBackground: some View {
+        HStack(spacing: 0) {
+            Rectangle().fill(InkTone.warning.color).frame(width: 3)
+            InkTone.paperInset.color
         }
     }
 

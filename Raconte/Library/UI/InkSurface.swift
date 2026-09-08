@@ -20,6 +20,10 @@ enum InkTone: CaseIterable, Sendable {
     case accent
     /// The app's one loud colour; shared with capture's record button.
     case record
+    /// #161: a marker that must be seen — the out-of-span glyph, the quarantine block's
+    /// bar. Darkened safety orange (#D2570A, ~3.7:1 on paper, ~3.5:1 on paperInset); lightens
+    /// on dark paper.
+    case warning
     /// The capture screen's fixed near-black. Pinned to `CaptureSurface.backgroundWhite`.
     case studio
     /// Text on the studio ground — the capture screen's full white (#118 §8; was a
@@ -50,6 +54,7 @@ enum InkTone: CaseIterable, Sendable {
         // tone rather than lower the floor.
         case .accent: CaptureLabelColor(red: 0x91 / 255, green: 0x64 / 255, blue: 0x38 / 255)
         case .record: CaptureLabelColor(red: 0xE5 / 255, green: 0x48 / 255, blue: 0x4D / 255)
+        case .warning: CaptureLabelColor(red: 0xD2 / 255, green: 0x57 / 255, blue: 0x0A / 255)
         case .studio: .grey(CaptureSurface.backgroundWhite)
         case .studioInk: .grey(1.0)
         case .studioInkDim: .grey(0.62)

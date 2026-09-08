@@ -70,12 +70,12 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         faceOutCover(for: journal)
                         Text(journal.name)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: TypeScale.homeFaceOutTitle, weight: .medium))
                             .foregroundStyle(InkTone.ink.color)
                             .lineLimit(2)
                         if let last = shelf.lastActivity[journal.id] {
                             Text(last, format: .relative(presentation: .named))
-                                .font(.system(size: 11))
+                                .font(.system(size: TypeScale.homeRelativeTime))
                                 .foregroundStyle(InkTone.inkSecondary.color)
                         }
                     }
@@ -118,7 +118,7 @@ struct HomeView: View {
                                 .fill(InkTone.accent.color.opacity(0.55))
                                 .frame(width: 3, height: 20)
                             Text(journal.name)
-                                .font(.system(size: 17, design: .serif))
+                                .font(.system(size: TypeScale.homeSpineTitle, design: .serif))
                                 .foregroundStyle(InkTone.ink.color)
                             Spacer()
                             Image(systemName: "chevron.right")

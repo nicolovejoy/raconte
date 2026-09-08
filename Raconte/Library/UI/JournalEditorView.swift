@@ -226,11 +226,11 @@ struct JournalEditorView: View {
             // on a Section silently never presents on iOS 26.
             #if os(iOS)
             .fullScreenCover(isPresented: $showingCoverLightbox) {
-                if let cover = model.journalCovers[journalID] { JournalCoverLightbox(data: cover) }
+                JournalCoverLightbox(data: model.journalCovers[journalID])
             }
             #else
             .sheet(isPresented: $showingCoverLightbox) {
-                if let cover = model.journalCovers[journalID] { JournalCoverLightbox(data: cover) }
+                JournalCoverLightbox(data: model.journalCovers[journalID])
             }
             #endif
         } else {

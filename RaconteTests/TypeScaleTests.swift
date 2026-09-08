@@ -64,4 +64,44 @@ final class TypeScaleTests: XCTestCase {
         XCTAssertEqual(TypeScale.homeNewEntryButton, 17)
         #endif
     }
+
+    /// The paper screens are on `TypeRole`/`TypeScale`, never a bare Apple style or a size
+    /// literal — a bare style is 10–13 pt on macOS, which is #162 coming back. Capture-surface
+    /// files are deliberately absent from this list (spec ruling 4).
+    private static let paperFiles = [
+        "Raconte/Home/UI/HomeView.swift",
+        "Raconte/App/SidebarView.swift",
+        "Raconte/App/AboutView.swift",
+        "Raconte/App/SyncStatusSectionView.swift",
+        "Raconte/Library/UI/LibraryView.swift",
+        "Raconte/Library/UI/TrashView.swift",
+        "Raconte/Library/UI/EntryDetailView.swift",
+        "Raconte/Library/UI/EntryInfoSheet.swift",
+        "Raconte/Library/UI/TranscriptEditorView.swift",
+        "Raconte/Library/UI/RevisionHistoryView.swift",
+        "Raconte/Library/UI/JournalPickerSheet.swift",
+        "Raconte/Library/UI/JournalSpanEditor.swift",
+        "Raconte/Library/UI/JournalEditorView.swift",
+        "Raconte/Library/UI/VoiceMarkingView.swift",
+        "Raconte/Capture/UI/PlaybackProgressLine.swift",
+        "Raconte/Capture/Debug/DebugMenuView.swift",
+    ]
+
+    func testPaperScreensCarryNoBareTextStyleOrSizeLiteral() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let bare = [".font(.caption", ".font(.footnote", ".font(.subheadline",
+                    ".font(.body", ".font(.headline", ".font(.system(.body",
+                    ".font(.title", ".font(.largeTitle"]
+        let literal = try NSRegularExpression(pattern: #"system\(size:\s*[0-9]"#)
+        for path in Self.paperFiles {
+            let url = root.appendingPathComponent(path)
+            let source = strippingComments(try String(contentsOf: url))
+            for pattern in bare {
+                XCTAssertFalse(source.contains(pattern), "\(path) still has \(pattern)")
+            }
+            let hits = literal.numberOfMatches(in: source, range: NSRange(source.startIndex..., in: source))
+            XCTAssertEqual(hits, 0, "\(path) still has a system(size: <number>) literal")
+        }
+    }
 }

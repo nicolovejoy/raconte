@@ -1,0 +1,104 @@
+Produce a two-page printable PDF that introduces Raconte to a therapist who is considering
+recommending it to clients for spoken journaling. Docs-only task on branch
+`docs/therapist-onepager` (already created from main and pushed; check it out, do not create
+another). Touch ONLY files under `docs/therapist-onepager/`. Do not edit CLAUDE.md,
+docs/devlog.md, docs/overview.md, or any Swift file.
+
+Environment: a Linux container with NO Swift toolchain — never run xcodebuild, xcodegen or
+swiftc. You have web access for the survey. CI skips docs-only pushes (paths-ignore on
+docs/**), so the PR will show no checks; that is expected. End at an OPEN pull request against
+main with the body written via `--body-file` (never a heredoc). Do NOT merge. Do not write a
+close-verb plus an issue number anywhere.
+
+## Deliverables (all in docs/therapist-onepager/)
+
+1. `survey.md` — the research notes: every app considered, what was checked, source URL and
+   the date checked, verbatim quotes for privacy claims. This is the evidence the PDF rests on.
+2. `matrix.md` — the comparison matrix as a markdown table (the PDF embeds the same data).
+3. `onepager.html` — the page source, self-contained (inline CSS, no external fonts or
+   scripts; system serif + system sans fallbacks).
+4. `onepager.pdf` — rendered from the HTML at US Letter, exactly two pages. Render with
+   headless Chromium if available (`chromium --headless --print-to-pdf=...`), else WeasyPrint
+   (`pip install weasyprint`), else wkhtmltopdf. Say in the PR which one you used. Check the
+   page count with `pdfinfo` or `python3 -c "import pypdf; ..."`; more or fewer than two pages
+   is a failure to fix, not to report.
+
+## Step 1 — survey the field (do this first, before any writing)
+
+Find apps a client or therapist might use to keep an audio journal with speech-to-text for
+personal or therapy use, with some claim about secure storage. Cover at least these
+categories, and name real products in each with a source: general voice-journal apps (e.g.
+Day One with audio, Reflectly, Journey, Voicenotes, Otter-style transcription used as a
+journal), therapy-adjacent journaling apps (mood/CBT journals with voice), therapist–client
+portal products that include client journaling (e.g. practice-management tools with client
+apps), and Apple's own Journal app. Aim for 8–12 apps. For each, record: platform(s);
+recording in-app; transcription (on-device / cloud / none; which engine if stated); whether
+the audio is kept as the source of truth or discarded after transcription; where data is
+stored (device only / vendor cloud / user's own iCloud or Drive); encryption claims (at rest,
+in transit, end-to-end — quote the vendor); account required; who else can read it
+(vendor staff, AI-training clauses in the privacy policy — quote); therapist sharing model
+(none / export / shared portal); export format (can the user take everything out?); price;
+HIPAA or BAA claims (quote exactly; note when a claim is absent). Cite every cell. Where you
+cannot verify, write "not stated" — never infer.
+
+## Step 2 — Raconte's column, from the repo (grep, do not guess)
+
+Read `docs/overview.md` (refreshed 2026-09-07), `docs/export-format.md`, and
+`docs/plans/2026-07-29-data-model-and-migration.md`. Facts to state, each verified in the
+code: native iOS + macOS app; records in-app; on-device transcription (Apple
+SpeechAnalyzer/SpeechTranscriber, iOS 26 — `Raconte/Transcription/`); **audio is the ground
+truth and the transcript is a derived, replaceable interpretation** (the repo's first
+principle); storage is the app's own container on the device plus the user's own iCloud
+private database via CloudKit (`Raconte/Sync/`) — no Raconte server, no account, no
+analytics, no third party; the developer cannot read a user's data; export is a
+byte-for-byte archive package with a per-file checksum and an in-app verifier
+(`Raconte/Export/`, About → Archive); nothing is auto-deleted — corrupt entries are
+quarantined, never destroyed (`Raconte/Library/StagedRemoval.swift`); single user by design —
+no therapist login, no shared portal; sharing with a therapist means the client chooses to
+export and hand over. Status: private TestFlight, not on the App Store; iOS 26 / macOS 26
+required. Do NOT claim HIPAA compliance, a BAA, or end-to-end encryption. The honest
+sentence on encryption: data in the iCloud private database is encrypted by Apple in transit
+and at rest; with Apple's Advanced Data Protection turned on, Apple itself cannot read it.
+
+## Step 3 — the two pages
+
+Audience: a therapist, not a developer. Plain words, short sentences, no jargon without a
+one-line gloss. Voice: the repo's docs are "plain and terse, no grandiose prose" — match it.
+
+Page 1: a one-paragraph "what it is" (spoken journaling, the recording is what is kept, the
+text is a helper); "what it is for" in therapy terms (between-session reflection, the client
+owns the record, nothing is shared unless the client chooses); the privacy section titled
+"Where your words go" in five or six plain statements, each true per Step 2, ending with the
+single caveat about Advanced Data Protection and the explicit line that Raconte is not a
+medical device and makes no HIPAA claim; "what it is not" (no therapist portal, no accounts,
+not in the App Store yet).
+
+Page 2: the matrix — Raconte as the first column, then the surveyed apps, rows for the Step 1
+fields that matter to a therapist (where stored / who can read it / audio kept / on-device
+transcription / account required / export / therapist sharing / HIPAA claim / price). Use
+short cell values (Yes / No / Vendor cloud / Own iCloud / Not stated). A footnote line with
+"Checked <date>; sources in the repo's survey.md". Below the matrix, three or four lines on
+how a client would share with a therapist today (export → hand over the package or a
+transcript.md) and a one-line contact.
+
+## Look and feel — the app's own palette and details
+
+Take the colours from `Raconte/Library/UI/InkSurface.swift` (light values) and use them
+verbatim: paper #F7F4EE (page ground), paperInset #F0ECE3 (matrix header and callout
+ground), hairline #E5DFD4 (rules), ink #211D18 (text), inkSecondary #8B8478 (captions,
+footnotes), accent #916438 (headings, links), warning #D2570A (used once at most, for the
+"not a medical device" line's marker), record #E5484D (do not use — it is the record
+button's colour). Body text in a serif (the app reads prose in a serif: Georgia/"Iowan Old
+Style"/"Charter" fallbacks), headings and matrix cells in the system sans. Warm, quiet,
+generous margins (≥ 0.75 in), no photos, no icons except a small calendar-with-exclamation
+glyph is NOT needed — keep it typographic. The app's name is Raconte (French, "tell!"); the
+publisher line is pianohouseproject.org. Read `docs/overview.md` §7 for the screens' names
+if you mention them.
+
+## PR
+
+Title: `docs: therapist one-pager (survey, matrix, two-page PDF)`. Body: the renderer used,
+the page-count check output, the list of apps surveyed with their check dates, and every
+Raconte claim with the file it was verified against. Commit message trailer lines:
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: <your session URL>

@@ -113,13 +113,13 @@ struct AboutView: View {
                     HStack {
                         ProgressView()
                         Text(verifying ? "Verifying…" : "Exporting…")
-                            .font(.body)
+                            .font(TypeRole.body.font)
                     }
                     .accessibilityIdentifier("about.export.progress")
                 }
                 if let resultText = exportResultText {
                     Text(resultText)
-                        .font(.body)
+                        .font(TypeRole.body.font)
                         .accessibilityIdentifier("about.export.result")
                 }
             }

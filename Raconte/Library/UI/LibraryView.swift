@@ -297,7 +297,7 @@ struct LibraryView: View {
                 .accessibilityIdentifier("library.selectAll")
             Spacer()
             Text("\(selection.count) selected")
-                .font(.system(size: 13).monospacedDigit())
+                .font(.system(size: TypeScale.libraryRowMeta).monospacedDigit())
                 .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("library.selectionCount")
             Spacer()
@@ -308,7 +308,7 @@ struct LibraryView: View {
                 .disabled(selection.isEmpty)
                 .accessibilityIdentifier("library.bulkTrash")
         }
-        .font(.system(size: 15))
+        .font(.system(size: TypeScale.libraryRowMeta))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(InkTone.paperInset.color)
@@ -326,7 +326,7 @@ struct LibraryView: View {
     /// the entries are all here, only their filing is unreadable.
     private var registryBanner: some View {
         Text("Your journals couldn’t be read, so entries aren’t showing which one they’re in.")
-            .font(.caption)
+            .font(TypeRole.label.font)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
@@ -339,7 +339,7 @@ struct LibraryView: View {
     private var skippedNote: some View {
         if !model.skipped.isEmpty {
             Text("\(model.skipped.count) capture directory(s) skipped — nothing durable in them.")
-                .font(.caption2)
+                .font(TypeRole.meta.font)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
@@ -356,7 +356,7 @@ struct LibraryView: View {
             let pending = sweep.pendingRemovalFailures.count
             Text("Trash sweep: \(sweep.deleted.count) erased, \(sweep.skipped.count) skipped."
                 + (pending > 0 ? ", \(pending) pending" : ""))
-                .font(.caption2)
+                .font(TypeRole.meta.font)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
@@ -387,7 +387,7 @@ struct LibraryView: View {
     private var floatingRecordButton: some View {
         Button(action: onRecord) {
             Image(systemName: "mic.fill")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: TypeScale.libraryJournalTitle, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 60, height: 60)
                 .background(InkTone.record.color, in: Circle())
@@ -420,7 +420,7 @@ struct LibraryView: View {
                             // year `Section` header above already covers those rows.
                             if let month = monthGroup.month {
                                 Text(month)
-                                    .font(.caption.weight(.semibold))
+                                    .font(TypeRole.label.font.weight(.semibold))
                                     .foregroundStyle(InkTone.inkSecondary.color)
                                     .listRowSeparator(.hidden)
                                     .listRowBackground(InkTone.paper.color)
@@ -530,9 +530,9 @@ struct LibraryView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Text("No recordings yet")
-                .font(.headline)
+                .font(TypeRole.headline.font)
             Text("Entries you record will show up here.")
-                .font(.caption)
+                .font(TypeRole.label.font)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -659,7 +659,7 @@ struct LibraryEntryRow: View {
             // Date + weekday · duration, one line (Task 11 spec).
             HStack(spacing: 6) {
                 Text(dateText)
-                    .font(.subheadline.weight(.semibold))
+                    .font(TypeRole.secondary.font.weight(.semibold))
                     .foregroundStyle(InkTone.ink.color)
                     .accessibilityIdentifier("library.row.date")
 
@@ -668,14 +668,14 @@ struct LibraryEntryRow: View {
                 // the detail screen.
                 if let weekday = item.weekdayText() {
                     Text(weekday)
-                        .font(.caption)
+                        .font(TypeRole.label.font)
                         .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityIdentifier("library.row.weekday")
                 }
 
                 if item.isBackdated {
                     Image(systemName: "clock.arrow.circlepath")
-                        .font(.caption2)
+                        .font(TypeRole.meta.font)
                         .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityLabel("Backdated. Recorded \(recordedDateText).")
                         .accessibilityIdentifier("library.row.backdatedMarker")
@@ -683,7 +683,7 @@ struct LibraryEntryRow: View {
 
                 if !item.degradations.isEmpty {
                     Image(systemName: "questionmark.circle")
-                        .font(.caption2)
+                        .font(TypeRole.meta.font)
                         .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityLabel(item.degradations.accessibilityReasons.joined(separator: ", "))
                         .accessibilityIdentifier("library.row.degradedMarker")
@@ -694,7 +694,7 @@ struct LibraryEntryRow: View {
                 // caption2/inkSecondary version was invisible at laptop distance.
                 if item.isDatedOutsideJournalSpan {
                     Image(systemName: "calendar.badge.exclamationmark")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: TypeScale.libraryOutOfSpanGlyph, weight: .semibold))
                         .foregroundStyle(InkTone.warning.color)
                         .accessibilityLabel("Dated outside this journal's range")
                         .accessibilityIdentifier("library.outOfSpan")
@@ -703,14 +703,14 @@ struct LibraryEntryRow: View {
                 Spacer()
 
                 Text(durationText)
-                    .font(.caption.monospacedDigit())
+                    .font(TypeRole.label.font.monospacedDigit())
                     .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("library.row.duration")
             }
 
             if let snippet = item.snippet, !snippet.isEmpty {
                 Text(snippet)
-                    .font(.system(.body, design: .serif))
+                    .font(TypeRole.reading.font)
                     .foregroundStyle(InkTone.ink.color)
                     .lineLimit(2)
                     .accessibilityIdentifier("library.row.snippet")
@@ -720,7 +720,7 @@ struct LibraryEntryRow: View {
             // `LibraryCoverBand` above (Task 11 spec).
             if showsJournalName, let journalName = item.journal?.name {
                 Text(journalName)
-                    .font(.caption2)
+                    .font(TypeRole.meta.font)
                     .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("library.row.journal")
             }
@@ -794,11 +794,11 @@ struct LibraryCoverBand: View {
     private var coverTitleBlock: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(name)
-                .font(.system(size: 26, weight: .semibold, design: .serif))
+                .font(.system(size: TypeScale.libraryCoverTitle, weight: .semibold, design: .serif))
                 .foregroundStyle(.white)
             if !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(TypeRole.secondary.font)
                     .foregroundStyle(.white.opacity(0.85))
             }
         }
@@ -811,15 +811,15 @@ struct LibraryCoverBand: View {
     private var coverlessTitleBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(name)
-                .font(.system(size: 26, weight: .semibold, design: .serif))
+                .font(.system(size: TypeScale.libraryCoverTitle, weight: .semibold, design: .serif))
                 .foregroundStyle(InkTone.ink.color)
             if !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(TypeRole.secondary.font)
                     .foregroundStyle(InkTone.inkSecondary.color)
             }
             Text("Add Cover")
-                .font(.caption.weight(.semibold))
+                .font(TypeRole.label.font.weight(.semibold))
                 .foregroundStyle(InkTone.accent.color)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)

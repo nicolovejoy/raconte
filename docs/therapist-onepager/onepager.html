@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Raconte — for therapists</title>
+<style>
+  /* Palette: Raconte/Library/UI/InkSurface.swift (light values), used verbatim. */
+  :root {
+    --paper: #F7F4EE;
+    --paper-inset: #F0ECE3;
+    --hairline: #E5DFD4;
+    --ink: #211D18;
+    --ink-secondary: #8B8478;
+    --accent: #916438;
+    --warning: #D2570A;
+    --serif: "Iowan Old Style", Charter, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
+  }
+  @page { size: Letter; margin: 0; }
+  html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
+  body { font-family: var(--serif); font-size: 10.5pt; line-height: 1.45; }
+  .page {
+    width: 8.5in; height: 11in; box-sizing: border-box;
+    padding: 0.8in 0.85in 0.75in 0.85in;
+    page-break-after: always; break-after: page;
+    background: var(--paper); position: relative; overflow: hidden;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  h1 { font-family: var(--sans); font-weight: 600; font-size: 22pt; letter-spacing: -0.01em;
+       color: var(--accent); margin: 0 0 2pt 0; }
+  .tagline { font-family: var(--sans); color: var(--ink-secondary); font-size: 10pt; margin: 0 0 14pt 0; }
+  h2 { font-family: var(--sans); font-weight: 600; font-size: 11.5pt; color: var(--accent);
+       margin: 14pt 0 5pt 0; padding-top: 8pt; border-top: 1px solid var(--hairline); }
+  h2:first-of-type { border-top: 0; padding-top: 0; }
+  p { margin: 0 0 7pt 0; }
+  ol, ul { margin: 0 0 7pt 0; padding-left: 1.3em; }
+  li { margin: 0 0 4pt 0; }
+  .callout { background: var(--paper-inset); padding: 9pt 12pt; margin: 6pt 0 8pt 0; }
+  .callout p { margin: 0; }
+  .warn { border-left: 3px solid var(--warning); padding-left: 9pt; }
+  .caption { font-family: var(--sans); font-size: 8.5pt; color: var(--ink-secondary); }
+  .footer { position: absolute; left: 0.85in; right: 0.85in; bottom: 0.5in;
+            font-family: var(--sans); font-size: 8.5pt; color: var(--ink-secondary);
+            border-top: 1px solid var(--hairline); padding-top: 5pt;
+            display: flex; justify-content: space-between; }
+  a { color: var(--accent); text-decoration: none; }
+  .two-col { column-count: 2; column-gap: 0.3in; }
+
+  /* Page 2 — matrix */
+  table.matrix { width: 100%; border-collapse: collapse; font-family: var(--sans);
+                 font-size: 7.1pt; line-height: 1.22; table-layout: fixed; }
+  table.matrix th, table.matrix td { border-bottom: 1px solid var(--hairline); padding: 3.5pt 3pt;
+                 vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+  table.matrix thead th { background: var(--paper-inset); font-weight: 600; font-size: 7.1pt;
+                 border-bottom: 1px solid var(--hairline); }
+  table.matrix th.row { font-weight: 600; color: var(--ink); width: 0.85in; }
+  table.matrix td.rac, table.matrix th.rac { background: var(--paper-inset); font-weight: 600; }
+  table.matrix thead th.rac { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <h1>Raconte</h1>
+  <p class="tagline">Spoken journaling. Private by construction. From pianohouseproject.org</p>
+
+  <h2>What it is</h2>
+  <p>Raconte (French, “tell!”) is an app for iPhone and Mac for keeping a journal out loud.
+  You press record and talk. The app keeps the recording and, as you speak, writes a
+  transcript beside it on the phone itself. <strong>The recording is what is kept.</strong>
+  The text is a helper: it can be corrected, re-done, or replaced later without touching
+  the audio. Nothing is sent anywhere to make the words appear.</p>
+
+  <h2>What it is for</h2>
+  <p>Between-session reflection, in the client’s own voice. A few minutes after a hard
+  day, a walk, a thought they want to bring to the next session. The client owns the
+  record: every recording and transcript belongs to them, on their own devices and in
+  their own iCloud. Nothing is shared with anyone, including a therapist, unless the
+  client chooses to share it. There is no clinician view, no dashboard, and no one on the
+  other end reading along.</p>
+
+  <h2>Where your words go</h2>
+  <ol>
+    <li><strong>The recording stays on the client’s phone or Mac</strong>, inside the app’s own
+    private folder. Nothing is uploaded to make transcription work.</li>
+    <li><strong>Transcription happens on the device</strong>, using Apple’s built-in
+    speech recognition. Audio is never sent to a transcription service.</li>
+    <li><strong>Copies live only in the client’s own iCloud</strong>, so their phone and
+    Mac agree and a lost phone is not a lost journal. There is no Raconte server, no account
+    to create, no analytics, and no third party in the path.</li>
+    <li><strong>The developer cannot read a client’s entries.</strong> Apple encrypts the
+    iCloud copy in transit and at rest. With Apple’s <em>Advanced Data Protection</em> turned on
+    (a setting on the client’s Apple account), Apple itself cannot read it either. Without
+    that setting, Apple holds the keys, as it does for most iCloud data.</li>
+    <li><strong>Nothing is auto-deleted.</strong> Deleted entries wait thirty days in the
+    trash. A damaged entry is set aside, never destroyed. Every recording and transcript
+    can be exported, complete, as ordinary files the client keeps.</li>
+  </ol>
+  <div class="callout warn">
+    <p><strong>Raconte is not a medical device and makes no HIPAA claim.</strong> It is a
+    personal journal a client keeps for themselves. It does not sign Business Associate
+    Agreements, and it is not end-to-end encrypted by the app itself. Treat it as you would a
+    paper journal the client owns.</p>
+  </div>
+
+  <h2>What it is not</h2>
+  <ul>
+    <li>Not a therapist portal. There is no clinician login, no shared inbox, no way for
+    anyone else to look in.</li>
+    <li>Not an account. Nothing to sign up for; the app uses the iCloud identity already on
+    the device.</li>
+    <li>Not in the App Store yet. Raconte is in private testing through Apple’s TestFlight,
+    by invitation. It needs iOS 26 or macOS 26.</li>
+  </ul>
+
+  <div class="footer">
+    <span>Raconte · pianohouseproject.org</span>
+    <span>Page 1 of 2</span>
+  </div>
+</section>
+
+<section class="page">
+  <h1 style="font-size:16pt">How Raconte compares</h1>
+  <p class="tagline">Voice-journal and therapy-adjacent apps a client might use instead. Short answers; the full notes with sources are in the survey.</p>
+
+  <!--MATRIX-->
+
+  <p class="caption" style="margin-top:6pt">Checked 2026-09-08; sources in the repo’s survey.md. “Not stated” means the vendor’s public pages do not say. Prices are US, at time of checking.</p>
+
+  <h2>Sharing with a therapist today</h2>
+  <p>Raconte has no sharing feature. A client who wants to bring an entry to session can
+  play it from the phone, or export. <em>About → Archive → Export archive…</em> writes a folder
+  the client keeps: one sub-folder per entry with the audio file, a plain-text
+  <em>transcript.md</em>, and a checksum list so the copy can be proven complete later.
+  The client hands over the whole folder, or just one transcript, by whatever channel
+  the two of you already trust.</p>
+  <p>Contact: <a href="https://pianohouseproject.org">pianohouseproject.org</a> · source and
+  documentation at <a href="https://github.com/nicolovejoy/raconte">github.com/nicolovejoy/raconte</a></p>
+
+  <div class="footer">
+    <span>Raconte · pianohouseproject.org</span>
+    <span>Page 2 of 2</span>
+  </div>
+</section>
+
+</body>
+</html>

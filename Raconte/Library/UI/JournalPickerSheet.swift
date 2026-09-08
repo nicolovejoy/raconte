@@ -76,7 +76,7 @@ struct JournalPickerSheet: View {
                                                      entryCount: entryCount(journal.id))
                     if !subtitle.isEmpty {
                         Text(subtitle)
-                            .font(.caption)
+                            .font(TypeRole.label.font)
                             .foregroundStyle(InkTone.inkSecondary.color)
                     }
                 }

@@ -45,7 +45,7 @@ struct PlaybackProgressLine: View {
             Text(CaptureCoordinator.formatDuration(playback.duration))
                 .accessibilityIdentifier("\(idPrefix).total")
         }
-        .font(.caption.monospacedDigit())
+        .font(TypeRole.label.font.monospacedDigit())
         .foregroundStyle(Color(white: 0.7))
     }
 }

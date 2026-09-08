@@ -114,7 +114,7 @@ struct TranscriptEditorView: View {
             }
 
             TextEditor(text: $model.text)
-                .font(.system(.body, design: .serif))
+                .font(TypeRole.reading.font)
                 .focused($textFocused)
                 .defaultFocus($textFocused, true)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -122,7 +122,7 @@ struct TranscriptEditorView: View {
                 .onChange(of: model.text) { _, _ in model.textChanged() }
 
             Text("Every version is kept. Earlier ones stay in this entry’s history.")
-                .font(.caption)
+                .font(TypeRole.label.font)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("editor.historyNote")
         }
@@ -148,15 +148,15 @@ struct TranscriptEditorView: View {
                 if model.hasUnsavedChanges, !model.text.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Your unsaved edit")
-                            .font(.headline)
+                            .font(TypeRole.headline.font)
                         Text(model.text)
-                            .font(.system(.body, design: .serif))
+                            .font(TypeRole.reading.font)
                             .textSelection(.enabled)
                             .accessibilityIdentifier("editor.unsavedText")
                         Text("This can’t be saved while the entry is in this state. Copy it "
                              + "somewhere safe if you need it — it will be lost when you "
                              + "leave this entry.")
-                            .font(.caption)
+                            .font(TypeRole.label.font)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -164,9 +164,9 @@ struct TranscriptEditorView: View {
                 if let machineTranscript = model.machineTranscript {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("The un-edited machine transcript")
-                            .font(.headline)
+                            .font(TypeRole.headline.font)
                         Text(machineTranscript)
-                            .font(.system(.body, design: .serif))
+                            .font(TypeRole.reading.font)
                             .textSelection(.enabled)
                             .accessibilityIdentifier("editor.machineTranscript")
                     }
@@ -180,7 +180,7 @@ struct TranscriptEditorView: View {
 
     private func notice(_ message: String) -> some View {
         Text(message)
-            .font(.caption)
+            .font(TypeRole.label.font)
             .foregroundStyle(.secondary)
     }
 

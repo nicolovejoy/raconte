@@ -74,4 +74,14 @@ final class InkSurfaceTests: XCTestCase {
             XCTAssertEqual(tone.darkColor, tone.lightColor, "\(tone)")
         }
     }
+
+    /// #161: the warning tone marks a row (the out-of-span glyph) — a graphical object, so
+    /// 3.0 is its floor on paper, and it must not collapse into the accent or record tones.
+    func testWarningClearsTheGraphicalFloorAndIsItsOwnColour() {
+        XCTAssertGreaterThanOrEqual(InkSurface.contrastOnPaper(InkTone.warning.lightColor), 3.0)
+        XCTAssertNotEqual(InkTone.warning.lightColor, InkTone.accent.lightColor)
+        XCTAssertNotEqual(InkTone.warning.lightColor, InkTone.record.lightColor)
+        XCTAssertNotEqual(InkTone.warning.darkColor, InkTone.warning.lightColor,
+                          "warning lightens on dark paper, like accent")
+    }
 }

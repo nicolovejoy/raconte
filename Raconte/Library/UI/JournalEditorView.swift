@@ -30,6 +30,7 @@ struct JournalEditorView: View {
     @State private var voiceLabelsFailed = false
     @State private var spanFailed = false
     @State private var showingCoverPicker = false
+    @State private var showingCoverLightbox = false
     @State private var showingDeleteConfirmation = false
     @State private var deleteFailed = false
     @FocusState private var nameFocused: Bool
@@ -75,8 +76,17 @@ struct JournalEditorView: View {
                 // right order while landing the cover row.
                 Section("Cover") {
                     if let cover = model.journalCovers[journalID] {
-                        JournalCoverPreview(data: cover)
-                            .listRowInsets(EdgeInsets())
+                        // #106: the strip stays the cropped preview the form wants, but a
+                        // tap opens the whole image. A `Button` label, never a `Menu`
+                        // label — an `Image` in a macOS `Menu` label renders at intrinsic
+                        // size and covers the screen (#69).
+                        Button { showingCoverLightbox = true } label: {
+                            JournalCoverPreview(data: cover)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("View cover")
+                        .accessibilityIdentifier("journalEditor.cover.preview")
+                        .listRowInsets(EdgeInsets())
                         Button("Replace…") { showingCoverPicker = true }
                             .accessibilityIdentifier("journalEditor.cover.replace")
                         Button("Remove", role: .destructive) {
@@ -212,6 +222,17 @@ struct JournalEditorView: View {
                     onRemove: { await model.removeJournalCover(journalID) })
                     .foregroundStyle(Color.primary)
             }
+            // #106: presented from the Form, never from `Section("Cover")` — a `.sheet`
+            // on a Section silently never presents on iOS 26.
+            #if os(iOS)
+            .fullScreenCover(isPresented: $showingCoverLightbox) {
+                JournalCoverLightbox(data: model.journalCovers[journalID])
+            }
+            #else
+            .sheet(isPresented: $showingCoverLightbox) {
+                JournalCoverLightbox(data: model.journalCovers[journalID])
+            }
+            #endif
         } else {
             // Deleted underneath us. Never a blank push — same treatment ContentView
             // gives a missing entry (issue #32's rule).

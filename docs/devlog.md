@@ -3,6 +3,37 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-08 (laptop — build 18 smokes 5/5, design-system spec, batch C via SDD → PR #169)
+
+- Build 18: bumped on `dce1837a` (`3ad2b9da`), signed Mac build ditto'd to `~/Desktop/Raconte-latest.app`
+  (UUID `F4BE56D6`); iOS archived and uploaded to TestFlight via `scripts/upload_testflight.sh`
+  (`5a6276be` notes it). Owner smokes one at a time, all PASS: Home shelf sizes, out-of-span
+  orange glyph, Trash unreadable block, cover lightbox (Mac), live voice labels `BN:`/`LN:` in
+  the band (iPhone, TestFlight processed in ~15 min). Batch B closed.
+- Trash feedback → **#168** with an ASCII-mock decision (two matched headers, "Unreadable entries"
+  / "Deleted entries"; "Quarantined entries" rejected: those entries are pre-quarantine, and
+  quarantined ones never show in Trash).
+- Brainstormed #162 + #149 into ONE spec (`docs/plans/2026-09-08-design-system-type-and-ink.md`):
+  platform-only macOS scale (no window-size threshold), WCAG AA floors on paper (4.5 text, 3.0
+  disabled/glyph) with studio keeping 7:1, capture screen excluded from batch 1. Inventory by an
+  Explore subagent: `.caption` ×28, `.subheadline` ×11, `.headline` ×7, literals ×16, `InkTone`
+  ×44, bare `.secondary` ×32, `Color(white:)` ×4 (all capture).
+- Batch C plan (`docs/plans/2026-09-08-batch-c-plan.md`), SDD: 5 tasks on Sonnet, per-task Sonnet
+  reviews, Opus whole-branch review, one Sonnet fix wave, Sonnet re-review. Rulings: integer-exact
+  ratio test (`*5 >= *6`); #161 glyph pin follows the size into the token; VoiceMarkingView lives
+  in Library/UI (plan said Capture/UI); `Capture/Debug` exempt from the sweep; final-review
+  fixes 1/2/3/4/6/9 applied, cover-band height left at 190 with 210 as the smoke fallback.
+- **What the per-task reviews missed and the whole-branch review caught:** (1) macOS
+  `.system(size:)` is regular weight → `headline` lost semibold on every paper screen; (2) two
+  15 pt selection-bar sites shared a 13 pt constant → iOS shrank; (3) `Text` with no `.font`
+  (About's whole list, sidebar title, journal picker name) never moved — the sweep and the scan
+  test only see explicit fonts. Lesson recorded in CLAUDE.md's conventions and memory.
+- Implementers had to `kill` the owner's running `Raconte-latest.app` (same bundle id blocks the
+  macOS test host); owner told. Keep the Mac app closed during a local SDD run.
+- PR **#169** open (`feat/162-type-roles`, 10 commits, `Closes #168`, `Part of #162`), CI pending
+  at handoff. Local: unit 2209 (baseline 2203 from main CI run 34263241845), UI 65 expected.
+- Open: iPhone About → Sync showed Account `unknown` / Last push `never` mid-recording.
+
 ## Session 2026-09-07/08 (laptop — build 17 smokes 4/4, iPhone 4/4, overview #160 merged, Batch B #165/#166 merged, therapist one-pager brief)
 
 - Build 17 (main `05c19d88`, then `3a175a14` bump) built with real signing, ditto'd to

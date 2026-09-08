@@ -175,7 +175,7 @@ final class EntryListItemTests: XCTestCase {
         }
         let block = source[glyph.upperBound..<identifier.lowerBound]
         XCTAssertTrue(block.contains("InkTone.warning.color"), "the glyph is the warning tone")
-        XCTAssertTrue(block.contains(".font(.system(size: 14, weight: .semibold))"), "14 pt semibold")
+        XCTAssertTrue(block.contains(".font(.system(size: TypeScale.libraryOutOfSpanGlyph, weight: .semibold))"), "16 pt (macOS) / 14 pt (iOS) semibold via TypeScale")
         XCTAssertFalse(block.contains("inkSecondary"), "the quiet tone is gone from this glyph")
     }
 

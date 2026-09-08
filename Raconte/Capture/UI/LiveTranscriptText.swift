@@ -32,12 +32,13 @@ struct LiveTranscriptText: View {
     }
 
     /// Pure, so the dim-in-the-middle rule is testable without a renderer. Runs are joined
-    /// with single spaces, except at a paragraph break (#136) or a voice change (#164),
-    /// which render as a blank line ("\n\n") instead — same nearer-edge cut rule the
-    /// detail screen uses (`TranscriptAttribution.cutIndex(forFrame:ranges:)`), so live
-    /// and post-hoc agree on where a break falls. A voice change also prefixes the run
-    /// with "<label>: " in semibold; the later of two marks at one cut wins; a mark at
-    /// index 0 labels the first run with no leading break.
+    /// with single spaces, except at a paragraph break (#136) or a change of voice
+    /// (#164), which render as a blank line ("\n\n") instead — same nearer-edge cut rule
+    /// the detail screen uses (`TranscriptAttribution.cutIndex(forFrame:ranges:)`), so
+    /// live and post-hoc agree on where a break falls: both break only on a change of
+    /// voice, never on a re-tap of the voice already in force. A voice change also
+    /// prefixes the run with "<label>: " in semibold; the later of two marks at one cut
+    /// wins; a mark at index 0 labels the first run with no leading break.
     static func attributed(_ runs: [ConsolidatedTranscriptRun], paragraphFrames: [Int64] = [],
                            voiceMarks: [LiveVoiceMark] = [], voiceLabels: [String: String] = [:],
                            ink: Color, dim: Color) -> AttributedString {
@@ -45,7 +46,10 @@ struct LiveTranscriptText: View {
         let ranges = visible.map(\.range)
         var breaks = Set(paragraphFrames.map { TranscriptAttribution.cutIndex(forFrame: $0, ranges: ranges) })
         var labels: [Int: String] = [:]
+        var voiceInForce: String? = nil
         for mark in voiceMarks {
+            guard mark.voice != voiceInForce else { continue }
+            voiceInForce = mark.voice
             let index = TranscriptAttribution.cutIndex(forFrame: mark.frame, ranges: ranges)
             labels[index] = VoiceDisplay.accessibilityName(forVoice: mark.voice, voiceLabels: voiceLabels)
             breaks.insert(index)

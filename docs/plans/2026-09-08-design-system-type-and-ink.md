@@ -39,7 +39,7 @@ Spec, 2026-09-08. Owner rulings recorded inline. Two batches, one token layer.
 | role | iOS style | iOS pt | macOS pt (was) | used for |
 |---|---|---|---|---|
 | `meta` | `.caption2` | 11 | 11 (10) | counts, tiny status |
-| `label` | `.caption` | 12 | 13 (10) | row metadata, sidebar subtitles, dates |
+| `label` | `.caption` | 12 | 12 (10) | row metadata, sidebar subtitles, dates |
 | `footnote` | `.footnote` | 13 | 13 (10) | section footers, explanations |
 | `secondary` | `.subheadline` | 15 | 15 (11) | row second lines, banners |
 | `body` | `.body` | 17 | 17 (13) | About rows, detail prose |
@@ -87,7 +87,7 @@ Straggler check: `grep -rn '\.font(\.\(caption\|caption2\|footnote\|subheadline\
 ### Clipping risks (each gets an expected number and a smoke line)
 
 - **Sidebar rows** (`SidebarView` 133–163): 28 pt thumb beside a title (system default) and a
-  `label` subtitle. Subtitle grows 10→13 on macOS. Expected row height ≈ 40 pt; the thumb stays
+  `label` subtitle. Subtitle grows 10→12 on macOS. Expected row height ≈ 40 pt; the thumb stays
   28. Pass: subtitle not clipped, thumb not squashed.
 - **Home spine rows** (`HomeView` 129, 151): fixed `frame(height: 52)`. Title is already 22 pt on
   macOS; the chevron grows 13→15. Expected: fits. Smoke: no vertical clip on a long title
@@ -105,8 +105,8 @@ No `lineLimit(1)` exists on paper screens today (grep, 2026-09-08), so no line-s
 ### Tests
 
 - `TypeScaleTests`: every `TypeRole` macOS size equals `CaptureTextSize.pointSize(on: .iOS)` for
-  its iOS style; every macOS size ≥ 1.25 × `CaptureTextSize.pointSize(on: .macOS)` for that
-  style, except `meta` (11 vs 10, +10%, the one style Apple already sizes close). Every named
+  its iOS style; every macOS size ≥ 1.2 × `CaptureTextSize.pointSize(on: .macOS)` for that
+  style (caption 10→12 is the smallest step), except `meta` (11 vs 10, +10%). Every named
   literal constant's macOS value ≥ its iOS value.
 - Proof of RED: add the test with the enum absent, watch it fail to compile; then with values
   copied from the macOS column, watch the equality assertion fail.

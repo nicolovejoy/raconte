@@ -2,35 +2,43 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-07/08 (laptop — build 17 smokes pass, Batch B #165/#166 merged, therapist one-pager brief)
+## Session 2026-09-08 (laptop — build 18 smokes 5/5, design-system spec, batch C PR #169 open)
 
-- Build 17 Mac smokes 4/4 and iPhone build 15 4/4. Feedback filed as #161–#164; #106 re-flagged.
-  Overview refresh **#160 merged**. Batch B via SDD from `docs/plans/2026-09-08-batch-b-plan.md`:
-  **#165** (#161 glyph in a new `InkTone.warning`, #163 Trash quarantine block, #162 partial) and
-  **#166** (#106 cover lightbox from the editor, #164 live voice labels) — both merged 2026-09-08.
-- **`.dynamicTypeSize` is inert on macOS 26** (measured in the #165 review). #162's macOS half is a
-  point-size token sweep, spec-first; the Home shelf's three sizes are already points per platform
-  in `Raconte/App/TypeScale.swift`.
-- The quarantine smoke's path was wrong (stale unsandboxed copy); corrected above — the app reads
-  `~/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte`.
-- Cloud task ready, **not launched**: branch `docs/therapist-onepager` (= main `b695d8d7`) and brief
-  `docs/cloud-tasks/therapist-onepager-2026-09-08.txt` — survey, matrix, two-page PDF, docs-only PR.
-- Counts (local, after both merges): unit 2197 (CI 1 skipped), UI 65 expected — read off main's CI.
+- Build 18 (main `dce1837a`, bump `3ad2b9da`): Mac smokes 4/4 (Home shelf, orange glyph, Trash
+  quarantine block, cover lightbox) and iPhone TestFlight build 18 smoke 1/1 (#164 live voice
+  labels). **Batch B closed on both platforms.** Owner feedback on the Trash screen filed as
+  **#168** (matched `Unreadable entries` / `Deleted entries` headers; "Quarantined" rejected as
+  the wrong state) and shipped in the same PR below.
+- **Design-system spec** `docs/plans/2026-09-08-design-system-type-and-ink.md` (rulings: one spec,
+  two batches; platform-only macOS scale; WCAG AA floors on paper, studio keeps 7:1; capture screen
+  out of batch 1). **Batch C plan** `docs/plans/2026-09-08-batch-c-plan.md`, executed via SDD with
+  Sonnet implementers + Opus final review → **PR #169 open, not merged**: `TypeRole` (iOS semantic
+  styles, macOS literal points = iOS rendered size) + named `TypeScale` constants, 15 paper files
+  swept, comment-stripping scan test, #168 headers. Worktree `/Users/nico/src/raconte-wt-162`
+  still exists; remove after merge (`git worktree remove`).
+- Final review caught three things the per-task reviews missed, all fixed in `221efbea`: macOS
+  `.system(size:)` is REGULAR weight so `headline` had lost semibold; the two selection bars had
+  shrunk 15→13 on iOS by sharing a 13 pt constant; unstyled `Text` (About's rows, sidebar title,
+  journal picker name) never moved because the sweep and the scan only see EXPLICIT fonts.
+- Open question from the iPhone About screen mid-recording: Sync read Account `unknown`, Last push
+  `never` (Last fetch had a time). Owner was asked to re-check after the entry saved; no answer yet.
+- Counts: main CI baseline **unit 2203 (1 skipped), UI 65** (run 34263241845). PR #169 local:
+  unit 2209, UI 65 expected. CLAUDE.md's earlier "2197" was stale.
 
 **Next steps:**
-1. **Launch the therapist one-pager cloud session** on branch `docs/therapist-onepager` with the
-   brief above as the prompt. Review its survey.md citations before trusting the matrix; the PDF
-   must be exactly two pages.
-2. **Build 18, then ONE smoke at a time** (step 0: About → App → Build reads `build 18: <date>`):
-   Home on the Mac (three shelf texts larger, nothing else); a journal with an out-of-span entry
-   (orange glyph); Trash with an unreadable entry (tinted block, bar, count); journal editor →
-   click the cover strip → lightbox, Esc closes. iPhone: multi-voice record → tap voice → `LN:`
-   and a blank line where it landed, and `BN:` at the top of the band after the first tap.
-3. **Specs before code:** #162 macOS token sweep (sizes in points; clipping risks at
-   `CaptureControlBarMetrics` 36/76 pt and the 28 pt sidebar thumb) and #149 backdate-sheet
-   contrast (text-role tokens with stated floors). Then T8 (rulings 1–2 recorded; open: background
-   survival, existing entries with live transcripts; #38 rides along).
-4. **M4 acceptance gate, never run** — quit, move the container aside (never delete), relaunch,
+1. **Merge #169 when CI is green**, then build 19 and smoke ONE at a time from the PR body's
+   seven-step list (step 0: About → App → Build reads `build 19: <date>`, and the About list is
+   visibly larger). If a long coverless Library title clips, `LibraryCoverBand.height` 190 → 210.
+2. **Re-check iPhone About → Sync** (Account / Last push) with the app idle; file if still
+   `unknown` / `never`.
+3. **Batch 2 of the spec (#149)**: `inkDisabled` tone + AA floor loop over paper/paperInset ×
+   light/dark, the 32 bare `.secondary` sweep, and the backdate popover — MEASURE the picker's
+   greys on studio first; move the popover to `paperInset` only if any text < 3:1. Plan from the
+   spec's batch 2 section; branch after #169 merges.
+4. Then T8 (rulings 1–2 recorded; open: background survival, existing entries with live
+   transcripts; #38 rides along). Therapist one-pager cloud task was running this session — check
+   for its PR.
+5. **M4 acceptance gate, never run** — quit, move the container aside (never delete), relaunch,
    let sync settle, export, Verify archive…, compare counts with the iPhone.
 
 ## What Raconte is
@@ -142,6 +150,16 @@ Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
 - **`ContentView.swift` is rewritten by both `nav/split-view` and `m4/sync`** and the
   two will conflict on merge — expected and accepted (nav design §10); whichever
   branch merges second resolves the conflict by hand.
+- **Paper screens take a `TypeRole`, never a bare text style or a size literal** (#162, PR #169).
+  Apple's macOS scale runs ~30% smaller than iOS (`.caption` 10 vs 12, `.body` 13 vs 17) and
+  `.dynamicTypeSize` is inert on macOS 26. `TypeRole` (`Raconte/App/TypeScale.swift`) keeps the
+  semantic style on iOS and states a literal macOS point size equal to the iOS RENDERED size;
+  sizes with no matching style are named `TypeScale` constants per platform.
+  `TypeScaleTests.testPaperScreensCarryNoBareTextStyleOrSizeLiteral` enforces it over the fifteen
+  paper files; the capture surface (`CaptureLabel`, 7:1 floor) and `Capture/Debug` are exempt. Two
+  traps: `.system(size:)` is REGULAR weight, so a role whose style carries a weight (`.headline`)
+  must state it in the macOS branch; and the scan sees only EXPLICIT fonts — a `Text` with no
+  `.font` still renders at Apple's macOS 13 pt, so a title that must grow needs the role stated.
 - **Never put an `Image` in a macOS `Menu` label.** On macOS a `Menu`'s label discards
   SwiftUI's sizing of a resizable `Image` and paints it at intrinsic size — a 768×1024
   cover photo laid out at 768×1024 *points*, covering the whole screen and pushing the

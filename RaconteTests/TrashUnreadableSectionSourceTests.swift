@@ -16,7 +16,9 @@ final class TrashUnreadableSectionSourceTests: XCTestCase {
     }
 
     /// The block between the section's opening and the `trash.unreadable.section` header
-    /// identifier carries the inset ground and the warning bar; the header names the count.
+    /// identifier carries the barred background and the count; the bar and inset ground
+    /// themselves live in `unreadableRowBackground`'s own body, which sits AFTER this range
+    /// (declared below `unreadableSection`) — checked separately below.
     func testTheUnreadableBlockIsTintedBarredAndCounted() throws {
         let source = try trashSource()
         guard let start = source.range(of: "private var unreadableSection"),
@@ -24,11 +26,23 @@ final class TrashUnreadableSectionSourceTests: XCTestCase {
             return XCTFail("unreadableSection or its header identifier is gone")
         }
         let block = source[start.upperBound..<header.lowerBound]
-        XCTAssertTrue(block.contains(".listRowBackground(InkTone.paperInset.color)"),
-                      "unreadable rows sit on the inset ground")
-        XCTAssertTrue(block.contains("InkTone.warning.color"), "a warning bar marks the block")
+        XCTAssertTrue(block.contains(".listRowBackground(unreadableRowBackground)"),
+                      "unreadable rows sit on the barred background")
         XCTAssertTrue(block.contains("Unreadable entries · \\(model.unreadableEntries.count)"),
                       "the header carries the count")
+    }
+
+    /// `unreadableRowBackground`'s own body carries the warning bar and the inset ground
+    /// it sits next to.
+    func testTheUnreadableRowBackgroundIsBarredAndInset() throws {
+        let source = try trashSource()
+        guard let start = source.range(of: "private var unreadableRowBackground"),
+              let end = source.range(of: "private func unreadableRow", range: start.upperBound..<source.endIndex) else {
+            return XCTFail("unreadableRowBackground or unreadableRow is gone")
+        }
+        let block = source[start.upperBound..<end.lowerBound]
+        XCTAssertTrue(block.contains("InkTone.warning.color"), "a warning bar marks the block")
+        XCTAssertTrue(block.contains("InkTone.paperInset.color"), "the background's ground is inset")
     }
 
     /// The ordinary trash rows keep the plain ground: the tint must not leak.
@@ -37,7 +51,10 @@ final class TrashUnreadableSectionSourceTests: XCTestCase {
         guard let row = source.range(of: "struct TrashEntryRow") else {
             return XCTFail("TrashEntryRow is gone")
         }
-        XCTAssertFalse(source[row.upperBound...].contains(".listRowBackground(InkTone.paperInset.color)"),
+        let rowRegion = source[row.upperBound...]
+        XCTAssertFalse(rowRegion.contains(".listRowBackground(unreadableRowBackground)"),
+                       "the barred background belongs to the unreadable block only")
+        XCTAssertFalse(rowRegion.contains("InkTone.paperInset.color"),
                        "the inset ground belongs to the unreadable block only")
     }
 }

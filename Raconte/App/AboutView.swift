@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 /// and read-only sync status. Exists because five sessions paid for TestFlight builds
 /// having zero on-device sync visibility (the Debug screen is `#if DEBUG`-gated).
 /// Read-only by design EXCEPT the T13 export action, which writes only to a folder the
-/// owner explicitly picks via the system document picker — never anywhere else, and
-/// never anything under the app's own container.
+/// owner explicitly picks AND confirms (#157) — never anywhere else, and never anything
+/// under the app's own container.
 ///
 /// The "What this is"/"How it works" introduction added 2026-08-29 for a first-time
 /// reader was removed 2026-09-08 at the owner's request: the app has one user, and the
@@ -38,6 +38,18 @@ struct AboutView: View {
     @State private var archivePickerMode: ArchivePickerMode = .export
     @State private var showingArchivePicker = false
 
+    /// #157: the export the owner has picked a folder for but not yet confirmed. Set only
+    /// after the inventory has been read; the `.sheet(item:)` below presents while non-nil.
+    /// `requiresSecurityScope` is false only for the UI-test harness destination (the app's
+    /// own temp dir), which `startAccessingSecurityScopedResource()` would refuse.
+    private struct PendingExport: Identifiable {
+        let id = UUID()
+        var destination: URL
+        var inventory: ExportInventory
+        var requiresSecurityScope: Bool
+    }
+    @State private var pendingExport: PendingExport?
+
     var body: some View {
         List {
             Section("App") {
@@ -64,6 +76,13 @@ struct AboutView: View {
 
             Section("Archive") {
                 Button("Export archive…") {
+                    #if DEBUG
+                    // #157 UI test path: the system picker cannot be driven from XCUITest.
+                    if ProcessInfo.processInfo.environment["RACONTE_UITEST_EXPORT_DESTINATION"] == "tmp" {
+                        Task { await stageExport(to: FileManager.default.temporaryDirectory, requiresSecurityScope: false) }
+                        return
+                    }
+                    #endif
                     archivePickerMode = .export
                     showingArchivePicker = true
                 }
@@ -129,19 +148,31 @@ struct AboutView: View {
                 guard let url = urls.first else { return }
                 let mode = archivePickerMode
                 Task {
-                    guard url.startAccessingSecurityScopedResource() else {
-                        exportRunner.fail(mode == .verify
-                                          ? "could not access the selected package"
-                                          : "could not access the selected folder")
-                        return
-                    }
-                    defer { url.stopAccessingSecurityScopedResource() }
                     switch mode {
-                    case .export: await exportRunner.run(into: url)
-                    case .verify: await exportRunner.verify(package: url)
+                    case .export:
+                        // #157: nothing is written yet — read the inventory and confirm.
+                        await stageExport(to: url, requiresSecurityScope: true)
+                    case .verify:
+                        guard url.startAccessingSecurityScopedResource() else {
+                            exportRunner.fail("could not access the selected package")
+                            return
+                        }
+                        defer { url.stopAccessingSecurityScopedResource() }
+                        await exportRunner.verify(package: url)
                     }
                 }
             }
+        }
+        // #157: attached to the LIST for the same reason `.fileImporter` is.
+        .sheet(item: $pendingExport) { pending in
+            ExportConfirmationSheet(
+                destinationName: pending.destination.lastPathComponent,
+                inventory: pending.inventory,
+                onCancel: { pendingExport = nil },
+                onExport: { scope in
+                    pendingExport = nil
+                    Task { await performExport(pending, scope: scope) }
+                })
         }
     }
 
@@ -174,6 +205,29 @@ struct AboutView: View {
         case let .failed(reason):
             return "Failed: \(reason)"
         }
+    }
+
+    /// #157 step 1 of 2: read what WOULD be exported and present the sheet. Reads the
+    /// container (not the destination), so no security scope is needed here.
+    private func stageExport(to destination: URL, requiresSecurityScope: Bool) async {
+        guard let inventory = await exportRunner.inventory() else { return } // runner published .failed
+        pendingExport = PendingExport(destination: destination, inventory: inventory,
+                                      requiresSecurityScope: requiresSecurityScope)
+    }
+
+    /// #157 step 2 of 2: the owner confirmed. Security scope is opened HERE, around the
+    /// write, exactly as the pre-#157 callback did — the picked URL keeps its scope until
+    /// accessed, so deferring the start past the sheet is fine.
+    private func performExport(_ pending: PendingExport, scope: ExportScope) async {
+        let url = pending.destination
+        if pending.requiresSecurityScope {
+            guard url.startAccessingSecurityScopedResource() else {
+                exportRunner.fail("could not access the selected folder")
+                return
+            }
+        }
+        defer { if pending.requiresSecurityScope { url.stopAccessingSecurityScopedResource() } }
+        await exportRunner.run(into: url, scope: scope)
     }
 }
 

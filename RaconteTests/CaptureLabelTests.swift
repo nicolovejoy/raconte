@@ -148,8 +148,8 @@ final class CaptureLabelTests: XCTestCase {
     /// #149 batch 2: the last four grey TEXT literals on the capture screen — RecoveryBanner's
     /// title (0.95), RecStatusLine's clock (0.9) and status (0.78), PlaybackProgressLine's
     /// figures (0.7) — are gone from every capture UI source. Fills and borders
-    /// (`MicMeter`, `RecordButton`, the banner's own background, the popover's
-    /// `CaptureSurface.backgroundWhite`) are decoration and are not what this scans for: the
+    /// (`MicMeter`, `RecordButton`, the banner's own background) are decoration and are
+    /// not what this scans for: the
     /// pattern is the literal followed by a foreground, which only text sites write.
     func testCaptureUITextNoLongerHardcodesGreyForegrounds() throws {
         let source = try captureUISources()

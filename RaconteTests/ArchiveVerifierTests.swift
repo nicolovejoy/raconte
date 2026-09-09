@@ -209,6 +209,25 @@ final class ArchiveVerifierTests: XCTestCase {
         XCTAssertEqual(report.problems, [.unlistedFile(relativePath)])
     }
 
+    // MARK: (4b) Finder droppings are not problems. Browsing a package in Finder
+    // writes `.DS_Store` into every directory opened (and the Verify open panel rewrites
+    // the root one on each pick), so a verifier that counts them would fail every
+    // package the owner has ever looked at. Dot-prefixed files are skipped — no export
+    // file legitimately starts with a dot. Found by the build-20 smoke (2026-09-09).
+
+    func testFinderDSStoreFilesAreIgnored() async throws {
+        let (packageURL, fixture) = try await exportPackage()
+        for relativePath in [".DS_Store", "entries/.DS_Store", "entries/\(fixture.idAudio)/.DS_Store"] {
+            try Data("Bud1".utf8).write(to: packageURL.appendingPathComponent(relativePath))
+        }
+        // A NON-hidden stray file next to them is still reported, so the skip is narrow.
+        try Data("surprise".utf8).write(to: packageURL.appendingPathComponent("entries/stray.txt"))
+
+        let report = ArchiveVerifier.verify(packageURL: packageURL)
+
+        XCTAssertEqual(report.problems, [.unlistedFile("entries/stray.txt")])
+    }
+
     // MARK: (5) editing transcript.md's body produces BOTH a checksumMismatch and a
     // transcriptMismatch, files first
 

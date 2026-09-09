@@ -3,6 +3,44 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-08/09 (laptop — build 19 smoke 7/7, batch 2 (#149) → PR #172, build-18 decoy fixed)
+
+- **#169 merged**, build 19 smoked 7/7 on the Mac. **#171 merged** (About's "What this is / How it
+  works" intro removed at the owner's request; UI suite 65 → 64 on main).
+- **Batch 2 of the design-system spec (#149) via SDD** (Sonnet implementers, Opus final review) →
+  **PR #172 open, not merged**: `InkTone.inkDisabled` + `inkSecondary` darkened to clear 4.5:1
+  (it measured 3.37 before), floor loop over paper/paperInset × light/dark; 31 `.secondary` +
+  2 `.tertiary` swept with a comment-stripped scan; capture greys → `CaptureLabel.primaryInk/
+  secondaryInk`, `PlaybackProgressLine(ink:)`; backdate popover → `paperInset`, ambient scheme
+  (disabled numerals measured 1.8:1 on studio). Says `Part of #149`: the post-fix popover
+  measurement was never done — **build 20 smoke step 6 (dark appearance) decides it**; a flat
+  mid-grey card there means NSPopover chrome blends the ground and the fix needs a container,
+  not a tone. Follow-ups filed as **#173**. Worktree `/Users/nico/src/raconte-wt-149` exists.
+- **The "I keep getting build 18" mystery**: `/Applications/Raconte.app` was the iOS TestFlight
+  build installed on the Mac; Spotlight ranks /Applications first. Owner deleted it; build 19 is
+  now at `/Applications/Raconte.app` (the ONLY Raconte outside DerivedData; Desktop copies
+  trashed). **Every smoke build goes there from now on.** Container backup made first:
+  `~/Desktop/raconte-container-backup-2026-09-08` (3082 files, 697 MB) — delete when confident.
+- **Two incidents, both now memories**: an SDD test run killed the owner's reopened build 19
+  (no macOS tests during a smoke session; ask for each window); a subagent's synthetic clicks
+  started a 3½-minute real recording ("Blue rabbit 2026", backdated 2026-09-09) — **no GUI
+  automation against any build sharing the owner's container, ever**. That junk entry is
+  still in his library; he trashes it.
+- Filed **#170** (owner rulings: sidebar top-level items biggest; every journal title one size =
+  sidebar's, one typeface = sans; long titles truncate with `…`; serif stays for prose only) and
+  wrote the **#157 plan** `docs/plans/2026-09-08-export-scope-plan.md` (confirmation sheet +
+  journal scope; ruling: `journals.json` in a scoped export lists only selected journals).
+- Counts: main after #171 **unit 2209 (1 skipped), UI 64**. PR #172 local: unit 2214, UI 65
+  pre-rebase (expect 64 on CI).
+
+Rulings made on the owner's behalf during the batch 2 SDD run (each reversible by the owner):
+test gate = no running Raconte at the instant a test starts (superseded after it killed his
+build 19: no macOS tests during a smoke session at all); UI-test crashes on 2026-09-08 were
+environmental (a broken "iPhone 17" sim + 13 concurrent sessions), fixed by recreating the sim;
+Task 4 step (d) re-measurement abandoned after the recording incident, verification moved to
+the build 20 smoke; Task 5 rebased onto main without re-running the full UI suite locally (CI is
+the combination gate). Final review deferred minors → #173.
+
 ## Session 2026-09-08 (laptop — build 18 smokes 5/5, design-system spec, batch C via SDD → PR #169)
 
 - Build 18: bumped on `dce1837a` (`3ad2b9da`), signed Mac build ditto'd to `~/Desktop/Raconte-latest.app`

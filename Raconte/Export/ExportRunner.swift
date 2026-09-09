@@ -47,19 +47,37 @@ final class ExportRunner {
 
     /// `destination` is the folder the owner picked via `.fileImporter` — the exporter
     /// creates its own timestamped package directory inside it, so this never writes
-    /// directly into a folder the owner did not choose.
-    func run(into destination: URL) async {
+    /// directly into a folder the owner did not choose. `scope` (#157) is what the
+    /// confirmation sheet resolved; `.all` is the pre-#157 behaviour.
+    func run(into destination: URL, scope: ExportScope = .all) async {
         state = .running(verifying: false)
         let exporter = self.exporter
         do {
             let (report, verification) = try await Task.detached(priority: .utility) {
-                let report = try await exporter.export(into: destination)
+                let report = try await exporter.export(into: destination, scope: scope)
                 let verification = ArchiveVerifier.verify(packageURL: report.packageURL)
                 return (report, verification)
             }.value
             state = .finished(report, verification)
         } catch {
             state = .failed(String(describing: error))
+        }
+    }
+
+    /// #157: what the confirmation sheet renders. One walk of the container, off the main
+    /// actor (a large archive is thousands of directory reads). Not a "run": `state` is left
+    /// alone on success so a stale result row from a previous export stays visible behind
+    /// the sheet. On failure — realistically only a missing container root — publishes
+    /// `.failed` and returns nil so the caller shows nothing.
+    func inventory() async -> ExportInventory? {
+        let containerRoot = exporter.containerRoot
+        do {
+            return try await Task.detached(priority: .utility) {
+                try ExportInventory.read(containerRoot: containerRoot)
+            }.value
+        } catch {
+            state = .failed(String(describing: error))
+            return nil
         }
     }
 

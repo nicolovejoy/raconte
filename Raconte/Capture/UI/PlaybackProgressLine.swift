@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Dual-surface: renders on paper (entry detail) AND inside `RecoveryBanner` on the studio
 /// surface. It takes the paper `label` role deliberately — 12 pt on macOS is closer to the
-/// studio floor than the old 10 pt.
+/// studio floor than the old 10 pt. The `ink` parameter lets the studio caller override the
+/// figures' colour, since paper's appearance-following `inkSecondary` fails the studio floor.
 ///
 /// Elapsed / total + a draggable position handle for an active `CapturePlayback`
 /// (issue #3: no position feedback; issue #6: no way to move the playhead).
@@ -17,6 +18,10 @@ struct PlaybackProgressLine: View {
     var tint: Color = .accentColor
     /// Accessibility-identifier namespace: `"finished"` / `"recovery"`.
     var idPrefix: String = "finished"
+    /// The figures' colour. Paper default (entry detail, appearance-following); the studio
+    /// caller (`RecoveryBanner`) passes `CaptureLabel.secondaryInkColor` — dark-appearance
+    /// `inkSecondary` on the studio ground would be under the 7.0 capture floor.
+    var ink: Color = InkTone.inkSecondary.color
 
     /// Non-nil only mid-drag; the slider reads the live position otherwise.
     @State private var scrubValue: Double?
@@ -50,6 +55,6 @@ struct PlaybackProgressLine: View {
                 .accessibilityIdentifier("\(idPrefix).total")
         }
         .font(TypeRole.label.font.monospacedDigit())
-        .foregroundStyle(Color(white: 0.7))
+        .foregroundStyle(ink)
     }
 }

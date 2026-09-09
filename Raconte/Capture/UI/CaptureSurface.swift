@@ -192,6 +192,15 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     /// Almost everything here is a grey; the colour model exists in full-sRGB form for the
     /// one label that is not (owner ruling 2026-08-16: the error banner joins the model
     /// rather than living outside it at 10 pt).
+    ///
+    /// The two greys every capture label is drawn in (the error banner is the one non-grey).
+    /// Named so the few capture texts that are NOT persistent operating labels (the recovery
+    /// banner's title, the status line, the playback figures) can take the same checked ink
+    /// instead of a literal that drifts — #149 batch 2. 1.0 is 17.4:1 on studio, 0.78 is
+    /// 11.5:1; both clear `CaptureSurface.minimumControlContrast`.
+    static let primaryInk = CaptureLabelColor.grey(1.0)
+    static let secondaryInk = CaptureLabelColor.grey(0.78)
+
     var labelColor: CaptureLabelColor {
         switch self {
         // The receipt's date is the answer to "what did I just record", so it carries the
@@ -199,10 +208,10 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         // The backdated date is a value the owner has to read back and confirm, not a
         // caption naming a control — full white, like the journal name and the receipt date.
         case .journalName, .receiptDate, .receiptSavedChip,
-             .backdateDateButton, .backdateSummary: .grey(1.0)
+             .backdateDateButton, .backdateSummary: Self.primaryInk
         case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
              .backdateFieldCaption, .journalPickerChevron,
-             .receiptSummary: .grey(0.78)
+             .receiptSummary: Self.secondaryInk
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
         // ~5.7:1 on this surface — the same passes-somewhere-fails-here trap as the

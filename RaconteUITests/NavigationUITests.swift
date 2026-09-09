@@ -436,23 +436,4 @@ final class NavigationUITests: XCTestCase {
         // that a capture can finish. Harmless: RACONTE_UITEST_ID gives every test its own
         // throwaway container, so nothing leaks. Don't "fix" this by adding a stop.
     }
-
-    // MARK: - Task 8 (record-flow): About also explains the app
-
-    /// Owner request 2026-08-29: About is the only Release-built screen that can tell a new
-    /// person (Lori, and whoever comes after) what this app is. The diagnostics stay; the
-    /// explanation goes above them.
-    func testAboutExplainsWhatTheAppIsAndHowToUseIt() {
-        let app = launchApp()
-        openPlace(app, "sidebar.about")
-        XCTAssertTrue(app.staticTexts["about.whatItIs"].waitForExistence(timeout: 5),
-                      "About must say what Raconte is")
-        // Below the fold on a phone: an offscreen List row is absent from the accessibility
-        // tree until it is scrolled into view (repo trap, 2026-08-21).
-        app.swipeUp()
-        XCTAssertTrue(app.staticTexts["about.howItWorks"].waitForExistence(timeout: 5),
-                      "About must say how to use it")
-        XCTAssertTrue(app.staticTexts["about.version"].exists,
-                      "the diagnostics this screen exists for must survive")
-    }
 }

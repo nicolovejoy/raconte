@@ -8,8 +8,9 @@ final class InkSurfaceTests: XCTestCase {
     /// Reading text on paper: WCAG AA for normal text, both text tones.
     func testInkTonesClearAAOnPaper() {
         XCTAssertGreaterThanOrEqual(InkSurface.contrastOnPaper(InkTone.ink.lightColor), 4.5)
-        XCTAssertGreaterThanOrEqual(InkSurface.contrastOnPaper(InkTone.inkSecondary.lightColor), 3.0,
-            "inkSecondary is a secondary tone — 3.0 (large-text AA) is its floor")
+        XCTAssertGreaterThanOrEqual(InkSurface.contrastOnPaper(InkTone.inkSecondary.lightColor), 4.5,
+            "inkSecondary is READ text (row second lines, dates) — spec batch 2 puts it at the "
+            + "4.5 normal-text floor, not the 3.0 large-text floor it had")
     }
 
     /// The accent is used for tappable text — it must clear AA for normal text on paper.
@@ -83,5 +84,51 @@ final class InkSurfaceTests: XCTestCase {
         XCTAssertNotEqual(InkTone.warning.lightColor, InkTone.record.lightColor)
         XCTAssertNotEqual(InkTone.warning.darkColor, InkTone.warning.lightColor,
                           "warning lightens on dark paper, like accent")
+    }
+
+    // MARK: #149 batch 2 — text roles on every reading surface, both appearances
+
+    /// The spec's floor table as one loop, not one function per pair. `paper` and `paperInset`
+    /// are the two grounds paper text sits on; both appearances, because dark paper is a
+    /// different pair of colours, not an inversion. The numbers are re-derived from the channel
+    /// values here — this test does not trust the table in the plan.
+    func testTextRolesClearTheirFloorsOnEverySurfaceAndAppearance() {
+        for (tone, floor) in InkSurface.textFloors {
+            for surface in [InkTone.paper, .paperInset] {
+                for appearance in InkAppearance.allCases {
+                    let ratio = InkSurface.contrast(tone, on: surface, appearance: appearance)
+                    XCTAssertGreaterThanOrEqual(
+                        ratio, floor,
+                        "\(tone) on \(surface) (\(appearance)) is \(ratio) — floor \(floor)")
+                }
+            }
+        }
+    }
+
+    /// Disabled must read as disabled: visibly weaker than secondary, on the same ground, in
+    /// both appearances. Without this a `inkDisabled` equal to `inkSecondary` passes the floor
+    /// loop above and the role is a synonym.
+    func testDisabledIsVisiblyWeakerThanSecondary() {
+        for appearance in InkAppearance.allCases {
+            let secondary = CaptureSurface.relativeLuminance(InkTone.inkSecondary.channels(for: appearance))
+            let disabled = CaptureSurface.relativeLuminance(InkTone.inkDisabled.channels(for: appearance))
+            let separation = (max(secondary, disabled) + 0.05) / (min(secondary, disabled) + 0.05)
+            XCTAssertGreaterThanOrEqual(separation, 1.3,
+                "\(appearance): disabled vs secondary is only \(separation):1")
+            // Weaker means CLOSER to the paper it sits on, in luminance terms.
+            let paper = CaptureSurface.relativeLuminance(InkTone.paper.channels(for: appearance))
+            XCTAssertLessThan(abs(disabled - paper), abs(secondary - paper),
+                "\(appearance): disabled must sit closer to paper than secondary does")
+        }
+    }
+
+    /// The general contrast function and the old paper-only one agree — the old one is now a
+    /// wrapper, and this pins that the wrapper picks light paper.
+    func testContrastOnPaperIsTheLightPaperCaseOfTheGeneralFunction() {
+        for tone in [InkTone.ink, .inkSecondary, .inkDisabled, .accent, .warning] {
+            XCTAssertEqual(InkSurface.contrastOnPaper(tone.lightColor),
+                           InkSurface.contrast(tone, on: .paper, appearance: .light),
+                           accuracy: 1e-9, "\(tone)")
+        }
     }
 }

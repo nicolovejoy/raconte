@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Raconte vs. Apple Journal</title>
+<style>
+  /* Palette: Raconte/Library/UI/InkSurface.swift (light values), used verbatim. */
+  :root {
+    --paper: #F7F4EE;
+    --paper-inset: #F0ECE3;
+    --hairline: #E5DFD4;
+    --ink: #211D18;
+    --ink-secondary: #8B8478;
+    --accent: #916438;
+    --warning: #D2570A;
+    --serif: "Iowan Old Style", Charter, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, "Helvetica Neue", Helvetica, Arial, "Segoe UI", sans-serif;
+  }
+  @page { size: Letter; margin: 0; }
+  html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
+  body { font-family: var(--serif); font-size: 10.2pt; line-height: 1.4; }
+  .page {
+    width: 8.5in; height: 11in; box-sizing: border-box;
+    padding: 0.75in 0.85in 0.75in 0.85in;
+    page-break-after: always; break-after: page;
+    background: var(--paper); position: relative; overflow: hidden;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  h1 { font-family: var(--sans); font-weight: 600; font-size: 22pt; letter-spacing: -0.01em;
+       color: var(--accent); margin: 0 0 2pt 0; }
+  .tagline { font-family: var(--sans); color: var(--ink-secondary); font-size: 10pt; margin: 0 0 14pt 0; }
+  h2 { font-family: var(--sans); font-weight: 600; font-size: 11.5pt; color: var(--accent);
+       margin: 10pt 0 4pt 0; padding-top: 7pt; border-top: 1px solid var(--hairline); }
+  h2:first-of-type { border-top: 0; padding-top: 0; }
+  p { margin: 0 0 7pt 0; }
+  ol, ul { margin: 0 0 7pt 0; padding-left: 1.3em; }
+  li { margin: 0 0 4pt 0; }
+  .callout { background: var(--paper-inset); padding: 9pt 12pt; margin: 6pt 0 8pt 0; }
+  .callout p { margin: 0; }
+  .warn { border-left: 3px solid var(--warning); padding-left: 9pt; }
+  .caption { font-family: var(--sans); font-size: 8.5pt; color: var(--ink-secondary); }
+  .footer { position: absolute; left: 0.85in; right: 0.85in; bottom: 0.5in;
+            font-family: var(--sans); font-size: 8.5pt; color: var(--ink-secondary);
+            border-top: 1px solid var(--hairline); padding-top: 5pt;
+            display: flex; justify-content: space-between; }
+  a { color: var(--accent); text-decoration: none; }
+  .two-col { column-count: 2; column-gap: 0.3in; }
+
+  /* Page 2 — matrix (apps as rows, fields as columns) */
+  .page.p2 .footer { left: 0.75in; right: 0.75in; }
+  .page.p2 { padding: 0.75in 0.75in 0.75in 0.75in; }
+  table.matrix { width: 100%; border-collapse: collapse; font-family: var(--sans);
+                 font-size: 7.1pt; line-height: 1.22; table-layout: fixed; hyphens: manual; }
+  table.matrix th, table.matrix td { border-bottom: 1px solid var(--hairline); padding: 2.4pt 3pt;
+                 vertical-align: top; text-align: left; }
+  table.matrix thead th { background: var(--paper-inset); font-weight: 600; color: var(--accent); }
+  table.matrix th.app { width: 0.72in; font-weight: 600; color: var(--ink); }
+  table.matrix tr.rac th, table.matrix tr.rac td { background: var(--paper-inset); font-weight: 600; }
+  table.matrix col.c-store { width: 0.7in; } table.matrix col.c-who { width: 1.05in; }
+  table.matrix col.c-audio { width: 0.55in; } table.matrix col.c-ondev { width: 0.72in; }
+  table.matrix col.c-acct { width: 0.5in; } table.matrix col.c-export { width: 0.85in; }
+  table.matrix col.c-share { width: 0.75in; } table.matrix col.c-hipaa { width: 0.62in; }
+  table.matrix col.c-price { width: 0.6in; }
+</style>
+</head>
+<body>
+
+<section class="page">
+  <h1>Raconte and Apple Journal</h1>
+  <p class="tagline">Did we just build Apple’s app? No. Here is the difference, in one page.</p>
+
+  <h2>Where they are the same</h2>
+  <p>Both record on the phone, transcribe on the device with Apple’s speech engine, keep the
+  audio, and store copies only in your own iCloud. For someone who wants to talk about today
+  and never touch the text, Apple Journal is free, in the App Store, and end-to-end encrypted
+  without any setting to turn on. On privacy alone, it is at least as good.</p>
+
+  <h2>What Raconte is for that Journal is not</h2>
+  <p>Reading decades of paper journals aloud and turning them into a searchable, lasting
+  archive. That job needs six things Journal does not have.</p>
+  <ol>
+    <li><strong>The date of the page, not the recording.</strong> A 1998 page read in 2026 is
+    filed under 1998. Dates can be a bare year or month, carry over across a sitting, or be
+    heard spoken at the start of a recording. Journal has one entry date.</li>
+    <li><strong>Two voices on one page.</strong> A tap while reading marks the switch between
+    print and cursive; the transcript renders the two voices apart and they can be fixed
+    afterwards. Journal has nothing like it.</li>
+    <li><strong>Corrections that survive re-transcription.</strong> Every edit is a kept
+    revision beside the machine’s own version, which stays available to revert to. A later,
+    better pass over the same audio does not erase your work. In Journal the transcript is
+    pasted text.</li>
+    <li><strong>Text tied to sound.</strong> Each stretch of text remembers which seconds of
+    audio it came from, honestly graded, so a word can one day be tapped to hear it.</li>
+    <li><strong>An archive you can prove.</strong> Export is plain, documented files with a
+    checksum per file and a verifier that needs no app. Journal exports PDFs and its own
+    file; whether audio is inside is not stated.</li>
+    <li><strong>Journals as books.</strong> Each paper journal is a named book with a cover, a
+    date span, and an entry count. Journal is one stream.</li>
+  </ol>
+
+  <div class="callout">
+    <p><strong>In one line:</strong> Apple Journal is a diary that can record. Raconte is an
+    archival transcription tool that also works as a diary. The recorder is the part they share.</p>
+  </div>
+
+  <h2>What that means for the therapist conversation</h2>
+  <p>Page 1 of the therapist one-pager makes a privacy case that Journal matches. If she asks
+  “why not Apple’s app”, the answer is items 3 and 5: your words are never overwritten, and
+  the record can be taken out whole and checked years later. Whether that matters to her
+  clients is her call, and worth asking.</p>
+
+  <div class="footer">
+    <span>Raconte · pianohouseproject.org · 2026-09-08</span>
+    <span>Page 1 of 1</span>
+  </div>
+</section>
+
+</body>
+</html>

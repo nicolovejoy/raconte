@@ -19,7 +19,7 @@ struct RecoveryBanner: View {
                     .foregroundStyle(.orange)
                 Text("Recovered recording: \(recording.formattedDuration)")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color(white: 0.95))
+                    .foregroundStyle(CaptureLabel.primaryInkColor)
                     .accessibilityIdentifier("recovery.title")
                 Spacer()
             }
@@ -42,7 +42,7 @@ struct RecoveryBanner: View {
             .font(.subheadline)
 
             if let playback {
-                PlaybackProgressLine(playback: playback, tint: .orange, idPrefix: "recovery")
+                PlaybackProgressLine(playback: playback, tint: .orange, idPrefix: "recovery", ink: CaptureLabel.secondaryInkColor)
             }
         }
         .padding(14)

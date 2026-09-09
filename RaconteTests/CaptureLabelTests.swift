@@ -145,6 +145,20 @@ final class CaptureLabelTests: XCTestCase {
         }
     }
 
+    /// #149 batch 2: the last four grey TEXT literals on the capture screen — RecoveryBanner's
+    /// title (0.95), RecStatusLine's clock (0.9) and status (0.78), PlaybackProgressLine's
+    /// figures (0.7) — are gone from every capture UI source. Fills and borders
+    /// (`MicMeter`, `RecordButton`, the banner's own background) are decoration and are
+    /// not what this scans for: the
+    /// pattern is the literal followed by a foreground, which only text sites write.
+    func testCaptureUITextNoLongerHardcodesGreyForegrounds() throws {
+        let source = try captureUISources()
+        let pattern = try NSRegularExpression(pattern: #"foregroundStyle\((isLive \? Color\.red : )?Color\(white: [0-9.]+\)\)"#)
+        let hits = pattern.matches(in: source, range: NSRange(source.startIndex..., in: source))
+            .map { String(source[Range($0.range, in: source)!]) }
+        XCTAssertEqual(hits, [], "capture UI still colours text with a raw grey: \(hits)")
+    }
+
     /// #118 §8's regression pin: the colour literals `InkTone` absorbed out of `CaptureView`
     /// must not creep back in. Comment-stripped (via the shared `strippingComments` helper,
     /// same as `captureUISources()` above) so a literal merely *named* in a doc comment

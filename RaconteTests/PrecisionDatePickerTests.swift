@@ -94,26 +94,28 @@ final class PrecisionDatePickerTests: XCTestCase {
             + "excessive step the owner asked to remove")
     }
 
-    /// The load-bearing property of the fix. A sheet left on the system's own material would
-    /// reintroduce exactly the bug being fixed: this screen sets a white foreground for its
-    /// near-black surface, and that white is inherited into nested builders (owner smoke,
-    /// 2026-08-15: the New Journal field was white-on-white for precisely this reason). By
-    /// painting the capture surface inside the sheet and pinning the scheme to match, the
-    /// sheet is self-consistent whatever does or does not propagate into it.
-    func testTheMacOSPopoverPaintsTheCaptureSurfaceRatherThanTrustingSystemMaterial() throws {
+    /// #149 batch 2, measured 2026-09-09: on the studio ground Apple's graphical calendar drew its
+    /// disabled day numerals at ~1.8:1 and its enabled numerals at ~2.5:1 — both under the 3.0
+    /// floor, and not ours to recolour (a token cannot reach inside a system control). So the
+    /// popover is a PAPER surface floating over the studio screen: `paperInset` ground, ambient
+    /// colour scheme, which is exactly what the system picker is tuned for. The two resets stay:
+    /// `Color.primary` (the white-leak fix, 2026-08-15 — under an ambient scheme it resolves to
+    /// the right ink for the ground) and the tint (a white fill under a white numeral is an
+    /// unreadable selection). This does not regress the "capture controls pin `.dark`" rule: that
+    /// rule exists because ambient controls on the STUDIO ground render dark-on-dark; a control
+    /// on its own paper ground is the case the rule was written to avoid.
+    func testTheMacOSPopoverIsAPaperSurfaceNotAStudioOne() throws {
         let source = try pickerSource()
-        XCTAssertTrue(
-            source.contains("CaptureSurface.backgroundWhite"),
-            "The Mac backdate popover must paint the capture surface's own background — "
-            + "hardcoding a colour here would silently drift from CaptureSurface")
-        XCTAssertTrue(
-            source.contains("\\.colorScheme, .dark"),
-            "The popover must pin the dark colour scheme to match the background it paints")
-        XCTAssertTrue(
-            source.contains("Color.primary"),
-            "The sheet must reset the foreground the capture screen sets to white — under "
-            + "the dark pin `Color.primary` resolves to white, so this both neutralises the "
-            + "leak and colours the popover correctly")
+        let popover = try XCTUnwrap(source.range(of: "private var dayCalendarPopover"))
+        let body = String(source[popover.lowerBound...].prefix(1400))
+        XCTAssertTrue(body.contains("InkTone.paperInset.color"),
+                      "the popover must paint paperInset — a paper ground the system calendar is tuned for")
+        XCTAssertFalse(body.contains("CaptureSurface.backgroundWhite"),
+                       "the popover must no longer paint the studio ground (measured under the floor)")
+        XCTAssertFalse(body.contains("\\.colorScheme, .dark"),
+                       "the popover follows the ambient scheme; its ground is its own")
+        XCTAssertTrue(body.contains("Color.primary"), "the white-leak reset stays")
+        XCTAssertTrue(body.contains(".tint(Color.accentColor)"), "the tint reset stays")
     }
 
     /// The button is a persistent label on the capture surface, so it is subject to the same

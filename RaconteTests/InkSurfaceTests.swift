@@ -131,4 +131,19 @@ final class InkSurfaceTests: XCTestCase {
                            accuracy: 1e-9, "\(tone)")
         }
     }
+
+    /// Paper text carries an `InkTone` role, never Apple's `.secondary` / `.tertiary`
+    /// hierarchical styles (#149) — those resolve to whatever the system decides and cannot
+    /// be measured against paper, which is how the unreadable dim text got in. Comment-stripped
+    /// so a doc comment naming the pattern (like this one) cannot satisfy the scan.
+    func testPaperScreensCarryNoBareHierarchicalForeground() throws {
+        let banned = ["foregroundStyle(.secondary)", "foregroundStyle(.tertiary)",
+                      ": .tertiary)", ": .secondary)", "white.opacity("]
+        for path in paperScreenFiles {
+            let source = strippingComments(try String(contentsOf: repoRoot().appendingPathComponent(path)))
+            for pattern in banned {
+                XCTAssertFalse(source.contains(pattern), "\(path) still has \(pattern)")
+            }
+        }
+    }
 }

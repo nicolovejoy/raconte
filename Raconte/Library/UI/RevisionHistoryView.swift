@@ -21,14 +21,14 @@ struct RevisionHistoryView: View {
                     if let readOnlyMessage = model.readOnlyMessage {
                         Section {
                             Label(readOnlyMessage, systemImage: "lock.fill")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(InkTone.inkSecondary.color)
                         }
                         .accessibilityIdentifier("revisionHistory.readOnlyMessage")
                     }
                     if model.isForked {
                         Section {
                             Label("This entry has edits that never converged.", systemImage: "arrow.triangle.branch")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(InkTone.inkSecondary.color)
                         }
                         .accessibilityIdentifier("revisionHistory.forkIndicator")
                     }
@@ -76,7 +76,7 @@ struct RevisionHistoryView: View {
                     Text(row.source.isHumanLineage ? "Human" : "Machine")
                         .font(TypeRole.label.font)
                         .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                     if row.isCurrent {
                         Text("Current")
                             .font(TypeRole.label.font)
@@ -88,14 +88,14 @@ struct RevisionHistoryView: View {
                         // is what the entry currently shows.
                         Text("Machine transcript, not applied")
                             .font(TypeRole.label.font)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(InkTone.inkSecondary.color)
                     }
                 }
                 Text(row.firstLine)
                     .lineLimit(2)
                 Text(row.createdAt, format: .dateTime)
                     .font(TypeRole.label.font)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
             }
             Spacer()
             if row.canRevert {

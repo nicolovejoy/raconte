@@ -19,9 +19,10 @@ struct AboutView: View {
 
     /// Built in `AppServices` (T13, composition root — same reasoning as `sync` above)
     /// and threaded straight through, never a view-local `@State` default: constructing
-    /// an `ArchiveExporter` reads `AppContainer.root()`, which creates a directory on
-    /// disk, and that must happen once at app launch, not every time this view's
-    /// default state initializer runs.
+    /// an `ArchiveExporter` derives its container root from the library's own captures
+    /// root (`AppContainer.containerRoot(capturesRoot:)`, pure path math — no directory
+    /// creation), and that construction must happen once at app launch, not every time
+    /// this view's default state initializer runs.
     let exportRunner: ExportRunner
 
     /// Detected here rather than plumbed from `SyncCoordinator` so the row still

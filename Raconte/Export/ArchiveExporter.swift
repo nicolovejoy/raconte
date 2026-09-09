@@ -214,8 +214,16 @@ struct ArchiveExporter: Sendable {
             }
             return true // journals.json (ruling 2)
         }
+        // A warning's parsed id is excluded by scope only when it names a REAL capture
+        // (one the walker actually listed). A warning about a malformed-ULID directory
+        // name parses to an id that is never in `listing.captureIDs` — the walker skips
+        // that directory entirely, it isn't a real capture — so it must survive every
+        // scope: it's the only trace that a bad capture directory exists, and losing it
+        // from a partial-export manifest would hide it silently.
+        let allCaptureIDs = Set(listing.captureIDs)
         let warnings = listing.warnings.filter { warning in
-            guard let captureID = Self.captureID(ofEntryPath: warning) else { return true }
+            guard let captureID = Self.captureID(ofEntryPath: warning),
+                  allCaptureIDs.contains(captureID) else { return true }
             return includedCaptures.contains(captureID)
         }
         return ArchiveWalker.Listing(

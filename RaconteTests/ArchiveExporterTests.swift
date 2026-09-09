@@ -489,6 +489,34 @@ final class ArchiveExporterTests: XCTestCase {
                       "an empty-but-well-formed package verifies; the SHEET disables the button at 0, the exporter stays honest")
     }
 
+    /// A malformed-ULID capture DIRECTORY (`ArchiveWalkerTests
+    /// .testStrayNonWellFormedULIDDirectoryProducesWarningAndNoFiles`'s fixture) is never
+    /// a real capture — the walker skips it and its warning's parsed id never appears in
+    /// `listing.captureIDs`. `apply`'s scope filter must not drop that warning just
+    /// because its id isn't in `includedCaptures`: it's the only trace the bad directory
+    /// exists, and a scope that excludes every real capture must still surface it.
+    func testMalformedULIDDirectoryWarningSurvivesAScopeThatExcludesEverything() async throws {
+        try buildFixture()
+        let strayName = "not-a-ulid-at-all"
+        let strayDir = capturesRoot.appendingPathComponent(strayName, isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        var m = Manifest(captureID: strayName, createdAt: Date(timeIntervalSince1970: 1_700_000_030),
+                         state: .complete, stateSeq: 1,
+                         stateUpdatedAt: Date(timeIntervalSince1970: 1_700_000_030), format: format)
+        m.final = FinalRef(path: "final/recording.m4a", verifiedAt: Date(timeIntervalSince1970: 1_700_000_030),
+                           durationFrames: 48_000)
+        try CaptureCoding.encoder().encode(m).write(to: strayDir.appendingPathComponent("manifest.json"))
+
+        let report = try await exporter().export(
+            into: destinationRoot,
+            scope: .selected(journalIDs: [], includeUnfiled: false))
+
+        let manifest = try readManifest(at: report.packageURL)
+        XCTAssertEqual(manifest.counts.entries, 0, "the scope excluded every real capture")
+        XCTAssertTrue(manifest.warnings.contains { $0.contains(strayName) && $0.contains("well-formed ULID") },
+                      "the malformed-ULID warning is not a real capture's warning — it must survive any scope")
+    }
+
     // MARK: (j) Fix wave Finding 9 — `ExportRunner.cancelled()` returns to `.idle`
     // regardless of what state it was in, so `AboutView`'s `.fileImporter` routing a
     // `CocoaError.userCancelled` failure there (instead of `fail(_:)`) never leaves the

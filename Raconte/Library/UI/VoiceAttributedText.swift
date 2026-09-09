@@ -24,7 +24,7 @@ enum VoiceAttributedText {
         if let label = VoiceDisplay.label(forVoice: paragraph.voice, voiceLabels: voiceLabels) {
             let prefix = Text("\(label): ")
                 .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
             combined = prefix + body
         } else {
             combined = body

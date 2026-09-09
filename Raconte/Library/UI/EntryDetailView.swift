@@ -142,7 +142,7 @@ struct EntryDetailView: View {
                 if item.isDatedOutsideJournalSpan, let journal = item.journal {
                     Text(outOfSpanSentence(journal: journal))
                         .font(TypeRole.body.font)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityIdentifier("detail.outOfSpan")
                 }
 
@@ -701,7 +701,7 @@ struct EntryDetailView: View {
             } label: {
                 Label(journal.name, systemImage: "book.closed")
                     .font(TypeRole.secondary.font)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("detail.journalLink")
@@ -710,12 +710,12 @@ struct EntryDetailView: View {
         } else if item.hasDanglingJournal {
             Text("Journal missing")
                 .font(TypeRole.secondary.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("detail.journalMissing")
         } else {
             Text("Unfiled")
                 .font(TypeRole.secondary.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("detail.journalUnfiled")
         }
     }
@@ -992,7 +992,7 @@ struct EntryDetailView: View {
                             if paragraph.hasApproximateBoundary {
                                 Text("*")
                                     .font(TypeRole.meta.font)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(InkTone.inkDisabled.color)
                                     .accessibilityLabel("approximate boundary")
                                     .accessibilityIdentifier(
                                         "detail.transcript.paragraph.\(index).approximateMark")
@@ -1101,7 +1101,7 @@ private struct ImageThumbnailView: View {
                 .scaledToFill()
         }, placeholder: {
             Image(systemName: "photo")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.quaternary)
         })

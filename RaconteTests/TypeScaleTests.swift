@@ -74,29 +74,6 @@ final class TypeScaleTests: XCTestCase {
         #endif
     }
 
-    /// The paper screens are on `TypeRole`/`TypeScale`, never a bare Apple style or a size
-    /// literal — a bare style is 10–13 pt on macOS, which is #162 coming back. Capture-surface
-    /// files are deliberately absent from this list (spec ruling 4). `Raconte/Capture/Debug` is
-    /// exempt (DEBUG-only tooling, spec inventory scope).
-    private static let paperFiles = [
-        "Raconte/Home/UI/HomeView.swift",
-        "Raconte/App/SidebarView.swift",
-        "Raconte/App/AboutView.swift",
-        "Raconte/App/SyncStatusSectionView.swift",
-        "Raconte/Library/UI/LibraryView.swift",
-        "Raconte/Library/UI/TrashView.swift",
-        "Raconte/Library/UI/EntryDetailView.swift",
-        "Raconte/Library/UI/EntryInfoSheet.swift",
-        "Raconte/Library/UI/TranscriptEditorView.swift",
-        "Raconte/Library/UI/RevisionHistoryView.swift",
-        "Raconte/Library/UI/JournalPickerSheet.swift",
-        "Raconte/Library/UI/JournalSpanEditor.swift",
-        "Raconte/Library/UI/JournalEditorView.swift",
-        "Raconte/Library/UI/VoiceMarkingView.swift",
-        "Raconte/Capture/UI/PlaybackProgressLine.swift",
-        "Raconte/App/ExportConfirmationSheet.swift",
-    ]
-
     func testPaperScreensCarryNoBareTextStyleOrSizeLiteral() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -105,7 +82,7 @@ final class TypeScaleTests: XCTestCase {
                     ".font(.body", ".font(.headline", ".font(.system(.",
                     ".font(.title", ".font(.largeTitle", ".font(.custom("]
         let literal = try NSRegularExpression(pattern: #"system\(size:\s*[0-9]"#)
-        for path in Self.paperFiles {
+        for path in paperScreenFiles {
             let url = root.appendingPathComponent(path)
             let source = strippingComments(try String(contentsOf: url))
             for pattern in bare {

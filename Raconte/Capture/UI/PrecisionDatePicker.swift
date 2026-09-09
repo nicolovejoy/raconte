@@ -86,9 +86,10 @@ struct PrecisionDatePicker: View {
             // So this stops asking the system for a presentation it will not let us style.
             // The button is ours — sized and coloured through `CaptureLabel`, and therefore
             // checked by `CaptureLabelTests` like every other label on this surface — and
-            // the calendar opens in a popover we paint in the capture surface's own
-            // near-black, with the scheme pinned and the foreground reset inside it, and
-            // month + year dropdowns above it. Nothing about how it reads depends on whether
+            // the calendar opens in a popover that is its own paper card
+            // (`InkTone.paperInset`, ambient scheme, with the foreground reset inside it,
+            // #149), and month + year dropdowns above it. Nothing about how it reads depends
+            // on whether
             // a modifier propagates into a system-owned presentation, which is precisely what
             // neither previous attempt could promise.
             macDayButton
@@ -206,8 +207,9 @@ struct PrecisionDatePicker: View {
         //
         // This does not reopen what the sheet was introduced to fix. The presentation that
         // could not be styled was the one the SYSTEM builds inside `.datePickerStyle(.compact)`;
-        // the content below is an ordinary view hierarchy this file owns, so the background,
-        // scheme pin and foreground reset apply to it exactly as they did to the sheet.
+        // the content below is an ordinary view hierarchy this file owns, so the background
+        // and foreground reset apply to it exactly as they did to the sheet (the ground is now
+        // paper, not studio — #149).
         .popover(isPresented: $showingDayCalendar, arrowEdge: .bottom) { dayCalendarPopover }
     }
 
@@ -221,25 +223,22 @@ struct PrecisionDatePicker: View {
         }
         .padding(16)
         .frame(minWidth: 320)
-        // The three modifiers that make this popover self-consistent no matter what does or
-        // does not propagate into it from the capture screen.
+        // This popover is a PAPER surface floating over the studio screen, not a studio one
+        // (#149 batch 2, measured 2026-09-09): on the studio ground Apple's graphical calendar
+        // drew its disabled day numerals at ~1.8:1 and its enabled numerals at ~2.5:1, both
+        // under the 3.0 floor and not ours to recolour — a token cannot reach inside a system
+        // control. `paperInset` is exactly the ground the system picker is tuned for.
         //
-        // `Color.primary` first, because the leak is the known bug, not a theory: this screen
-        // sets `.foregroundStyle(.white)` for its near-black surface, and that white is
-        // inherited into nested builders — it is exactly what made the New Journal text field
-        // white-on-white (owner smoke, 2026-08-15). Under the dark pin below, `Color.primary`
-        // resolves to white, so the reset both neutralises the leak and colours the popover
-        // correctly rather than fighting it.
-        //
-        // The tint reset matters for the same reason it does on the segmented control: the
-        // graphical calendar fills the selected day with the tint, and a white fill under a
-        // white numeral is an unreadable selection.
-        //
-        // Then the surface itself, so nothing here rests on the system's own material.
+        // `Color.primary` stays as the white-leak reset (owner smoke, 2026-08-15): under the
+        // ambient scheme it now resolves to the right ink for the paper ground instead of
+        // fighting it. The tint reset stays too — the graphical calendar fills the selected
+        // day with the tint, and a white fill under a white numeral is unreadable. There is no
+        // `.dark` pin: the "capture controls pin dark" rule exists because ambient controls on
+        // the STUDIO ground render dark-on-dark; a control on its own paper ground is the case
+        // that rule was written to avoid.
         .foregroundStyle(Color.primary)
         .tint(Color.accentColor)
-        .background(Color(white: CaptureSurface.backgroundWhite))
-        .environment(\.colorScheme, .dark)
+        .background(InkTone.paperInset.color)
     }
 
     /// Month and year dropdowns above the calendar.

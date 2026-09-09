@@ -327,7 +327,7 @@ struct LibraryView: View {
     private var registryBanner: some View {
         Text("Your journals couldn’t be read, so entries aren’t showing which one they’re in.")
             .font(TypeRole.label.font)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(InkTone.inkSecondary.color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -340,7 +340,7 @@ struct LibraryView: View {
         if !model.skipped.isEmpty {
             Text("\(model.skipped.count) capture directory(s) skipped — nothing durable in them.")
                 .font(TypeRole.meta.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .accessibilityIdentifier("library.skippedNote")
@@ -357,7 +357,7 @@ struct LibraryView: View {
             Text("Trash sweep: \(sweep.deleted.count) erased, \(sweep.skipped.count) skipped."
                 + (pending > 0 ? ", \(pending) pending" : ""))
                 .font(TypeRole.meta.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 8)
                 .accessibilityIdentifier("library.sweepNote")
@@ -533,7 +533,7 @@ struct LibraryView: View {
                 .font(TypeRole.headline.font)
             Text("Entries you record will show up here.")
                 .font(TypeRole.label.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("library.empty")
@@ -795,11 +795,11 @@ struct LibraryCoverBand: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(name)
                 .font(.system(size: TypeScale.libraryCoverTitle, weight: .semibold, design: .serif))
-                .foregroundStyle(.white)
+                .foregroundStyle(InkTone.studioInk.color)
             if !subtitle.isEmpty {
                 Text(subtitle)
                     .font(TypeRole.secondary.font)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(InkTone.studioInk.color)
             }
         }
         .padding(20)

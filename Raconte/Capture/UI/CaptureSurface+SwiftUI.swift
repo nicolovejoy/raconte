@@ -39,6 +39,17 @@ extension CaptureLabel {
         return Color(red: c.red, green: c.green, blue: c.blue)
     }
     var font: Font { textSize(on: .current).font }
+
+    /// `primaryInk` / `secondaryInk` as SwiftUI colours, for capture text that is not itself
+    /// a `CaptureLabel` case (see the statics' comment).
+    static var primaryInkColor: Color {
+        let c = primaryInk
+        return Color(red: c.red, green: c.green, blue: c.blue)
+    }
+    static var secondaryInkColor: Color {
+        let c = secondaryInk
+        return Color(red: c.red, green: c.green, blue: c.blue)
+    }
 }
 
 extension View {

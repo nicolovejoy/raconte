@@ -41,7 +41,7 @@ struct VoiceMarkingView: View {
     private var header: some View {
         Text("Marking voices — tap a paragraph to switch its voice, or drag across words")
             .font(TypeRole.label.font)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(InkTone.inkSecondary.color)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -147,7 +147,7 @@ private struct VoiceMarkingParagraphBlock: View {
             if let label = VoiceDisplay.label(forVoice: row.voice, voiceLabels: voiceLabels) {
                 Text(label)
                     .font(TypeRole.label.font.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
             }
             TokenFlowLayout(horizontalSpacing: 4, verticalSpacing: 6) {
                 // Hoisted OUT of the closure below: `coordinateSpaceName` is a
@@ -161,7 +161,7 @@ private struct VoiceMarkingParagraphBlock: View {
                     Text(token.text)
                         .font(TypeRole.reading.font)
                         .italic(VoiceDisplay.isItalic(voice: row.voice))
-                        .foregroundStyle(token.isPlaceable ? .primary : .tertiary)
+                        .foregroundStyle(token.isPlaceable ? Color.primary : InkTone.inkDisabled.color)
                         .padding(.horizontal, 1)
                         .background((liveRange?.contains(token.id) ?? false)
                                     ? Color.accentColor.opacity(0.25) : Color.clear)

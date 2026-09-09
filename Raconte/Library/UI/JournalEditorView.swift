@@ -121,7 +121,7 @@ struct JournalEditorView: View {
                     // the one place the stored span itself becomes editable.
                     Text(derivedSummary)
                         .font(TypeRole.footnote.font)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityIdentifier("journalEditor.derived")
                 }
 

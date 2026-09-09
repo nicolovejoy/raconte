@@ -54,7 +54,7 @@ struct RecStatusLine: View {
             Text(RecFormat.clock(elapsed))
                 .font(.system(size: CaptureControlBarMetrics.clockPointSize,
                               weight: .regular).monospacedDigit())
-                .foregroundStyle(isLive ? Color.red : Color(white: 0.9))
+                .foregroundStyle(isLive ? Color.red : CaptureLabel.primaryInkColor)
                 // The UI test's anchor for "where does the bar start" — the topmost thing
                 // in the topmost row. An identifier on a `Text` is safe; one on a
                 // CONTAINER flattens its children out of the accessibility tree, which is
@@ -82,7 +82,7 @@ struct RecStatusLine: View {
 
             Text(RecFormat.statusText(phase: phase, canResume: canResume))
                 .font(.subheadline)
-                .foregroundStyle(Color(white: 0.78))
+                .foregroundStyle(CaptureLabel.secondaryInkColor)
                 // The status string varies a lot in length ("Recording" against
                 // "Interrupted — reconnecting…"). The bar is anchored to the bottom edge,
                 // so a string that wraps to a second line grows the bar UPWARD and moves

@@ -543,6 +543,49 @@ final class ArchiveExporterTests: XCTestCase {
         }
     }
 
+    // MARK: #157 — the runner reads the inventory the sheet renders, off-main, from the
+    // exporter's own container root.
+
+    @MainActor
+    func testExportRunnerInventoryReflectsTheFixture() async throws {
+        let fixture = try buildFixture()
+        let runner = ExportRunner(exporter: exporter())
+
+        let result = await runner.inventory()
+        let inventory = try XCTUnwrap(result)
+
+        XCTAssertEqual(inventory.journals,
+                       [ExportInventory.JournalRow(id: fixture.journal.id, name: "1987 Journal", entryCount: 1)])
+        XCTAssertEqual(inventory.unfiledCount, 1, "the garbage-sidecar capture is unfiled")
+        XCTAssertEqual(inventory.totalEntries, 2)
+        XCTAssertEqual(runner.state, .idle, "reading the inventory is not a run")
+    }
+
+    @MainActor
+    func testExportRunnerInventoryOnAMissingContainerPublishesFailedAndReturnsNil() async {
+        let missing = containerRoot.appendingPathComponent("gone", isDirectory: true)
+        let runner = ExportRunner(exporter: ArchiveExporter(containerRoot: missing, appVersion: "9.9", build: "t"))
+
+        let inventory = await runner.inventory()
+
+        XCTAssertNil(inventory)
+        guard case .failed = runner.state else { return XCTFail("expected .failed, got \(runner.state)") }
+    }
+
+    @MainActor
+    func testExportRunnerRunWithScopeWritesOnlyThatScope() async throws {
+        let fixture = try buildFixture()
+        let runner = ExportRunner(exporter: exporter())
+
+        await runner.run(into: destinationRoot, scope: .selected(journalIDs: [fixture.journal.id], includeUnfiled: false))
+
+        guard case let .finished(report, verification) = runner.state else {
+            return XCTFail("expected .finished, got \(runner.state)")
+        }
+        XCTAssertEqual(report.counts.entries, 1)
+        XCTAssertTrue(verification.ok)
+    }
+
     func testProblemSummaryNamesTheFileOrFieldForEveryCase() {
         XCTAssertEqual(ArchiveVerifier.Problem.manifestUnreadable("no such file").summary,
                        "manifest unreadable: no such file")

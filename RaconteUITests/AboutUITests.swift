@@ -23,12 +23,11 @@ final class AboutUITests: XCTestCase {
 
     /// Reveals a diagnostic row and returns it, scrolling only as far as it has to.
     ///
-    /// The diagnostic rows sit below the fold: About gained its "What this is" / "How it
-    /// works" sections (record-flow branch, owner request — About is the only
-    /// Release-built screen that can tell a first-time user what this app is), and an
-    /// offscreen `List` row is absent from the accessibility tree until it is scrolled
-    /// into view. Without scrolling, a present row reads as MISSING rather than merely
-    /// off-screen, which is exactly how this test once failed on CI.
+    /// The lower diagnostic rows can sit below the fold on a phone, and an offscreen
+    /// `List` row is absent from the accessibility tree until it is scrolled into view.
+    /// Without scrolling, a present row reads as MISSING rather than merely off-screen,
+    /// which is exactly how this test once failed on CI (when About still carried an
+    /// introduction above the diagnostics; removed 2026-09-08).
     ///
     /// A single `swipeUp()` used to be enough. It is not a durable assumption: #118 §7
     /// added the Build row to this very section, pushing everything below it down by one

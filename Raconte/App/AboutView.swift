@@ -8,10 +8,9 @@ import UniformTypeIdentifiers
 /// owner explicitly picks via the system document picker — never anywhere else, and
 /// never anything under the app's own container.
 ///
-/// Owner request 2026-08-29: also the only always-visible, Release-built place a
-/// first-time person (Lori, and whoever comes after) can be told what the app is and
-/// how to use it — so it now carries a short "What this is"/"How it works" explanation
-/// above the diagnostics.
+/// The "What this is"/"How it works" introduction added 2026-08-29 for a first-time
+/// reader was removed 2026-09-08 at the owner's request: the app has one user, and the
+/// diagnostics are what About is for.
 struct AboutView: View {
     /// Nil in every build `SyncCoordinator.live()` refuses (XCTest host, UI-test
     /// harness, preview, nocloud-signed) — the Sync section degrades to an
@@ -41,30 +40,6 @@ struct AboutView: View {
 
     var body: some View {
         List {
-            Section("What this is") {
-                Text("""
-                Raconte is a private audio journaling app. It syncs across your devices \
-                through your own iCloud account, so no one else can read what you record.
-                """)
-                .accessibilityIdentifier("about.whatItIs")
-            }
-
-            Section("How it works") {
-                Text("""
-                I built this to bring my old paper journals into one place. I have kept \
-                them for decades. For each one I wanted three things held together: the \
-                audio of me reading it aloud, a transcript of those words, and a photo of \
-                the original page.
-
-                So entries are filed into journals. An entry can be backdated to when it \
-                was really written, and you can attach pictures to it.
-
-                The audio is the record that matters, and it is always preserved. The \
-                transcript is written from it.
-                """)
-                .accessibilityIdentifier("about.howItWorks")
-            }
-
             Section("App") {
                 LabeledContent("Version", value: AppVersion.current())
                     .accessibilityIdentifier("about.version")

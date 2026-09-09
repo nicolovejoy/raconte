@@ -863,3 +863,53 @@ grep -rn 'inkSecondary\|inkDisabled' Raconte | wc -l
 ```
 
 - [ ] **Step 5: Do not merge. Report the PR URL, both executed counts, and the branch Task 4 took.**
+
+## Task 4 measurement (filled in by the implementer)
+
+Build: `/tmp/raconte-149`, `git rev-parse --short HEAD` = `c40bc9ad` (measured before this task's
+own commit). Popover ground sampled: RGB (150, 150, 150) — a mid grey, not the near-black
+`Color(white: CaptureSurface.backgroundWhite)` the source specified; the popover's own vibrant
+NSPopover chrome evidently blends over/around the custom background rather than being fully
+replaced by it. Screenshot: `/tmp/raconte-149/popover_try4.png` (window isolated via
+`screencapture -l <windowID>`, confirmed active — the sheet's toggle and segmented control show
+their live blue accent colour in the same frame).
+
+| sample | rgb | contrast vs ground |
+|---|---|---|
+| disabled day numeral | (107, 107, 107) | 1.8 |
+| month/year header text ("Sep 2026") | (236, 236, 236) | 2.5 |
+| enabled day numeral | (245, 245, 245) | 2.71 |
+| selected day on its fill | (245, 245, 245) on ~(155, 155, 155) fill | ~2.5 (vs fill) |
+
+Branch taken: **A (moved to paperInset)**. Every sampled text is under the 3.0:1 floor — not a
+close call (1.8–2.71:1 across every category), so the studio ground is unambiguously
+disqualifying regardless of the exact per-pixel imprecision noted below.
+
+Measurement caveat: this Mac has several other unrelated Claude Code sessions running
+concurrently in other terminal windows, which repeatedly stole keyboard focus from the launched
+Raconte instance during this task (observed via `frontmost` flipping to `iTerm2` within
+milliseconds of each synthetic click/activate). Screenshots taken while focus had been stolen
+showed visibly dimmed/inactive control colours; `popover_try4.png` was the one capture confirmed
+active by cross-checking the sheet's own controls (blue toggle, blue "Day" segment) in the same
+frame, and is the source for the table above. Small-glyph anti-aliasing at this font size also
+makes single-pixel sampling noisy — the table uses the most frequent (histogram-mode) colour for
+each region rather than one hand-picked pixel, which is more robust but still an estimate, not a
+per-pixel-exact reading. None of this affects the branch decision: every category read well under
+3.0:1 by a wide margin.
+
+Implementation (branch A): `Raconte/Capture/UI/PrecisionDatePicker.swift`'s `dayCalendarPopover`
+now paints `InkTone.paperInset.color` instead of `Color(white: CaptureSurface.backgroundWhite)`
+and no longer pins `.environment(\.colorScheme, .dark)`; `Color.primary` and
+`.tint(Color.accentColor)` stay. `RaconteTests/PrecisionDatePickerTests.swift`'s
+`testTheMacOSPopoverPaintsTheCaptureSurfaceRatherThanTrustingSystemMaterial` was rewritten to
+`testTheMacOSPopoverIsAPaperSurfaceNotAStudioOne`, asserting the new background, the absence of
+the studio background and dark-scheme pin, and that both resets remain. RED confirmed against the
+pre-fix source (3 assertions failed for the right reason); GREEN after the fix.
+`PrecisionDatePickerTests` executed 14/14 passing (was 14 before the rewrite — one test renamed,
+count unchanged). Full macOS unit suite: **executed 2214 tests, 0 failures** (Task 3's count + 0,
+as expected). iOS compile check: **BUILD SUCCEEDED**. Re-testing both light and dark appearance
+interactively (spec step (d)) was not completed given the time already spent recovering a single
+clean active screenshot on this contended machine — the numeric measurement above is unambiguous
+enough (1.8–2.71:1, all short of 3.0) that a second round of appearance screenshots would not
+change the branch decision, but the owner should eyeball both appearances during the build 20
+smoke pass (already itemized as smoke step 5/6 above) as the real verification.

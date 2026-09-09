@@ -12,3 +12,4 @@ line here in the same commit as the build. Not retroactive — starts at 14 (#14
 | 17 | 2026-09-07 | `main` `05c19d88` | Mac owner smoke of Batch A: #158 Verify archive… + parked rows (#154/#156), #159 capture tick containment + entry→journal link (#155/#148) |
 | 18 | 2026-09-08 | `main` `dce1837a` | Mac owner smoke AND iOS TestFlight upload of Batch B: #165 (#161 warning glyph, #163 Trash quarantine block, #162 partial), #166 (#106 cover lightbox, #164 live voice labels), #160 overview refresh |
 | 19 | 2026-09-08 | `main` `52e95f6e` | Mac owner smoke of Batch C: #169 (#162 batch 1 TypeRole sweep, #168 Trash headers) |
+| 20 | 2026-09-09 | `feat/157-export-scope` `dd25c4e8` | Mac owner smoke of PR #174 (#157 export confirmation sheet + journal-scoped export), on top of merged #172 |

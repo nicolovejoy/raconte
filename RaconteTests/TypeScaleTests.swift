@@ -94,6 +94,7 @@ final class TypeScaleTests: XCTestCase {
         "Raconte/Library/UI/JournalEditorView.swift",
         "Raconte/Library/UI/VoiceMarkingView.swift",
         "Raconte/Capture/UI/PlaybackProgressLine.swift",
+        "Raconte/App/ExportConfirmationSheet.swift",
     ]
 
     func testPaperScreensCarryNoBareTextStyleOrSizeLiteral() throws {

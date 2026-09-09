@@ -86,9 +86,10 @@ struct PrecisionDatePicker: View {
             // So this stops asking the system for a presentation it will not let us style.
             // The button is ours — sized and coloured through `CaptureLabel`, and therefore
             // checked by `CaptureLabelTests` like every other label on this surface — and
-            // the calendar opens in a popover we paint in the capture surface's own
-            // near-black, with the scheme pinned and the foreground reset inside it, and
-            // month + year dropdowns above it. Nothing about how it reads depends on whether
+            // the calendar opens in a popover that is its own paper card
+            // (`InkTone.paperInset`, ambient scheme, with the foreground reset inside it,
+            // #149), and month + year dropdowns above it. Nothing about how it reads depends
+            // on whether
             // a modifier propagates into a system-owned presentation, which is precisely what
             // neither previous attempt could promise.
             macDayButton
@@ -206,8 +207,9 @@ struct PrecisionDatePicker: View {
         //
         // This does not reopen what the sheet was introduced to fix. The presentation that
         // could not be styled was the one the SYSTEM builds inside `.datePickerStyle(.compact)`;
-        // the content below is an ordinary view hierarchy this file owns, so the background,
-        // scheme pin and foreground reset apply to it exactly as they did to the sheet.
+        // the content below is an ordinary view hierarchy this file owns, so the background
+        // and foreground reset apply to it exactly as they did to the sheet (the ground is now
+        // paper, not studio — #149).
         .popover(isPresented: $showingDayCalendar, arrowEdge: .bottom) { dayCalendarPopover }
     }
 

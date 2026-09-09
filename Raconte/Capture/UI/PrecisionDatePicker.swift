@@ -221,25 +221,22 @@ struct PrecisionDatePicker: View {
         }
         .padding(16)
         .frame(minWidth: 320)
-        // The three modifiers that make this popover self-consistent no matter what does or
-        // does not propagate into it from the capture screen.
+        // This popover is a PAPER surface floating over the studio screen, not a studio one
+        // (#149 batch 2, measured 2026-09-09): on the studio ground Apple's graphical calendar
+        // drew its disabled day numerals at ~1.8:1 and its enabled numerals at ~2.5:1, both
+        // under the 3.0 floor and not ours to recolour — a token cannot reach inside a system
+        // control. `paperInset` is exactly the ground the system picker is tuned for.
         //
-        // `Color.primary` first, because the leak is the known bug, not a theory: this screen
-        // sets `.foregroundStyle(.white)` for its near-black surface, and that white is
-        // inherited into nested builders — it is exactly what made the New Journal text field
-        // white-on-white (owner smoke, 2026-08-15). Under the dark pin below, `Color.primary`
-        // resolves to white, so the reset both neutralises the leak and colours the popover
-        // correctly rather than fighting it.
-        //
-        // The tint reset matters for the same reason it does on the segmented control: the
-        // graphical calendar fills the selected day with the tint, and a white fill under a
-        // white numeral is an unreadable selection.
-        //
-        // Then the surface itself, so nothing here rests on the system's own material.
+        // `Color.primary` stays as the white-leak reset (owner smoke, 2026-08-15): under the
+        // ambient scheme it now resolves to the right ink for the paper ground instead of
+        // fighting it. The tint reset stays too — the graphical calendar fills the selected
+        // day with the tint, and a white fill under a white numeral is unreadable. There is no
+        // `.dark` pin: the "capture controls pin dark" rule exists because ambient controls on
+        // the STUDIO ground render dark-on-dark; a control on its own paper ground is the case
+        // that rule was written to avoid.
         .foregroundStyle(Color.primary)
         .tint(Color.accentColor)
-        .background(Color(white: CaptureSurface.backgroundWhite))
-        .environment(\.colorScheme, .dark)
+        .background(InkTone.paperInset.color)
     }
 
     /// Month and year dropdowns above the calendar.

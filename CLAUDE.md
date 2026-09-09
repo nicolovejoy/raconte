@@ -2,42 +2,39 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-08/09 (laptop — build 19 smoke 7/7, batch 2 (#149) → PR #172, build-18 decoy fixed)
+## Session 2026-09-09 (laptop — #167 merged, #157 export scope via SDD → PR #174, verified conflict with #172)
 
-- **#169 merged**, build 19 smoked 7/7 on the Mac. **#171 merged** (About's "What this is / How it
-  works" intro removed at the owner's request; UI suite 65 → 64 on main).
-- **Batch 2 of the design-system spec (#149) via SDD** (Sonnet implementers, Opus final review) →
-  **PR #172 open, not merged**: `InkTone.inkDisabled` + `inkSecondary` darkened to clear 4.5:1
-  (it measured 3.37 before), floor loop over paper/paperInset × light/dark; 31 `.secondary` +
-  2 `.tertiary` swept with a comment-stripped scan; capture greys → `CaptureLabel.primaryInk/
-  secondaryInk`, `PlaybackProgressLine(ink:)`; backdate popover → `paperInset`, ambient scheme
-  (disabled numerals measured 1.8:1 on studio). Says `Part of #149`: the post-fix popover
-  measurement was never done — **build 20 smoke step 6 (dark appearance) decides it**; a flat
-  mid-grey card there means NSPopover chrome blends the ground and the fix needs a container,
-  not a tone. Follow-ups filed as **#173**. Worktree `/Users/nico/src/raconte-wt-149` exists.
-- **The "I keep getting build 18" mystery**: `/Applications/Raconte.app` was the iOS TestFlight
-  build installed on the Mac; Spotlight ranks /Applications first. Owner deleted it; build 19 is
-  now at `/Applications/Raconte.app` (the ONLY Raconte outside DerivedData; Desktop copies
-  trashed). **Every smoke build goes there from now on.** Container backup made first:
-  `~/Desktop/raconte-container-backup-2026-09-08` (3082 files, 697 MB) — delete when confident.
-- **Two incidents, both now memories**: an SDD test run killed the owner's reopened build 19
-  (no macOS tests during a smoke session; ask for each window); a subagent's synthetic clicks
-  started a 3½-minute real recording ("Blue rabbit 2026", backdated 2026-09-09) — **no GUI
-  automation against any build sharing the owner's container, ever**. That junk entry is
-  still in his library; he trashes it.
-- Filed **#170** (owner rulings: sidebar top-level items biggest; every journal title one size =
-  sidebar's, one typeface = sans; long titles truncate with `…`; serif stays for prose only) and
-  wrote the **#157 plan** `docs/plans/2026-09-08-export-scope-plan.md` (confirmation sheet +
-  journal scope; ruling: `journals.json` in a scoped export lists only selected journals).
-- Counts: main after #171 **unit 2209 (1 skipped), UI 64**. PR #172 local: unit 2214, UI 65
-  pre-rebase (expect 64 on CI).
+- **#167 merged** (therapist one-pager docs, pure addition, no app code).
+- **#157 export scope via SDD** (Sonnet implementers, Opus final review, from the 2026-09-08
+  plan) → **PR #174 open, not merged**: `ExportScope`/`ExportInventory` pure types,
+  `ArchiveExporter.export(into:scope:)` filtering (partial package verifies unchanged),
+  `ExportRunner.inventory()`/`run(into:scope:)`, `ExportConfirmationSheet` + `AboutView` wiring.
+  Nothing writes until the sheet's confirm button. Two fix rounds, both re-reviewed clean: one
+  enrolled the new sheet in `TypeScaleTests`; the other fixed three stale doc comments and a real
+  bug — a warning about a malformed-ULID capture directory was silently dropped from any scoped
+  (non-full) export's manifest, now fixed with a regression test.
+- **Verified merge conflict between PR #174 and open PR #172**, both touching
+  `RaconteTests/TypeScaleTests.swift`: #172 moves `paperFiles` to
+  `RaconteTests/SourceScanning.swift` as `paperScreenFiles`; #174's fix-round commit adds a line
+  to the old array. A careless resolution silently drops #174's enrollment with the suite still
+  green — **documented in PR #174's body with the correct resolution** (keep #172's structure,
+  add `ExportConfirmationSheet.swift` to `paperScreenFiles`). Neither PR is merged yet.
+- Counts: unit **2222 (0 failures)**, UI **67 across 3 invocations (0 failures)** — both verified
+  against actual file content, not the plan's stated baselines (both were off by one in the plan
+  text; not real gaps, documented in the PR body). One UI invocation flaked on first run
+  (LLDB debugger error, ~18h-uptime simulator) and passed clean on retry.
+- **Real picker → sheet → confirm flow has zero automated coverage on either platform** (system
+  picker can't be driven from XCUITest) — PR #174's smoke list is the only verification and now
+  explicitly requires both Mac and iPhone passes.
 
 **Next steps:**
-1. **Merge #172 when CI is green**, remove `raconte-wt-149`, build 20 → `/Applications/Raconte.app`
-   (ditto; verify `dwarfdump --uuid`), smoke from the PR body's 7-step list ONE at a time —
-   **step 6 (backdate popover, dark appearance) first**. Then close or reopen #149 accordingly.
-2. **#157 export scope** — plan is written; SDD it (Sonnet), branch from main after #172. Note
-   the plan touches `AboutView`, which #171 changed; rebase before starting.
+1. **Decide merge order for #172 and #174** (both open, real conflict in `TypeScaleTests.swift`
+   — see PR #174's body for the exact resolution): merge one, wait for main green, **Update
+   branch** on the other before merging it. #172 still needs build 20 smoke (step 6, backdate
+   popover dark appearance, first) before merge; #174 needs the Mac + iPhone smoke pass in its
+   PR body before merge (real export flow, no automated coverage).
+2. After both land: remove `raconte-wt-149` and `raconte-wt-157` worktrees, build 20 (or next) →
+   `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`).
 3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
    roles, then a sweep PR. #173 minors can ride along.
 4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still

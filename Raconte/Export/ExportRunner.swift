@@ -11,9 +11,13 @@ import Foundation
 /// `@MainActor`.
 ///
 /// Security-scoped access to the picked folder is this type's caller's concern, not
-/// this type's: `AboutView`'s `.fileImporter` callback starts it and stops it (via
-/// `defer`) around the call to `run(into:)` or `verify(package:)`, so the scope's
-/// lifetime is visible in one place rather than split across two.
+/// this type's, and the two flows open it in different places (#157). Verify still
+/// opens and closes scope directly in `AboutView`'s `.fileImporter` callback, around
+/// the call to `verify(package:)`. Export defers the write behind a confirmation sheet
+/// (#157 step 2 of 2), so its scope opens later, in `AboutView.performExport`, around
+/// the call to `run(into:scope:)` — the picked URL keeps its scope until accessed, so
+/// deferring the start past the sheet is fine. Either way the scope's lifetime is
+/// visible in one place per flow rather than split across two.
 @MainActor @Observable
 final class ExportRunner {
     enum State: Equatable {

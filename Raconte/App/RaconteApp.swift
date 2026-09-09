@@ -15,11 +15,12 @@ final class AppServices {
     /// that never blocks or delays capture (M4 design §8).
     let sync: SyncCoordinator?
     /// T13: `AboutView`'s "Export archive…" action. Built here, once, at app-composition
-    /// time — never as a view's own `@State` default, which would run
-    /// `AppContainer.root()`'s directory-creating file I/O every time that view value
-    /// gets constructed. `AppVersion`/`BuildInfo` are the same two bundle-reading types
-    /// the About rows already read, so this is the only place that pairs
-    /// `CFBundleShortVersionString`/`CFBundleVersion` for the export manifest.
+    /// time — never as a view's own `@State` default, which would re-run the
+    /// `ArchiveExporter` construction (and its `AppContainer.containerRoot(capturesRoot:)`
+    /// path math) every time that view value gets constructed. `AppVersion`/`BuildInfo`
+    /// are the same two bundle-reading types the About rows already read, so this is the
+    /// only place that pairs `CFBundleShortVersionString`/`CFBundleVersion` for the
+    /// export manifest.
     let exportRunner: ExportRunner
 
     init() {

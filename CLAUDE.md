@@ -2,44 +2,46 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-08 (laptop — build 18 smokes 5/5, design-system spec, batch C PR #169 open)
+## Session 2026-09-08/09 (laptop — build 19 smoke 7/7, batch 2 (#149) → PR #172, build-18 decoy fixed)
 
-- Build 18 (main `dce1837a`, bump `3ad2b9da`): Mac smokes 4/4 (Home shelf, orange glyph, Trash
-  quarantine block, cover lightbox) and iPhone TestFlight build 18 smoke 1/1 (#164 live voice
-  labels). **Batch B closed on both platforms.** Owner feedback on the Trash screen filed as
-  **#168** (matched `Unreadable entries` / `Deleted entries` headers; "Quarantined" rejected as
-  the wrong state) and shipped in the same PR below.
-- **Design-system spec** `docs/plans/2026-09-08-design-system-type-and-ink.md` (rulings: one spec,
-  two batches; platform-only macOS scale; WCAG AA floors on paper, studio keeps 7:1; capture screen
-  out of batch 1). **Batch C plan** `docs/plans/2026-09-08-batch-c-plan.md`, executed via SDD with
-  Sonnet implementers + Opus final review → **PR #169 open, not merged**: `TypeRole` (iOS semantic
-  styles, macOS literal points = iOS rendered size) + named `TypeScale` constants, 15 paper files
-  swept, comment-stripping scan test, #168 headers. Worktree `/Users/nico/src/raconte-wt-162`
-  still exists; remove after merge (`git worktree remove`).
-- Final review caught three things the per-task reviews missed, all fixed in `221efbea`: macOS
-  `.system(size:)` is REGULAR weight so `headline` had lost semibold; the two selection bars had
-  shrunk 15→13 on iOS by sharing a 13 pt constant; unstyled `Text` (About's rows, sidebar title,
-  journal picker name) never moved because the sweep and the scan only see EXPLICIT fonts.
-- Open question from the iPhone About screen mid-recording: Sync read Account `unknown`, Last push
-  `never` (Last fetch had a time). Owner was asked to re-check after the entry saved; no answer yet.
-- Counts: main CI baseline **unit 2203 (1 skipped), UI 65** (run 34263241845). PR #169 local:
-  unit 2209, UI 65 expected. CLAUDE.md's earlier "2197" was stale.
+- **#169 merged**, build 19 smoked 7/7 on the Mac. **#171 merged** (About's "What this is / How it
+  works" intro removed at the owner's request; UI suite 65 → 64 on main).
+- **Batch 2 of the design-system spec (#149) via SDD** (Sonnet implementers, Opus final review) →
+  **PR #172 open, not merged**: `InkTone.inkDisabled` + `inkSecondary` darkened to clear 4.5:1
+  (it measured 3.37 before), floor loop over paper/paperInset × light/dark; 31 `.secondary` +
+  2 `.tertiary` swept with a comment-stripped scan; capture greys → `CaptureLabel.primaryInk/
+  secondaryInk`, `PlaybackProgressLine(ink:)`; backdate popover → `paperInset`, ambient scheme
+  (disabled numerals measured 1.8:1 on studio). Says `Part of #149`: the post-fix popover
+  measurement was never done — **build 20 smoke step 6 (dark appearance) decides it**; a flat
+  mid-grey card there means NSPopover chrome blends the ground and the fix needs a container,
+  not a tone. Follow-ups filed as **#173**. Worktree `/Users/nico/src/raconte-wt-149` exists.
+- **The "I keep getting build 18" mystery**: `/Applications/Raconte.app` was the iOS TestFlight
+  build installed on the Mac; Spotlight ranks /Applications first. Owner deleted it; build 19 is
+  now at `/Applications/Raconte.app` (the ONLY Raconte outside DerivedData; Desktop copies
+  trashed). **Every smoke build goes there from now on.** Container backup made first:
+  `~/Desktop/raconte-container-backup-2026-09-08` (3082 files, 697 MB) — delete when confident.
+- **Two incidents, both now memories**: an SDD test run killed the owner's reopened build 19
+  (no macOS tests during a smoke session; ask for each window); a subagent's synthetic clicks
+  started a 3½-minute real recording ("Blue rabbit 2026", backdated 2026-09-09) — **no GUI
+  automation against any build sharing the owner's container, ever**. That junk entry is
+  still in his library; he trashes it.
+- Filed **#170** (owner rulings: sidebar top-level items biggest; every journal title one size =
+  sidebar's, one typeface = sans; long titles truncate with `…`; serif stays for prose only) and
+  wrote the **#157 plan** `docs/plans/2026-09-08-export-scope-plan.md` (confirmation sheet +
+  journal scope; ruling: `journals.json` in a scoped export lists only selected journals).
+- Counts: main after #171 **unit 2209 (1 skipped), UI 64**. PR #172 local: unit 2214, UI 65
+  pre-rebase (expect 64 on CI).
 
 **Next steps:**
-1. **Merge #169 when CI is green**, then build 19 and smoke ONE at a time from the PR body's
-   seven-step list (step 0: About → App → Build reads `build 19: <date>`, and the About list is
-   visibly larger). If a long coverless Library title clips, `LibraryCoverBand.height` 190 → 210.
-2. **Re-check iPhone About → Sync** (Account / Last push) with the app idle; file if still
-   `unknown` / `never`.
-3. **Batch 2 of the spec (#149)**: `inkDisabled` tone + AA floor loop over paper/paperInset ×
-   light/dark, the 32 bare `.secondary` sweep, and the backdate popover — MEASURE the picker's
-   greys on studio first; move the popover to `paperInset` only if any text < 3:1. Plan from the
-   spec's batch 2 section; branch after #169 merges.
-4. Then T8 (rulings 1–2 recorded; open: background survival, existing entries with live
-   transcripts; #38 rides along). Therapist one-pager cloud task was running this session — check
-   for its PR.
-5. **M4 acceptance gate, never run** — quit, move the container aside (never delete), relaunch,
-   let sync settle, export, Verify archive…, compare counts with the iPhone.
+1. **Merge #172 when CI is green**, remove `raconte-wt-149`, build 20 → `/Applications/Raconte.app`
+   (ditto; verify `dwarfdump --uuid`), smoke from the PR body's 7-step list ONE at a time —
+   **step 6 (backdate popover, dark appearance) first**. Then close or reopen #149 accordingly.
+2. **#157 export scope** — plan is written; SDD it (Sonnet), branch from main after #172. Note
+   the plan touches `AboutView`, which #171 changed; rebase before starting.
+3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
+   roles, then a sweep PR. #173 minors can ride along.
+4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still
+   `unknown` / `never`. Then T8; M4 acceptance gate still never run.
 
 ## What Raconte is
 
@@ -118,7 +120,8 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
   -derivedDataPath /tmp/raconte-smoke -allowProvisioningUpdates build
 ```
 
-Hand the result over with `ditto`, never bare `cp -R`, and verify identity with
+Hand the result over with `ditto` to **`/Applications/Raconte.app`** (the one place Spotlight
+resolves "Raconte" to; never a Desktop copy, never bare `cp -R`), and verify identity with
 `dwarfdump --uuid` on `Raconte.debug.dylib` — see the DerivedData/stale-build traps above.
 
 - iOS compile check: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'generic/platform=iOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build`

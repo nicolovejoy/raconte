@@ -82,7 +82,7 @@ struct TrashView: View {
                     Section {
                         if model.trashed.isEmpty {
                             Text("Trash is empty")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(InkTone.inkSecondary.color)
                         } else {
                             ForEach(model.trashed) { item in
                                 if selection.isActive {
@@ -145,7 +145,7 @@ struct TrashView: View {
                      + "the whole entry, audio included, out of the library into the "
                      + "app’s quarantine folder. Nothing is deleted.")
                     .font(TypeRole.footnote.font)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .listRowBackground(unreadableRowBackground)
                     .listRowSeparator(.hidden)
             } header: {
@@ -180,7 +180,7 @@ struct TrashView: View {
                     .font(.system(size: TypeScale.trashUnreadableTitle, weight: .semibold))
                 Text("Entry settings unreadable")
                     .font(.system(size: TypeScale.libraryRowMeta))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
             }
             Spacer()
             Button("Quarantine") {
@@ -309,7 +309,7 @@ struct TrashView: View {
         HStack(spacing: 16) {
             Text("\(selection.count) selected")
                 .font(.system(size: TypeScale.libraryRowMeta).monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("trash.selectionCount")
             Spacer()
             Button("Restore") {
@@ -443,7 +443,7 @@ struct TrashView: View {
             Text("Deleted entries stay here for \(TrashPolicy.retentionDays) days "
                  + "before they’re erased.")
                 .font(TypeRole.label.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .multilineTextAlignment(.center)
         }
         .padding(24)
@@ -476,19 +476,19 @@ struct TrashEntryRow: View {
                 Spacer()
                 Text(CaptureCoordinator.formatDuration(item.durationSeconds))
                     .font(TypeRole.label.font.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
             }
 
             if let snippet = item.snippet, !snippet.isEmpty {
                 Text(snippet)
                     .font(TypeRole.reading.font)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                     .lineLimit(2)
             }
 
             Text(remainingText)
                 .font(TypeRole.label.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("trash.row.remaining")
 
             if showsActions {

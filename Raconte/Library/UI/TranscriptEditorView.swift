@@ -123,7 +123,7 @@ struct TranscriptEditorView: View {
 
             Text("Every version is kept. Earlier ones stay in this entry’s history.")
                 .font(TypeRole.label.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(InkTone.inkSecondary.color)
                 .accessibilityIdentifier("editor.historyNote")
         }
         .padding(16)
@@ -157,7 +157,7 @@ struct TranscriptEditorView: View {
                              + "somewhere safe if you need it — it will be lost when you "
                              + "leave this entry.")
                             .font(TypeRole.label.font)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(InkTone.inkSecondary.color)
                     }
                 }
 
@@ -181,7 +181,7 @@ struct TranscriptEditorView: View {
     private func notice(_ message: String) -> some View {
         Text(message)
             .font(TypeRole.label.font)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(InkTone.inkSecondary.color)
     }
 
     // MARK: - Finish

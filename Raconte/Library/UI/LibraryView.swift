@@ -388,7 +388,7 @@ struct LibraryView: View {
         Button(action: onRecord) {
             Image(systemName: "mic.fill")
                 .font(.system(size: TypeScale.libraryRecordGlyph, weight: .semibold))
-                .foregroundStyle(InkTone.studioInk.color)
+                .foregroundStyle(.white)
                 .frame(width: 60, height: 60)
                 .background(InkTone.record.color, in: Circle())
                 .shadow(color: .black.opacity(0.25), radius: 6, y: 3)

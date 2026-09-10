@@ -3,6 +3,44 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-09 (laptop — #167 merged, #157 export scope via SDD → PR #174, verified conflict with #172)
+
+- **#167 merged** (therapist one-pager docs, pure addition, no app code).
+- **#157 export scope via SDD** (Sonnet implementers, Opus final review, from the 2026-09-08
+  plan) → **PR #174 open, not merged**: `ExportScope`/`ExportInventory` pure types,
+  `ArchiveExporter.export(into:scope:)` filtering (partial package verifies unchanged),
+  `ExportRunner.inventory()`/`run(into:scope:)`, `ExportConfirmationSheet` + `AboutView` wiring.
+  Nothing writes until the sheet's confirm button. Two fix rounds, both re-reviewed clean: one
+  enrolled the new sheet in `TypeScaleTests`; the other fixed three stale doc comments and a real
+  bug — a warning about a malformed-ULID capture directory was silently dropped from any scoped
+  (non-full) export's manifest, now fixed with a regression test.
+- **Verified merge conflict between PR #174 and open PR #172**, both touching
+  `RaconteTests/TypeScaleTests.swift`: #172 moves `paperFiles` to
+  `RaconteTests/SourceScanning.swift` as `paperScreenFiles`; #174's fix-round commit adds a line
+  to the old array. A careless resolution silently drops #174's enrollment with the suite still
+  green — **documented in PR #174's body with the correct resolution** (keep #172's structure,
+  add `ExportConfirmationSheet.swift` to `paperScreenFiles`). Neither PR is merged yet.
+- Counts: unit **2222 (0 failures)**, UI **67 across 3 invocations (0 failures)** — both verified
+  against actual file content, not the plan's stated baselines (both were off by one in the plan
+  text; not real gaps, documented in the PR body). One UI invocation flaked on first run
+  (LLDB debugger error, ~18h-uptime simulator) and passed clean on retry.
+- **Real picker → sheet → confirm flow has zero automated coverage on either platform** (system
+  picker can't be driven from XCUITest) — PR #174's smoke list is the only verification and now
+  explicitly requires both Mac and iPhone passes.
+
+**Next steps:**
+1. **Decide merge order for #172 and #174** (both open, real conflict in `TypeScaleTests.swift`
+   — see PR #174's body for the exact resolution): merge one, wait for main green, **Update
+   branch** on the other before merging it. #172 still needs build 20 smoke (step 6, backdate
+   popover dark appearance, first) before merge; #174 needs the Mac + iPhone smoke pass in its
+   PR body before merge (real export flow, no automated coverage).
+2. After both land: remove `raconte-wt-149` and `raconte-wt-157` worktrees, build 20 (or next) →
+   `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`).
+3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
+   roles, then a sweep PR. #173 minors can ride along.
+4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still
+   `unknown` / `never`. Then T8; M4 acceptance gate still never run.
+
 ## Session 2026-09-08/09 (laptop — build 19 smoke 7/7, batch 2 (#149) → PR #172, build-18 decoy fixed)
 
 - **#169 merged**, build 19 smoked 7/7 on the Mac. **#171 merged** (About's "What this is / How it

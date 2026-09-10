@@ -127,10 +127,17 @@ enum ArchiveVerifier {
     }
 
     // MARK: Package-relative file listing (excludes the manifest itself).
+    //
+    // Hidden (dot-prefixed) files are skipped: Finder writes `.DS_Store` into every
+    // directory the owner browses, and the Verify open panel rewrites the package's
+    // root one on each pick, so counting them would fail every package ever looked
+    // at. No export file legitimately starts with a dot (`ArchiveExporter` never
+    // writes one), so the skip loses nothing the manifest could have listed.
 
     private static func onDiskRelativePaths(under packageURL: URL, excluding manifestFileName: String) -> Set<String> {
         guard let enumerator = FileManager.default.enumerator(
-            at: packageURL, includingPropertiesForKeys: [.isDirectoryKey])
+            at: packageURL, includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles])
         else { return [] }
 
         let prefix = packageURL.path + "/"

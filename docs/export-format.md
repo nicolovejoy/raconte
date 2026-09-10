@@ -72,6 +72,21 @@ Fields (`ExportManifest`):
   capture directory whose name isn't a well-formed ULID, an unreadable `journals.json`,
   an unrecognized file the walker left out of the package.
 
+## Scoped exports (#157)
+
+About → Archive → **Export archive…** confirms before writing and lets you leave journals out.
+A scoped package has the same layout and manifest; only its contents differ:
+
+- `journals.json` is always copied whole (it is a byte copy; the verifier never decodes it),
+  so the names of journals you left out still travel. Covers (`journals/<id>/cover.jpg`) are
+  copied only for the journals you included.
+- `counts.journals` is the number of INCLUDED journals; `counts.entries` the included
+  captures. Warnings about excluded captures are dropped.
+- "Unfiled entries" means a capture whose `entry.json` is missing, unreadable, has no
+  `journalID`, or names a journal not in `journals.json`.
+- The verifier does not know or care about scope: a partial package verifies exactly like a
+  full one, because every check is against the package's own manifest and files.
+
 ## Skipped on purpose
 
 `segments/` (deleted at finalize anyway, nothing left to copy), `transcript/head.json`

@@ -388,6 +388,135 @@ final class ArchiveExporterTests: XCTestCase {
         XCTAssertFalse(packageContents.contains("junk.txt"))
     }
 
+    // MARK: #157 — scoped exports
+
+    /// A second journal WITH a cover and a third capture filed into it, on top of
+    /// `buildFixture()`'s one journal + two captures. Returns the new journal and capture id.
+    private func addSecondJournalAndCapture() throws -> (journal: Journal, captureID: String) {
+        let second = Journal(id: ULID.make(), name: "Second", createdAt: Date(timeIntervalSince1970: 1_700_000_003))
+        let id = ULID.make()
+        try writeManifest(id, verifiedAt: Date(timeIntervalSince1970: 1_700_000_004))
+        try writeFinalM4A(id, bytes: Data(repeating: 0xCD, count: 512))
+        try writeEntryMetadata(EntryMetadata(journalID: second.id), id: id)
+        let registry = try JournalStore.load(url: AppContainer.journalsURL(containerRoot: containerRoot))
+        try writeJournals(registry.journals + [second])
+        try writeCover(journalID: second.id, bytes: Data(repeating: 0x43, count: 8))
+        return (second, id)
+    }
+
+    private func readManifest(at packageURL: URL) throws -> ExportManifest {
+        try CaptureCoding.decoder().decode(
+            ExportManifest.self,
+            from: try Data(contentsOf: packageURL.appendingPathComponent("raconte-export.json")))
+    }
+
+    func testSelectedJournalExportCopiesOnlyItsEntriesAndCoverAndVerifiesClean() async throws {
+        let fixture = try buildFixture()
+        let (second, secondCaptureID) = try addSecondJournalAndCapture()
+
+        let report = try await exporter().export(
+            into: destinationRoot,
+            scope: .selected(journalIDs: [fixture.journal.id], includeUnfiled: false))
+
+        let paths = try packageFileRelativePaths(under: report.packageURL)
+        XCTAssertTrue(paths.contains("entries/\(fixture.idAudio)/audio.m4a"))
+        XCTAssertFalse(paths.contains { $0.hasPrefix("entries/\(fixture.idNoAudio)/") },
+                       "the garbage-sidecar capture is unfiled and was not asked for")
+        XCTAssertFalse(paths.contains { $0.hasPrefix("entries/\(secondCaptureID)/") })
+        XCTAssertTrue(paths.contains("journals.json"), "ruling 2: registry is copied whole")
+        XCTAssertTrue(paths.contains("journals/\(fixture.journal.id)/cover.jpg"))
+        XCTAssertFalse(paths.contains("journals/\(second.id)/cover.jpg"),
+                       "covers travel only for included journals")
+
+        let manifest = try readManifest(at: report.packageURL)
+        XCTAssertEqual(manifest.counts.entries, 1)
+        XCTAssertEqual(manifest.counts.journals, 1)
+        XCTAssertEqual(Set(manifest.entries.keys), [fixture.idAudio])
+        XCTAssertEqual(manifest.counts.files, manifest.files.count)
+        XCTAssertFalse(manifest.warnings.contains { $0.hasPrefix("entries/\(fixture.idNoAudio)") },
+                       "ruling 4: warnings for excluded captures are dropped")
+
+        // The whole point of #157's "same verifier": a partial package is a valid package.
+        let verification = ArchiveVerifier.verify(packageURL: report.packageURL)
+        XCTAssertTrue(verification.ok, "\(verification.problems)")
+        XCTAssertEqual(verification.checkedFiles, manifest.files.count)
+    }
+
+    func testUnfiledOnlyExportCarriesTheGarbageSidecarCaptureAndNoCovers() async throws {
+        let fixture = try buildFixture()
+        _ = try addSecondJournalAndCapture()
+
+        let report = try await exporter().export(
+            into: destinationRoot,
+            scope: .selected(journalIDs: [], includeUnfiled: true))
+
+        let manifest = try readManifest(at: report.packageURL)
+        XCTAssertEqual(Set(manifest.entries.keys), [fixture.idNoAudio])
+        XCTAssertEqual(manifest.counts.entries, 1)
+        XCTAssertEqual(manifest.counts.journals, 0)
+        let paths = try packageFileRelativePaths(under: report.packageURL)
+        XCTAssertFalse(paths.contains { $0.hasPrefix("journals/") }, "no journal included, no covers")
+        XCTAssertTrue(paths.contains("journals.json"))
+        XCTAssertTrue(manifest.warnings.contains("entries/\(fixture.idNoAudio): sidecar unreadable"))
+        XCTAssertTrue(ArchiveVerifier.verify(packageURL: report.packageURL).ok)
+    }
+
+    func testAllScopeWritesTheSamePackageAsTheUnscopedCall() async throws {
+        try buildFixture()
+        let otherDestination = destinationRoot.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: otherDestination, withIntermediateDirectories: true)
+
+        let unscoped = try await exporter().export(into: destinationRoot)
+        let scoped = try await exporter().export(into: otherDestination, scope: .all)
+
+        let a = try readManifest(at: unscoped.packageURL)
+        let b = try readManifest(at: scoped.packageURL)
+        XCTAssertEqual(a.files, b.files)
+        XCTAssertEqual(a.counts, b.counts)
+        XCTAssertEqual(a.entries, b.entries)
+        XCTAssertEqual(a.warnings, b.warnings)
+    }
+
+    func testSelectedScopeExcludingEveryJournalStillExportsWhenNothingMatches() async throws {
+        try buildFixture()
+        let report = try await exporter().export(
+            into: destinationRoot,
+            scope: .selected(journalIDs: [], includeUnfiled: false))
+        let manifest = try readManifest(at: report.packageURL)
+        XCTAssertEqual(manifest.counts.entries, 0)
+        XCTAssertEqual(manifest.counts.journals, 0)
+        XCTAssertTrue(ArchiveVerifier.verify(packageURL: report.packageURL).ok,
+                      "an empty-but-well-formed package verifies; the SHEET disables the button at 0, the exporter stays honest")
+    }
+
+    /// A malformed-ULID capture DIRECTORY (`ArchiveWalkerTests
+    /// .testStrayNonWellFormedULIDDirectoryProducesWarningAndNoFiles`'s fixture) is never
+    /// a real capture — the walker skips it and its warning's parsed id never appears in
+    /// `listing.captureIDs`. `apply`'s scope filter must not drop that warning just
+    /// because its id isn't in `includedCaptures`: it's the only trace the bad directory
+    /// exists, and a scope that excludes every real capture must still surface it.
+    func testMalformedULIDDirectoryWarningSurvivesAScopeThatExcludesEverything() async throws {
+        try buildFixture()
+        let strayName = "not-a-ulid-at-all"
+        let strayDir = capturesRoot.appendingPathComponent(strayName, isDirectory: true)
+        try FileManager.default.createDirectory(at: strayDir, withIntermediateDirectories: true)
+        var m = Manifest(captureID: strayName, createdAt: Date(timeIntervalSince1970: 1_700_000_030),
+                         state: .complete, stateSeq: 1,
+                         stateUpdatedAt: Date(timeIntervalSince1970: 1_700_000_030), format: format)
+        m.final = FinalRef(path: "final/recording.m4a", verifiedAt: Date(timeIntervalSince1970: 1_700_000_030),
+                           durationFrames: 48_000)
+        try CaptureCoding.encoder().encode(m).write(to: strayDir.appendingPathComponent("manifest.json"))
+
+        let report = try await exporter().export(
+            into: destinationRoot,
+            scope: .selected(journalIDs: [], includeUnfiled: false))
+
+        let manifest = try readManifest(at: report.packageURL)
+        XCTAssertEqual(manifest.counts.entries, 0, "the scope excluded every real capture")
+        XCTAssertTrue(manifest.warnings.contains { $0.contains(strayName) && $0.contains("well-formed ULID") },
+                      "the malformed-ULID warning is not a real capture's warning — it must survive any scope")
+    }
+
     // MARK: (j) Fix wave Finding 9 — `ExportRunner.cancelled()` returns to `.idle`
     // regardless of what state it was in, so `AboutView`'s `.fileImporter` routing a
     // `CocoaError.userCancelled` failure there (instead of `fail(_:)`) never leaves the
@@ -440,6 +569,49 @@ final class ArchiveExporterTests: XCTestCase {
         guard case .manifestUnreadable = verification.problems.first else {
             return XCTFail("expected .manifestUnreadable first, got \(verification.problems)")
         }
+    }
+
+    // MARK: #157 — the runner reads the inventory the sheet renders, off-main, from the
+    // exporter's own container root.
+
+    @MainActor
+    func testExportRunnerInventoryReflectsTheFixture() async throws {
+        let fixture = try buildFixture()
+        let runner = ExportRunner(exporter: exporter())
+
+        let result = await runner.inventory()
+        let inventory = try XCTUnwrap(result)
+
+        XCTAssertEqual(inventory.journals,
+                       [ExportInventory.JournalRow(id: fixture.journal.id, name: "1987 Journal", entryCount: 1)])
+        XCTAssertEqual(inventory.unfiledCount, 1, "the garbage-sidecar capture is unfiled")
+        XCTAssertEqual(inventory.totalEntries, 2)
+        XCTAssertEqual(runner.state, .idle, "reading the inventory is not a run")
+    }
+
+    @MainActor
+    func testExportRunnerInventoryOnAMissingContainerPublishesFailedAndReturnsNil() async {
+        let missing = containerRoot.appendingPathComponent("gone", isDirectory: true)
+        let runner = ExportRunner(exporter: ArchiveExporter(containerRoot: missing, appVersion: "9.9", build: "t"))
+
+        let inventory = await runner.inventory()
+
+        XCTAssertNil(inventory)
+        guard case .failed = runner.state else { return XCTFail("expected .failed, got \(runner.state)") }
+    }
+
+    @MainActor
+    func testExportRunnerRunWithScopeWritesOnlyThatScope() async throws {
+        let fixture = try buildFixture()
+        let runner = ExportRunner(exporter: exporter())
+
+        await runner.run(into: destinationRoot, scope: .selected(journalIDs: [fixture.journal.id], includeUnfiled: false))
+
+        guard case let .finished(report, verification) = runner.state else {
+            return XCTFail("expected .finished, got \(runner.state)")
+        }
+        XCTAssertEqual(report.counts.entries, 1)
+        XCTAssertTrue(verification.ok)
     }
 
     func testProblemSummaryNamesTheFileOrFieldForEveryCase() {

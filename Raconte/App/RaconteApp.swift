@@ -15,11 +15,12 @@ final class AppServices {
     /// that never blocks or delays capture (M4 design §8).
     let sync: SyncCoordinator?
     /// T13: `AboutView`'s "Export archive…" action. Built here, once, at app-composition
-    /// time — never as a view's own `@State` default, which would run
-    /// `AppContainer.root()`'s directory-creating file I/O every time that view value
-    /// gets constructed. `AppVersion`/`BuildInfo` are the same two bundle-reading types
-    /// the About rows already read, so this is the only place that pairs
-    /// `CFBundleShortVersionString`/`CFBundleVersion` for the export manifest.
+    /// time — never as a view's own `@State` default, which would re-run the
+    /// `ArchiveExporter` construction (and its `AppContainer.containerRoot(capturesRoot:)`
+    /// path math) every time that view value gets constructed. `AppVersion`/`BuildInfo`
+    /// are the same two bundle-reading types the About rows already read, so this is the
+    /// only place that pairs `CFBundleShortVersionString`/`CFBundleVersion` for the
+    /// export manifest.
     let exportRunner: ExportRunner
 
     init() {
@@ -30,8 +31,13 @@ final class AppServices {
         // Built from the library's own stores, never its own copies — see
         // `SyncCoordinator.live(library:)`.
         self.sync = SyncCoordinator.live(library: library)
+        // #157: the exporter reads the SAME container the library scans — derived from the
+        // library's captures root, never `AppContainer.root()` on its own, which ignores the
+        // `RACONTE_UITEST_ID` harness redirect and would export an empty sandbox under UI
+        // test while the sheet counted the seeded entries. In production the two are the
+        // same directory.
         self.exportRunner = ExportRunner(exporter: ArchiveExporter(
-            containerRoot: AppContainer.root(),
+            containerRoot: AppContainer.containerRoot(capturesRoot: library.capturesRoot),
             appVersion: AppVersion.shortVersion(),
             build: AppVersion.displayString(short: nil, build: BuildInfo.buildNumber)))
         // M4 T6: the finalize-completion choke point (`CaptureScreenModel

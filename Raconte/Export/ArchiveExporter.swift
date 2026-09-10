@@ -34,8 +34,12 @@ struct ArchiveExporter: Sendable {
     /// writes `transcript.md` per entry, hashes every file, writes `raconte-export.json`
     /// LAST, then renames `.part` away. Throws on any I/O failure and removes the
     /// `.part` on every throw path — nothing is left half-written under `destination`.
-    func export(into destination: URL) async throws -> Report {
-        let listing = try ArchiveWalker.list(containerRoot: containerRoot)
+    /// `scope` (#157) decides which captures and covers land; `.all` is the T13 behaviour.
+    /// `journals.json` is copied whole in every scope (ruling 2 — byte-copy contract, and the
+    /// verifier never decodes it).
+    func export(into destination: URL, scope: ExportScope = .all) async throws -> Report {
+        let fullListing = try ArchiveWalker.list(containerRoot: containerRoot)
+        let listing = Self.apply(scope, to: fullListing, containerRoot: containerRoot)
 
         // Hoisted once (Fix wave Finding 4): the directory stamp and `exportedAt` must
         // name the SAME instant, not two separate `now()` calls that could straddle a
@@ -181,5 +185,70 @@ struct ArchiveExporter: Sendable {
         formatter.timeZone = TimeZone(identifier: "UTC")
         formatter.locale = Locale(identifier: "en_US_POSIX")
         return formatter
+    }
+
+    // MARK: #157 scope filter — pure over the listing plus one sidecar read per capture
+
+    /// Narrows the walker's listing to `scope`. Resolution of each capture's bucket goes
+    /// through `ExportInventory.bucket(captureDirectory:known:)` — the SAME rule the
+    /// confirmation sheet counted with, so "Export 3 entries" writes exactly 3.
+    static func apply(_ scope: ExportScope, to listing: ArchiveWalker.Listing,
+                      containerRoot: URL) -> ArchiveWalker.Listing {
+        if case .all = scope { return listing }
+
+        let known = Set(listing.journalIDs)
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let includedCaptures = Set(listing.captureIDs.filter { captureID in
+            let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+            return scope.includes(bucket: ExportInventory.bucket(captureDirectory: directory, known: known))
+        })
+        let includedJournals = listing.journalIDs.filter { scope.includes(bucket: $0) }
+        let includedJournalSet = Set(includedJournals)
+
+        let files = listing.files.filter { file in
+            if let captureID = Self.captureID(ofEntryPath: file.relativePath) {
+                return includedCaptures.contains(captureID)
+            }
+            if let journalID = Self.journalID(ofCoverPath: file.relativePath) {
+                return includedJournalSet.contains(journalID)
+            }
+            return true // journals.json (ruling 2)
+        }
+        // A warning's parsed id is excluded by scope only when it names a REAL capture
+        // (one the walker actually listed). A warning about a malformed-ULID directory
+        // name parses to an id that is never in `listing.captureIDs` — the walker skips
+        // that directory entirely, it isn't a real capture — so it must survive every
+        // scope: it's the only trace that a bad capture directory exists, and losing it
+        // from a partial-export manifest would hide it silently.
+        let allCaptureIDs = Set(listing.captureIDs)
+        let warnings = listing.warnings.filter { warning in
+            guard let captureID = Self.captureID(ofEntryPath: warning),
+                  allCaptureIDs.contains(captureID) else { return true }
+            return includedCaptures.contains(captureID)
+        }
+        return ArchiveWalker.Listing(
+            files: files,
+            captureIDs: listing.captureIDs.filter { includedCaptures.contains($0) },
+            journalIDs: includedJournals,
+            warnings: warnings)
+    }
+
+    /// `entries/<id>/…` or `entries/<id>: …` → `<id>`; nil for anything else.
+    private static func captureID(ofEntryPath path: String) -> String? {
+        let prefix = "entries/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let rest = path.dropFirst(prefix.count)
+        let end = rest.firstIndex { $0 == "/" || $0 == ":" } ?? rest.endIndex
+        return String(rest[rest.startIndex..<end])
+    }
+
+    /// `journals/<id>/cover.jpg` → `<id>`; nil for anything else (including `journals.json`,
+    /// which has no slash after the directory name).
+    private static func journalID(ofCoverPath path: String) -> String? {
+        let prefix = AppContainer.journalCoversDirectoryName + "/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let rest = path.dropFirst(prefix.count)
+        guard let slash = rest.firstIndex(of: "/") else { return nil }
+        return String(rest[rest.startIndex..<slash])
     }
 }

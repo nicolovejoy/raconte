@@ -11,9 +11,13 @@ import Foundation
 /// `@MainActor`.
 ///
 /// Security-scoped access to the picked folder is this type's caller's concern, not
-/// this type's: `AboutView`'s `.fileImporter` callback starts it and stops it (via
-/// `defer`) around the call to `run(into:)` or `verify(package:)`, so the scope's
-/// lifetime is visible in one place rather than split across two.
+/// this type's, and the two flows open it in different places (#157). Verify still
+/// opens and closes scope directly in `AboutView`'s `.fileImporter` callback, around
+/// the call to `verify(package:)`. Export defers the write behind a confirmation sheet
+/// (#157 step 2 of 2), so its scope opens later, in `AboutView.performExport`, around
+/// the call to `run(into:scope:)` — the picked URL keeps its scope until accessed, so
+/// deferring the start past the sheet is fine. Either way the scope's lifetime is
+/// visible in one place per flow rather than split across two.
 @MainActor @Observable
 final class ExportRunner {
     enum State: Equatable {
@@ -47,19 +51,37 @@ final class ExportRunner {
 
     /// `destination` is the folder the owner picked via `.fileImporter` — the exporter
     /// creates its own timestamped package directory inside it, so this never writes
-    /// directly into a folder the owner did not choose.
-    func run(into destination: URL) async {
+    /// directly into a folder the owner did not choose. `scope` (#157) is what the
+    /// confirmation sheet resolved; `.all` is the pre-#157 behaviour.
+    func run(into destination: URL, scope: ExportScope = .all) async {
         state = .running(verifying: false)
         let exporter = self.exporter
         do {
             let (report, verification) = try await Task.detached(priority: .utility) {
-                let report = try await exporter.export(into: destination)
+                let report = try await exporter.export(into: destination, scope: scope)
                 let verification = ArchiveVerifier.verify(packageURL: report.packageURL)
                 return (report, verification)
             }.value
             state = .finished(report, verification)
         } catch {
             state = .failed(String(describing: error))
+        }
+    }
+
+    /// #157: what the confirmation sheet renders. One walk of the container, off the main
+    /// actor (a large archive is thousands of directory reads). Not a "run": `state` is left
+    /// alone on success so a stale result row from a previous export stays visible behind
+    /// the sheet. On failure — realistically only a missing container root — publishes
+    /// `.failed` and returns nil so the caller shows nothing.
+    func inventory() async -> ExportInventory? {
+        let containerRoot = exporter.containerRoot
+        do {
+            return try await Task.detached(priority: .utility) {
+                try ExportInventory.read(containerRoot: containerRoot)
+            }.value
+        } catch {
+            state = .failed(String(describing: error))
+            return nil
         }
     }
 

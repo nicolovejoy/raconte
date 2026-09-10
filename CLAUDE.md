@@ -2,39 +2,30 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-09 (laptop — #167 merged, #157 export scope via SDD → PR #174, verified conflict with #172)
+## Session 2026-09-10 (laptop — #174 smoked both platforms + merged, verifier `.DS_Store` fix, worktrees cleaned)
 
-- **#167 merged** (therapist one-pager docs, pure addition, no app code).
-- **#157 export scope via SDD** (Sonnet implementers, Opus final review, from the 2026-09-08
-  plan) → **PR #174 open, not merged**: `ExportScope`/`ExportInventory` pure types,
-  `ArchiveExporter.export(into:scope:)` filtering (partial package verifies unchanged),
-  `ExportRunner.inventory()`/`run(into:scope:)`, `ExportConfirmationSheet` + `AboutView` wiring.
-  Nothing writes until the sheet's confirm button. Two fix rounds, both re-reviewed clean: one
-  enrolled the new sheet in `TypeScaleTests`; the other fixed three stale doc comments and a real
-  bug — a warning about a malformed-ULID capture directory was silently dropped from any scoped
-  (non-full) export's manifest, now fixed with a regression test.
-- **Verified merge conflict between PR #174 and open PR #172**, both touching
-  `RaconteTests/TypeScaleTests.swift`: #172 moves `paperFiles` to
-  `RaconteTests/SourceScanning.swift` as `paperScreenFiles`; #174's fix-round commit adds a line
-  to the old array. A careless resolution silently drops #174's enrollment with the suite still
-  green — **documented in PR #174's body with the correct resolution** (keep #172's structure,
-  add `ExportConfirmationSheet.swift` to `paperScreenFiles`). Neither PR is merged yet.
-- Counts: unit **2222 (0 failures)**, UI **67 across 3 invocations (0 failures)** — both verified
-  against actual file content, not the plan's stated baselines (both were off by one in the plan
-  text; not real gaps, documented in the PR body). One UI invocation flaked on first run
-  (LLDB debugger error, ~18h-uptime simulator) and passed clean on retry.
-- **Real picker → sheet → confirm flow has zero automated coverage on either platform** (system
-  picker can't be driven from XCUITest) — PR #174's smoke list is the only verification and now
-  explicitly requires both Mac and iPhone passes.
+- **#172 had merged** since the last handoff and PR #174 already carried the correct
+  `TypeScaleTests` resolution (enrollment line in `paperScreenFiles`); `git merge-tree` clean.
+- **PR #174 owner smoke, both platforms, 5/5 each.** Mac: build 20 then 21 from the branch to
+  `/Applications/Raconte.app`. iPhone: build 21 via `scripts/upload_testflight.sh ios` (real
+  data, iCloud Drive `export-smoke` folder). Full export 52 entries; scoped package
+  `68 files, no problems`.
+- **Build-20 smoke 4 found a pre-existing verifier gap:** `ArchiveVerifier` (#151/#158) counted
+  Finder's `.DS_Store` (root and `entries/`) as `unlistedFile`, and the Verify open panel rewrites
+  the root one on every pick, so every package the owner ever browsed would fail. Fixed on the
+  branch: enumerate with `.skipsHiddenFiles`; `testFinderDSStoreFilesAreIgnored` plants three
+  `.DS_Store` files plus one non-hidden stray and asserts only the stray is reported (RED with all
+  three listed before the fix, GREEN after). Commit `145e75f5`.
+- **#174 merged** (`d0999afa`). Both SDD worktrees (`raconte-wt-149`, `raconte-wt-157`) and their
+  branches removed; `xcodegen generate` re-run on main. Main's CI for the merge was still
+  in progress at handoff.
+- Builds 20 and 21 appended to `docs/builds.md`. `/Applications/Raconte.app` is currently
+  build 21 from the PR branch (source-identical to main after the merge).
 
 **Next steps:**
-1. **Decide merge order for #172 and #174** (both open, real conflict in `TypeScaleTests.swift`
-   — see PR #174's body for the exact resolution): merge one, wait for main green, **Update
-   branch** on the other before merging it. #172 still needs build 20 smoke (step 6, backdate
-   popover dark appearance, first) before merge; #174 needs the Mac + iPhone smoke pass in its
-   PR body before merge (real export flow, no automated coverage).
-2. After both land: remove `raconte-wt-149` and `raconte-wt-157` worktrees, build 20 (or next) →
-   `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`).
+1. Confirm main's CI run for the #174 merge is green (it was in progress at handoff).
+2. Build 22 from main → `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`) so the
+   owner's Mac app is a main build again. Optional; code is identical to build 21.
 3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
    roles, then a sweep PR. #173 minors can ride along.
 4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still

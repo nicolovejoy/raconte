@@ -68,7 +68,11 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
 xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'generic/platform=iOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build 2>&1 | grep -E "BUILD|error:" | tail -3
 ```
 
-- UI tests run on the simulator only, one class per invocation:
+- UI tests run on the simulator only, one class per invocation. **On the laptop the simulator is
+  currently unavailable** (macOS 27.0 with an older CoreSimulator; `xcodebuild` prints
+  `CoreSimulator is out of date … Simulator device support disabled`). If that line appears,
+  do not retry or recreate simulators: record the line, skip the UI run, and say in the report
+  and the PR body that CI runs the class.
 
 ```
 xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:RaconteUITests/ImageCaptureUITests test 2>&1 | grep -E "Executed|error:|failed|passed" | tail -8
@@ -77,7 +81,7 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=i
 - **The camera cannot be driven in the simulator** (`UIImagePickerController.isSourceTypeAvailable(.camera)`
   is false there, and the row is not even shown). So the loop is pinned at the model level
   (`ImageCaptureBatch`) and the existing `ImageCaptureUITests` class is re-run unchanged to
-  prove the pre-shot sheet (labels, Cancel) did not move. Do not add a UI test that pretends to
+  prove the pre-shot sheet (labels, Cancel) did not move, where a simulator is available (else CI). Do not add a UI test that pretends to
   take a photo. The owner smoke at the end is the only end-to-end proof; say so in the PR.
 - Commit after each task with the trailer:
 
@@ -382,8 +386,9 @@ iOS compile check from Global Constraints: `BUILD SUCCEEDED`. Then the UI class:
 xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:RaconteUITests/ImageCaptureUITests test 2>&1 | grep -E "Executed|error:|failed|passed" | tail -8
 ```
 
-Expected: the class's existing tests pass at the same count as before this branch (read the
-count out of the run; it must not drop). If `testCapturingAnImageOpensTheRealPickerSheet`
+Expected: the class's existing 3 tests pass (`Executed 3 tests, with 0 failures`). If the
+simulator is unavailable on this machine (see Global Constraints), record the CoreSimulator line
+and move on; CI runs the class. If `testCapturingAnImageOpensTheRealPickerSheet`
 fails on `app.buttons["Cancel"]`, the dismiss title was flipped before any shot; fix
 `dismissButtonTitle`'s use, not the test.
 
@@ -414,7 +419,11 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 Run the full unit command from Global Constraints (no `-only-testing`).
 Expected: `Executed 2233 tests, with 1 test skipped and 0 failures` — the baseline 2229 plus
-4 (Task 1). If the number is 2229, `xcodegen generate` was skipped and the new test file never
+4 (Task 1). On the laptop (macOS 27.0) nine SpeechAnalyzer tests crash the test host
+(`[SpeechFramework] Failed precondition: Audio sample data must be 16-bit signed integers`;
+verified identical on plain main), xcodebuild restarts mid-suite and no single `Executed` line
+exists: report the started and passed counts from the log instead (expected 2233 started, 2224
+passed, those 9 crashed) and name the nine; they are the environment, not this branch. If the number is 2229, `xcodegen generate` was skipped and the new test file never
 ran. (If this branch is being run after `feat/175-backdate-seed` merged, the baseline is 2243
 and the expected count 2247; take the baseline from main's latest CI run, never from this
 sentence.)

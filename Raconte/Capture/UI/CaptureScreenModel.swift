@@ -651,10 +651,12 @@ final class CaptureScreenModel {
 
     /// #47: after a day-precision backdated capture commits, pre-fill the NEXT reading
     /// with the following day — consecutive pages of a paper journal are usually
-    /// consecutive days. Only `.day` advances; never into the future (the field would
-    /// then be silently refused at `EntryMetadata.setOriginalDate`). Sets the properties
-    /// directly rather than through `setBackdateDate`, which would try to sync a sidecar
-    /// for a capture that has already finished.
+    /// consecutive days. This is the in-sitting half; the first toggle-on after a relaunch
+    /// gets the same day-after rule from `BackdateSeed` (#175). Only `.day` advances; never
+    /// into the future (the field would then be silently refused at
+    /// `EntryMetadata.setOriginalDate`). Sets the properties directly rather than through
+    /// `setBackdateDate`, which would try to sync a sidecar for a capture that has already
+    /// finished.
     private func advanceBackdateForNextEntry(now: Date = Date()) {
         guard backdateEnabled, backdatePrecision == .day else { return }
         let current = PartialDate(from: backdateDate, precision: .day, calendar: .gregorianCurrent)

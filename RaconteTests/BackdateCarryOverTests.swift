@@ -59,6 +59,8 @@ final class BackdateCarryOverTests: XCTestCase {
 
     override func tearDownWithError() throws {
         if let root { try? FileManager.default.removeItem(at: root) }
+        // Leave the test host's real UserDefaults clean too, not just the next test's.
+        UserDefaults.standard.removeObject(forKey: CurrentJournal.defaultsKey)
     }
 
     private func makeModel() -> CaptureScreenModel {
@@ -378,18 +380,25 @@ final class BackdateCarryOverTests: XCTestCase {
 
     /// An undated capture after the backdated one does not reset the seed to today.
     func testASeedSurvivesAnUndatedCaptureInBetween() async throws {
+        // One capture per model instance (fix round 1): the pendingMetadataWrite chain for
+        // a SECOND capture on the same model was intermittently slow to land under
+        // whole-class load. Each capture below goes through its own fresh model over the
+        // same `root`, exactly the shape the reliable single-capture relaunch tests use.
         let recorder = CarryOverFakeRecorder()
         let first = makeModel(recorder: recorder)
         await first.bootstrap()
         await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
-        first.setBackdateEnabled(false)
-        let live = first.coordinator
-        await first.record()
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let second = makeModel(recorder: recorder)
+        await second.bootstrap()
+        XCTAssertFalse(second.backdateEnabled, "sanity: the undated capture below is genuinely undated")
+        let live = second.coordinator
+        await second.record()
         await waitUntil({ live.phase == .recording }, "never started recording")
         recorder.feed(frames: 48_000)
-        await first.done()
-        await waitUntil({ first.coordinator !== live }, timeout: 10, "capture never finished")
-        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+        await second.done()
+        await waitUntil({ second.coordinator !== live }, timeout: 10, "capture never finished")
 
         let relaunched = makeModel()
         await relaunched.bootstrap()
@@ -427,16 +436,22 @@ final class BackdateCarryOverTests: XCTestCase {
 
     /// Journal B's newest entry is invisible when journal A is selected after a relaunch.
     func testSeedDoesNotCrossJournalsAfterRelaunch() async throws {
+        // One capture per model instance (fix round 1) — see the comment in
+        // `testASeedSurvivesAnUndatedCaptureInBetween`.
         let recorder = CarryOverFakeRecorder()
         let first = makeModel(recorder: recorder)
         await first.bootstrap()
         let a = try XCTUnwrap(first.selectedJournalID)
         await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
-        let created = await first.createJournal(name: "Other")
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let second = makeModel(recorder: recorder)
+        await second.bootstrap()
+        let created = await second.createJournal(name: "Other")
         let b = try XCTUnwrap(created)
-        await commitBackdatedCapture(first, recorder: recorder, date(1999, 1, 1))
-        XCTAssertEqual(first.selectedJournalID, b.id, "sanity: the 1999 capture filed into B")
-        await waitForSidecar(first, PartialDate(year: 1999, month: 1, day: 1))
+        await commitBackdatedCapture(second, recorder: recorder, date(1999, 1, 1))
+        XCTAssertEqual(second.selectedJournalID, b.id, "sanity: the 1999 capture filed into B")
+        await waitForSidecar(second, PartialDate(year: 1999, month: 1, day: 1))
 
         let relaunched = makeModel()
         await relaunched.bootstrap()

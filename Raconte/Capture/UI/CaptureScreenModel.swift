@@ -152,6 +152,9 @@ final class CaptureScreenModel {
     /// preference — a relaunch a week later should not pre-fill 1987. Upgrading it to
     /// survive relaunch is a one-line swap for a `JournalPreferenceStore`-style store,
     /// which is why the read and write are funnelled through two private helpers.
+    /// (#175 softens that for the first toggle-on after a relaunch: with nothing carried,
+    /// `seededBackdate()` reads the journal's own last backdated entry off the library
+    /// instead of opening at today.)
     private var carriedBackdates: [String: PartialDate] = [:]
 
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
@@ -551,18 +554,24 @@ final class CaptureScreenModel {
     /// nil ("use the capture's own date"), not to whatever was last picked. Precision
     /// resets to `.day` alongside it, for the same reason: nothing should carry over
     /// silently into the next time the owner turns backdating back on.
-    /// Turning it *on* pre-fills from the last backdate set in this journal this session,
-    /// if there is one — date and precision together, since carrying a 1987 day-precision
-    /// picker over a year-precision sitting would re-invent the fabricated-day problem.
+    /// Turning it *on* pre-fills from the last backdate set in this journal this session if
+    /// there is one, else from the journal's most recently captured backdated entry
+    /// advanced a day (#175, `BackdateSeed`) — date and precision together, since carrying
+    /// a 1987 day-precision picker over a year-precision sitting would re-invent the
+    /// fabricated-day problem.
     /// The toggle itself is never flipped on automatically: pre-filling a field the owner
     /// opened is help, opening it for him is a decision he did not make.
     func setBackdateEnabled(_ enabled: Bool) {
         let wasEnabled = backdateEnabled
         backdateEnabled = enabled
         if enabled {
-            if !wasEnabled, let carried = carriedBackdate() {
-                backdateDate = carried.anchorDate(calendar: .gregorianCurrent)
-                backdatePrecision = carried.precision
+            // Off → on pre-fills: this session's carry first, else the journal's own
+            // history (#175). Carry wins because it is what the owner dialled; the seed
+            // is a guess from disk. Either way `rememberBackdate()` below turns the
+            // pre-fill into the carry, so off/on again repeats it.
+            if !wasEnabled, let prefill = carriedBackdate() ?? seededBackdate() {
+                backdateDate = prefill.anchorDate(calendar: .gregorianCurrent)
+                backdatePrecision = prefill.precision
             }
             rememberBackdate()
         } else {
@@ -593,6 +602,15 @@ final class CaptureScreenModel {
         selectedJournalID.flatMap { carriedBackdates[$0] }
     }
 
+    /// #175: the pre-fill when nothing has been carried this session — the day after the
+    /// selected journal's most recently captured backdated entry (see `BackdateSeed`).
+    /// Exposed for the tests that pin the seed rule; the view reads it only through the
+    /// pre-fill in `setBackdateEnabled`.
+    func seededBackdate(now: Date = Date()) -> PartialDate? {
+        guard let journalID = selectedJournalID else { return nil }
+        return BackdateSeed.seed(from: library.allEntries, journalID: journalID, now: now)
+    }
+
     /// Re-anchors the live backdate picker to the JUST-selected journal, when the toggle
     /// is on. Carry-over is per journal (M3 issue #15, owner decision) — leaving
     /// `backdateDate`/`backdatePrecision` untouched across a journal switch would carry
@@ -606,9 +624,11 @@ final class CaptureScreenModel {
     /// or, worse, invent a carry for B out of a same-session default.
     private func resolveBackdateForJournalChange() {
         guard backdateEnabled else { return }
-        if let carried = carriedBackdate() {
-            backdateDate = carried.anchorDate(calendar: .gregorianCurrent)
-            backdatePrecision = carried.precision
+        // Same precedence as `setBackdateEnabled`: this session's carry, else the
+        // journal's own history (#175), else today. Still no `rememberBackdate()`.
+        if let prefill = carriedBackdate() ?? seededBackdate() {
+            backdateDate = prefill.anchorDate(calendar: .gregorianCurrent)
+            backdatePrecision = prefill.precision
         } else {
             backdateDate = Date()
             backdatePrecision = .day

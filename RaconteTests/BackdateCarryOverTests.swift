@@ -44,6 +44,17 @@ final class BackdateCarryOverTests: XCTestCase {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("BackdateCarryOver-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // `makeModel()`/`makeModel(recorder:)` build `CaptureScreenModel` with its default
+        // `journalPreferenceStore`, `UserDefaultsJournalPreferenceStore()` — real
+        // `UserDefaults.standard`, unscoped to `root`. The #175 relaunch/seed tests are the
+        // first in this file to run TWO models over DIFFERENT roots in the same process
+        // (this test's "first"/"second"/"other" plus a later test's own), so a stale
+        // `currentJournalID` written by an earlier test's root can leak into this one's
+        // `resolveCurrentJournal()` and select a journal that doesn't exist here. Clearing
+        // the key before every test keeps each one's "device" starting cold, same as it
+        // would after this file's very first test — not a behavior change for any single
+        // test, just cross-test isolation.
+        UserDefaults.standard.removeObject(forKey: CurrentJournal.defaultsKey)
     }
 
     override func tearDownWithError() throws {
@@ -272,5 +283,189 @@ final class BackdateCarryOverTests: XCTestCase {
         await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
 
         XCTAssertEqual(model.carriedBackdate(), today, "tomorrow would be refused at the sidecar — keep today")
+    }
+
+    // MARK: seed from the journal's last backdated entry (#175)
+
+    /// Drives one backdated capture to commit on `model`, exactly as the #47 tests do.
+    private func commitBackdatedCapture(_ model: CaptureScreenModel,
+                                        recorder: CarryOverFakeRecorder,
+                                        _ backdate: Date, precision: DatePrecision = .day) async {
+        model.setBackdateEnabled(true)
+        model.setBackdatePrecision(precision)
+        model.setBackdateDate(backdate)
+        let live = model.coordinator
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        recorder.feed(frames: 48_000)
+        await model.done()
+        await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
+    }
+
+    private func makeModel(recorder: CarryOverFakeRecorder) -> CaptureScreenModel {
+        CaptureScreenModel(capturesRoot: root,
+                           makeSession: { CarryOverFakeSession() },
+                           makeRecorder: { recorder },
+                           encoder: FakeAudioEncoder())
+    }
+
+    /// The pendingMetadataWrite chain that lands a backdate in the sidecar is a detached
+    /// Task `done()` does not await when the capture has no transcript (fake recorder,
+    /// this whole file) — `detectSpokenDate` only awaits it on the transcript-present
+    /// path. So `library.rescan()` right after `done()` can race the write landing on
+    /// disk. Poll with a fresh rescan each iteration (not a static `allEntries` read,
+    /// which never changes once taken) until the expected backdate shows up.
+    private func waitForSidecar(_ model: CaptureScreenModel, _ expected: PartialDate,
+                                attempts: Int = 15,
+                                file: StaticString = #filePath, line: UInt = #line) async {
+        // A generous sleep BEFORE each rescan, not a tight poll: the pendingMetadataWrite
+        // chain (a detached Task `done()` does not await when there is no transcript) and
+        // this method's own `library.rescan()` both go through the same actor-backed
+        // `entryMetadataStore`, and hammering it with rescans starves the pending write of
+        // its turn rather than letting it land sooner.
+        for _ in 0..<attempts {
+            try? await Task.sleep(for: .seconds(2))
+            await model.library.rescan()
+            if model.library.allEntries.contains(where: { $0.originalDate == expected }) { return }
+        }
+        XCTFail("the \(expected) capture's sidecar never landed", file: file, line: line)
+    }
+
+    /// The gap #175 closes: a relaunch (a fresh model on the same root) has no in-memory
+    /// carry, so turning the toggle on used to open at today. It now opens at the day
+    /// after the last backdated capture in this journal.
+    func testAfterRelaunchTheToggleSeedsTheDayAfterTheLastBackdatedCapture() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let journal = try XCTUnwrap(first.selectedJournalID)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        XCTAssertEqual(relaunched.selectedJournalID, journal)
+        XCTAssertNil(relaunched.carriedBackdate(), "sanity: a fresh model carries nothing")
+        XCTAssertFalse(relaunched.backdateEnabled, "the seed never flips the toggle on")
+
+        relaunched.setBackdateEnabled(true)
+        XCTAssertEqual(relaunched.backdatePrecision, .day)
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13))
+        XCTAssertEqual(relaunched.carriedBackdate(), PartialDate(year: 1987, month: 6, day: 13),
+                       "the seed becomes this session's carry, so off/on repeats it")
+    }
+
+    /// Coarser precision seeds unchanged, precision included — a 1987-06 sitting must not
+    /// come back as a day-precision picker.
+    func testAfterRelaunchAYearMonthBackdateSeedsTheSameMonth() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12),
+                                     precision: .yearMonth)
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6))
+
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        relaunched.setBackdateEnabled(true)
+        XCTAssertEqual(relaunched.backdatePrecision, .yearMonth)
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .yearMonth,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6))
+    }
+
+    /// An undated capture after the backdated one does not reset the seed to today.
+    func testASeedSurvivesAnUndatedCaptureInBetween() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        first.setBackdateEnabled(false)
+        let live = first.coordinator
+        await first.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        recorder.feed(frames: 48_000)
+        await first.done()
+        await waitUntil({ first.coordinator !== live }, timeout: 10, "capture never finished")
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        relaunched.setBackdateEnabled(true)
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
+    /// Ruling 4: what was dialled this session outranks what is on disk, even when the
+    /// disk holds a NEWER capture from another session on the same root.
+    func testInSessionCarryOutranksTheDiskSeed() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+
+        let second = makeModel()
+        await second.bootstrap()
+        second.setBackdateEnabled(true)
+        second.setBackdateDate(date(1991, 2, 3))   // dialled by hand this session
+        second.setBackdateEnabled(false)
+        // Another session writes a newer backdated capture to the same root meanwhile.
+        let other = makeModel(recorder: recorder)
+        await other.bootstrap()
+        await commitBackdatedCapture(other, recorder: recorder, date(2001, 1, 1))
+        await second.library.rescan()
+
+        second.setBackdateEnabled(true)
+        XCTAssertEqual(PartialDate(from: second.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1991, month: 2, day: 3),
+                       "the carried 1991 wins over the seed's 2001-01-02")
+    }
+
+    /// Journal B's newest entry is invisible when journal A is selected after a relaunch.
+    func testSeedDoesNotCrossJournalsAfterRelaunch() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let a = try XCTUnwrap(first.selectedJournalID)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        let created = await first.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+        await commitBackdatedCapture(first, recorder: recorder, date(1999, 1, 1))
+        XCTAssertEqual(first.selectedJournalID, b.id, "sanity: the 1999 capture filed into B")
+        await waitForSidecar(first, PartialDate(year: 1999, month: 1, day: 1))
+
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        relaunched.selectJournal(a)
+        relaunched.setBackdateEnabled(true)
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13))
+        // The toggle stays on across the switch: B is pre-filled from B's own history.
+        relaunched.selectJournal(b.id)
+        XCTAssertTrue(relaunched.backdateEnabled)
+        XCTAssertEqual(relaunched.seededBackdate(), PartialDate(year: 1999, month: 1, day: 2),
+                       "B's own seed is B's last capture plus one")
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1999, month: 1, day: 2),
+                       "a journal switch with the toggle on pre-fills from the seed too")
+        XCTAssertNil(relaunched.carriedBackdate(),
+                     "the switch path never invents a carry for B (existing rule)")
+    }
+
+    /// A journal with no backdated entry still opens at today: no seed, no surprise.
+    func testAJournalWithNoBackdatedEntrySeedsNothing() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        XCTAssertNil(model.seededBackdate())
+        model.setBackdateEnabled(true)
+        XCTAssertEqual(Calendar.gregorianCurrent.component(.year, from: model.backdateDate),
+                       Calendar.gregorianCurrent.component(.year, from: Date()))
+        XCTAssertEqual(model.backdatePrecision, .day)
     }
 }

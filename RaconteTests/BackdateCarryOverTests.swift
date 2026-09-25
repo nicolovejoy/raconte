@@ -38,36 +38,37 @@ private final class CarryOverFakeRecorder: EngineRecording, @unchecked Sendable 
 /// each other; re-dialling the year for each one is the friction being removed.
 @MainActor
 final class BackdateCarryOverTests: XCTestCase {
+    /// Each test's own container: `journals.json` and the captures tree side by side, as
+    /// on a device. Without an explicit `journalsContainerRoot` the model derives the
+    /// container as the captures root's PARENT — `$TMPDIR` for a bare temp root — so
+    /// every test in the process (and every run) shared one registry (#176 finding).
+    private var containerRoot: URL!
+    /// The captures root, `<containerRoot>/captures`.
     private var root: URL!
+    /// One preference store per test, shared by every model in it, so a "relaunch" sees
+    /// the selection the previous model stored — like `UserDefaults` on a device, minus
+    /// the process-wide state.
+    private var prefs: InMemoryJournalPreferenceStore!
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
+        containerRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("BackdateCarryOver-\(UUID().uuidString)", isDirectory: true)
+        root = AppContainer.capturesRoot(containerRoot: containerRoot)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        // `makeModel()`/`makeModel(recorder:)` build `CaptureScreenModel` with its default
-        // `journalPreferenceStore`, `UserDefaultsJournalPreferenceStore()` — real
-        // `UserDefaults.standard`, unscoped to `root`. The #175 relaunch/seed tests are the
-        // first in this file to run TWO models over DIFFERENT roots in the same process
-        // (this test's "first"/"second"/"other" plus a later test's own), so a stale
-        // `currentJournalID` written by an earlier test's root can leak into this one's
-        // `resolveCurrentJournal()` and select a journal that doesn't exist here. Clearing
-        // the key before every test keeps each one's "device" starting cold, same as it
-        // would after this file's very first test — not a behavior change for any single
-        // test, just cross-test isolation.
-        UserDefaults.standard.removeObject(forKey: CurrentJournal.defaultsKey)
+        prefs = InMemoryJournalPreferenceStore()
     }
 
     override func tearDownWithError() throws {
-        if let root { try? FileManager.default.removeItem(at: root) }
-        // Leave the test host's real UserDefaults clean too, not just the next test's.
-        UserDefaults.standard.removeObject(forKey: CurrentJournal.defaultsKey)
+        if let containerRoot { try? FileManager.default.removeItem(at: containerRoot) }
     }
 
     private func makeModel() -> CaptureScreenModel {
         CaptureScreenModel(capturesRoot: root,
                            makeSession: { CarryOverFakeSession() },
                            makeRecorder: { CarryOverFakeRecorder() },
-                           encoder: FakeAudioEncoder())
+                           encoder: FakeAudioEncoder(),
+                           journalsContainerRoot: containerRoot,
+                           journalPreferenceStore: prefs)
     }
 
     private func waitUntil(_ predicate: @escaping () -> Bool,
@@ -206,10 +207,7 @@ final class BackdateCarryOverTests: XCTestCase {
     /// capture commits, the dial for the next one reads the day after.
     func testADayPrecisionBackdateAdvancesToTheNextDayAfterACaptureCommits() async throws {
         let recorder = CarryOverFakeRecorder()
-        let model = CaptureScreenModel(capturesRoot: root,
-                                       makeSession: { CarryOverFakeSession() },
-                                       makeRecorder: { recorder },
-                                       encoder: FakeAudioEncoder())
+        let model = makeModel(recorder: recorder)
         await model.bootstrap()
         model.setBackdateEnabled(true)
         model.setBackdatePrecision(.day)
@@ -241,10 +239,7 @@ final class BackdateCarryOverTests: XCTestCase {
     /// 12th to the 13th, which only the day-resolution assertion below catches.
     func testAYearMonthBackdateDoesNotAdvance() async throws {
         let recorder = CarryOverFakeRecorder()
-        let model = CaptureScreenModel(capturesRoot: root,
-                                       makeSession: { CarryOverFakeSession() },
-                                       makeRecorder: { recorder },
-                                       encoder: FakeAudioEncoder())
+        let model = makeModel(recorder: recorder)
         await model.bootstrap()
         model.setBackdateEnabled(true)
         model.setBackdatePrecision(.yearMonth)
@@ -267,10 +262,7 @@ final class BackdateCarryOverTests: XCTestCase {
     /// Never into the future: a backdate of today stays today.
     func testABackdateOfTodayDoesNotAdvanceIntoTheFuture() async throws {
         let recorder = CarryOverFakeRecorder()
-        let model = CaptureScreenModel(capturesRoot: root,
-                                       makeSession: { CarryOverFakeSession() },
-                                       makeRecorder: { recorder },
-                                       encoder: FakeAudioEncoder())
+        let model = makeModel(recorder: recorder)
         await model.bootstrap()
         let today = PartialDate(from: Date(), precision: .day, calendar: .gregorianCurrent)
         model.setBackdateEnabled(true)
@@ -308,29 +300,28 @@ final class BackdateCarryOverTests: XCTestCase {
         CaptureScreenModel(capturesRoot: root,
                            makeSession: { CarryOverFakeSession() },
                            makeRecorder: { recorder },
-                           encoder: FakeAudioEncoder())
+                           encoder: FakeAudioEncoder(),
+                           journalsContainerRoot: containerRoot,
+                           journalPreferenceStore: prefs)
     }
 
-    /// The pendingMetadataWrite chain that lands a backdate in the sidecar is a detached
-    /// Task `done()` does not await when the capture has no transcript (fake recorder,
-    /// this whole file) — `detectSpokenDate` only awaits it on the transcript-present
-    /// path. So `library.rescan()` right after `done()` can race the write landing on
-    /// disk. Poll with a fresh rescan each iteration (not a static `allEntries` read,
-    /// which never changes once taken) until the expected backdate shows up.
+    /// The journal/backdate sidecar is written by a task `handlePhase()` enqueues, which
+    /// `done()` does not await (it only does on the transcript-present path, and these
+    /// captures have no transcript). So "the capture finished" does not imply "its
+    /// sidecar is on disk" — a relaunch that scans straight away could miss it. Poll the
+    /// library until the expected backdate shows up; it normally already has.
     private func waitForSidecar(_ model: CaptureScreenModel, _ expected: PartialDate,
-                                attempts: Int = 15,
+                                timeout: TimeInterval = 5,
                                 file: StaticString = #filePath, line: UInt = #line) async {
-        // A generous sleep BEFORE each rescan, not a tight poll: the pendingMetadataWrite
-        // chain (a detached Task `done()` does not await when there is no transcript) and
-        // this method's own `library.rescan()` both go through the same actor-backed
-        // `entryMetadataStore`, and hammering it with rescans starves the pending write of
-        // its turn rather than letting it land sooner.
-        for _ in 0..<attempts {
-            try? await Task.sleep(for: .seconds(2))
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
             await model.library.rescan()
             if model.library.allEntries.contains(where: { $0.originalDate == expected }) { return }
+            if Date() > deadline {
+                return XCTFail("the \(expected) capture's sidecar never landed", file: file, line: line)
+            }
+            try? await Task.sleep(for: .milliseconds(50))
         }
-        XCTFail("the \(expected) capture's sidecar never landed", file: file, line: line)
     }
 
     /// The gap #175 closes: a relaunch (a fresh model on the same root) has no in-memory
@@ -380,10 +371,10 @@ final class BackdateCarryOverTests: XCTestCase {
 
     /// An undated capture after the backdated one does not reset the seed to today.
     func testASeedSurvivesAnUndatedCaptureInBetween() async throws {
-        // One capture per model instance (fix round 1): the pendingMetadataWrite chain for
-        // a SECOND capture on the same model was intermittently slow to land under
-        // whole-class load. Each capture below goes through its own fresh model over the
-        // same `root`, exactly the shape the reliable single-capture relaunch tests use.
+        // One capture per model instance, each a fresh "launch" over the same `root`. (The
+        // flakiness that first prompted this was #176 — a dropped `.recording` sidecar
+        // write — not the number of captures per model; the shape stays because it reads
+        // as the owner's real sequence of sittings.)
         let recorder = CarryOverFakeRecorder()
         let first = makeModel(recorder: recorder)
         await first.bootstrap()
@@ -436,7 +427,7 @@ final class BackdateCarryOverTests: XCTestCase {
 
     /// Journal B's newest entry is invisible when journal A is selected after a relaunch.
     func testSeedDoesNotCrossJournalsAfterRelaunch() async throws {
-        // One capture per model instance (fix round 1) — see the comment in
+        // One capture per model instance — see the comment in
         // `testASeedSurvivesAnUndatedCaptureInBetween`.
         let recorder = CarryOverFakeRecorder()
         let first = makeModel(recorder: recorder)

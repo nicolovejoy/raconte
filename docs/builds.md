@@ -14,3 +14,4 @@ line here in the same commit as the build. Not retroactive — starts at 14 (#14
 | 19 | 2026-09-08 | `main` `52e95f6e` | Mac owner smoke of Batch C: #169 (#162 batch 1 TypeRole sweep, #168 Trash headers) |
 | 20 | 2026-09-09 | `feat/157-export-scope` `dd25c4e8` | Mac owner smoke of PR #174 (#157 export confirmation sheet + journal-scoped export), on top of merged #172 |
 | 21 | 2026-09-09 | `feat/157-export-scope` `145e75f5` | Mac owner smoke (5/5) AND iOS TestFlight upload of PR #174, after the verifier `.DS_Store` fix found by build 20 smoke 4 |
+| 22 | 2026-09-25 | `feat/175-backdate-seed` `24149477` | Mac owner smoke of PR #178 (#175 backdate seed on toggle-on and journal switch; #176 sidecar-write race fix) |

@@ -416,6 +416,7 @@ final class BackdateCarryOverTests: XCTestCase {
         let other = makeModel(recorder: recorder)
         await other.bootstrap()
         await commitBackdatedCapture(other, recorder: recorder, date(2001, 1, 1))
+        await waitForSidecar(other, PartialDate(year: 2001, month: 1, day: 1))
         await second.library.rescan()
 
         second.setBackdateEnabled(true)

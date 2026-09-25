@@ -866,6 +866,20 @@ final class CaptureScreenModel {
         enqueueEntryMetadataWrite(for: id, clearingBackdateIfDisabled: clearingBackdateIfDisabled)
     }
 
+    /// #176 retry budget for a sidecar write that beat `SegmentStore.begin()`: 40 attempts.
+    private static let captureMissingRetryAttempts = 40
+    /// #176 retry interval: 25 ms per attempt, about a second total.
+    private static let captureMissingRetryInterval: Duration = .milliseconds(25)
+    /// Logger for sidecar write diagnostics.
+    private static let sidecarLog = Logger(subsystem: "org.pianohouseproject.raconte",
+                                           category: "sidecar")
+
+    /// The capture is still recording (or interrupted) or is queued to finalize — i.e.
+    /// its directory is on its way, not gone.
+    private func isCaptureInFlight(_ captureID: String) -> Bool {
+        coordinator.activeCaptureID == captureID || coordinator.finalizeQueue.contains(captureID)
+    }
+
     /// journalID = the currently selected journal; originalDate = the backdate only if
     /// the user turned it on — never materializing `capturedAt` here is what keeps an
     /// un-backdated entry distinguishable from one backdated to exactly its capture time.
@@ -899,17 +913,6 @@ final class CaptureScreenModel {
     /// #176 retry budget for a sidecar write that beat `SegmentStore.begin()`: 40 × 25 ms,
     /// about a second. The real window is one main-actor hop, so the first retry
     /// almost always lands.
-    private static let captureMissingRetryAttempts = 40
-    private static let captureMissingRetryInterval: Duration = .milliseconds(25)
-    private static let sidecarLog = Logger(subsystem: "org.pianohouseproject.raconte",
-                                           category: "sidecar")
-
-    /// The capture is still recording (or interrupted) or is queued to finalize — i.e.
-    /// its directory is on its way, not gone.
-    private func isCaptureInFlight(_ captureID: String) -> Bool {
-        coordinator.activeCaptureID == captureID || coordinator.finalizeQueue.contains(captureID)
-    }
-
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String,
                                            clearingBackdateIfDisabled: Bool = false,

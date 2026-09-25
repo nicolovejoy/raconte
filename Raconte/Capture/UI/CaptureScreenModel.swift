@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 #if os(iOS)
 import UIKit
 #endif
@@ -478,8 +479,12 @@ final class CaptureScreenModel {
     }
 
     /// Stand the transcription session up once the format is readable, and write the
-    /// entry's journal/backdate sidecar now that the capture directory exists (M3 T3 —
-    /// `SegmentStore.begin()`, called just before this phase publishes, creates it).
+    /// entry's journal/backdate sidecar (M3 T3). The capture directory may NOT exist yet:
+    /// `CaptureCoordinator.send` publishes `.recording` BEFORE `beginRecording()` →
+    /// `SegmentStore.begin()` creates it, so this write can meet `captureMissing` for
+    /// about one main-actor hop. `enqueueEntryMetadataWrite` retries that briefly rather
+    /// than dropping it — for a transcript-less, unmarked capture this is the ONLY write
+    /// its sidecar ever gets (#176).
     ///
     /// Keyed off `.recording` rather than the factory call: the factory runs inside
     /// `configureAndStart`, before `recorder.start` returns, so `activeFormat` is still
@@ -889,6 +894,20 @@ final class CaptureScreenModel {
     /// the wheel could reach the actor in either order and settle on the older date.
     /// Every caller now enqueues synchronously on the main actor and the writes run in
     /// the order those snapshots were taken: last write wins by construction, not by luck.
+    /// #176 retry budget for a sidecar write that beat `SegmentStore.begin()`: 40 × 25 ms,
+    /// about a second. The real window is one main-actor hop, so the first retry
+    /// almost always lands.
+    private static let captureMissingRetryAttempts = 40
+    private static let captureMissingRetryInterval: Duration = .milliseconds(25)
+    private static let sidecarLog = Logger(subsystem: "org.pianohouseproject.raconte",
+                                           category: "sidecar")
+
+    /// The capture is still recording (or interrupted) or is queued to finalize — i.e.
+    /// its directory is on its way, not gone.
+    private func isCaptureInFlight(_ captureID: String) -> Bool {
+        coordinator.activeCaptureID == captureID || coordinator.finalizeQueue.contains(captureID)
+    }
+
     @discardableResult
     private func enqueueEntryMetadataWrite(for captureID: String,
                                            clearingBackdateIfDisabled: Bool = false,
@@ -901,14 +920,36 @@ final class CaptureScreenModel {
         let store = entryMetadataStore
         let journalStore = journalStore
         let previous = pendingMetadataWrite
-        let task = Task { @MainActor in
+        let task = Task { @MainActor [weak self] in
             await previous?.value
-            let wrote = try? await store.update(captureID: captureID) { metadata in
-                if let journalID { metadata.journalID = journalID }
-                if writeBackdate {
-                    metadata.setOriginalDate(originalDate)
+            // #176: the `.recording` write can run before `SegmentStore.begin()` has
+            // created the capture directory (the phase publishes first). Retry
+            // `captureMissing` only, briefly, and only while this capture is still the
+            // live one or waiting to finalize — so a retry can never recreate a sidecar
+            // for a capture the owner has since discarded. Any other error, or running
+            // out of budget, is a final failure and is logged, never silently dropped.
+            var wrote: (EntryMetadata, Void)?
+            var attempt = 0
+            while true {
+                do {
+                    wrote = try await store.update(captureID: captureID) { metadata in
+                        if let journalID { metadata.journalID = journalID }
+                        if writeBackdate {
+                            metadata.setOriginalDate(originalDate)
+                        }
+                        if let multiVoice { metadata.multiVoice = multiVoice }
+                    }
+                    break
+                } catch EntryMetadataError.captureMissing
+                            where attempt < Self.captureMissingRetryAttempts
+                                && self?.isCaptureInFlight(captureID) == true {
+                    attempt += 1
+                    try? await Task.sleep(for: Self.captureMissingRetryInterval)
+                } catch {
+                    Self.sidecarLog.notice(
+                        "entry sidecar write dropped for \(captureID, privacy: .public) after \(attempt, privacy: .public) retries: \(String(describing: error), privacy: .public)")
+                    break
                 }
-                if let multiVoice { metadata.multiVoice = multiVoice }
             }
             // #84 point 2: routes through the ONE shared chokepoint every caller that
             // files an entry into a journal must use (`promoteProvisionalDefaultAfterEntrySave`'s

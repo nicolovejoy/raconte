@@ -60,6 +60,9 @@ final class JournalCaptureContextTests: XCTestCase {
 
     override func tearDownWithError() throws {
         if let containerRoot { try? FileManager.default.removeItem(at: containerRoot) }
+        // The #176 test parks the coordinator on the process-wide breakpoint singleton;
+        // never leave a state armed for the next test, even when an assertion bailed early.
+        MainActor.assumeIsolated { TransitionBreakpointController.shared.disarmAll() }
     }
 
     private func makeModel(recorder: ContextFakeRecorder = ContextFakeRecorder())
@@ -157,6 +160,53 @@ final class JournalCaptureContextTests: XCTestCase {
         await waitForSidecar(captureID, "originalDate must stay absent") {
             $0.journalID == selected && $0.originalDate == nil
         }
+    }
+
+    /// #176: `CaptureCoordinator.send` publishes `.recording` BEFORE `beginRecording()`
+    /// creates the capture directory, so the phase-keyed sidecar write can reach
+    /// `EntryMetadataStore.update` while the directory is still absent (`captureMissing`).
+    /// That write is the only one a transcript-less, unmarked capture ever gets, so
+    /// dropping it lost the entry's journal and backdate with no error.
+    ///
+    /// The window is held open deterministically: `TransitionBreakpointController`'s gate
+    /// sits exactly between the publish and the effects (`send`: `phase = next.phase`,
+    /// then `gate(at:)`, then `realize`). No `model.handlePhase()` relay here, unlike
+    /// `startRecording` — a manual call after `record()` returns runs once the directory
+    /// exists and would mask the race; the model's own observation is the path under test.
+    func testRecordingSidecarLandsWhenTheCaptureDirectoryAppearsAfterRecordingPublishes() async throws {
+        let recorder = ContextFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let selected = try XCTUnwrap(model.selectedJournalID)
+        model.setBackdateEnabled(true)
+        model.setBackdateDate(Date(timeIntervalSince1970: 550_000_000))
+
+        let breakpoints = TransitionBreakpointController.shared
+        breakpoints.arm(.recording)
+        let live = model.coordinator
+        let recording = Task { await model.record() }
+        let parkDeadline = Date().addingTimeInterval(5)
+        while !breakpoints.isWaiting(.recording) {
+            if Date() > parkDeadline { breakpoints.disarmAll(); return XCTFail("never parked at .recording") }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let captureID = try XCTUnwrap(live.activeCaptureID)
+        let captureDirectory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot,
+                                                              captureID: captureID)
+        XCTAssertEqual(live.phase, .recording, "sanity: the phase is already published")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
+                       "sanity: parked inside the window — the directory does not exist yet")
+        // Long enough for the observation hop to run `handlePhase()` and its write to
+        // meet the missing directory; short of the retry budget.
+        try? await Task.sleep(for: .milliseconds(200))
+        breakpoints.disarm(.recording)
+        await recording.value
+
+        await waitForSidecar(captureID, "the .recording write was dropped (#176)") {
+            $0.journalID == selected && $0.originalDate == self.expectedBackdate(550_000_000)
+        }
+        recorder.feed(frames: 480)
+        await model.done()
     }
 
     // MARK: #84 — promote on use (design point 2, entry-save half)

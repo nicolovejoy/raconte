@@ -21,6 +21,11 @@ import UIKit
 /// one `onPick` call per item, with no batch-progress UI (design doc, decision — v1
 /// scope). A partial failure mid-batch still adds everything that succeeded; the sheet
 /// surfaces one alert and stays up rather than losing track of which items landed.
+///
+/// A camera shot that lands does NOT dismiss (#134): the sheet comes back with a tally
+/// ("2 photos added"), the camera row re-titled "Take Another…" and the toolbar button
+/// turned into "Done", so a run of page photos is one trip. `ImageCaptureBatch` holds the
+/// rules; `ImageCaptureBatchTests` pins them, since the simulator has no camera.
 struct ImageCapturePickerSheet: View {
     /// Returns false when a given item's bytes didn't take (`ImageStoreError
     /// .invalidImage`, or the write failed) — every other item in a multi-select batch
@@ -30,6 +35,10 @@ struct ImageCapturePickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var pickError = false
+    /// #134: how many camera shots have landed this presentation. The library picker and
+    /// the file importer add whole batches in one trip and dismiss afterwards as before;
+    /// only the camera loops through here.
+    @State private var batch = ImageCaptureBatch()
     #if os(iOS)
     @State private var showingCamera = false
     /// Set by the camera's completion closure, applied once `fullScreenCover` has
@@ -48,8 +57,14 @@ struct ImageCapturePickerSheet: View {
                 // Guarded: `.camera` on a device without one (any simulator) is an
                 // exception at presentation time, not a graceful empty picker.
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take Photo…") { showingCamera = true }
+                    Button(batch.cameraButtonTitle) { showingCamera = true }
                         .accessibilityIdentifier("imageCapture.takePhoto")
+                }
+                if batch.hasLanded {
+                    Text(batch.summary)
+                        .font(TypeRole.footnote.font)
+                        .foregroundStyle(InkTone.inkSecondary.color)
+                        .accessibilityIdentifier("imageCapture.summary")
                 }
                 PhotosPicker("Choose from Library…", selection: $photosPickerItems, matching: .images)
                     .accessibilityIdentifier("imageCapture.choosePhoto")
@@ -61,7 +76,8 @@ struct ImageCapturePickerSheet: View {
             .navigationTitle("Capture Image")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(batch.dismissButtonTitle) { dismiss() }
+                        .accessibilityIdentifier("imageCapture.dismiss")
                 }
             }
             .alert("Couldn’t Use That Photo", isPresented: $pickError) {
@@ -83,7 +99,9 @@ struct ImageCapturePickerSheet: View {
                 showingCamera = false
                 if let data {
                     Task {
-                        if await onPick(data, .jpeg) { dismiss() } else { pendingCameraError = true }
+                        // Landed: stay up for the next shot (#134). Failed: the same
+                        // deferred alert as before; the tally is untouched.
+                        if await onPick(data, .jpeg) { batch.recordLanded() } else { pendingCameraError = true }
                     }
                 }
             }

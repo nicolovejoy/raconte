@@ -127,10 +127,11 @@ final class BackdateCarryOverTests: XCTestCase {
         XCTAssertEqual(model.backdatePrecision, .day)
     }
 
-    /// The dangerous case: the toggle stays ON across a journal switch. Journal A's
-    /// dialled 1987 date must not leak into journal B's next capture — B gets its own
-    /// carry (none yet, so today/.day), and switching back to A restores A's.
-    func testCarryOverDoesNotCrossJournalsWhileToggleStaysOn() async throws {
+    /// The dangerous case: a journal switch with the toggle ON. Journal A's dialled 1987
+    /// date must not leak into journal B's next capture — B is settled from B's own state
+    /// (no session choice, no history: off at today, #183), and switching back to A
+    /// restores A's carry.
+    func testCarryOverDoesNotCrossJournalsOnAJournalSwitch() async throws {
         let model = makeModel()
         await model.bootstrap()
         let a = try XCTUnwrap(model.selectedJournalID)
@@ -537,6 +538,163 @@ final class BackdateCarryOverTests: XCTestCase {
         recorder.feed(frames: 48_000)
         await model.done()
         await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
-        XCTAssertEqual(model.selectedJournalID, a, "and finishing does not adopt it retroactively")
+    }
+
+    /// Review finding: `adoptViewedJournal` must go through `selectJournal`, so the
+    /// adopted journal's backdate default is settled too — an id-only reimplementation
+    /// would show B's name over A's toggle state.
+    func testAdoptingAJournalSettlesItsBackdateDefault() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let a = try XCTUnwrap(first.selectedJournalID)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let session = makeModel()
+        await session.bootstrap()
+        let created = await session.createJournal(name: "Other")
+        _ = try XCTUnwrap(created)
+        XCTAssertFalse(session.backdateEnabled, "sanity: the new journal has no history")
+
+        session.adoptViewedJournal(a)
+        XCTAssertTrue(session.backdateEnabled)
+        XCTAssertEqual(PartialDate(from: session.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
+    /// The composition-root wiring, pinned: a router selection reaches the capture model.
+    /// `AppServices.init` itself needs the live stores, so the wiring is a function of
+    /// its own that this test can call with a fake-backed model.
+    func testTheRouterWiringReachesTheCaptureModel() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+        let created = await model.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+
+        let router = AppRouter()
+        AppServices.wireJournalFollowing(router: router, capture: model)
+        router.select(.journal(a))
+        XCTAssertEqual(model.selectedJournalID, a)
+        router.select(.journal(b.id))
+        XCTAssertEqual(model.selectedJournalID, b.id)
+    }
+
+    // MARK: the backdate never moves under a live capture (#183 review findings 1, 2)
+
+    /// The capture picker is live during recording. Switching journals mid-reading
+    /// re-files the entry and nothing else: the toggle and date describe THIS reading,
+    /// and B's history must not re-date it (or leave the sidecar and header disagreeing).
+    func testAJournalSwitchMidRecordingLeavesTheBackdateAlone() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+        let created = await model.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+        model.selectJournal(a)
+        model.setBackdateEnabled(true)
+        model.setBackdateDate(date(1987, 6, 12))
+
+        let live = model.coordinator
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        model.selectJournal(b.id)
+        XCTAssertEqual(model.selectedJournalID, b.id, "the reading is re-filed into B")
+        XCTAssertTrue(model.backdateEnabled, "B's empty history must not turn the toggle off mid-reading")
+        XCTAssertEqual(PartialDate(from: model.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 12))
+
+        recorder.feed(frames: 48_000)
+        await model.done()
+        await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
+    }
+
+    /// The mirror: recording undated into A, then switching to B whose history is
+    /// backdated, must not write B's automatic seed into this reading's sidecar.
+    func testAJournalSwitchMidRecordingDoesNotAutoBackdateTheReading() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let created = await first.createJournal(name: "Dated")
+        let dated = try XCTUnwrap(created)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let session = makeModel(recorder: recorder)
+        await session.bootstrap()
+        let plain = await session.createJournal(name: "Plain")
+        _ = try XCTUnwrap(plain)
+        XCTAssertFalse(session.backdateEnabled, "sanity: Plain has no history")
+
+        let live = session.coordinator
+        await session.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        session.selectJournal(dated.id)
+        XCTAssertFalse(session.backdateEnabled, "Dated's history must not backdate a reading already under way")
+
+        recorder.feed(frames: 48_000)
+        await session.done()
+        await waitUntil({ session.coordinator !== live }, timeout: 10, "capture never finished")
+    }
+
+    // MARK: session choices expire on commit (#183 rule 4, review finding 3)
+
+    /// An explicit off is "this reading is undated", and it is spent once that reading
+    /// commits. If the entry is then backdated elsewhere (the detail screen, spoken-date
+    /// detection), history says on, and a stale off must not overrule it.
+    func testAnExplicitOffExpiresWhenACaptureCommitsInThatJournal() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let a = try XCTUnwrap(first.selectedJournalID)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
+
+        let session = makeModel(recorder: recorder)
+        await session.bootstrap()
+        XCTAssertTrue(session.backdateEnabled, "sanity: history turns it on")
+        session.setBackdateEnabled(false)
+        let live = session.coordinator
+        await session.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        let undated = try XCTUnwrap(live.activeCaptureID)
+        recorder.feed(frames: 48_000)
+        await session.done()
+        await waitUntil({ session.coordinator !== live }, timeout: 10, "capture never finished")
+
+        // The owner dates that entry afterwards, from the detail screen.
+        await session.library.setBackdate(undated, to: date(1990, 1, 1))
+        await waitForSidecar(session, PartialDate(year: 1990, month: 1, day: 1))
+
+        let created = await session.createJournal(name: "Other")
+        _ = try XCTUnwrap(created)
+        session.selectJournal(a)
+        XCTAssertTrue(session.backdateEnabled, "the off was spent at the commit; history now says on")
+        XCTAssertEqual(PartialDate(from: session.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1990, month: 1, day: 2))
+    }
+
+    /// A hand-set date after an explicit off clears the off: the owner has changed his
+    /// mind, and a switch away and back must come back ON at that date.
+    func testAHandSetDateAfterAnExplicitOffClearsTheOff() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+        model.setBackdateEnabled(false)
+        model.setBackdateEnabled(true)
+        model.setBackdateDate(date(1987, 6, 12))
+
+        let created = await model.createJournal(name: "Other")
+        _ = try XCTUnwrap(created)
+        model.selectJournal(a)
+        XCTAssertTrue(model.backdateEnabled)
+        XCTAssertEqual(PartialDate(from: model.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 12))
     }
 }

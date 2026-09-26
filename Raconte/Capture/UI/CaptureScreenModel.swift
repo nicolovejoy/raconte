@@ -138,8 +138,9 @@ final class CaptureScreenModel {
     }
 
     /// Optional backdate (§ "entry date — set only if backdating"). `false`/`Date()`
-    /// until the user opts in; `originalDate` in the sidecar stays nil while disabled —
-    /// the default is never materialized (`EntryMetadata`'s doc comment).
+    /// unless the owner opts in or the journal's own history opts in for him
+    /// (`resolveBackdateDefault`, #183); `originalDate` in the sidecar stays nil while
+    /// disabled — the default is never materialized (`EntryMetadata`'s doc comment).
     private(set) var backdateEnabled = false
     private(set) var backdateDate = Date()
     private(set) var backdatePrecision: DatePrecision = .day
@@ -156,7 +157,6 @@ final class CaptureScreenModel {
     /// (#175 softens that for the first toggle-on after a relaunch: with nothing carried,
     /// `seededBackdate()` reads the journal's own last backdated entry off the library
     /// instead of opening at today.)
-    ///
     private var carriedBackdates: [String: PartialDate] = [:]
     /// #183 rule 4: an explicit toggle-OFF is a session choice too. History
     /// (`resolveBackdateDefault`) turns the toggle on by itself now, so without this a
@@ -647,8 +647,19 @@ final class CaptureScreenModel {
     /// Settles the toggle AND the picker for the selected journal (#183). Runs at the
     /// moments the journal comes into selection with the picker unattended: launch (after
     /// the library scan has landed — `performBootstrap`), and every journal switch
-    /// (`selectJournal`, `createJournal`). After a capture commits, #47's
-    /// `advanceBackdateForNextEntry` already leaves the same answer.
+    /// (`selectJournal`, `createJournal`, the sync-fallback reselect). After a capture
+    /// commits, #47's `advanceBackdateForNextEntry` carries the toggle-on case forward and
+    /// the explicit off is spent (`finishCurrentCapture`); the carry itself outlives the
+    /// commit (M3 #15, unchanged).
+    ///
+    /// Only against an IDLE capture. The picker is live during recording, and the toggle
+    /// and date describe THAT reading: a journal switch mid-reading re-files the entry and
+    /// nothing else, because B's history turning the toggle off would leave the sidecar
+    /// (still dated) and the header (undated) disagreeing, and B's history turning it on
+    /// would write a date the owner never set into a reading already under way. Same
+    /// guard, same reason, for the launch resolve: `CaptureView`'s record button does not
+    /// await `bootstrap()`, so the launch default can land under a capture started in
+    /// the recovery window and must then leave it alone.
     ///
     /// Precedence: this session's choice for the journal — an explicit off, else a
     /// dialled date (on, at that date) — else the journal's own history: on at
@@ -661,6 +672,7 @@ final class CaptureScreenModel {
     /// resolved value back would either re-stamp B's own carry with itself or, worse,
     /// turn a default read off disk into a choice the owner never made.
     private func resolveBackdateDefault(now: Date = Date()) {
+        guard coordinator.phase == .idle else { return }
         let resolved: PartialDate?
         if let journalID = selectedJournalID, !sessionOffJournals.contains(journalID) {
             resolved = carriedBackdates[journalID]
@@ -783,6 +795,13 @@ final class CaptureScreenModel {
         // change under it.
         await buildReceipt(for: transcribed)
         advanceBackdateForNextEntry()
+        // #183 rule 4: an explicit off is "this reading is undated", and this reading has
+        // now committed — the next resolve reads history again (which may say on, if the
+        // entry is dated afterwards from the detail screen or by spoken-date detection).
+        // `selectedJournalID` IS the committed capture's journal: a mid-reading
+        // `selectJournal` re-files the live capture too, and `adoptViewedJournal` is
+        // guarded to idle, so the two cannot have diverged between record and here.
+        if let journalID = selectedJournalID { sessionOffJournals.remove(journalID) }
         coordinator = spawn()
         wroteMultiVoiceForActiveCapture = false
         finishing = false

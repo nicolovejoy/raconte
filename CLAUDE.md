@@ -112,6 +112,20 @@ Hand the result over with `ditto` to **`/Applications/Raconte.app`** (the one pl
 resolves "Raconte" to; never a Desktop copy, never bare `cp -R`), and verify identity with
 `dwarfdump --uuid` on `Raconte.debug.dylib` — see the DerivedData/stale-build traps above.
 
+**Then delete every other macOS `Raconte.app` on the machine, every time** (owner, 2026-09-25,
+after Spotlight handed him build 21 with build 23 sitting in `/Applications`). Every local
+test run and compile check leaves a same-named bundle behind, and Spotlight ranks them
+alongside the real one; there were seventeen. Confirm the only hit is `/Applications`, then
+launch it for him so his first look never goes through Spotlight:
+
+📋 **COPY THE BELOW**:
+
+```
+rm -rf ~/Library/Developer/Xcode/DerivedData/Raconte-*/Build/Products/Debug/Raconte.app /tmp/raconte-*/Build/Products/Debug/Raconte.app
+mdfind "kMDItemCFBundleIdentifier == 'org.pianohouseproject.raconte'" | grep -v iphone
+open /Applications/Raconte.app
+```
+
 - iOS compile check: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'generic/platform=iOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build`
 - iOS simulator: `-destination 'platform=iOS Simulator,name=iPhone 17'` (check `xcrun simctl list devices` for available names). Simulator builds need **no** entitlements override — they don't validate restricted entitlements against a profile.
 - UI tests (simulator only — macOS needs interactive automation permission):

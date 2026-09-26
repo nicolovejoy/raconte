@@ -157,15 +157,15 @@ final class CaptureScreenModel {
     /// `seededBackdate()` reads the journal's own last backdated entry off the library
     /// instead of opening at today.)
     ///
+    private var carriedBackdates: [String: PartialDate] = [:]
     /// #183 rule 4: an explicit toggle-OFF is a session choice too. History
-    /// (`resolveBackdateDefault`) turns the toggle on by itself now, so without an
-    /// `.off` entry a journal switch and back would flip it on again under the owner.
-    /// The automatic default itself is never written here — it is history, not a choice.
-    private enum SessionBackdate {
-        case off
-        case on(PartialDate)
-    }
-    private var sessionBackdates: [String: SessionBackdate] = [:]
+    /// (`resolveBackdateDefault`) turns the toggle on by itself now, so without this a
+    /// journal switch and back would flip it on again under the owner. Kept BESIDE the
+    /// carry, not instead of it: off-then-on by hand must still bring the dialled date
+    /// back (M3 #15), so the carry survives an off and only a hand-set date (or #47's
+    /// advance) clears the off. The automatic default is never written to either — it
+    /// is history, not a choice.
+    private var sessionOffJournals: Set<String> = []
 
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
@@ -609,7 +609,7 @@ final class CaptureScreenModel {
         } else {
             backdateDate = Date()
             backdatePrecision = .day
-            if let journalID = selectedJournalID { sessionBackdates[journalID] = .off }
+            if let journalID = selectedJournalID { sessionOffJournals.insert(journalID) }
         }
         // The explicit toggle-off must still clear the sidecar's date — unlike a
         // phase re-entry sync (see `enqueueEntryMetadataWrite`), this IS the user
@@ -632,9 +632,7 @@ final class CaptureScreenModel {
     /// The carried backdate for the currently selected journal, if any. Exposed for the
     /// tests that pin the carry-over rule; the view reads it only through the pre-fill.
     func carriedBackdate() -> PartialDate? {
-        guard let journalID = selectedJournalID,
-              case .on(let carried)? = sessionBackdates[journalID] else { return nil }
-        return carried
+        selectedJournalID.flatMap { carriedBackdates[$0] }
     }
 
     /// #175: the pre-fill when nothing has been carried this session — the day after the
@@ -652,8 +650,8 @@ final class CaptureScreenModel {
     /// (`selectJournal`, `createJournal`). After a capture commits, #47's
     /// `advanceBackdateForNextEntry` already leaves the same answer.
     ///
-    /// Precedence: this session's choice for the journal — a dialled date (on, at that
-    /// date) or an explicit off — else the journal's own history: on at
+    /// Precedence: this session's choice for the journal — an explicit off, else a
+    /// dialled date (on, at that date) — else the journal's own history: on at
     /// `BackdateSeed.automatic` when its latest capture is backdated, otherwise off at
     /// today. Carry-over is per journal (M3 issue #15): journal A's dialled 1987 must never
     /// leak into journal B's next capture, so B is resolved from B's state alone.
@@ -664,15 +662,11 @@ final class CaptureScreenModel {
     /// turn a default read off disk into a choice the owner never made.
     private func resolveBackdateDefault(now: Date = Date()) {
         let resolved: PartialDate?
-        switch selectedJournalID.flatMap({ sessionBackdates[$0] }) {
-        case .on(let carried)?:
-            resolved = carried
-        case .off?:
+        if let journalID = selectedJournalID, !sessionOffJournals.contains(journalID) {
+            resolved = carriedBackdates[journalID]
+                ?? BackdateSeed.automatic(from: library.allEntries, journalID: journalID, now: now)
+        } else {
             resolved = nil
-        case nil:
-            resolved = selectedJournalID.flatMap {
-                BackdateSeed.automatic(from: library.allEntries, journalID: $0, now: now)
-            }
         }
         if let resolved {
             backdateEnabled = true
@@ -689,9 +683,10 @@ final class CaptureScreenModel {
     /// disabled backdate is "use the capture's own date", which is nothing to carry.
     private func rememberBackdate() {
         guard backdateEnabled, let journalID = selectedJournalID else { return }
-        sessionBackdates[journalID] = .on(PartialDate(from: backdateDate,
-                                                      precision: backdatePrecision,
-                                                      calendar: .gregorianCurrent))
+        carriedBackdates[journalID] = PartialDate(from: backdateDate,
+                                                  precision: backdatePrecision,
+                                                  calendar: .gregorianCurrent)
+        sessionOffJournals.remove(journalID)
     }
 
     /// #47: after a day-precision backdated capture commits, pre-fill the NEXT reading

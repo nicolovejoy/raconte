@@ -164,6 +164,27 @@ final class BackdateSeedTests: XCTestCase {
                        PartialDate(year: 1987, month: 6, day: 13))
     }
 
+    /// "Latest" is by `capturedAt`, whatever order the list arrives in — `allEntries` is
+    /// not promised to be ascending, and a `.last`/`.first` shortcut would read the wrong
+    /// entry. Newest-first here; every other fixture in this file is oldest-first.
+    func testAutomaticSeedReadsTheLatestRegardlessOfListOrder() {
+        let newestFirst = [
+            item(journal: "A", capturedAt: date(2026, 9, 2), backdate: nil),
+            item(journal: "A", capturedAt: date(2026, 9, 1),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12))
+        ]
+        XCTAssertNil(BackdateSeed.automatic(from: newestFirst, journalID: "A", now: date(2026, 9, 25)),
+                     "the newest capture is the undated one, wherever it sits in the list")
+        let newestFirstBackdated = [
+            item(journal: "A", capturedAt: date(2026, 9, 2),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12)),
+            item(journal: "A", capturedAt: date(2026, 9, 1), backdate: nil)
+        ]
+        XCTAssertEqual(BackdateSeed.automatic(from: newestFirstBackdated, journalID: "A",
+                                              now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
     /// Another journal's newer undated capture is not this journal's latest.
     func testAutomaticSeedIsPerJournal() {
         let entries = [

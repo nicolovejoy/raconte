@@ -233,10 +233,17 @@ final class AppRouter {
     /// `ContentView`'s `.onChange(of: place)` consumes this once the new root has
     /// actually rendered, in a later, separate update pass.
     var pendingEditorPush: String?
+    /// #183 rule 1: fired with the journal id every time a journal place is selected, so the
+    /// capture screen can follow the journal the owner last looked at. Wired by
+    /// `AppServices` to `CaptureScreenModel.adoptViewedJournal`; the router itself knows
+    /// nothing about capture. Not fired by `apply(_:)` — a background reroute after a
+    /// journals pull is not the owner choosing a journal.
+    @ObservationIgnored var onJournalSelected: ((String) -> Void)?
 
     func select(_ place: Place) {
         detailPath = PlaceRouting.detailPath(afterSelecting: place, from: self.place, path: detailPath)
         self.place = place
+        if case .journal(let id) = place { onJournalSelected?(id) }
     }
 
     /// Applies a `PlaceRouting.Reroute` directly — sets `place` and `detailPath`

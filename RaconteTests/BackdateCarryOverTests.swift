@@ -142,7 +142,8 @@ final class BackdateCarryOverTests: XCTestCase {
         let created = await model.createJournal(name: "Other")
         let b = try XCTUnwrap(created)
         XCTAssertEqual(model.selectedJournalID, b.id)
-        XCTAssertTrue(model.backdateEnabled, "the toggle itself is untouched by the switch")
+        XCTAssertFalse(model.backdateEnabled,
+                       "#183 rule 3: B has no history and no session choice, so the toggle follows B — off")
         XCTAssertNil(model.carriedBackdate(), "journal B has no carry of its own yet")
         XCTAssertEqual(Calendar.gregorianCurrent.component(.year, from: model.backdateDate),
                        Calendar.gregorianCurrent.component(.year, from: Date()),
@@ -150,6 +151,7 @@ final class BackdateCarryOverTests: XCTestCase {
         XCTAssertEqual(model.backdatePrecision, .day)
 
         model.selectJournal(a)
+        XCTAssertTrue(model.backdateEnabled, "A's session choice was on")
         XCTAssertEqual(PartialDate(from: model.backdateDate, precision: model.backdatePrecision,
                                     calendar: .gregorianCurrent),
                        PartialDate(year: 1987, month: 6, day: 12),
@@ -170,20 +172,30 @@ final class BackdateCarryOverTests: XCTestCase {
         XCTAssertEqual(model.carriedBackdate(), PartialDate(year: 1991, month: 2, day: 3))
     }
 
-    /// The toggle is never flipped on for him. Pre-filling a field he opened is help;
-    /// opening it is a decision he did not make.
-    func testCarryOverNeverAutoEnablesTheToggle() async throws {
-        let model = makeModel()
-        await model.bootstrap()
+    /// #183 rule 4 (supersedes #175's "never auto-enabled"): history turns the toggle on,
+    /// but an explicit OFF is the owner's choice and sticks for the session, per journal —
+    /// a journal switch and back must not flip it on again. A relaunch forgets it.
+    func testAnExplicitOffSticksForTheSessionPerJournal() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let first = makeModel(recorder: recorder)
+        await first.bootstrap()
+        let a = try XCTUnwrap(first.selectedJournalID)
+        await commitBackdatedCapture(first, recorder: recorder, date(1987, 6, 12))
+        await waitForSidecar(first, PartialDate(year: 1987, month: 6, day: 12))
 
-        model.setBackdateEnabled(true)
-        model.setBackdateDate(date(1987, 6, 12))
-        model.setBackdateEnabled(false)
+        let session = makeModel()
+        await session.bootstrap()
+        XCTAssertTrue(session.backdateEnabled, "sanity: A's history turns the toggle on")
+        session.setBackdateEnabled(false)
+        let created = await session.createJournal(name: "Other")
+        _ = try XCTUnwrap(created)
+        session.selectJournal(a)
+        XCTAssertFalse(session.backdateEnabled, "the explicit off outranks A's history this session")
+        XCTAssertEqual(session.selectedJournalID, a)
 
-        XCTAssertFalse(model.backdateEnabled)
-        let second = makeModel()
-        await second.bootstrap()
-        XCTAssertFalse(second.backdateEnabled)
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        XCTAssertTrue(relaunched.backdateEnabled, "a relaunch reads history again")
     }
 
     /// Nothing is remembered while backdating is off — "use the capture's own date" is
@@ -325,9 +337,9 @@ final class BackdateCarryOverTests: XCTestCase {
     }
 
     /// The gap #175 closes: a relaunch (a fresh model on the same root) has no in-memory
-    /// carry, so turning the toggle on used to open at today. It now opens at the day
-    /// after the last backdated capture in this journal.
-    func testAfterRelaunchTheToggleSeedsTheDayAfterTheLastBackdatedCapture() async throws {
+    /// carry, so turning the toggle on used to open at today. #183 goes one further: the
+    /// journal's latest capture is backdated, so the toggle STARTS on, at the day after.
+    func testAfterRelaunchTheToggleStartsOnAtTheDayAfterTheLastBackdatedCapture() async throws {
         let recorder = CarryOverFakeRecorder()
         let first = makeModel(recorder: recorder)
         await first.bootstrap()
@@ -338,16 +350,20 @@ final class BackdateCarryOverTests: XCTestCase {
         let relaunched = makeModel()
         await relaunched.bootstrap()
         XCTAssertEqual(relaunched.selectedJournalID, journal)
-        XCTAssertNil(relaunched.carriedBackdate(), "sanity: a fresh model carries nothing")
-        XCTAssertFalse(relaunched.backdateEnabled, "the seed never flips the toggle on")
-
-        relaunched.setBackdateEnabled(true)
+        XCTAssertTrue(relaunched.backdateEnabled, "#183 rule 2: the latest capture is backdated")
         XCTAssertEqual(relaunched.backdatePrecision, .day)
         XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
                                    calendar: .gregorianCurrent),
                        PartialDate(year: 1987, month: 6, day: 13))
-        XCTAssertEqual(relaunched.carriedBackdate(), PartialDate(year: 1987, month: 6, day: 13),
-                       "the seed becomes this session's carry, so off/on repeats it")
+        XCTAssertNil(relaunched.carriedBackdate(),
+                     "the automatic default is history, not a choice — nothing is carried yet")
+
+        relaunched.setBackdateEnabled(false)
+        relaunched.setBackdateEnabled(true)
+        XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
+                                   calendar: .gregorianCurrent),
+                       PartialDate(year: 1987, month: 6, day: 13),
+                       "off/on repeats the seed (rule 5)")
     }
 
     /// Coarser precision seeds unchanged, precision included — a 1987-06 sitting must not
@@ -362,7 +378,7 @@ final class BackdateCarryOverTests: XCTestCase {
 
         let relaunched = makeModel()
         await relaunched.bootstrap()
-        relaunched.setBackdateEnabled(true)
+        XCTAssertTrue(relaunched.backdateEnabled, "#183: starts on from history")
         XCTAssertEqual(relaunched.backdatePrecision, .yearMonth)
         XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .yearMonth,
                                    calendar: .gregorianCurrent),
@@ -383,7 +399,8 @@ final class BackdateCarryOverTests: XCTestCase {
 
         let second = makeModel(recorder: recorder)
         await second.bootstrap()
-        XCTAssertFalse(second.backdateEnabled, "sanity: the undated capture below is genuinely undated")
+        XCTAssertTrue(second.backdateEnabled, "#183: the 1987 capture turns the toggle on at launch")
+        second.setBackdateEnabled(false)   // the owner's explicit off: this capture is undated
         let live = second.coordinator
         await second.record()
         await waitUntil({ live.phase == .recording }, "never started recording")
@@ -393,10 +410,13 @@ final class BackdateCarryOverTests: XCTestCase {
 
         let relaunched = makeModel()
         await relaunched.bootstrap()
+        XCTAssertFalse(relaunched.backdateEnabled,
+                       "#183 rule 3: the latest capture is undated, so the toggle starts off")
         relaunched.setBackdateEnabled(true)
         XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
                                    calendar: .gregorianCurrent),
-                       PartialDate(year: 1987, month: 6, day: 13))
+                       PartialDate(year: 1987, month: 6, day: 13),
+                       "#183 rule 5: a manual on still seeds from the last backdated capture")
     }
 
     /// Ruling 4: what was dialled this session outranks what is on disk, even when the
@@ -448,11 +468,11 @@ final class BackdateCarryOverTests: XCTestCase {
         let relaunched = makeModel()
         await relaunched.bootstrap()
         relaunched.selectJournal(a)
-        relaunched.setBackdateEnabled(true)
+        XCTAssertTrue(relaunched.backdateEnabled, "#183: A's own history turns it on")
         XCTAssertEqual(PartialDate(from: relaunched.backdateDate, precision: .day,
                                    calendar: .gregorianCurrent),
                        PartialDate(year: 1987, month: 6, day: 13))
-        // The toggle stays on across the switch: B is pre-filled from B's own history.
+        // The switch re-decides the toggle from B's own history: on, at B's seed.
         relaunched.selectJournal(b.id)
         XCTAssertTrue(relaunched.backdateEnabled)
         XCTAssertEqual(relaunched.seededBackdate(), PartialDate(year: 1999, month: 1, day: 2),
@@ -469,10 +489,54 @@ final class BackdateCarryOverTests: XCTestCase {
     func testAJournalWithNoBackdatedEntrySeedsNothing() async throws {
         let model = makeModel()
         await model.bootstrap()
+        XCTAssertFalse(model.backdateEnabled, "#183 rule 3: nothing to follow, so off")
         XCTAssertNil(model.seededBackdate())
         model.setBackdateEnabled(true)
         XCTAssertEqual(Calendar.gregorianCurrent.component(.year, from: model.backdateDate),
                        Calendar.gregorianCurrent.component(.year, from: Date()))
         XCTAssertEqual(model.backdatePrecision, .day)
+    }
+
+    // MARK: capture follows the last-viewed journal (#183 rule 1)
+
+    /// Looking at a journal anywhere in the app makes it the capture journal, and the
+    /// choice persists like the picker's own (a relaunch opens on it).
+    func testCaptureAdoptsTheLastViewedJournal() async throws {
+        let model = makeModel()
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+        let created = await model.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+        XCTAssertEqual(model.selectedJournalID, b.id, "sanity: creating selects")
+
+        model.adoptViewedJournal(a)
+        XCTAssertEqual(model.selectedJournalID, a)
+
+        let relaunched = makeModel()
+        await relaunched.bootstrap()
+        XCTAssertEqual(relaunched.selectedJournalID, a, "viewing persisted the preference")
+    }
+
+    /// The guard: browsing another journal while a reading is under way must leave that
+    /// reading — including which journal it is filed in — exactly alone.
+    func testViewingAJournalMidRecordingDoesNotRefileTheCapture() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let a = try XCTUnwrap(model.selectedJournalID)
+        let created = await model.createJournal(name: "Other")
+        let b = try XCTUnwrap(created)
+        model.selectJournal(a)
+
+        let live = model.coordinator
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        model.adoptViewedJournal(b.id)
+        XCTAssertEqual(model.selectedJournalID, a, "a live capture is never re-filed by browsing")
+
+        recorder.feed(frames: 48_000)
+        await model.done()
+        await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
+        XCTAssertEqual(model.selectedJournalID, a, "and finishing does not adopt it retroactively")
     }
 }

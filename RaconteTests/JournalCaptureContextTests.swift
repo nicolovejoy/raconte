@@ -490,9 +490,9 @@ final class JournalCaptureContextTests: XCTestCase {
     /// NOT discriminate the #67-class guard from its removal — `JournalSelection.resolve`
     /// is idempotent whenever the stored id still resolves, so an unconditional
     /// re-resolve on every rescan would land on the same id either way. What the guard
-    /// actually suppresses is `resolveBackdateForJournalChange()`/`syncActiveEntryMetadata()`
+    /// actually suppresses is `resolveBackdateDefault()`/`syncActiveEntryMetadata()`
     /// firing on every rescan regardless of relevance — and
-    /// `resolveBackdateForJournalChange()` re-anchors `backdateDate` off the carried
+    /// `resolveBackdateDefault()` re-anchors `backdateDate` off the carried
     /// `PartialDate` (noon for `.day` precision), which is a DIFFERENT instant than
     /// whatever exact `Date` the owner actually dialled unless it happened to already be
     /// noon. A background rescan silently nudging a live backdate is the same bug class

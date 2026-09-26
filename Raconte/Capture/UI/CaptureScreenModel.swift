@@ -156,7 +156,16 @@ final class CaptureScreenModel {
     /// (#175 softens that for the first toggle-on after a relaunch: with nothing carried,
     /// `seededBackdate()` reads the journal's own last backdated entry off the library
     /// instead of opening at today.)
-    private var carriedBackdates: [String: PartialDate] = [:]
+    ///
+    /// #183 rule 4: an explicit toggle-OFF is a session choice too. History
+    /// (`resolveBackdateDefault`) turns the toggle on by itself now, so without an
+    /// `.off` entry a journal switch and back would flip it on again under the owner.
+    /// The automatic default itself is never written here — it is history, not a choice.
+    private enum SessionBackdate {
+        case off
+        case on(PartialDate)
+    }
+    private var sessionBackdates: [String: SessionBackdate] = [:]
 
     /// Launch-recovered captures the user hasn't dismissed (via Keep/Delete) yet.
     var visibleRecovered: [RecoveredRecording] {
@@ -352,6 +361,10 @@ final class CaptureScreenModel {
         // next real capture's early `.captured` flip finds nothing to drain.
         coordinator.consumeFinalized(recoveredQueue)
         await library.rescan()
+        // #183: the launch default for the toggle reads the journal's history, which is
+        // `library.allEntries` — empty until the rescan above. `resolveCurrentJournal()`
+        // ran first because recovery needs the journal; the toggle can wait for the scan.
+        resolveBackdateDefault()
         // Fire-and-forget corpus promotion (T6c) + head-cache stamping (T7 Task 3 fix
         // round 2) + stale-draft recovery (T7 prereq #41), ONE Task, sequential: the
         // library is already on screen and showing today's `live.jsonl` text via the
@@ -521,7 +534,8 @@ final class CaptureScreenModel {
 
     /// Switch the journal captures file into. If a capture is live, its sidecar is
     /// updated immediately — the file that's on disk when the app is killed must never
-    /// disagree with what the header showed.
+    /// disagree with what the header showed. The backdate toggle and date follow the
+    /// journal (#183): its session choice if any, else its own history.
     ///
     /// Synchronous: it only touches main-actor state and *enqueues* the sidecar write.
     /// Every intent that can change what the sidecar should say is synchronous for that
@@ -530,8 +544,20 @@ final class CaptureScreenModel {
         guard journals.contains(where: { $0.id == id }) else { return }
         selectedJournalID = id
         currentJournal.select(id)
-        resolveBackdateForJournalChange()
+        resolveBackdateDefault()
         syncActiveEntryMetadata()
+    }
+
+    /// #183 rule 1: the owner looked at a journal (sidebar, Home), so it becomes the
+    /// capture journal — through `selectJournal`, the same path the capture screen's own
+    /// picker uses, so the two never disagree about what selecting means. Guarded to an
+    /// idle capture, and BEFORE the select, for the reason `beginCapture(inJournal:)`
+    /// spells out: browsing journal B while a reading into A is under way must leave that
+    /// reading exactly alone, including which journal it is filed in.
+    func adoptViewedJournal(_ id: String) {
+        guard coordinator.phase == .idle else { return }
+        guard id != selectedJournalID else { return }
+        selectJournal(id)
     }
 
     /// `library.journals` (what the sidebar reads) and this model's own `journals` (the
@@ -549,7 +575,7 @@ final class CaptureScreenModel {
         journals = (journals + [created]).displayOrdered
         selectedJournalID = created.id
         currentJournal.select(created.id)
-        resolveBackdateForJournalChange()
+        resolveBackdateDefault()
         syncActiveEntryMetadata()
         await library.rescan()
         return created
@@ -564,8 +590,9 @@ final class CaptureScreenModel {
     /// advanced a day (#175, `BackdateSeed`) — date and precision together, since carrying
     /// a 1987 day-precision picker over a year-precision sitting would re-invent the
     /// fabricated-day problem.
-    /// The toggle itself is never flipped on automatically: pre-filling a field the owner
-    /// opened is help, opening it for him is a decision he did not make.
+    /// This is the owner's hand on the toggle. The toggle also starts on BY ITSELF when
+    /// the journal's latest capture is backdated (#183, `resolveBackdateDefault`); an
+    /// explicit off here outranks that for the rest of the session (rule 4).
     func setBackdateEnabled(_ enabled: Bool) {
         let wasEnabled = backdateEnabled
         backdateEnabled = enabled
@@ -582,6 +609,7 @@ final class CaptureScreenModel {
         } else {
             backdateDate = Date()
             backdatePrecision = .day
+            if let journalID = selectedJournalID { sessionBackdates[journalID] = .off }
         }
         // The explicit toggle-off must still clear the sidecar's date — unlike a
         // phase re-entry sync (see `enqueueEntryMetadataWrite`), this IS the user
@@ -604,7 +632,9 @@ final class CaptureScreenModel {
     /// The carried backdate for the currently selected journal, if any. Exposed for the
     /// tests that pin the carry-over rule; the view reads it only through the pre-fill.
     func carriedBackdate() -> PartialDate? {
-        selectedJournalID.flatMap { carriedBackdates[$0] }
+        guard let journalID = selectedJournalID,
+              case .on(let carried)? = sessionBackdates[journalID] else { return nil }
+        return carried
     }
 
     /// #175: the pre-fill when nothing has been carried this session — the day after the
@@ -616,25 +646,40 @@ final class CaptureScreenModel {
         return BackdateSeed.seed(from: library.allEntries, journalID: journalID, now: now)
     }
 
-    /// Re-anchors the live backdate picker to the JUST-selected journal, when the toggle
-    /// is on. Carry-over is per journal (M3 issue #15, owner decision) — leaving
-    /// `backdateDate`/`backdatePrecision` untouched across a journal switch would carry
-    /// journal A's dialled date into journal B's next capture, which is not what "on"
-    /// means for B. The toggle itself is left alone: switching journals is not the
-    /// owner turning backdating off.
+    /// Settles the toggle AND the picker for the selected journal (#183). Runs at the
+    /// moments the journal comes into selection with the picker unattended: launch (after
+    /// the library scan has landed — `performBootstrap`), and every journal switch
+    /// (`selectJournal`, `createJournal`). After a capture commits, #47's
+    /// `advanceBackdateForNextEntry` already leaves the same answer.
     ///
-    /// Must run AFTER `selectedJournalID` is updated to the new journal (so
-    /// `carriedBackdate()` reads B's entry, not A's) and does not call `rememberBackdate()`
-    /// — writing the resolved value back would either re-stamp B's own carry with itself
-    /// or, worse, invent a carry for B out of a same-session default.
-    private func resolveBackdateForJournalChange() {
-        guard backdateEnabled else { return }
-        // Same precedence as `setBackdateEnabled`: this session's carry, else the
-        // journal's own history (#175), else today. Still no `rememberBackdate()`.
-        if let prefill = carriedBackdate() ?? seededBackdate() {
-            backdateDate = prefill.anchorDate(calendar: .gregorianCurrent)
-            backdatePrecision = prefill.precision
+    /// Precedence: this session's choice for the journal — a dialled date (on, at that
+    /// date) or an explicit off — else the journal's own history: on at
+    /// `BackdateSeed.automatic` when its latest capture is backdated, otherwise off at
+    /// today. Carry-over is per journal (M3 issue #15): journal A's dialled 1987 must never
+    /// leak into journal B's next capture, so B is resolved from B's state alone.
+    ///
+    /// Must run AFTER `selectedJournalID` is updated to the new journal (so the session
+    /// lookup reads B's entry, not A's) and never calls `rememberBackdate()` — writing the
+    /// resolved value back would either re-stamp B's own carry with itself or, worse,
+    /// turn a default read off disk into a choice the owner never made.
+    private func resolveBackdateDefault(now: Date = Date()) {
+        let resolved: PartialDate?
+        switch selectedJournalID.flatMap({ sessionBackdates[$0] }) {
+        case .on(let carried)?:
+            resolved = carried
+        case .off?:
+            resolved = nil
+        case nil:
+            resolved = selectedJournalID.flatMap {
+                BackdateSeed.automatic(from: library.allEntries, journalID: $0, now: now)
+            }
+        }
+        if let resolved {
+            backdateEnabled = true
+            backdateDate = resolved.anchorDate(calendar: .gregorianCurrent)
+            backdatePrecision = resolved.precision
         } else {
+            backdateEnabled = false
             backdateDate = Date()
             backdatePrecision = .day
         }
@@ -644,9 +689,9 @@ final class CaptureScreenModel {
     /// disabled backdate is "use the capture's own date", which is nothing to carry.
     private func rememberBackdate() {
         guard backdateEnabled, let journalID = selectedJournalID else { return }
-        carriedBackdates[journalID] = PartialDate(from: backdateDate,
-                                                  precision: backdatePrecision,
-                                                  calendar: .gregorianCurrent)
+        sessionBackdates[journalID] = .on(PartialDate(from: backdateDate,
+                                                      precision: backdatePrecision,
+                                                      calendar: .gregorianCurrent))
     }
 
     /// #47: after a day-precision backdated capture commits, pre-fill the NEXT reading
@@ -1022,7 +1067,7 @@ extension CaptureScreenModel: LibraryRescanObserver {
         case .existing(let id):
             self.selectedJournalID = id
             currentJournal.select(id)
-            resolveBackdateForJournalChange()
+            resolveBackdateDefault()
             syncActiveEntryMetadata()
         case .needsDefault:
             // The registry has gone from "the selected journal is gone" to "every
@@ -1039,7 +1084,7 @@ extension CaptureScreenModel: LibraryRescanObserver {
                 self.journals = (self.journals + [created]).displayOrdered
                 self.selectedJournalID = created.id
                 self.currentJournal.select(created.id)
-                self.resolveBackdateForJournalChange()
+                self.resolveBackdateDefault()
                 self.syncActiveEntryMetadata()
                 // Same convention as `createJournal` (see its doc comment above):
                 // `library.journals` and this model's own `journals` are separate

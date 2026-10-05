@@ -35,12 +35,20 @@ enum BackdateSeed {
     /// toggle start on — and then at `seed`, which that same capture is the source of.
     /// An undated latest capture means the owner has moved on to dating by capture day,
     /// so the toggle starts off; a manual toggle-on still gets `seed` (rule 5).
+    ///
+    /// Never on just to say today (owner, build 23 smoke): a backdate of today is the same
+    /// as no backdate, so a seed that resolves to today at `.day` — the latest entry was
+    /// dated today, yesterday, or in the future — starts off. `seed` itself still says
+    /// today for the manual path.
     static func automatic(from entries: [EntryListItem], journalID: String,
                           now: Date = Date(), calendar: Calendar = .gregorianCurrent) -> PartialDate? {
         let latest = entries
             .filter { $0.journalID == journalID && !$0.isTrashed }
             .max { $0.capturedAt < $1.capturedAt }
-        guard latest?.originalDate != nil else { return nil }
-        return seed(from: entries, journalID: journalID, now: now, calendar: calendar)
+        guard latest?.originalDate != nil,
+              let next = seed(from: entries, journalID: journalID, now: now, calendar: calendar)
+        else { return nil }
+        let today = PartialDate(from: now, precision: .day, calendar: calendar)
+        return next == today ? nil : next
     }
 }

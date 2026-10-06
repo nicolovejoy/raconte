@@ -41,11 +41,9 @@ struct ImageCapturePickerSheet: View {
     @State private var batch = ImageCaptureBatch()
     #if os(iOS)
     @State private var showingCamera = false
-    /// Set by the camera's completion closure, applied once `fullScreenCover` has
-    /// actually dismissed — see `JournalCoverPickerSheet`'s identical field for why
-    /// (setting `pickError` in the same turn as `showingCamera = false` can race the
-    /// cover's own dismissal and drop the alert).
-    @State private var pendingCameraError = false
+    /// Raises `pickError` for a failed shot once the cover is down, whichever of the
+    /// two arrives first (#182) — same field, same reason as `JournalCoverPickerSheet`.
+    @State private var cameraError = CameraErrorRelay()
     #else
     @State private var showingFileImporter = false
     #endif
@@ -99,18 +97,24 @@ struct ImageCapturePickerSheet: View {
                 showingCamera = false
                 if let data {
                     Task {
-                        // Landed: stay up for the next shot (#134). Failed: the same
-                        // deferred alert as before; the tally is untouched.
-                        if await onPick(data, .jpeg) { batch.recordLanded() } else { pendingCameraError = true }
+                        // Landed: stay up for the next shot (#134). Failed: alert once
+                        // the cover is down; the tally is untouched.
+                        if await onPick(data, .jpeg) {
+                            batch.recordLanded()
+                        } else if cameraError.addFailed() {
+                            pickError = true
+                        }
                     }
                 }
             }
             .ignoresSafeArea()
         }
         .onChange(of: showingCamera) { _, isShowing in
-            guard !isShowing, pendingCameraError else { return }
-            pendingCameraError = false
-            pickError = true
+            if isShowing {
+                cameraError.cameraPresented()
+            } else if cameraError.coverDismissed() {
+                pickError = true
+            }
         }
         #else
         .fileImporter(isPresented: $showingFileImporter, allowedContentTypes: [.image],

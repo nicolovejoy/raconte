@@ -26,10 +26,12 @@ struct JournalCoverPickerSheet: View {
     @State private var pickError = false
     #if os(iOS)
     @State private var showingCamera = false
-    /// Set by the camera's completion closure, applied once `fullScreenCover` has
-    /// actually dismissed — setting `pickError` in the same turn as `showingCamera =
-    /// false` can race the cover's own dismissal and drop the alert.
-    @State private var pendingCameraError = false
+    /// Raises `pickError` for a failed shot once the cover is down, whichever of the
+    /// cover's dismissal and the add's verdict arrives first (#182). Setting `pickError`
+    /// in the same turn as `showingCamera = false` races the cover's own dismissal and
+    /// drops the alert; a flag consumed only from `.onChange(of: showingCamera)` fired
+    /// before the verdict existed and alerted on the NEXT round-trip instead.
+    @State private var cameraError = CameraErrorRelay()
     #endif
 
     var body: some View {
@@ -93,16 +95,22 @@ struct JournalCoverPickerSheet: View {
                 showingCamera = false
                 if let data {
                     Task {
-                        if await onPick(data) { dismiss() } else { pendingCameraError = true }
+                        if await onPick(data) {
+                            dismiss()
+                        } else if cameraError.addFailed() {
+                            pickError = true
+                        }
                     }
                 }
             }
             .ignoresSafeArea()
         }
         .onChange(of: showingCamera) { _, isShowing in
-            guard !isShowing, pendingCameraError else { return }
-            pendingCameraError = false
-            pickError = true
+            if isShowing {
+                cameraError.cameraPresented()
+            } else if cameraError.coverDismissed() {
+                pickError = true
+            }
         }
         #endif
     }

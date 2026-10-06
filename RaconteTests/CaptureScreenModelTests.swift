@@ -35,16 +35,28 @@ final class ModelFakeRecorder: EngineRecording, @unchecked Sendable {
 
 @MainActor
 final class CaptureScreenModelTests: XCTestCase {
+    /// One container per test, with `root` its captures directory — the
+    /// `BackdateCarryOverTests` shape (#177). A bare temp directory as `capturesRoot` made
+    /// `AppContainer.containerRoot(capturesRoot:)` (= `deletingLastPathComponent()`) resolve
+    /// to the SHARED system temp dir, so every test in this file, in every run on the
+    /// machine, read and wrote one `$TMPDIR/journals.json` — 814 journals deep on the laptop
+    /// by 2026-09-25, 0.6 s per `rescan()`.
+    private var containerRoot: URL!
     private var root: URL!
+    /// In-memory, per test: the initializer's default is `UserDefaultsJournalPreferenceStore`,
+    /// which leaks `currentJournalID` into the test host's real `UserDefaults.standard`.
+    private var prefs: InMemoryJournalPreferenceStore!
 
     override func setUpWithError() throws {
-        root = FileManager.default.temporaryDirectory
+        containerRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("CaptureScreenModelTests-\(UUID().uuidString)", isDirectory: true)
+        root = AppContainer.capturesRoot(containerRoot: containerRoot)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        prefs = InMemoryJournalPreferenceStore()
     }
 
     override func tearDownWithError() throws {
-        if let root { try? FileManager.default.removeItem(at: root) }
+        if let containerRoot { try? FileManager.default.removeItem(at: containerRoot) }
     }
 
     private func waitUntil(_ predicate: @escaping () -> Bool,
@@ -70,7 +82,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: encoder)
+            encoder: encoder,
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         let liveCoordinator = model.coordinator
 
@@ -167,7 +180,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         let liveCoordinator = model.coordinator
 
@@ -206,7 +220,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: encoder)
+            encoder: encoder,
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         for cycle in 1...10 {
@@ -235,7 +250,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         let live = model.coordinator
         await model.record()
@@ -250,7 +266,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await relaunch.bootstrap()
 
         XCTAssertTrue(relaunch.visibleRecovered.isEmpty, "spurious recovery banner")
@@ -265,7 +282,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         let coordinator = model.coordinator
         model.handleFinalizeQueue()   // queue empty and/or phase idle → no-op
@@ -304,7 +322,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: encoder)
+            encoder: encoder,
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         let live = model.coordinator
@@ -358,7 +377,8 @@ final class CaptureScreenModelTests: XCTestCase {
             makeRecorder: { recorder },
             encoder: FakeAudioEncoder(),
             makeSecondarySink: { [weak transcription] id in transcription?.begin(captureID: id) },
-            transcription: transcription)
+            transcription: transcription,
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         await model.record()
@@ -405,13 +425,7 @@ final class CaptureScreenModelTests: XCTestCase {
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
             encoder: FakeAudioEncoder(),
-            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
-            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
-            // `root` (a direct child of the shared system temp dir) lands on that
-            // SHARED temp dir. Without this override every test in this file writes
-            // `journals.json` to the same place and pollutes every other test's
-            // journal list.
-            journalsContainerRoot: root)
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         XCTAssertEqual(model.selectedJournalVoiceLabels, [:])
@@ -432,13 +446,7 @@ final class CaptureScreenModelTests: XCTestCase {
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
             encoder: FakeAudioEncoder(),
-            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
-            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
-            // `root` (a direct child of the shared system temp dir) lands on that
-            // SHARED temp dir. Without this override every test in this file writes
-            // `journals.json` to the same place and pollutes every other test's
-            // journal list.
-            journalsContainerRoot: root)
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         let id = try XCTUnwrap(model.selectedJournalID,
@@ -457,13 +465,7 @@ final class CaptureScreenModelTests: XCTestCase {
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
             encoder: FakeAudioEncoder(),
-            // Explicit, root-scoped registry root — `AppContainer.containerRoot(capturesRoot:)`
-            // is `capturesRoot.deletingLastPathComponent()`, which for this file's
-            // `root` (a direct child of the shared system temp dir) lands on that
-            // SHARED temp dir. Without this override every test in this file writes
-            // `journals.json` to the same place and pollutes every other test's
-            // journal list.
-            journalsContainerRoot: root)
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         let id = try XCTUnwrap(model.selectedJournalID,
                                "harness failure: no default journal selected after bootstrap")
@@ -497,7 +499,7 @@ final class CaptureScreenModelTests: XCTestCase {
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
             encoder: FakeAudioEncoder(),
-            journalsContainerRoot: root)
+            journalPreferenceStore: prefs)
         await model.bootstrap()
 
         let result = await model.createJournal(name: "Second Journal")
@@ -539,7 +541,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
-            encoder: encoder)
+            encoder: encoder,
+            journalPreferenceStore: prefs)
         model.attach(syncHooks: hooks)
 
         await model.bootstrap()
@@ -562,7 +565,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { ModelFakeRecorder() },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
 
         // The first caller does the real work. The second must not be told "done" until
         // that work has actually finished — `beginCapture(inJournal:)` starts a recording
@@ -595,7 +599,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
 
         await model.beginCapture()
 
@@ -612,7 +617,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         guard let target = await model.createJournal(name: "Letters") else {
             return XCTFail("could not create the target journal")
@@ -642,7 +648,8 @@ final class CaptureScreenModelTests: XCTestCase {
             capturesRoot: root,
             makeSession: { ModelFakeSession() },
             makeRecorder: { recorder },
-            encoder: FakeAudioEncoder())
+            encoder: FakeAudioEncoder(),
+            journalPreferenceStore: prefs)
         await model.bootstrap()
         guard let other = await model.createJournal(name: "Elsewhere") else {
             return XCTFail("could not create the second journal")

@@ -119,4 +119,109 @@ final class BackdateSeedTests: XCTestCase {
         XCTAssertNil(BackdateSeed.seed(from: entries, journalID: "A", now: date(2026, 9, 25)))
         XCTAssertNil(BackdateSeed.seed(from: [], journalID: "A", now: date(2026, 9, 25)))
     }
+
+    // MARK: #183 — the automatic default
+
+    /// #183 rule 2: the journal's LATEST untrashed capture is backdated, so the toggle
+    /// starts on, at the same seed the manual path gives.
+    func testAutomaticSeedWhenTheLatestEntryIsBackdated() {
+        let entries = [item(journal: "A", capturedAt: date(2026, 9, 1),
+                            backdate: PartialDate(year: 1987, month: 6, day: 12))]
+        XCTAssertEqual(BackdateSeed.automatic(from: entries, journalID: "A", now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
+    /// #183 rule 3 beside rule 5: an undated capture AFTER the backdated one means the
+    /// toggle starts off — while a manual toggle-on still seeds from the backdated one.
+    func testNoAutomaticSeedWhenTheLatestEntryIsUndated() {
+        let entries = [
+            item(journal: "A", capturedAt: date(2026, 9, 1),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12)),
+            item(journal: "A", capturedAt: date(2026, 9, 2), backdate: nil)
+        ]
+        XCTAssertNil(BackdateSeed.automatic(from: entries, journalID: "A", now: date(2026, 9, 25)))
+        XCTAssertEqual(BackdateSeed.seed(from: entries, journalID: "A", now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13),
+                       "the manual seed is unchanged (rule 5)")
+    }
+
+    /// Coarser precision comes through the automatic path unchanged too.
+    func testAutomaticSeedKeepsCoarserPrecision() {
+        let entries = [item(journal: "A", capturedAt: date(2026, 9, 1),
+                            backdate: PartialDate(year: 1987, month: 6))]
+        XCTAssertEqual(BackdateSeed.automatic(from: entries, journalID: "A", now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6))
+    }
+
+    /// A trashed latest capture does not decide the default; the newest untrashed one does.
+    func testAutomaticSeedSkipsATrashedLatestEntry() {
+        let entries = [
+            item(journal: "A", capturedAt: date(2026, 9, 1),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12)),
+            item(journal: "A", capturedAt: date(2026, 9, 2), backdate: nil, trashed: true)
+        ]
+        XCTAssertEqual(BackdateSeed.automatic(from: entries, journalID: "A", now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
+    /// Owner, 2026-09-25 (build 23 smoke, errand 2): a backdate of today is the same as no
+    /// backdate, so the automatic default never turns the toggle on just to say today. A
+    /// latest entry dated today, yesterday (next day = today) or in the future (clamped to
+    /// today) all start off. The MANUAL seed is unchanged: it still says today.
+    func testAutomaticSeedNeverTurnsTheToggleOnJustToSayToday() {
+        let now = date(2026, 9, 25)
+        let today = PartialDate(from: now, precision: .day, calendar: calendar)
+        for backdate in [PartialDate(year: 2026, month: 9, day: 25),
+                         PartialDate(year: 2026, month: 9, day: 24),
+                         PartialDate(year: 2026, month: 10, day: 1)] {
+            let entries = [item(journal: "A", capturedAt: now, backdate: backdate)]
+            XCTAssertNil(BackdateSeed.automatic(from: entries, journalID: "A", now: now),
+                         "latest backdated to \(backdate) must not auto-enable")
+            XCTAssertEqual(BackdateSeed.seed(from: entries, journalID: "A", now: now), today,
+                           "the manual seed still says today")
+        }
+        // Two days back seeds yesterday, which is a real backdate — still on.
+        let twoDaysBack = [item(journal: "A", capturedAt: now,
+                                backdate: PartialDate(year: 2026, month: 9, day: 23))]
+        XCTAssertEqual(BackdateSeed.automatic(from: twoDaysBack, journalID: "A", now: now),
+                       PartialDate(year: 2026, month: 9, day: 24))
+        // Month precision for the current month is not "today" — it stays on.
+        let thisMonth = [item(journal: "A", capturedAt: now,
+                              backdate: PartialDate(year: 2026, month: 9))]
+        XCTAssertEqual(BackdateSeed.automatic(from: thisMonth, journalID: "A", now: now),
+                       PartialDate(year: 2026, month: 9))
+    }
+
+    /// "Latest" is by `capturedAt`, whatever order the list arrives in — `allEntries` is
+    /// not promised to be ascending, and a `.last`/`.first` shortcut would read the wrong
+    /// entry. Newest-first here; every other fixture in this file is oldest-first.
+    func testAutomaticSeedReadsTheLatestRegardlessOfListOrder() {
+        let newestFirst = [
+            item(journal: "A", capturedAt: date(2026, 9, 2), backdate: nil),
+            item(journal: "A", capturedAt: date(2026, 9, 1),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12))
+        ]
+        XCTAssertNil(BackdateSeed.automatic(from: newestFirst, journalID: "A", now: date(2026, 9, 25)),
+                     "the newest capture is the undated one, wherever it sits in the list")
+        let newestFirstBackdated = [
+            item(journal: "A", capturedAt: date(2026, 9, 2),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12)),
+            item(journal: "A", capturedAt: date(2026, 9, 1), backdate: nil)
+        ]
+        XCTAssertEqual(BackdateSeed.automatic(from: newestFirstBackdated, journalID: "A",
+                                              now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13))
+    }
+
+    /// Another journal's newer undated capture is not this journal's latest.
+    func testAutomaticSeedIsPerJournal() {
+        let entries = [
+            item(journal: "A", capturedAt: date(2026, 9, 1),
+                 backdate: PartialDate(year: 1987, month: 6, day: 12)),
+            item(journal: "B", capturedAt: date(2026, 9, 2), backdate: nil)
+        ]
+        XCTAssertEqual(BackdateSeed.automatic(from: entries, journalID: "A", now: date(2026, 9, 25)),
+                       PartialDate(year: 1987, month: 6, day: 13))
+        XCTAssertNil(BackdateSeed.automatic(from: entries, journalID: "B", now: date(2026, 9, 25)))
+    }
 }

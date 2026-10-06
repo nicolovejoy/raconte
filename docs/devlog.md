@@ -3,6 +3,36 @@
 Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to keep that file a lean operating manual. Newest entries first.
 
 
+## Session 2026-09-10 (laptop — #174 smoked both platforms + merged, verifier `.DS_Store` fix, worktrees cleaned)
+
+- **#172 had merged** since the last handoff and PR #174 already carried the correct
+  `TypeScaleTests` resolution (enrollment line in `paperScreenFiles`); `git merge-tree` clean.
+- **PR #174 owner smoke, both platforms, 5/5 each.** Mac: build 20 then 21 from the branch to
+  `/Applications/Raconte.app`. iPhone: build 21 via `scripts/upload_testflight.sh ios` (real
+  data, iCloud Drive `export-smoke` folder). Full export 52 entries; scoped package
+  `68 files, no problems`.
+- **Build-20 smoke 4 found a pre-existing verifier gap:** `ArchiveVerifier` (#151/#158) counted
+  Finder's `.DS_Store` (root and `entries/`) as `unlistedFile`, and the Verify open panel rewrites
+  the root one on every pick, so every package the owner ever browsed would fail. Fixed on the
+  branch: enumerate with `.skipsHiddenFiles`; `testFinderDSStoreFilesAreIgnored` plants three
+  `.DS_Store` files plus one non-hidden stray and asserts only the stray is reported (RED with all
+  three listed before the fix, GREEN after). Commit `145e75f5`.
+- **#174 merged** (`d0999afa`). Both SDD worktrees (`raconte-wt-149`, `raconte-wt-157`) and their
+  branches removed; `xcodegen generate` re-run on main. Main's CI for the merge was still
+  in progress at handoff.
+- Builds 20 and 21 appended to `docs/builds.md`. `/Applications/Raconte.app` is currently
+  build 21 from the PR branch (source-identical to main after the merge).
+
+**Next steps:**
+1. Confirm main's CI run for the #174 merge is green (it was in progress at handoff).
+2. Build 22 from main → `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`) so the
+   owner's Mac app is a main build again. Optional; code is identical to build 21.
+3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
+   roles, then a sweep PR. #173 minors can ride along.
+4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still
+   `unknown` / `never`. Then T8; M4 acceptance gate still never run.
+
+
 ## Session 2026-09-09 (laptop — #167 merged, #157 export scope via SDD → PR #174, verified conflict with #172)
 
 - **#167 merged** (therapist one-pager docs, pure addition, no app code).

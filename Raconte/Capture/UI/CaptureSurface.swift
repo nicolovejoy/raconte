@@ -163,16 +163,10 @@ enum CaptureLabel: String, CaseIterable, Sendable {
     case journalName
     case journalPickerChevron
     case journalsUnreadable
-    case backdateToggle
-    case backdateFieldCaption
-    /// The macOS backdate day button (2026-08-15) — the Mac draws its own date button and
-    /// calendar sheet instead of a system date picker, so unlike the iOS `.compact` chip
-    /// this text is ours to size and colour, and therefore ours to check.
-    case backdateDateButton
     /// The one-line "Backdated to …" / "Not backdated" summary shown on Ready and
-    /// Recording alike (#118 §6) — the same role as `backdateDateButton`, just
-    /// cross-platform and reachable during a recording rather than only inside macOS's
-    /// own picker.
+    /// Recording alike (#118 §6). The editor it opens is a SHEET — paper, out of scope
+    /// here per the rule above — so the toggle, caption and Mac date button that used to
+    /// be cases of this enum were removed with #185.
     case backdateSummary
     /// Post-stop receipt (2026-08-15).
     case receiptDate
@@ -207,10 +201,8 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         // same full-white weight the journal name does.
         // The backdated date is a value the owner has to read back and confirm, not a
         // caption naming a control — full white, like the journal name and the receipt date.
-        case .journalName, .receiptDate, .receiptSavedChip,
-             .backdateDateButton, .backdateSummary: Self.primaryInk
-        case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-             .backdateFieldCaption, .journalPickerChevron,
+        case .journalName, .receiptDate, .receiptSavedChip, .backdateSummary: Self.primaryInk
+        case .journalHeaderCaption, .journalsUnreadable, .journalPickerChevron,
              .receiptSummary: Self.secondaryInk
         // Unmistakably red, lightened until it clears the same 7.0:1 floor as every grey
         // here (~8.8:1). Not the system red: dark-mode systemRed (1.0, 0.27, 0.23) is
@@ -230,19 +222,15 @@ enum CaptureLabel: String, CaseIterable, Sendable {
         case .iOS:
             switch self {
             case .journalName, .receiptDate: .title3   // 20
-            case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .journalPickerChevron,
-                 .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton, .backdateSummary,
+            case .journalHeaderCaption, .journalsUnreadable, .journalPickerChevron,
+                 .receiptSummary, .receiptSavedChip, .backdateSummary,
                  .errorBanner: .callout    // 16
             }
         case .macOS:
             switch self {
             case .journalName, .receiptDate: .title    // 22
-            case .journalHeaderCaption, .journalsUnreadable, .backdateToggle,
-                 .backdateFieldCaption, .journalPickerChevron,
-                 .receiptSummary,
-                 .receiptSavedChip, .backdateDateButton, .backdateSummary,
+            case .journalHeaderCaption, .journalsUnreadable, .journalPickerChevron,
+                 .receiptSummary, .receiptSavedChip, .backdateSummary,
                  .errorBanner: .title2     // 17
             }
         }

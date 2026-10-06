@@ -470,12 +470,19 @@ struct JournalHeaderView: View {
 /// materialized into its sidecar (`EntryMetadata.originalDate == nil` means "use the
 /// capture's own date"). Settable before or during recording (M3 T3); the model pushes
 /// every change straight to the live capture's `entry.json` when one is in progress.
-/// The backdate toggle plus its precision date picker, with no styling applied.
-/// `CompactBackdateSummary`'s sheet presents it in the system's own light/dark
-/// appearance — the same convention `JournalHeaderView`'s cover/voice-labels sheets
-/// already use, and the reason this content is factored out on its own (approach 2,
-/// 2026-08-16 IA discussion: the sheet needs the identical write-through bindings, just
-/// un-styled).
+/// The backdate toggle plus its precision date picker. `CompactBackdateSummary`'s sheet
+/// presents it in the system's own light/dark appearance — the same convention
+/// `JournalHeaderView`'s cover/voice-labels sheets already use, and the reason this content
+/// is factored out on its own (approach 2, 2026-08-16 IA discussion: the sheet needs the
+/// identical write-through bindings).
+///
+/// A sheet is a PAPER surface, so its labels take `TypeRole` + `InkTone` like every other
+/// sheet, never `captureLabel` (#185). The editor was inline on the studio ground when its
+/// labels were first given the studio's near-white ink; #118 §6 moved it into this sheet
+/// and the ink came along, so in light mode the toggle label, the caption and the Mac's
+/// date button were white on white — "I couldn't see the date picker until I clicked on a
+/// blank white space" (owner, build 24 smoke, 2026-10-05). The paper calendar popover
+/// underneath was already right, which is why the blind click worked.
 struct BackdateEditorContent: View {
     let model: CaptureScreenModel
 
@@ -489,7 +496,8 @@ struct BackdateEditorContent: View {
                 set: { model.setBackdateEnabled($0) }
             )) {
                 Text("Backdate this entry")
-                    .captureLabel(.backdateToggle)
+                    .font(TypeRole.body.font)
+                    .foregroundStyle(InkTone.ink.color)
             }
             .accessibilityIdentifier("capture.backdateToggle")
             // `.switch`, not the platform-default checkbox: a checkbox's outline-only
@@ -503,7 +511,8 @@ struct BackdateEditorContent: View {
             // feedback, 2026-08-02). The row itself is the affordance.
             VStack(alignment: .leading, spacing: 4) {
                 Text("Entry date")
-                    .captureLabel(.backdateFieldCaption)
+                    .font(TypeRole.secondary.font)
+                    .foregroundStyle(InkTone.inkSecondary.color)
                 PrecisionDatePicker(
                     date: Binding(get: { model.backdateDate }, set: { model.setBackdateDate($0) }),
                     precision: Binding(get: { model.backdatePrecision }, set: { model.setBackdatePrecision($0) }),

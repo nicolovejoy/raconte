@@ -84,9 +84,8 @@ struct PrecisionDatePicker: View {
             // the iphone" (owner, same day, final smoke).
             //
             // So this stops asking the system for a presentation it will not let us style.
-            // The button is ours — sized and coloured through `CaptureLabel`, and therefore
-            // checked by `CaptureLabelTests` like every other label on this surface — and
-            // the calendar opens in a popover that is its own paper card
+            // The button is ours — sized and coloured as paper, since the editor sits in a
+            // sheet (#118 §6, #185) — and the calendar opens in a popover that is its own paper card
             // (`InkTone.paperInset`, ambient scheme, with the foreground reset inside it,
             // #149), and month + year dropdowns above it. Nothing about how it reads depends
             // on whether
@@ -180,17 +179,20 @@ struct PrecisionDatePicker: View {
                 Text(date.formatted(date: .long, time: .omitted))
                 Spacer(minLength: 0)
             }
-            .captureLabel(.backdateDateButton)
+            // Paper ink, not `captureLabel`: this button lives in the backdate SHEET (#118
+            // §6), a paper surface, where the studio's near-white ink and a white border
+            // were invisible in light mode (#185).
+            .font(TypeRole.body.font)
+            .foregroundStyle(InkTone.ink.color)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.white.opacity(0.28), lineWidth: 1))
+                    .strokeBorder(InkTone.hairline.color, lineWidth: 1))
             .contentShape(Rectangle())
         }
-        // `.plain`, so the button contributes no material of its own: the bordered default
-        // paints a light Aqua capsule that would be the dark-on-dark bug all over again on
-        // this near-black surface.
+        // `.plain`, so the button contributes no material of its own; the hairline border
+        // above is its whole chrome.
         .buttonStyle(.plain)
         // A button wrapping an icon + text is read out as two elements otherwise — the
         // flattening/splitting pair this screen has hit repeatedly.

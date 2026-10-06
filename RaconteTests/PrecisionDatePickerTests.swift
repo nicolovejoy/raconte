@@ -118,19 +118,22 @@ final class PrecisionDatePickerTests: XCTestCase {
         XCTAssertTrue(body.contains(".tint(Color.accentColor)"), "the tint reset stays")
     }
 
-    /// The button is a persistent label on the capture surface, so it is subject to the same
-    /// contrast and point-size floors as every other one. Routing it through `captureLabel`
-    /// is what puts it under `CaptureLabelTests` — a raw `.font(...)` here would render at
-    /// the Mac's smaller default scale and be invisible to those tests, which is how the
-    /// original legibility bug got in.
-    func testTheMacOSDateButtonIsDrawnAsACheckedCaptureLabel() throws {
-        XCTAssertTrue(
-            try pickerSource().contains(".captureLabel(.backdateDateButton)"),
-            "The Mac backdate button must draw itself with a CaptureLabel so its size and "
-            + "contrast are checked by CaptureLabelTests")
-        XCTAssertTrue(
-            CaptureLabel.allCases.contains(.backdateDateButton),
-            "backdateDateButton must be a CaptureLabel case for those floors to apply")
+    /// The button lives in the backdate SHEET (#118 §6), a paper surface, so it is drawn in
+    /// paper ink at a `TypeRole` size — never `captureLabel`, whose near-white studio ink
+    /// made the button (and its white border) invisible on the sheet's light material: "I
+    /// couldn't see the date picker until I clicked on a blank white space" (owner, 2026-10-05,
+    /// #185). The earlier pin here demanded the opposite, from when the editor was inline.
+    func testTheMacOSDateButtonIsDrawnInPaperInkNotStudioInk() throws {
+        let source = try pickerSource()
+        let button = try XCTUnwrap(source.range(of: "private var macDayButton"))
+        let body = String(source[button.lowerBound...].prefix(1600))
+        XCTAssertFalse(body.contains(".captureLabel("),
+                       "the sheet's date button must not take the studio's near-white ink")
+        XCTAssertFalse(body.contains("Color.white"),
+                       "no white literal: the border was white on the sheet's light material")
+        XCTAssertTrue(body.contains(".font(TypeRole.body.font)"), "a TypeRole size, so macOS matches iOS")
+        XCTAssertTrue(body.contains(".foregroundStyle(InkTone.ink.color)"), "paper ink")
+        XCTAssertTrue(body.contains("InkTone.hairline.color"), "the border is the paper hairline")
     }
 
     // MARK: - Picking a day in a past year (owner smoke, 2026-08-16)

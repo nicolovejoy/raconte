@@ -240,6 +240,90 @@ final class BackdateCarryOverTests: XCTestCase {
                        "the carry-over is the NEXT entry's date, so toggling off and on pre-fills the advanced day")
     }
 
+    /// #179: a sitting is many captures on ONE model. During #175 the seed tests were first
+    /// written in this shape and flaked under whole-class load; they were restructured to
+    /// one capture per model before the real cause — #176, the `.recording` sidecar write
+    /// racing the capture directory — was found and fixed, so #176 alone was never shown
+    /// to explain it. Two backdated captures on one model must both land their sidecars
+    /// with journal and backdate, and a third undated one must leave them untouched.
+    func testTwoBackdatedCapturesOnOneModelBothLandTheirSidecars() async throws {
+        let recorder = CarryOverFakeRecorder()
+        let model = makeModel(recorder: recorder)
+        await model.bootstrap()
+        let journalID = try XCTUnwrap(model.selectedJournalID, "no default journal after bootstrap")
+
+        model.setBackdateEnabled(true)
+        model.setBackdatePrecision(.day)
+        model.setBackdateDate(date(1987, 6, 12))
+        let first = try await commitCapture(model, recorder)
+        await waitForSidecar(first, "first capture's backdate never landed") {
+            $0.journalID == journalID && $0.originalDate == PartialDate(year: 1987, month: 6, day: 12)
+        }
+
+        // #47 has advanced the dial to the 13th; set the second date explicitly.
+        model.setBackdateDate(date(1987, 6, 20))
+        let second = try await commitCapture(model, recorder)
+        await waitForSidecar(second, "second capture's backdate never landed") {
+            $0.journalID == journalID && $0.originalDate == PartialDate(year: 1987, month: 6, day: 20)
+        }
+
+        model.setBackdateEnabled(false)
+        let third = try await commitCapture(model, recorder)
+        await waitForSidecar(third, "third capture should be filed and undated") {
+            $0.journalID == journalID && $0.originalDate == nil
+        }
+
+        // The earlier two are untouched by the later writes.
+        let firstMeta = try EntryMetadataStore.read(url: sidecarURL(first))
+        let secondMeta = try EntryMetadataStore.read(url: sidecarURL(second))
+        XCTAssertEqual(firstMeta.originalDate, PartialDate(year: 1987, month: 6, day: 12))
+        XCTAssertEqual(secondMeta.originalDate, PartialDate(year: 1987, month: 6, day: 20))
+        _ = await model.library.rescan()
+        let dates = Dictionary(uniqueKeysWithValues: model.library.allEntries
+            .map { ($0.captureID, $0.originalDate) })
+        XCTAssertEqual(dates[first], PartialDate(year: 1987, month: 6, day: 12))
+        XCTAssertEqual(dates[second], PartialDate(year: 1987, month: 6, day: 20))
+        XCTAssertEqual(dates[third], .some(nil), "third entry must be listed, undated")
+        XCTAssertEqual(Set([first, second, third]).count, 3)
+    }
+
+    /// Record → feed → done on the given model; returns the capture id once the commit
+    /// has handed the model a fresh coordinator.
+    private func commitCapture(_ model: CaptureScreenModel,
+                               _ recorder: CarryOverFakeRecorder) async throws -> String {
+        let live = model.coordinator
+        await model.record()
+        await waitUntil({ live.phase == .recording }, "never started recording")
+        let captureID = try XCTUnwrap(live.activeCaptureID)
+        recorder.feed(frames: 48_000)
+        await model.done()
+        await waitUntil({ model.coordinator !== live }, timeout: 10, "capture never finished")
+        return captureID
+    }
+
+    private func sidecarURL(_ captureID: String) -> URL {
+        SegmentLayout.entryMetadataURL(
+            captureDirectory: SegmentLayout.captureDirectory(capturesRoot: root, captureID: captureID))
+    }
+
+    /// The sidecar is written by a task the model enqueues, so assertions about it poll the
+    /// file rather than assuming the write has landed (the `JournalCaptureContextTests` shape).
+    private func waitForSidecar(_ captureID: String, timeout: TimeInterval = 5, _ message: String,
+                                file: StaticString = #filePath, line: UInt = #line,
+                                _ predicate: (EntryMetadata) -> Bool) async {
+        let url = sidecarURL(captureID)
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if let metadata = try? EntryMetadataStore.read(url: url), predicate(metadata) { return }
+            if Date() > deadline {
+                let text = (try? String(contentsOf: url, encoding: .utf8)) ?? "<no file>"
+                XCTFail("\(message) — sidecar is \(text)", file: file, line: line)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     /// Only `.day` advances — a journal covering 1998 does not turn a page per year.
     ///
     /// Asserts the dial itself at DAY resolution, not only the carried value: the carry is

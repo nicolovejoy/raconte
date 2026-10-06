@@ -193,6 +193,19 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertEqual(router.detailPath, [])
     }
 
+    /// #183 rule 1: the capture screen follows the journal the owner last looked at. The
+    /// router reports every journal place it selects, and only journal places.
+    func testSelectingAJournalPlaceReportsItAsViewed() {
+        let router = AppRouter()
+        var viewed: [String] = []
+        router.onJournalSelected = { viewed.append($0) }
+        router.select(.journal("A"))
+        router.select(.capture)
+        router.select(.allEntries)
+        router.select(.journal("B"))
+        XCTAssertEqual(viewed, ["A", "B"])
+    }
+
     // Table-driven over every fixed (non-journal) row so a single-field typo or a
     // whole-row corruption anywhere in the locked list is caught in one assertion,
     // rather than relying on scattered single-field checks elsewhere in this file.

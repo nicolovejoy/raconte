@@ -1,6 +1,7 @@
 import Foundation
 
 /// #175: the pre-fill for the backdate toggle when nothing has been carried this session.
+/// #183 adds `automatic`, the launch/journal-switch default that also decides the toggle.
 ///
 /// `CaptureScreenModel.carriedBackdates` is in-memory by design (a sitting's convenience,
 /// not a preference), so the first backdated entry after a relaunch used to open at today.
@@ -26,5 +27,28 @@ enum BackdateSeed {
             return PartialDate(from: now, precision: .day, calendar: calendar)
         }
         return next
+    }
+
+    /// #183 (rules 2 and 3): the seed to apply WITHOUT the owner touching the toggle, or
+    /// nil when the toggle should start off. Decided by the journal's LATEST untrashed
+    /// capture, whatever its date: only when that capture itself is backdated does the
+    /// toggle start on — and then at `seed`, which that same capture is the source of.
+    /// An undated latest capture means the owner has moved on to dating by capture day,
+    /// so the toggle starts off; a manual toggle-on still gets `seed` (rule 5).
+    ///
+    /// Never on just to say today (owner, build 23 smoke): a backdate of today is the same
+    /// as no backdate, so a seed that resolves to today at `.day` — the latest entry was
+    /// dated today, yesterday, or in the future — starts off. `seed` itself still says
+    /// today for the manual path.
+    static func automatic(from entries: [EntryListItem], journalID: String,
+                          now: Date = Date(), calendar: Calendar = .gregorianCurrent) -> PartialDate? {
+        let latest = entries
+            .filter { $0.journalID == journalID && !$0.isTrashed }
+            .max { $0.capturedAt < $1.capturedAt }
+        guard latest?.originalDate != nil,
+              let next = seed(from: entries, journalID: journalID, now: now, calendar: calendar)
+        else { return nil }
+        let today = PartialDate(from: now, precision: .day, calendar: calendar)
+        return next == today ? nil : next
     }
 }

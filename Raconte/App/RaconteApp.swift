@@ -47,6 +47,10 @@ final class AppServices {
         // exists, for the same construction-order reason `SyncCoordinator.live`
         // attaches the library's stores after building the coordinator.
         if let sync { capture.attach(syncHooks: sync) }
+        // #183 rule 1: sidebar/Home → journal makes that journal the capture journal, so
+        // the Capture row (and Home's "New entry", and All Entries' record button) file
+        // into the journal the owner was just looking at.
+        Self.wireJournalFollowing(router: router, capture: capture)
         // #82: `deleteJournal`'s on-demand resolution of a worthless zero-frame blocker
         // must never resolve out from under a capture that is actively recording — this
         // is the only way it can tell. Weak: `capture` already holds `library` strongly
@@ -60,6 +64,16 @@ final class AppServices {
         // same style as `CaptureScreenModel.swift:173`/`:214`.
         assert(capture.library === library,
                "AppServices must thread ONE LibraryScreenModel into CaptureScreenModel")
+    }
+}
+
+extension AppServices {
+    /// #183 rule 1, as a function of its own so a test can pin the wiring with a
+    /// fake-backed model (`init` needs the live stores). `adoptViewedJournal` is guarded
+    /// to an idle capture, so browsing mid-recording never re-files the live entry.
+    /// Weak: `capture` already holds `library`, and the router is owned alongside both.
+    static func wireJournalFollowing(router: AppRouter, capture: CaptureScreenModel) {
+        router.onJournalSelected = { [weak capture] in capture?.adoptViewedJournal($0) }
     }
 }
 

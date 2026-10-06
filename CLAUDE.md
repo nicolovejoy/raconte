@@ -2,34 +2,38 @@
 
 Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
 
-## Session 2026-09-10 (laptop — #174 smoked both platforms + merged, verifier `.DS_Store` fix, worktrees cleaned)
+## Session 2026-10-05 (laptop — #184 smoked + merged; resync closed 4 issues; the 2026-09-25/26 session is folded in here, it never ran /handoff)
 
-- **#172 had merged** since the last handoff and PR #174 already carried the correct
-  `TypeScaleTests` resolution (enrollment line in `paperScreenFiles`); `git merge-tree` clean.
-- **PR #174 owner smoke, both platforms, 5/5 each.** Mac: build 20 then 21 from the branch to
-  `/Applications/Raconte.app`. iPhone: build 21 via `scripts/upload_testflight.sh ios` (real
-  data, iCloud Drive `export-smoke` folder). Full export 52 entries; scoped package
-  `68 files, no problems`.
-- **Build-20 smoke 4 found a pre-existing verifier gap:** `ArchiveVerifier` (#151/#158) counted
-  Finder's `.DS_Store` (root and `entries/`) as `unlistedFile`, and the Verify open panel rewrites
-  the root one on every pick, so every package the owner ever browsed would fail. Fixed on the
-  branch: enumerate with `.skipsHiddenFiles`; `testFinderDSStoreFilesAreIgnored` plants three
-  `.DS_Store` files plus one non-hidden stray and asserts only the stray is reported (RED with all
-  three listed before the fix, GREEN after). Commit `145e75f5`.
-- **#174 merged** (`d0999afa`). Both SDD worktrees (`raconte-wt-149`, `raconte-wt-157`) and their
-  branches removed; `xcodegen generate` re-run on main. Main's CI for the merge was still
-  in progress at handoff.
-- Builds 20 and 21 appended to `docs/builds.md`. `/Applications/Raconte.app` is currently
-  build 21 from the PR branch (source-identical to main after the merge).
+- **2026-09-25/26 (no handoff written):** owner smoke of build 22 (PR #178) found the #175 seed
+  right but the surrounding defaults wrong → #183 filed with five owner rules; SDD in
+  `raconte-wt-183` → PR #184 (capture follows the last-viewed journal; backdate toggle starts
+  on from the journal's history; explicit off is per-journal and spent at commit). Build 23
+  smoke found one more rule — never auto-enable the toggle just to say today — and left the
+  fix uncommitted in the worktree. Also from that session: #178 and #180 merged, #177/#179/
+  #181/#182 filed, the "delete every other macOS Raconte.app" rule above.
+- **Today:** committed that fix (`94b91875`, `BackdateSeed.automatic` returns nil when the seed
+  is today at `.day`; +1 test), build 24 (`771debea`) → `/Applications/Raconte.app`, owner
+  smoke pass on the relaunch path. Note the carry trap: recording a backdated entry and then
+  opening Capture shows #47's advanced carry, not history — a smoke of the automatic path
+  needs a relaunch first. CI at `771debea`: unit **2264** (1 skipped), UI **67**. #184 merged
+  (`369f0b71`).
+- **Deep /resync:** closed #175, #134, #149, #162 as shipped (evidence on each); deleted
+  `origin/feat/149-ink-roles`; worktree and branch for #183 removed. Proposed and agreed
+  phases: (0) this cleanup, (1) prove sync — M4 acceptance gate, (2) transcript integrity —
+  T8 + #44 + #51 + #2, (3) capture-flow batch, (4) design sweep #170/#173/#55/#86, (5) #133,
+  FTS5, crop, #137. Probable duplicates still open: #109/#121 (crop), #27/#83 (swipe-to-trash).
+- **#185 filed** from the build 24 smoke: Mac, the backdate day picker is invisible while
+  recording until a click on blank space; fine once recording stops. Mechanism unconfirmed.
+- Shared-conventions blocks in `CLAUDE.md` and `AGENTS.md` re-synced (v=28022362f01b).
 
 **Next steps:**
-1. Confirm main's CI run for the #174 merge is green (it was in progress at handoff).
-2. Build 22 from main → `/Applications/Raconte.app` (ditto; verify `dwarfdump --uuid`) so the
-   owner's Mac app is a main build again. Optional; code is identical to build 21.
-3. **#170 type hierarchy** — extend the design-system spec with `navigation` + `journalTitle`
-   roles, then a sweep PR. #173 minors can ride along.
-4. Re-check iPhone About → Sync (Account / Last push) with the app idle; file if still
-   `unknown` / `never`. Then T8; M4 acceptance gate still never run.
+1. **Phase 1 — prove sync.** Re-check iPhone About → Sync (Account / Last push) idle; then the
+   M4 acceptance gate (`docs/plans/2026-08-17-m4-sync-implementation-plan.md` Gate B): verified
+   export first, delete the app from the mini, reinstall, archive reconstructs. Never run.
+2. **Phase 2 — transcript integrity:** T8 final pass before editing, with #44, #51, #2.
+3. **Phase 3 — capture-flow batch:** #185, #181, #182, #104, #107, #83 (+#27), tests #177/#179.
+4. **Phase 4 — design sweep:** #170 type hierarchy (+#173), then #55, #86.
+5. Dedupe #109→#121 and #27→#83 (owner call). #134 has no iPhone smoke on record yet.
 
 ## What Raconte is
 
@@ -280,7 +284,7 @@ open /Applications/Raconte.app
 - Backdates are sticky: editable with explicit overrides, never clearable by one tap.
   Owner wants metadata edits auditable eventually (fold into T6 revision design).
 
-<!-- SHARED-CONVENTIONS:BEGIN v=4fafc2cfa0f4 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
+<!-- SHARED-CONVENTIONS:BEGIN v=28022362f01b — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions
 
 <!-- These are Nico's cross-repo output rules. They're materialized into each repo's
@@ -296,7 +300,13 @@ re-sync, never here. -->
 
 - **UTC at rest, Pacific on display.** Timestamps are stored in UTC, always. A *calendar day* shown to a human is `America/Los_Angeles` — Nico's day, and the clock the work actually happened on. The two rules that follow are the ones that get broken: never form a date bucket with `new Date(…).toISOString().slice(0,10)` (that is UTC, so every chart axis and "today" silently rolls over at 5pm Pacific — it put a phantom tomorrow bar on the Prompt Lab dashboard), and never bucket UTC-stamped rows with a bare `date(col)` in SQL. Use `Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' })` in JS and an explicit zone in SQL/Python. Storage in local time is also wrong — it can't be migrated across a DST boundary without loss.
 
-- **No marker before a copy-paste command block.** Nico's terminal renders markdown bullets (`-`, `*`, `•`) as `●`, which breaks paste into zsh. The line directly above a fenced command block must be a plain-text label ending in a colon — never a bullet, dash, asterisk, or number. For loud copy targets, lead the label with `📋` + bold `COPY THE BELOW`, then a colon, then the block.
+- **No marker before a copy-paste command block.** Nico's terminal renders markdown bullets (`-`, `*`, `•`) as `●`, which breaks paste into zsh. The line directly above a fenced command block must be a plain-text label ending in a colon — never a bullet, dash, asterisk, or number. For loud copy targets, lead the label with `📋` + bold `COPY THE BELOW`, then a colon, then the block. Bracket anything Nico will paste elsewhere (a prompt for another agent, a multi-line command) with a ruler line of `================` above the label and below the closing fence. Rulers go outside the fence so they aren't copied, each with a blank line before it (a `===` line directly under text renders as a heading).
+
+- **No bare backslash in a copy-paste command block.** A `\` is load-bearing shell syntax that renders invisibly and gets silently dropped somewhere between the markdown render, the clipboard, and zsh. `find … -exec test -e {} \; -delete` arrived in the terminal as `… {} ; -delete`, which zsh split into two commands and reported as `find: -exec: no terminating ";"` plus `command not found: -delete` (2026-09-20). Quote it instead — `';'` is exactly equivalent to `\;` and survives any copy path. For the same reason never break a command across lines with a trailing `\`: write one long line, however wide it wraps.
 
 - **Codex branches are named `codex/<description>`.** When working in this repo via Codex CLI, always create a working branch under the `codex/` prefix (e.g. `codex/fix-flaky-test`) rather than working directly on `main` or an unprefixed branch. Claude Code has no visibility into other tools' running sessions (`ListAgents` only sees Claude sessions), so this prefix is the one signal a Claude session can check for — a local or remote `codex/*` branch means Codex has touched or is touching this repo, even though its session itself is invisible. Claude branches keep whatever naming they already use; only Codex adopts this new prefix.
+
+- **Codex: run commands in a form a rule can match.** Codex approval rules match a command's leading tokens, so a wrapped command never matches an existing allow and every variant prompts again, then leaves a dead one-off "don't ask again" rule behind (36 of them in five days, 2026-09-23). The program is the first token: call helpers and tools directly, never through `/bin/zsh -lc "…"`, never with a `PATH=…` or other `VAR=…` prefix, never with `$(…)` in the arguments. Work only inside your clone (one long-lived `~/src/<repo>-codex`, no worktrees, no scratch clones — everything outside it escalates, except the cross-repo handoff log at `~/src/.handoff`, which is granted). Redirect output only to files inside the workspace, and keep temp files in a gitignored `tmp/` there, never `/private/tmp`. If a tool is missing from `PATH`, report it: the fix belongs in `~/.zprofile` (Nico's edit), not in an inline `PATH=` prefix.
+
+- **A review another agent must act on goes on the PR.** A review that another agent must act on, or that must outlive the session, is posted as a PR comment (`gh pr comment`), where the next session or agent finds it. Live, in-session reviews between Nico and the agent stay in chat. There is no devlog.md: the history DB is the one session record.
 <!-- SHARED-CONVENTIONS:END -->

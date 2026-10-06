@@ -17,3 +17,4 @@ line here in the same commit as the build. Not retroactive — starts at 14 (#14
 | 22 | 2026-09-25 | `feat/175-backdate-seed` `24149477` | Mac owner smoke of PR #178 (#175 backdate seed on toggle-on and journal switch; #176 sidecar-write race fix) |
 | 23 | 2026-09-25 | `feat/183-capture-defaults` `d8fa5ea7` | Mac owner smoke of PR #184 (#183 capture follows the last-viewed journal; backdate toggle starts on from the journal's history), on top of merged #178/#180 |
 | 24 | 2026-10-05 | `feat/183-capture-defaults` `94b91875` | Mac owner smoke of PR #184 after the build 23 smoke fix: the automatic backdate never turns the toggle on just to say today |
+| 25 | 2026-10-06 | `main` `9d90edd3` | Mac owner smoke of merged #186 (#185 backdate sheet in paper ink — the Mac date button was white on white) |

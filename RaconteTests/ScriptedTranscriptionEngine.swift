@@ -31,11 +31,18 @@ final class ScriptedTranscriptionEngine: TranscriptionEngine, @unchecked Sendabl
     var startError: Error?
     /// What `prepare` reports — the analyzer's preferred format plus the module and
     /// locale it settled on.
+    ///
+    /// **Int16, not Float32** (#189). The real `bestAvailableAudioFormat` returns 16 kHz
+    /// mono Int16, and on OS 27 `AnalyzerInput.init` PRECONDITIONS it — a Float32
+    /// analysis format here crashed the test host nine times per suite on macOS 27,
+    /// inside production code the fake had steered into a format the SDK never actually
+    /// hands out. `TranscriptionSessionTests.testEveryBufferHandedToTheAnalyzerIsInt16`
+    /// pins it.
     var setup = TranscriptionSetup(
         generator: "SpeechTranscriber",
         locale: "en_US",
         analysisFormat: AudioFormatDescriptor(
-            sampleRate: 16_000, channels: 1, commonFormat: .pcmFormatFloat32, interleaved: false))
+            sampleRate: 16_000, channels: 1, commonFormat: .pcmFormatInt16, interleaved: false))
 
     /// Kept so the many tests that only care about the format stay readable.
     var analysisFormat: AudioFormatDescriptor {

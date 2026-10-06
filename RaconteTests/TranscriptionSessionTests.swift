@@ -91,6 +91,33 @@ final class TranscriptionSessionTests: XCTestCase {
         XCTAssertEqual(engine.calls.filter { $0 == .ingest }.count, 4)
     }
 
+    /// Every buffer handed to the analyzer is 16-bit signed integer PCM (#189).
+    ///
+    /// On OS 27 `AnalyzerInput.init` PRECONDITIONS it — "Audio sample data must be
+    /// 16-bit signed integers" — where OS 26 accepted Float32. The real
+    /// `bestAvailableAudioFormat` returns Int16 (the mini's does; `AnalysisAudioTap`
+    /// is written around that fact), so production converts to it; this pins the
+    /// scripted engine to the same contract, so the suite exercises the format the
+    /// SDK enforces instead of one it merely used to tolerate. The capture side stays
+    /// Float32: the point is that the session CONVERTS, not that the input changed.
+    func testEveryBufferHandedToTheAnalyzerIsInt16() async {
+        let engine = ScriptedTranscriptionEngine()
+        let session = makeSession(engine)
+        await session.start()
+
+        for i in 0..<4 {
+            await session.ingest(stamped(at: Int64(i) * Int64(Self.chunkFrames)))
+        }
+        await session.finish()
+
+        let formats = engine.inputs.map(\.buffer.format.commonFormat)
+        XCTAssertFalse(formats.isEmpty, "nothing reached the analyzer")
+        XCTAssertEqual(Set(formats), [.pcmFormatInt16],
+                       "analyzer input must be Int16 — OS 27 preconditions it; got \(formats)")
+        XCTAssertEqual(captureFormat.commonFormat, .pcmFormatFloat32,
+                       "the capture side is Float32 on purpose; the session converts")
+    }
+
     /// A gap must open a new run *and* be recorded. An emitted-frame accumulator
     /// would silently compress here, which is the whole reason §2 rejects one.
     func testAGapOpensANewRunAndIsRecorded() async {

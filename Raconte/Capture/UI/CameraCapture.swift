@@ -26,8 +26,35 @@ struct CameraCapture: UIViewControllerRepresentable {
 
         func imagePickerController(_ picker: UIImagePickerController,
                                    didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            let image = info[.originalImage] as? UIImage
-            onFinish(image?.jpegData(compressionQuality: 0.9))
+            // Not `jpegData(compressionQuality:)`: that drops the camera's metadata, so
+            // the shot carried no `DateTimeOriginal` and never suggested a backdate
+            // (#181). The metadata arrives separately in `.mediaMetadata`; `CameraJPEG`
+            // writes it back around the same pixels, orientation included.
+            // The old encode stays as the fallback: a `nil` here reads as CANCEL to both
+            // picker sheets, so a shot must never be lost over its metadata.
+            guard let image = info[.originalImage] as? UIImage else { return onFinish(nil) }
+            let withMetadata = image.cgImage.flatMap { cgImage in
+                CameraJPEG.encode(image: cgImage,
+                                  orientation: Self.exifOrientation(image.imageOrientation),
+                                  metadata: info[.mediaMetadata] as? [CFString: Any])
+            }
+            onFinish(withMetadata ?? image.jpegData(compressionQuality: 0.9))
+        }
+
+        /// `UIImage.Orientation` → EXIF orientation. Same mapping as UIKit's
+        /// `CGImagePropertyOrientation.init(_:)`, which the generic-iOS build does not see.
+        static func exifOrientation(_ orientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+            switch orientation {
+            case .up: .up
+            case .upMirrored: .upMirrored
+            case .down: .down
+            case .downMirrored: .downMirrored
+            case .left: .left
+            case .leftMirrored: .leftMirrored
+            case .right: .right
+            case .rightMirrored: .rightMirrored
+            @unknown default: .up
+            }
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {

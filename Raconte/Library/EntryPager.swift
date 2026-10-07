@@ -54,7 +54,7 @@ extension AppServices {
     func entryPagingTarget(_ direction: PagingDirection) -> String? {
         EntryPager.pagingTarget(place: router.place,
                                 detailPath: router.detailPath,
-                                orderedIDs: library.items.map(\.captureID),
+                                orderedIDs: library.items.filter { !$0.isTrashed }.map(\.captureID),
                                 direction: direction)
     }
 

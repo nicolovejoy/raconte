@@ -15,7 +15,7 @@ enum LibraryDestination: Hashable {
 
 /// The library screen (M3 T4, phone mockup; nav T5 dropped the journal filter chips and
 /// the Trash link — both are sidebar places now): entries grouped by year of
-/// `effectiveDate` descending, one quiet row each. Trashed entries are never shown here.
+/// `effectiveDate` descending, one quiet row each. Trashed entries are never shown here, except a swiped row that lingers for its undo window (#83).
 struct LibraryView: View {
     let model: LibraryScreenModel
     /// From the PLACE that routed here (`ContentView.libraryTitle`) — "All Entries" for
@@ -39,10 +39,9 @@ struct LibraryView: View {
     var onRecord: () -> Void = {}
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
-    /// trash or move, if any. Held here rather than per-row `@State` because the
-    /// confirmation dialogs are single instances shared across every row, keyed by the
-    /// captured id — the same shape `EntryDetailView` uses for its own trash confirm.
-    @State private var pendingTrashCaptureID: String?
+    /// move, if any. Held here rather than per-row `@State` because the confirmation
+    /// dialog is a single instance shared across every row, keyed by the captured id.
+    /// Trash has no pending state: a swipe trashes at once and lingers (#83).
     @State private var pendingMoveCaptureID: String?
 
     /// Select mode (#128). On the VIEW, deliberately — the inverse of the
@@ -50,7 +49,7 @@ struct LibraryView: View {
     /// Flat set of capture ids, so it spans the year/month grouping for free.
     @State private var selection = BulkSelection()
     /// The two bulk confirmations. Trash confirms because a seven-entry action is not a
-    /// one-entry action (#83's single-swipe direction deliberately diverged from);
+    /// one-entry action (a single-row swipe lingers with undo instead, #83);
     /// Move confirms implicitly by being a destination picker.
     @State private var confirmingBulkTrash = false
     @State private var choosingBulkMoveDestination = false
@@ -78,6 +77,7 @@ struct LibraryView: View {
         // because one monolithic modifier chain stopped type-checking in reasonable
         // time once the select-mode chrome (#128) joined it.
         withBulkDialogs(withSingleEntryDialogs(screenStack))
+            .sensoryFeedback(.success, trigger: model.trashCompletions)
             .navigationTitle(title)
             .toolbar { toolbarContent }
             .task { await model.rescan() }
@@ -153,24 +153,6 @@ struct LibraryView: View {
     /// the repo rule that a dialog on a nested child can silently never present.
     private func withSingleEntryDialogs(_ base: some View) -> some View {
         base
-        .confirmationDialog("Move this entry to the trash?",
-                            isPresented: Binding(
-                                get: { pendingTrashCaptureID != nil },
-                                set: { if !$0 { pendingTrashCaptureID = nil } }),
-                            titleVisibility: .visible) {
-            Button("Move to Trash", role: .destructive) {
-                if let id = pendingTrashCaptureID {
-                    Task {
-                        if !(await model.trashEntry(id)) { trashFailed = true }
-                    }
-                }
-                pendingTrashCaptureID = nil
-            }
-            .accessibilityIdentifier("library.row.confirmTrash")
-            Button("Cancel", role: .cancel) { pendingTrashCaptureID = nil }
-        } message: {
-            Text("You can restore it from the Trash for \(TrashPolicy.retentionDays) days.")
-        }
         .confirmationDialog("Move to journal",
                             isPresented: Binding(
                                 get: { pendingMoveCaptureID != nil },
@@ -293,7 +275,7 @@ struct LibraryView: View {
     /// renders on both platforms from this one file.
     private var selectionBar: some View {
         HStack(spacing: 16) {
-            Button("Select All") { selection.selectAll(model.items.map(\.captureID)) }
+            Button("Select All") { selection.selectAll(model.items.filter { !model.isLingering($0.captureID) }.map(\.captureID)) }
                 .accessibilityIdentifier("library.selectAll")
             Spacer()
             Text("\(selection.count) selected")
@@ -316,7 +298,8 @@ struct LibraryView: View {
 
     /// Every journal except the entry's current one — reassigning to where it already is
     /// isn't a choice. `model.items` (not `allEntries`): the library list is already
-    /// scoped to non-trashed entries, which is the only place these rows appear.
+    /// scoped to non-trashed entries (bar a swiped row lingering for its undo window, #83),
+    /// which is the only place these rows appear.
     private func journalChoices(for captureID: String) -> [Journal] {
         let currentJournalID = model.items.first { $0.captureID == captureID }?.journalID
         return model.journals.filter { $0.id != currentJournalID }
@@ -428,7 +411,9 @@ struct LibraryView: View {
                             }
 
                             ForEach(monthGroup.items) { item in
-                                if selection.isActive {
+                                if model.isLingering(item.captureID) {
+                                    lingeringRow(item)
+                                } else if selection.isActive {
                                     // Select mode (#128): the row toggles instead of
                                     // navigating; swipe actions and the context menu
                                     // are suppressed by living only on the other
@@ -479,6 +464,28 @@ struct LibraryView: View {
         .listRowBackground(InkTone.paper.color)
     }
 
+    /// The two-second undo window after a swipe-to-trash (#83): the entry is already in
+    /// Trash; this row holds its place and a tap brings it back. A `Button`, not a
+    /// `NavigationLink` — there is nothing to navigate to, and no swipe actions: a second
+    /// swipe is meaningless here.
+    private func lingeringRow(_ item: EntryListItem) -> some View {
+        Button {
+            Task { await model.undoTrash(item.captureID) }
+        } label: {
+            HStack {
+                Label("Deleting this entry…", systemImage: "trash")
+                Spacer()
+                Text("Tap to undo")
+            }
+            .font(TypeRole.label.font)
+            .foregroundStyle(InkTone.inkSecondary.color)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("library.row.lingering")
+        .listRowBackground(InkTone.paper.color)
+    }
+
     private func navigableRow(_ item: EntryListItem) -> some View {
         NavigationLink(value: LibraryDestination.entry(item.captureID)) {
             LibraryEntryRow(model: model, item: item,
@@ -494,15 +501,19 @@ struct LibraryView: View {
         .listRowBackground(InkTone.paper.color)
         // Trailing swipe (trash first, so a full swipe trashes —
         // platform convention) plus a Mac-convention right-click
-        // context menu with the same two handlers, reusing
-        // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
-        // detail screen does — no second delete or move path.
+        // context menu with the same two handlers. Trash goes through
+        // `LibraryScreenModel.swipeTrash`, the lingering path (#83): the entry is
+        // trashed at once and its row holds for a tap-to-undo window. The detail
+        // screen keeps its confirmation (ruling 2) — no dialog here.
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                pendingTrashCaptureID = item.captureID
+            // No `role: .destructive` (#27): that role makes SwiftUI remove the row
+            // optimistically, and this row must STAY for the undo window (#83).
+            Button {
+                Task { if !(await model.swipeTrash(item.captureID)) { trashFailed = true } }
             } label: {
                 Label("Trash", systemImage: "trash")
             }
+            .tint(.red)
             .accessibilityIdentifier("library.row.trashSwipe")
 
             Button {
@@ -520,7 +531,7 @@ struct LibraryView: View {
                 Label("Move to Journal…", systemImage: "folder")
             }
             Button(role: .destructive) {
-                pendingTrashCaptureID = item.captureID
+                Task { if !(await model.swipeTrash(item.captureID)) { trashFailed = true } }
             } label: {
                 Label("Move to Trash", systemImage: "trash")
             }

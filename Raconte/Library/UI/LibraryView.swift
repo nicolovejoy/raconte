@@ -39,10 +39,9 @@ struct LibraryView: View {
     var onRecord: () -> Void = {}
 
     /// Row swipe/context-menu state (owner request, 2026-08-03): the row that asked to
-    /// trash or move, if any. Held here rather than per-row `@State` because the
-    /// confirmation dialogs are single instances shared across every row, keyed by the
-    /// captured id — the same shape `EntryDetailView` uses for its own trash confirm.
-    @State private var pendingTrashCaptureID: String?
+    /// move, if any. Held here rather than per-row `@State` because the confirmation
+    /// dialog is a single instance shared across every row, keyed by the captured id.
+    /// Trash has no pending state: a swipe trashes at once and lingers (#83).
     @State private var pendingMoveCaptureID: String?
 
     /// Select mode (#128). On the VIEW, deliberately — the inverse of the
@@ -78,6 +77,7 @@ struct LibraryView: View {
         // because one monolithic modifier chain stopped type-checking in reasonable
         // time once the select-mode chrome (#128) joined it.
         withBulkDialogs(withSingleEntryDialogs(screenStack))
+            .sensoryFeedback(.success, trigger: model.trashCompletions)
             .navigationTitle(title)
             .toolbar { toolbarContent }
             .task { await model.rescan() }
@@ -153,24 +153,6 @@ struct LibraryView: View {
     /// the repo rule that a dialog on a nested child can silently never present.
     private func withSingleEntryDialogs(_ base: some View) -> some View {
         base
-        .confirmationDialog("Move this entry to the trash?",
-                            isPresented: Binding(
-                                get: { pendingTrashCaptureID != nil },
-                                set: { if !$0 { pendingTrashCaptureID = nil } }),
-                            titleVisibility: .visible) {
-            Button("Move to Trash", role: .destructive) {
-                if let id = pendingTrashCaptureID {
-                    Task {
-                        if !(await model.trashEntry(id)) { trashFailed = true }
-                    }
-                }
-                pendingTrashCaptureID = nil
-            }
-            .accessibilityIdentifier("library.row.confirmTrash")
-            Button("Cancel", role: .cancel) { pendingTrashCaptureID = nil }
-        } message: {
-            Text("You can restore it from the Trash for \(TrashPolicy.retentionDays) days.")
-        }
         .confirmationDialog("Move to journal",
                             isPresented: Binding(
                                 get: { pendingMoveCaptureID != nil },
@@ -428,7 +410,9 @@ struct LibraryView: View {
                             }
 
                             ForEach(monthGroup.items) { item in
-                                if selection.isActive {
+                                if model.isLingering(item.captureID) {
+                                    lingeringRow(item)
+                                } else if selection.isActive {
                                     // Select mode (#128): the row toggles instead of
                                     // navigating; swipe actions and the context menu
                                     // are suppressed by living only on the other
@@ -479,6 +463,28 @@ struct LibraryView: View {
         .listRowBackground(InkTone.paper.color)
     }
 
+    /// The two-second undo window after a swipe-to-trash (#83): the entry is already in
+    /// Trash; this row holds its place and a tap brings it back. A `Button`, not a
+    /// `NavigationLink` — there is nothing to navigate to, and no swipe actions: a second
+    /// swipe is meaningless here.
+    private func lingeringRow(_ item: EntryListItem) -> some View {
+        Button {
+            Task { await model.undoTrash(item.captureID) }
+        } label: {
+            HStack {
+                Label("Deleting this entry…", systemImage: "trash")
+                Spacer()
+                Text("Tap to undo")
+            }
+            .font(TypeRole.label.font)
+            .foregroundStyle(InkTone.inkSecondary.color)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("library.row.lingering")
+        .listRowBackground(InkTone.paper.color)
+    }
+
     private func navigableRow(_ item: EntryListItem) -> some View {
         NavigationLink(value: LibraryDestination.entry(item.captureID)) {
             LibraryEntryRow(model: model, item: item,
@@ -494,15 +500,19 @@ struct LibraryView: View {
         .listRowBackground(InkTone.paper.color)
         // Trailing swipe (trash first, so a full swipe trashes —
         // platform convention) plus a Mac-convention right-click
-        // context menu with the same two handlers, reusing
-        // `LibraryScreenModel.trashEntry`/`moveEntry` exactly as the
-        // detail screen does — no second delete or move path.
+        // context menu with the same two handlers. Trash goes through
+        // `LibraryScreenModel.swipeTrash`, the lingering path (#83): the entry is
+        // trashed at once and its row holds for a tap-to-undo window. The detail
+        // screen keeps its confirmation (ruling 2) — no dialog here.
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                pendingTrashCaptureID = item.captureID
+            // No `role: .destructive` (#27): that role makes SwiftUI remove the row
+            // optimistically, and this row must STAY for the undo window (#83).
+            Button {
+                Task { if !(await model.swipeTrash(item.captureID)) { trashFailed = true } }
             } label: {
                 Label("Trash", systemImage: "trash")
             }
+            .tint(.red)
             .accessibilityIdentifier("library.row.trashSwipe")
 
             Button {
@@ -520,7 +530,7 @@ struct LibraryView: View {
                 Label("Move to Journal…", systemImage: "folder")
             }
             Button(role: .destructive) {
-                pendingTrashCaptureID = item.captureID
+                Task { if !(await model.swipeTrash(item.captureID)) { trashFailed = true } }
             } label: {
                 Label("Move to Trash", systemImage: "trash")
             }

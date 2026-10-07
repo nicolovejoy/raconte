@@ -457,7 +457,7 @@ struct EntryDetailView: View {
     /// Live list order, not a push-time snapshot (design decision 4): identical
     /// within an unchanged session, and the only truth that never navigates to a
     /// deleted entry after a rescan.
-    private var pagingOrderedIDs: [String] { model.items.map(\.captureID) }
+    private var pagingOrderedIDs: [String] { model.items.filter { !$0.isTrashed }.map(\.captureID) }
 
     private var previousEntryID: String? {
         guard pagingEnabled else { return nil }

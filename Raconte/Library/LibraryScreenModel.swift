@@ -72,6 +72,17 @@ final class LibraryScreenModel {
     /// looking for it — making him first recall which journal it was filed in is how a
     /// recoverable entry reads as gone.
     private(set) var trashed: [EntryListItem] = []
+
+    /// Swipe-to-trash's undo window (#83). An id here is ALREADY trashed on disk — the row
+    /// stays in `items` for the window so a tap can restore it; `rescan()` is what keeps it
+    /// there. The timer that closes the window is `lingerTasks`, held on this model and
+    /// never on a view, per the capture-screen rule.
+    private var trashLinger: TrashLinger
+    private var lingerTasks: [String: Task<Void, Never>] = [:]
+    /// Bumped once per window that closes with the entry still trashed — the view's haptic
+    /// trigger. Never bumped by an undo.
+    private(set) var trashCompletions = 0
+    private let trashLingerWindow: Duration
     /// Every non-trashed entry, across every journal, independent of `journalScope` —
     /// the source `dateRange(forJournal:)` derives from, since it doesn't want the
     /// current filter's narrowing (issue #14 part 2).
@@ -175,7 +186,14 @@ final class LibraryScreenModel {
     /// rather than through one of those already-wired actors.
     private var syncHooks: (any SyncHooks)?
 
-    init(capturesRoot: URL, journalsContainerRoot: URL? = nil) {
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+    }
+
+    init(capturesRoot: URL, journalsContainerRoot: URL? = nil,
+         trashLingerWindow: Duration = .seconds(2)) {
+        self.trashLingerWindow = trashLingerWindow
+        self.trashLinger = TrashLinger(window: Self.seconds(trashLingerWindow))
         self.capturesRoot = capturesRoot
         let containerRoot = journalsContainerRoot ?? AppContainer.containerRoot(capturesRoot: capturesRoot)
         self.scanner = LibraryScanner(capturesRoot: capturesRoot, containerRoot: containerRoot)
@@ -299,7 +317,11 @@ final class LibraryScreenModel {
         journals = (loadedJournals ?? []).displayOrdered
         journalCovers = loadedCovers
         journalsUnreadable = loadedJournals == nil || result.journalsUnreadable
-        items = EntryListFilter(journal: scope, trash: .excludeTrashed).apply(to: result.items)
+        // A lingering swipe-to-trash row (#83) is already trashed on disk but holds its
+        // place in the list for the undo window — so filter by scope with trash INCLUDED,
+        // then drop the trashed rows that are not lingering. Same sort as before.
+        items = EntryListFilter(journal: scope, trash: .all).apply(to: result.items)
+            .filter { !$0.isTrashed || trashLinger.isLingering($0.captureID) }
         trashed = EntryListFilter(journal: .all, trash: .trashedOnly).apply(to: result.items)
         skipped = result.skipped
         allEntries = EntryListFilter(journal: .all, trash: .excludeTrashed).apply(to: result.items)
@@ -891,6 +913,53 @@ final class LibraryScreenModel {
         let succeeded = await restoreEntryCore(captureID)
         await rescan()
         return succeeded
+    }
+
+    // MARK: - Swipe-to-trash linger (#83)
+
+    func isLingering(_ captureID: String) -> Bool { trashLinger.isLingering(captureID) }
+
+    /// Write first: the tombstone lands now, then the row lingers for the window with a
+    /// tap-to-undo. A crash mid-window leaves the entry in Trash, recoverable — never a
+    /// silent loss, which a deferred write would risk. Returns `false` only when the write
+    /// did not land (same contract as `trashEntry`); then nothing is armed. A swipe on a
+    /// row that is already lingering is a no-op and returns `true`.
+    @discardableResult
+    func swipeTrash(_ captureID: String, now: Date = Date()) async -> Bool {
+        guard !trashLinger.isLingering(captureID) else { return true }
+        guard await trashEntryCore(captureID, now: now) else { return false }
+        _ = trashLinger.arm(captureID, now: now)
+        await rescan()
+        lingerTasks[captureID]?.cancel()
+        lingerTasks[captureID] = Task { [weak self, window = trashLingerWindow] in
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled else { return }
+            await self?.closeLingerWindows()
+        }
+        return true
+    }
+
+    /// The tap during the window. Clears the tombstone (the whole restore — nothing ever
+    /// moved) and the linger. `false` when the window has already closed, or the write
+    /// failed; the Trash view is the route back then.
+    @discardableResult
+    func undoTrash(_ captureID: String) async -> Bool {
+        guard trashLinger.undo(captureID) else { return false }
+        lingerTasks[captureID]?.cancel()
+        lingerTasks[captureID] = nil
+        let restored = await restoreEntryCore(captureID)
+        await rescan()
+        return restored
+    }
+
+    /// Timer callback: every window that has passed closes, its row leaves the list on
+    /// the rescan, and each one counts as a completion for the haptic.
+    private func closeLingerWindows(now: Date = Date()) async {
+        let done = trashLinger.expire(now: now)
+        guard !done.isEmpty else { return }
+        for id in done { lingerTasks[id] = nil }
+        trashCompletions += done.count
+        await rescan()
     }
 
     // MARK: - Non-rescanning cores (#128 Task 2)

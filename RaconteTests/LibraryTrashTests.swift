@@ -548,4 +548,132 @@ final class LibraryTrashTests: XCTestCase {
         XCTAssertEqual(model.trashed.map(\.captureID), [idA])
         XCTAssertTrue(FileManager.default.fileExists(atPath: captureDir(idA).path))
     }
+
+    // MARK: - Swipe-to-trash linger (#83)
+
+    private func lingerModel(windowMilliseconds: Int = 50) -> LibraryScreenModel {
+        LibraryScreenModel(capturesRoot: capturesRoot, journalsContainerRoot: containerRoot,
+                           trashLingerWindow: .milliseconds(windowMilliseconds))
+    }
+
+    /// Polls the main actor without blocking it; a model-held timer needs the actor free.
+    private func waitUntil(_ timeout: TimeInterval = 3, _ message: String,
+                           file: StaticString = #filePath, line: UInt = #line,
+                           _ predicate: @MainActor () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate() {
+            if Date() > deadline { XCTFail(message, file: file, line: line); return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    func testSwipeTrashWritesTheTombstoneAndKeepsTheRowInPlace() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = lingerModel(windowMilliseconds: 60_000)   // a window this test never reaches
+        await model.rescan()
+
+        let swiped = await model.swipeTrash(idA, now: Date(timeIntervalSince1970: 5_000))
+        XCTAssertTrue(swiped)
+
+        XCTAssertNotNil(try metadata(idA).trashedAt, "write first: the tombstone is on disk at once")
+        XCTAssertEqual(model.items.map(\.captureID), [idB, idA],
+                       "the row holds its place in the list for the window")
+        XCTAssertTrue(model.isLingering(idA))
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA],
+                       "it is in Trash already — a crash mid-window loses nothing")
+        XCTAssertEqual(model.trashCompletions, 0)
+    }
+
+    func testUndoDuringTheWindowRestoresAndTheRowIsOrdinaryAgain() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = lingerModel(windowMilliseconds: 60_000)
+        await model.rescan()
+        await model.swipeTrash(idA)
+
+        let undone = await model.undoTrash(idA)
+        XCTAssertTrue(undone)
+
+        XCTAssertNil(try metadata(idA).trashedAt)
+        XCTAssertFalse(model.isLingering(idA))
+        XCTAssertEqual(model.items.map(\.captureID), [idA])
+        XCTAssertTrue(model.trashed.isEmpty)
+        XCTAssertEqual(model.trashCompletions, 0, "an undone trash never completes")
+    }
+
+    func testTheWindowEndingRemovesTheRowAndCountsACompletion() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = lingerModel(windowMilliseconds: 50)
+        await model.rescan()
+        await model.swipeTrash(idA)
+        XCTAssertEqual(model.items.count, 2)
+
+        await waitUntil(3, "the lingering row never left the list") { model.items.count == 1 }
+
+        XCTAssertEqual(model.items.map(\.captureID), [idB])
+        XCTAssertFalse(model.isLingering(idA))
+        XCTAssertEqual(model.trashCompletions, 1)
+        XCTAssertEqual(model.trashed.map(\.captureID), [idA])
+        let lateUndo = await model.undoTrash(idA)
+        XCTAssertFalse(lateUndo, "after the window the Trash view is the route back")
+        XCTAssertNotNil(try metadata(idA).trashedAt, "a late undo must not restore")
+    }
+
+    func testASecondSwipeDuringTheWindowIsANoOp() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = lingerModel(windowMilliseconds: 60_000)
+        await model.rescan()
+        await model.swipeTrash(idA, now: Date(timeIntervalSince1970: 5_000))
+        let first = try metadata(idA).trashedAt
+
+        let again = await model.swipeTrash(idA, now: Date(timeIntervalSince1970: 9_000))
+        XCTAssertTrue(again,
+                      "reported as handled — there is nothing to alert about")
+
+        XCTAssertEqual(try metadata(idA).trashedAt, first, "no second tombstone write")
+        XCTAssertTrue(model.isLingering(idA))
+    }
+
+    func testAFailedTrashWriteLeavesNoLinger() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        let model = lingerModel(windowMilliseconds: 60_000)
+        await model.rescan()
+        try Data("not json".utf8).write(to: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idA)))
+
+        let swiped = await model.swipeTrash(idA)
+        XCTAssertFalse(swiped)
+
+        XCTAssertFalse(model.isLingering(idA), "a write that did not land must not arm an undo window")
+        XCTAssertEqual(model.trashCompletions, 0)
+    }
+
+    func testAnUnrelatedRescanMidWindowKeepsTheLingeringRow() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = lingerModel(windowMilliseconds: 60_000)
+        await model.rescan()
+        await model.swipeTrash(idA)
+
+        await model.rescan()   // a journal switch, a sync landing — anything else that rescans
+
+        XCTAssertEqual(model.items.map(\.captureID), [idB, idA],
+                       "the row must not vanish early and then reappear only in Trash")
+    }
+
+    func testALingeringRowFromAnotherJournalDoesNotLeakIntoAScopedList() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        try EntryMetadataStore.write(EntryMetadata(journalID: "J1"),
+                                     url: SegmentLayout.entryMetadataURL(captureDirectory: captureDir(idB)))
+        let model = lingerModel(windowMilliseconds: 60_000)
+        await model.rescan()
+        await model.swipeTrash(idA)   // idA is unfiled
+
+        model.journalScope = .journal("J1")
+        await model.rescan()
+
+        XCTAssertEqual(model.items.map(\.captureID), [idB],
+                       "a lingering row obeys the same journal scope as every other row")
+    }
 }

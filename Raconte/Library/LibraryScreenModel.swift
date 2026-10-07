@@ -230,6 +230,13 @@ final class LibraryScreenModel {
             // #81 Task 6: a complete entry whose entry.json is present but unreadable,
             // for the Trash screen's repair UI test. No-op unless asked for.
             UITestUnreadableEntrySeed.seedIfRequested(capturesRoot: capturesRoot)
+            // #83: the swipe-to-trash undo window is 2 s in production, which a UI test
+            // cannot trust a loaded CI runner to act inside (four AX snapshots per half).
+            // The test sets a longer one here; every other path keeps the default.
+            if let ms = ProcessInfo.processInfo.environment["RACONTE_UITEST_TRASH_LINGER_MS"].flatMap({ Int($0) }) {
+                return LibraryScreenModel(capturesRoot: capturesRoot,
+                                          trashLingerWindow: .milliseconds(ms))
+            }
             return LibraryScreenModel(capturesRoot: capturesRoot)
         }
         #endif
@@ -910,6 +917,12 @@ final class LibraryScreenModel {
     /// `false` on a store failure — see `trashEntry`.
     @discardableResult
     func restoreEntry(_ captureID: String) async -> Bool {
+        // A restore made elsewhere (Trash view, sync) during a swipe's window ends that
+        // window: the row stops reading "Deleting..." and no completion is counted.
+        if trashLinger.undo(captureID) {
+            lingerTasks[captureID]?.cancel()
+            lingerTasks[captureID] = nil
+        }
         let succeeded = await restoreEntryCore(captureID)
         await rescan()
         return succeeded
@@ -958,6 +971,11 @@ final class LibraryScreenModel {
         let done = trashLinger.expire(now: now)
         guard !done.isEmpty else { return }
         for id in done { lingerTasks[id] = nil }
+        // Drop the expired rows BEFORE the rescan suspends: until then `items` still holds
+        // them while `isLingering` is already false, so the view would draw each one as an
+        // ordinary entry for the length of the scan. No suspension between here and there.
+        let gone = Set(done)
+        items.removeAll { gone.contains($0.captureID) }
         trashCompletions += done.count
         await rescan()
     }

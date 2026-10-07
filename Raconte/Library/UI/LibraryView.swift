@@ -15,7 +15,7 @@ enum LibraryDestination: Hashable {
 
 /// The library screen (M3 T4, phone mockup; nav T5 dropped the journal filter chips and
 /// the Trash link — both are sidebar places now): entries grouped by year of
-/// `effectiveDate` descending, one quiet row each. Trashed entries are never shown here.
+/// `effectiveDate` descending, one quiet row each. Trashed entries are never shown here, except a swiped row that lingers for its undo window (#83).
 struct LibraryView: View {
     let model: LibraryScreenModel
     /// From the PLACE that routed here (`ContentView.libraryTitle`) — "All Entries" for
@@ -49,7 +49,7 @@ struct LibraryView: View {
     /// Flat set of capture ids, so it spans the year/month grouping for free.
     @State private var selection = BulkSelection()
     /// The two bulk confirmations. Trash confirms because a seven-entry action is not a
-    /// one-entry action (#83's single-swipe direction deliberately diverged from);
+    /// one-entry action (a single-row swipe lingers with undo instead, #83);
     /// Move confirms implicitly by being a destination picker.
     @State private var confirmingBulkTrash = false
     @State private var choosingBulkMoveDestination = false
@@ -275,7 +275,7 @@ struct LibraryView: View {
     /// renders on both platforms from this one file.
     private var selectionBar: some View {
         HStack(spacing: 16) {
-            Button("Select All") { selection.selectAll(model.items.map(\.captureID)) }
+            Button("Select All") { selection.selectAll(model.items.filter { !model.isLingering($0.captureID) }.map(\.captureID)) }
                 .accessibilityIdentifier("library.selectAll")
             Spacer()
             Text("\(selection.count) selected")
@@ -298,7 +298,8 @@ struct LibraryView: View {
 
     /// Every journal except the entry's current one — reassigning to where it already is
     /// isn't a choice. `model.items` (not `allEntries`): the library list is already
-    /// scoped to non-trashed entries, which is the only place these rows appear.
+    /// scoped to non-trashed entries (bar a swiped row lingering for its undo window, #83),
+    /// which is the only place these rows appear.
     private func journalChoices(for captureID: String) -> [Journal] {
         let currentJournalID = model.items.first { $0.captureID == captureID }?.journalID
         return model.journals.filter { $0.id != currentJournalID }

@@ -646,6 +646,7 @@ final class LibraryTrashTests: XCTestCase {
 
         XCTAssertFalse(model.isLingering(idA), "a write that did not land must not arm an undo window")
         XCTAssertEqual(model.trashCompletions, 0)
+        XCTAssertEqual(model.items.map(\.captureID), [idA])
     }
 
     func testAnUnrelatedRescanMidWindowKeepsTheLingeringRow() async throws {
@@ -675,5 +676,21 @@ final class LibraryTrashTests: XCTestCase {
 
         XCTAssertEqual(model.items.map(\.captureID), [idB],
                        "a lingering row obeys the same journal scope as every other row")
+    }
+
+    func testTheClosingRescanNeverShowsTheExpiredRowAsOrdinary() async throws {
+        try writeCapture(idA, capturedAt: 1_000)
+        try writeCapture(idB, capturedAt: 2_000)
+        let model = lingerModel(windowMilliseconds: 50)
+        await model.rescan()
+        await model.swipeTrash(idA)
+        var flashes = 0
+        let deadline = Date().addingTimeInterval(3)
+        while model.items.count == 2 && Date() < deadline {
+            if !model.isLingering(idA) && model.items.contains(where: { $0.captureID == idA }) { flashes += 1 }
+            await Task.yield()
+        }
+        XCTAssertEqual(model.items.map(\.captureID), [idB])
+        XCTAssertEqual(flashes, 0, "expired row sat in items, not lingering, during the closing rescan")
     }
 }

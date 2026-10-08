@@ -4,8 +4,8 @@ import ImageIO
 @testable import Raconte
 
 /// #181: a camera shot's metadata survives the JPEG encode. `UIImage.jpegData` threw
-/// the picker's `mediaMetadata` away, so `ImageEXIF.capturedAt` was nil for every
-/// camera photo and the backdate suggestion only ever fired from library picks.
+/// the picker's `mediaMetadata` away, so `ImageEXIF.capturedAt` — the sidecar's
+/// `capturedAt` — was nil for every camera photo.
 final class CameraJPEGTests: XCTestCase {
 
     private static let expected: Date = {

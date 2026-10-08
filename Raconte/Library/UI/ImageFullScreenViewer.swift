@@ -107,6 +107,7 @@ struct ImageFullScreenViewer: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                         .disabled(removing)
+                        .accessibilityIdentifier("entryDetail.images.viewer.done")
                 }
             }
             .confirmationDialog("Remove this image?", isPresented: $showingRemoveConfirmation,

@@ -9,7 +9,9 @@ import UIKit
 /// image bytes up to `onPick` and does no downscaling or file I/O itself —
 /// `JournalCoverStore` owns that. Camera is iOS-only; `PhotosPicker` (PhotosUI) needs no
 /// photo-library permission on either platform, which is the whole reason it's used here
-/// instead of the legacy `PHPhotoLibrary` API.
+/// instead of the legacy `PHPhotoLibrary` API. A library pick is enqueued for framing only
+/// once the picker reports dismissed (`loadedPick`, flushed from `showingPhotosPicker` going
+/// false), same reason as the camera shot: a cover requested mid-dismissal can drop (#182).
 struct JournalCoverPickerSheet: View {
     let journalName: String
     /// The current cover's JPEG bytes, shown large at the top of the sheet — the tiny
@@ -30,6 +32,9 @@ struct JournalCoverPickerSheet: View {
     /// Raises `pickError` for a failed verdict once the FRAMING cover is down (#182) — every
     /// failure, shot or pick, now surfaces after it.
     @State private var framingError = CameraErrorRelay()
+    @State private var showingPhotosPicker = false
+    /// A loaded pick held until the picker is down; see `flushLoadedPick`.
+    @State private var loadedPick: PendingFramingItem?
     #if os(iOS)
     @State private var showingCamera = false
     /// #121: a landed shot waits here until the camera cover is fully down, then joins the
@@ -58,7 +63,7 @@ struct JournalCoverPickerSheet: View {
                         .accessibilityIdentifier("journalCover.takePhoto")
                 }
                 #endif
-                PhotosPicker("Choose from Library…", selection: $photosPickerItem, matching: .images)
+                Button("Choose from Library…") { showingPhotosPicker = true }
                     .accessibilityIdentifier("journalCover.choosePhoto")
                 if hasCover {
                     Button("Remove Cover", role: .destructive) {
@@ -89,6 +94,10 @@ struct JournalCoverPickerSheet: View {
         .onChange(of: framingQueue.head?.id) { old, new in
             if old == nil, new != nil { framingError.cameraPresented() }
         }
+        .photosPicker(isPresented: $showingPhotosPicker, selection: $photosPickerItem, matching: .images)
+        .onChange(of: showingPhotosPicker) { _, shown in
+            if !shown { flushLoadedPick() }
+        }
         .onChange(of: photosPickerItem) { _, newValue in
             guard let newValue else { return }
             Task {
@@ -101,9 +110,10 @@ struct JournalCoverPickerSheet: View {
                 // Cancel-then-reopen) must not inherit a stale item that no longer
                 // fires `onChange` when the same photo is picked again.
                 photosPickerItem = nil
-                framingQueue.enqueue(PendingFramingItem(id: UUID(), data: data,
-                                                        type: newValue.supportedContentTypes.first ?? .image,
-                                                        origin: .library))
+                loadedPick = PendingFramingItem(id: UUID(), data: data,
+                                                type: newValue.supportedContentTypes.first ?? .image,
+                                                origin: .library)
+                flushLoadedPick()
             }
         }
         #if os(iOS)
@@ -120,6 +130,13 @@ struct JournalCoverPickerSheet: View {
             .ignoresSafeArea()
         }
         #endif
+    }
+
+    /// Whichever of "picker down" and "load finished" comes last enqueues the pick.
+    private func flushLoadedPick() {
+        guard !showingPhotosPicker, let item = loadedPick else { return }
+        loadedPick = nil
+        framingQueue.enqueue(item)
     }
 
     private func resolveHead(_ item: PendingFramingItem, framing: ImageFraming) async {

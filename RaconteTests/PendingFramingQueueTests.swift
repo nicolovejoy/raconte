@@ -63,4 +63,54 @@ final class PendingFramingQueueTests: XCTestCase {
         XCTAssertEqual(data, junk.data)
         XCTAssertEqual(type, .jpeg)
     }
+
+    /// A queued camera shot keeps the library batch open: [L, L, C] is not over after both L's.
+    func testBatchIsNotOverWhileACameraShotIsQueued() throws {
+        var queue = PendingFramingQueue()
+        queue.enqueue(contentsOf: [item(1), item(2)])
+        queue.enqueue(item(3, origin: .camera))
+        let l1 = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l1, landed: true)
+        let l2 = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l2, landed: true)
+        XCTAssertFalse(queue.libraryBatchIsOver, "the camera shot is still queued")
+        let c = try XCTUnwrap(queue.beginResolving())
+        XCTAssertFalse(queue.libraryBatchIsOver, "and then still in flight")
+        queue.finishResolving(c, landed: true)
+        XCTAssertTrue(queue.libraryBatchIsOver)
+    }
+
+    /// Out-of-order completion: the batch is over only when the LAST in-flight add returns.
+    func testBatchIsNotOverUntilEveryInFlightItemFinishes() throws {
+        var queue = PendingFramingQueue()
+        queue.enqueue(contentsOf: [item(1), item(2)])
+        let l1 = try XCTUnwrap(queue.beginResolving())
+        let l2 = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l2, landed: true)
+        XCTAssertFalse(queue.libraryBatchIsOver, "L1 is still in flight")
+        queue.finishResolving(l1, landed: true)
+        XCTAssertTrue(queue.libraryBatchIsOver)
+    }
+
+    func testFailedLibraryItemReportsOnceThenResets() throws {
+        var queue = PendingFramingQueue()
+        queue.enqueue(contentsOf: [item(1), item(2)])
+        let l1 = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l1, landed: false)
+        let l2 = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l2, landed: true)
+        XCTAssertTrue(queue.libraryBatchIsOver)
+        XCTAssertTrue(queue.closeLibraryBatch())
+        XCTAssertFalse(queue.closeLibraryBatch())
+        XCTAssertFalse(queue.libraryBatchIsOver, "closed")
+    }
+
+    /// A camera-only queue never opens a library batch.
+    func testCameraItemsAloneNeverOpenALibraryBatch() throws {
+        var queue = PendingFramingQueue()
+        queue.enqueue(item(1, origin: .camera))
+        let c = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(c, landed: false)
+        XCTAssertFalse(queue.libraryBatchIsOver)
+    }
 }

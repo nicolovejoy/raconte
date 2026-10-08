@@ -18,6 +18,10 @@ import XCTest
 /// journal cover picker. `testCapturingAnImageOpensTheRealPickerSheet` below follows
 /// that exact precedent instead: it proves the real `ImageCapturePickerSheet`
 /// presents and is dismissible, without trying to complete a pick.
+///
+/// #121 (crop + rotate): the tests drive the framing screen from the viewer's Crop button, not
+/// from a fresh pick, because a `PhotosPicker` pick cannot complete in the simulator; the viewer
+/// presents the same `ImageFramingView` the pick path does.
 final class ImageCaptureUITests: XCTestCase {
 
     private var testID = ""
@@ -197,5 +201,77 @@ final class ImageCaptureUITests: XCTestCase {
         waitUntil(20, "the library row's thumbnail did not disappear after the image was removed") {
             entryLinkAfterRemoval.exists && !entryLinkAfterRemoval.label.contains("Entry photo")
         }
+    }
+
+    // MARK: - #121 crop + rotate
+
+    /// Viewer → Crop → Rotate → Use → "Replace the original?" → Replace: the strip still has
+    /// exactly one image, under a DIFFERENT id (the replacement at the old slot), and the
+    /// viewer dismissed as it does after Remove.
+    func testCroppingAnImageReplacesItUnderANewID() {
+        let app = launchApp(seedImageEntry: true)
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+        openPlace(app, "sidebar.allEntries")
+        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(entryLink.waitForExistence(timeout: 20))
+        waitUntil(20, "seeded image never produced a row thumbnail") { entryLink.label.contains("Entry photo") }
+        press(entryLink)
+
+        let thumbnails = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15))
+        let idBefore = thumbnails.firstMatch.identifier
+        press(thumbnails.firstMatch)
+
+        let crop = app.buttons["entryDetail.images.crop"].firstMatch
+        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop")
+        press(crop)
+
+        let rotate = app.buttons["imageFraming.rotate"].firstMatch
+        XCTAssertTrue(rotate.waitForExistence(timeout: 15), "the framing screen never appeared")
+        press(rotate)
+        press(app.buttons["imageFraming.use"].firstMatch)
+
+        // Dialog action vs. nothing else labelled Replace: the toolbar has no Replace button,
+        // so the label alone is unambiguous here (unlike Remove's case above).
+        let confirm = app.buttons["Replace"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 15), "a real framing must confirm before replacing")
+        press(confirm)
+
+        waitUntil(20, "the strip never showed the replacement") {
+            thumbnails.count == 1 && thumbnails.firstMatch.identifier != idBefore
+        }
+        XCTAssertFalse(app.buttons["entryDetail.images.crop"].firstMatch.exists, "the viewer dismisses after Replace")
+    }
+
+    /// Use with NO change (no rotate, no drag) must do nothing: no dialog, same id.
+    func testUsingAnUnchangedFramingDoesNotAskToReplace() {
+        let app = launchApp(seedImageEntry: true)
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+        openPlace(app, "sidebar.allEntries")
+        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(entryLink.waitForExistence(timeout: 20))
+        waitUntil(20, "seeded image never produced a row thumbnail") { entryLink.label.contains("Entry photo") }
+        press(entryLink)
+        let thumbnails = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15))
+        let idBefore = thumbnails.firstMatch.identifier
+        press(thumbnails.firstMatch)
+        let crop = app.buttons["entryDetail.images.crop"].firstMatch
+        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop")
+        press(crop)
+        XCTAssertTrue(app.buttons["imageFraming.use"].firstMatch.waitForExistence(timeout: 15))
+        press(app.buttons["imageFraming.use"].firstMatch)
+
+        XCTAssertFalse(app.buttons["Replace"].firstMatch.waitForExistence(timeout: 3),
+                       "an identity framing must not offer to replace anything")
+        XCTAssertTrue(app.buttons["entryDetail.images.crop"].firstMatch.waitForExistence(timeout: 10),
+                      "the viewer stays up")
+        // Library/Capture also have bare "Done" buttons; the viewer's carries an identifier.
+        press(app.buttons["entryDetail.images.viewer.done"].firstMatch)
+        XCTAssertEqual(thumbnails.firstMatch.identifier, idBefore)
     }
 }

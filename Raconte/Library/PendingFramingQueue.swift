@@ -52,7 +52,8 @@ struct PendingFramingQueue: Equatable, Sendable {
     /// Records the `onPick` verdict for an item taken by `beginResolving`.
     mutating func finishResolving(_ item: PendingFramingItem, landed: Bool) {
         inFlight = max(0, inFlight - 1)
-        if item.origin == .library && !landed { libraryBatchFailed = true }
+        // While a library batch is open, a failure of EITHER origin must survive to the close.
+        if libraryBatchOpen && !landed { libraryBatchFailed = true }
     }
 
     /// A library item whose bytes could not even be loaded, in a batch that has other items.
@@ -102,10 +103,12 @@ extension View {
         #if os(iOS)
         fullScreenCover(item: item, onDismiss: onDismiss) { pending in
             ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+                .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #else
         sheet(item: item, onDismiss: onDismiss) { pending in
             ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+                .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #endif
     }

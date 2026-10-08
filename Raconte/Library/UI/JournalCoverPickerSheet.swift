@@ -82,6 +82,8 @@ struct JournalCoverPickerSheet: View {
         } onCancel: { item in
             Task { await resolveHead(item, framing: .identity) }
         } onDismiss: {
+            // An A->B item swap may fire onDismiss on iOS; only the final dismissal counts.
+            guard framingQueue.head == nil else { return }
             if framingError.coverDismissed() { pickError = true }
         }
         .onChange(of: framingQueue.head?.id) { old, new in

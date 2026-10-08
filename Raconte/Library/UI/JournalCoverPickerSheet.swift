@@ -27,14 +27,14 @@ struct JournalCoverPickerSheet: View {
     @State private var pickError = false
     /// #121: the one item (a shot or a pick) waiting for the framing step.
     @State private var framingQueue = PendingFramingQueue()
+    /// Raises `pickError` for a failed verdict once the FRAMING cover is down (#182) — every
+    /// failure, shot or pick, now surfaces after it.
+    @State private var framingError = CameraErrorRelay()
     #if os(iOS)
     @State private var showingCamera = false
-    /// Raises `pickError` for a failed shot once the cover is down, whichever of the
-    /// cover's dismissal and the add's verdict arrives first (#182). Setting `pickError`
-    /// in the same turn as `showingCamera = false` races the cover's own dismissal and
-    /// drops the alert; a flag consumed only from `.onChange(of: showingCamera)` fired
-    /// before the verdict existed and alerted on the NEXT round-trip instead.
-    @State private var cameraError = CameraErrorRelay()
+    /// #121: a landed shot waits here until the camera cover is fully down, then joins the
+    /// framing queue from `onDismiss` — never two covers in one transaction.
+    @State private var pendingShot: Data?
     #endif
 
     var body: some View {
@@ -81,6 +81,11 @@ struct JournalCoverPickerSheet: View {
             Task { await resolveHead(item, framing: framing) }
         } onCancel: { item in
             Task { await resolveHead(item, framing: .identity) }
+        } onDismiss: {
+            if framingError.coverDismissed() { pickError = true }
+        }
+        .onChange(of: framingQueue.head?.id) { old, new in
+            if old == nil, new != nil { framingError.cameraPresented() }
         }
         .onChange(of: photosPickerItem) { _, newValue in
             guard let newValue else { return }
@@ -100,36 +105,31 @@ struct JournalCoverPickerSheet: View {
             }
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showingCamera) {
+        .fullScreenCover(isPresented: $showingCamera, onDismiss: {
+            if let shot = pendingShot {
+                pendingShot = nil
+                framingQueue.enqueue(PendingFramingItem(id: UUID(), data: shot, type: .jpeg, origin: .camera))
+            }
+        }) {
             CameraCapture { data in
+                pendingShot = data
                 showingCamera = false
-                if let data {
-                    framingQueue.enqueue(PendingFramingItem(id: UUID(), data: data, type: .jpeg, origin: .camera))
-                }
             }
             .ignoresSafeArea()
-        }
-        .onChange(of: showingCamera) { _, isShowing in
-            if isShowing {
-                cameraError.cameraPresented()
-            } else if cameraError.coverDismissed() {
-                pickError = true
-            }
         }
         #endif
     }
 
     private func resolveHead(_ item: PendingFramingItem, framing: ImageFraming) async {
-        framingQueue.popHead()
-        let (data, _) = PendingFramingQueue.resolve(item, framing: framing)
-        if await onPick(data) {
+        // A second tap on the same cover must not resolve (and pop) twice.
+        guard framingQueue.head?.id == item.id, let item = framingQueue.beginResolving() else { return }
+        let (data, _) = await Task.detached { PendingFramingQueue.resolve(item, framing: framing) }.value
+        let landed = await onPick(data)
+        framingQueue.finishResolving(item, landed: landed)
+        if landed {
             dismiss()
-        } else {
-            #if os(iOS)
-            if item.origin == .library || cameraError.addFailed() { pickError = true }
-            #else
+        } else if framingError.addFailed() {
             pickError = true
-            #endif
         }
     }
 }

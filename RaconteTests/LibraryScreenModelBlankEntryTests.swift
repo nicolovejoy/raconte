@@ -248,6 +248,96 @@ final class LibraryScreenModelBlankEntryTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    // MARK: replaceImage (#121)
+
+    private func twoByOneRedPNG() -> Data { ImageThumbnailerTests.makePNG(width: 2, height: 1, color: (255, 0, 0)) }
+
+    func testReplacementIDKeepsTheOldULIDTimestamp() throws {
+        let old = ULID.make(now: Date(timeIntervalSince1970: 1_700_000_000.123))
+        let replacement = LibraryScreenModel.replacementImageID(for: old)
+        XCTAssertNotEqual(replacement, old)
+        XCTAssertEqual(ULID.timestamp(from: replacement), ULID.timestamp(from: old))
+        XCTAssertTrue(ULID.isWellFormed(replacement))
+    }
+
+    func testReplacementIDForAnUnparseableOldIDMintsNow() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let replacement = LibraryScreenModel.replacementImageID(for: "not-a-ulid", now: now)
+        XCTAssertEqual(ULID.timestamp(from: replacement), now)
+    }
+
+    /// The strip is ULID-ordered; the replacement must sit where the old image sat.
+    func testReplaceImageKeepsTheSlotAndChangesOnlyThatID() async throws {
+        let model = model()
+        let minted = await model.createBlankEntry(journalID: nil)
+        let captureID = try XCTUnwrap(minted)
+        for _ in 0..<3 {
+            _ = await model.addImage(captureID, data: twoByOneRedPNG(), sourceUTType: nil)
+            try await Task.sleep(for: .milliseconds(3)) // distinct ULID millisecond per image
+        }
+        let before = await model.images(for: captureID).map(\.id)
+        XCTAssertEqual(before.count, 3)
+        let framed = try XCTUnwrap(ImageFraming(rotationQuarterTurns: 1, cropRect: .unit).apply(to: twoByOneRedPNG()))
+
+        let ok = await model.replaceImage(captureID, imageID: before[1], data: framed)
+        XCTAssertTrue(ok)
+
+        let after = await model.images(for: captureID)
+        XCTAssertEqual(after.count, 3)
+        XCTAssertEqual(after[0].id, before[0]); XCTAssertEqual(after[2].id, before[2])
+        XCTAssertNotEqual(after[1].id, before[1])
+        XCTAssertEqual(ULID.timestamp(from: after[1].id), ULID.timestamp(from: before[1]))
+        XCTAssertEqual(after[1].width, 1); XCTAssertEqual(after[1].height, 2, "the stored bytes are the framed ones")
+        let original = await model.originalData(captureID: captureID, imageID: before[1])
+        XCTAssertNil(original, "the original is gone")
+    }
+
+    /// Review Focus 3: write-first. Bytes that do not decode must leave the old image exactly
+    /// where it was and fire nothing.
+    func testReplaceImageWriteFirstAFailedAddRemovesNothingAndFiresNoHook() async throws {
+        let model = model()
+        let hooks = DeletionRecordingSyncHooks()
+        model.attach(syncHooks: hooks)
+        let minted = await model.createBlankEntry(journalID: nil)
+        let captureID = try XCTUnwrap(minted)
+        _ = await model.addImage(captureID, data: twoByOneRedPNG(), sourceUTType: nil)
+        let firstImage = await model.images(for: captureID).first?.id
+        let old = try XCTUnwrap(firstImage)
+        await hooks.reset()
+
+        let ok = await model.replaceImage(captureID, imageID: old, data: Data("junk".utf8))
+        XCTAssertFalse(ok)
+
+        let ids = await model.images(for: captureID).map(\.id)
+        XCTAssertEqual(ids, [old])
+        let changed = await hooks.changedNames
+        let deleted = await hooks.deletedNames
+        XCTAssertTrue(changed.isEmpty)
+        XCTAssertTrue(deleted.isEmpty)
+    }
+
+    func testReplaceImageFiresAddThenDeleteHooks() async throws {
+        let model = model()
+        let hooks = DeletionRecordingSyncHooks()
+        model.attach(syncHooks: hooks)
+        let minted = await model.createBlankEntry(journalID: nil)
+        let captureID = try XCTUnwrap(minted)
+        _ = await model.addImage(captureID, data: twoByOneRedPNG(), sourceUTType: nil)
+        let firstImage = await model.images(for: captureID).first?.id
+        let old = try XCTUnwrap(firstImage)
+        await hooks.reset()
+
+        let ok = await model.replaceImage(captureID, imageID: old, data: twoByOneRedPNG())
+        XCTAssertTrue(ok)
+
+        let newImage = await model.images(for: captureID).first?.id
+        let new = try XCTUnwrap(newImage)
+        let changed = await hooks.changedNames
+        let deleted = await hooks.deletedNames
+        XCTAssertEqual(changed, [.image(captureID: captureID, imageID: new)])
+        XCTAssertEqual(deleted, [.image(captureID: captureID, imageID: old)])
+    }
+
     /// A minimal valid 1x1 PNG, so `ImageStore.addImage`'s ImageIO decode succeeds.
     private static let onePixelPNG: Data? = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 import os
 
 /// Model-to-model rescan notification (#62, nav redesign §5.1). `CaptureScreenModel`
@@ -561,6 +562,37 @@ final class LibraryScreenModel {
         await syncHooks?.noteLocalDelete(name)
         await syncHooks?.noteLocalDeleteFamily([name])
         await rescan()
+    }
+
+    /// #121: the id a cropped replacement is filed under — the OLD image's ULID millisecond
+    /// with fresh randomness, so once the old image is removed the replacement sorts into its
+    /// slot in the ULID-ordered strip. No new sidecar field, no CloudKit schema change. An old
+    /// id that does not parse mints at `now` (the image moves to the end; pinned, not expected).
+    static func replacementImageID(for oldImageID: String, now: Date = Date()) -> String {
+        ULID.make(now: ULID.timestamp(from: oldImageID) ?? now)
+    }
+
+    /// Replaces one image's bytes with `data` — a cropped/rotated version — by adding `data`
+    /// as a NEW image at `replacementImageID(for:)` and then removing the old one through
+    /// `removeImage` (which fires the real delete hooks). **Write-first:** a failed add returns
+    /// false and removes nothing, so the owner's photo is never lost to a crop that could not
+    /// be stored. Images are write-once in the store and immutable in sync, which is why this
+    /// is add-then-remove rather than an overwrite under the same id.
+    ///
+    /// Hook order is add (`noteLocalChange(new)`) then delete (`noteLocalDelete(old)` +
+    /// family), each fired by the method that did the write — same placement as `addImage`
+    /// and `removeImage` above. One `rescan()` at the end (inside `removeImage`).
+    func replaceImage(_ captureID: String, imageID oldImageID: String, data: Data) async -> Bool {
+        let newImageID = Self.replacementImageID(for: oldImageID)
+        do {
+            _ = try await imageStore.addImage(captureID: captureID, data: data,
+                                              sourceUTType: UTType.jpeg.identifier, imageID: newImageID)
+        } catch {
+            return false
+        }
+        await syncHooks?.noteLocalChange(.image(captureID: captureID, imageID: newImageID))
+        await removeImage(captureID, imageID: oldImageID)
+        return true
     }
 
     /// Thin pass-through to `ImageStore.images(captureID:)` — the async, actor-hopping

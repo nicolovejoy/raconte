@@ -8,8 +8,8 @@ import UniformTypeIdentifiers
 /// `UIImage.jpegData` re-encodes the pixels and nothing else: no `DateTimeOriginal`, no
 /// `{TIFF}` make/model. `UIImagePickerController` hands the camera's metadata over
 /// separately as `info[.mediaMetadata]`, so a camera shot only carries a date if this
-/// encode writes it back — and `ImageEXIF.capturedAt` (hence the backdate suggestion on
-/// add) reads nothing else. Pure CoreGraphics/ImageIO so it pins on macOS without a camera.
+/// encode writes it back — and `ImageEXIF.capturedAt` (the sidecar's `capturedAt`) reads
+/// nothing else. Pure CoreGraphics/ImageIO so it pins on macOS without a camera.
 enum CameraJPEG {
     static func encode(image: CGImage,
                        orientation: CGImagePropertyOrientation,

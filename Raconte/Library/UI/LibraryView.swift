@@ -613,10 +613,7 @@ struct LibraryEntryRow: View {
     /// Row-level counterpart to `EntryDetailView.handleImageProviders` — same
     /// `ImageDropSource.extract` data-extraction step, then the SAME
     /// `LibraryScreenModel.addImage` the detail screen's picker sheet and drop/paste all
-    /// terminate at. No backdate-suggestion prompt here (Task 8's `EntryDetailView
-    /// .suggestedBackdate` sheet): a library row has no sheet host of its own to present
-    /// one into — that affordance stays scoped to the detail screen, where the owner is
-    /// already looking at the entry the image just landed on.
+    /// terminate at.
     private func handleImageProviders(_ providers: [NSItemProvider]) -> Bool {
         guard providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }) else {
             return false

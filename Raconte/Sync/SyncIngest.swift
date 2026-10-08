@@ -3237,6 +3237,35 @@ actor SyncRecordExchange: CloudRecordExchange {
         await localStoreDidChange?()
     }
 
+    /// #121 — see `CloudRecordExchange.acceptRemoteImageDeletion`. Local write only, through
+    /// `ImageStore.removeImage` (idempotent: an unknown id is a no-op), then
+    /// `localStoreDidChange` so the library rescans. Never `noteLocalChange`/`noteLocalDelete`.
+    /// Retires this device's bookkeeping for the name the same way an entry deletion does, so
+    /// a reconciliation scan does not treat the vanished artifact as never-uploaded.
+    func acceptRemoteImageDeletion(captureID: String, imageID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — image deletion ingest skipped")
+            return
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            log.debug("sync: image deletion for \(captureID, privacy: .public) — capture already gone, no-op")
+            return
+        }
+        guard let imageStore else {
+            log.notice("sync: no image store wired — image deletion \(imageID, privacy: .public) skipped")
+            return
+        }
+        await imageStore.removeImage(captureID: captureID, imageID: imageID)
+        let name = SyncRecordName.image(captureID: captureID, imageID: imageID)
+        await engine?.dropPendingSaves([name])
+        await forgetServerState(for: name)
+        await localStoreDidChange?()
+    }
+
     /// R3: strictly scoped to a path under `sync/staging/` — legal `removeItem` usage,
     /// unlike `acceptRemoteEntryDeletion` above, which must route the CAPTURE removal
     /// through `StagedRemover` alone. Discards whatever this device was durably

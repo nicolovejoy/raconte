@@ -611,8 +611,9 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                 case .image(let captureID, let imageID):
                     // #121: the one child deletion that is NOT a cascade — a remote removal
                     // of ONE image from a still-live entry. When the Entry itself was
-                    // deleted this arrives alongside `.entry`'s cascade and the handler's
-                    // "capture gone → no-op" branch covers it in either order.
+                    // deleted this arrives alongside `.entry`'s cascade: image-first removes
+                    // the image and the entry purge follows; entry-first leaves the handler
+                    // a capture that is gone, which it treats as a no-op.
                     await exchange.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
                 case .audio, .revision, .liveLog, .markerStream:
                     // These cascade from the SAME Entry deletion `.entry` above already

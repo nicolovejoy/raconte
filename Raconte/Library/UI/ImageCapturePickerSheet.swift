@@ -26,6 +26,11 @@ import UIKit
 /// ("2 photos added"), the camera row re-titled "Take Another…" and the toolbar button
 /// turned into "Done", so a run of page photos is one trip. `ImageCaptureBatch` holds the
 /// rules; `ImageCaptureBatchTests` pins them, since the simulator has no camera.
+///
+/// #121: every landed shot or picked item runs through `ImageFramingView` first
+/// (`framingQueue`, head-first); Use hands the framed JPEG to `onPick`, Cancel hands the
+/// original. A library batch dismisses when its LAST item resolves, as before; a camera shot
+/// still feeds the #134 tally.
 struct ImageCapturePickerSheet: View {
     /// Returns false when a given item's bytes didn't take (`ImageStoreError
     /// .invalidImage`, or the write failed) — every other item in a multi-select batch
@@ -39,6 +44,12 @@ struct ImageCapturePickerSheet: View {
     /// the file importer add whole batches in one trip and dismiss afterwards as before;
     /// only the camera loops through here.
     @State private var batch = ImageCaptureBatch()
+    /// #121: items waiting for the framing step. The head is what `ImageFramingView` shows;
+    /// Use/Cancel pops it, resolves it through `onPick`, and the next head (if any) presents.
+    @State private var framingQueue = PendingFramingQueue()
+    /// Set when any library item of the current batch failed, so the sheet alerts once when
+    /// the LAST library item resolves instead of dismissing.
+    @State private var libraryBatchFailed = false
     #if os(iOS)
     @State private var showingCamera = false
     /// Raises `pickError` for a failed shot once the cover is down, whichever of the
@@ -82,6 +93,11 @@ struct ImageCapturePickerSheet: View {
                 Button("OK", role: .cancel) {}
             }
         }
+        .framingPresentation(item: $framingQueue.headBinding) { item, framing in
+            Task { await resolveHead(item, framing: framing) }
+        } onCancel: { item in
+            Task { await resolveHead(item, framing: .identity) }
+        }
         #if os(iOS)
         .onChange(of: photosPickerItems) { _, newValue in
             guard !newValue.isEmpty else { return }
@@ -90,21 +106,13 @@ struct ImageCapturePickerSheet: View {
             // (a later pick after this one already started) must not inherit a stale
             // selection, same reasoning as `JournalCoverPickerSheet.photosPickerItem`.
             photosPickerItems = []
-            Task { await addPhotosPickerItems(items) }
+            Task { await enqueuePhotosPickerItems(items) }
         }
         .fullScreenCover(isPresented: $showingCamera) {
             CameraCapture { data in
                 showingCamera = false
                 if let data {
-                    Task {
-                        // Landed: stay up for the next shot (#134). Failed: alert once
-                        // the cover is down; the tally is untouched.
-                        if await onPick(data, .jpeg) {
-                            batch.recordLanded()
-                        } else if cameraError.addFailed() {
-                            pickError = true
-                        }
-                    }
+                    framingQueue.enqueue(PendingFramingItem(id: UUID(), data: data, type: .jpeg, origin: .camera))
                 }
             }
             .ignoresSafeArea()
@@ -123,14 +131,47 @@ struct ImageCapturePickerSheet: View {
             case .failure:
                 pickError = true
             case .success(let urls):
-                Task { await addFileImporterURLs(urls) }
+                Task { await enqueueFileImporterURLs(urls) }
             }
         }
         #endif
     }
 
+    /// Pops `item`, hands it to `onPick` under `framing`, then does the bookkeeping its origin
+    /// needs. Camera: landed stays up for the next shot (#134); failed alerts once the cover
+    /// is down, the tally untouched. Library: the last item of a batch dismisses on an
+    /// all-clear or alerts once.
+    private func resolveHead(_ item: PendingFramingItem, framing: ImageFraming) async {
+        framingQueue.popHead()
+        let (data, type) = PendingFramingQueue.resolve(item, framing: framing)
+        let landed = await onPick(data, type)
+        switch item.origin {
+        case .camera:
+            if landed {
+                batch.recordLanded()
+            } else if cameraErrorAddFailed() {
+                pickError = true
+            }
+        case .library:
+            if !landed { libraryBatchFailed = true }
+            if framingQueue.items.allSatisfy({ $0.origin == .camera }) {
+                // No library items left in the queue: this batch is over.
+                if libraryBatchFailed { pickError = true; libraryBatchFailed = false } else { dismiss() }
+            }
+        }
+    }
+
+    private func cameraErrorAddFailed() -> Bool {
+        #if os(iOS)
+        return cameraError.addFailed()
+        #else
+        return true
+        #endif
+    }
+
     #if os(iOS)
-    private func addPhotosPickerItems(_ items: [PhotosPickerItem]) async {
+    private func enqueuePhotosPickerItems(_ items: [PhotosPickerItem]) async {
+        var loaded: [PendingFramingItem] = []
         var anyFailed = false
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else {
@@ -138,12 +179,15 @@ struct ImageCapturePickerSheet: View {
                 continue
             }
             let type = item.supportedContentTypes.first ?? .image
-            if !(await onPick(data, type)) { anyFailed = true }
+            loaded.append(PendingFramingItem(id: UUID(), data: data, type: type, origin: .library))
         }
-        if anyFailed { pickError = true } else { dismiss() }
+        if anyFailed { libraryBatchFailed = true }
+        if loaded.isEmpty { if anyFailed { pickError = true; libraryBatchFailed = false }; return }
+        framingQueue.enqueue(contentsOf: loaded)
     }
     #else
-    private func addFileImporterURLs(_ urls: [URL]) async {
+    private func enqueueFileImporterURLs(_ urls: [URL]) async {
+        var loaded: [PendingFramingItem] = []
         var anyFailed = false
         for url in urls {
             // `fileImporter` results are security-scoped in a sandboxed app — access
@@ -154,10 +198,11 @@ struct ImageCapturePickerSheet: View {
                 anyFailed = true
                 continue
             }
-            let type = Self.contentType(of: url)
-            if !(await onPick(data, type)) { anyFailed = true }
+            loaded.append(PendingFramingItem(id: UUID(), data: data, type: Self.contentType(of: url), origin: .library))
         }
-        if anyFailed { pickError = true } else { dismiss() }
+        if anyFailed { libraryBatchFailed = true }
+        if loaded.isEmpty { if anyFailed { pickError = true; libraryBatchFailed = false }; return }
+        framingQueue.enqueue(contentsOf: loaded)
     }
 
     private static func contentType(of url: URL) -> UTType {

@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 #if os(iOS)
 import UIKit
 #endif
@@ -24,6 +25,8 @@ struct JournalCoverPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var photosPickerItem: PhotosPickerItem?
     @State private var pickError = false
+    /// #121: the one item (a shot or a pick) waiting for the framing step.
+    @State private var framingQueue = PendingFramingQueue()
     #if os(iOS)
     @State private var showingCamera = false
     /// Raises `pickError` for a failed shot once the cover is down, whichever of the
@@ -74,6 +77,11 @@ struct JournalCoverPickerSheet: View {
                 Button("OK", role: .cancel) {}
             }
         }
+        .framingPresentation(item: $framingQueue.headBinding) { item, framing in
+            Task { await resolveHead(item, framing: framing) }
+        } onCancel: { item in
+            Task { await resolveHead(item, framing: .identity) }
+        }
         .onChange(of: photosPickerItem) { _, newValue in
             guard let newValue else { return }
             Task {
@@ -82,11 +90,13 @@ struct JournalCoverPickerSheet: View {
                     photosPickerItem = nil
                     return
                 }
-                if await onPick(data) { dismiss() } else { pickError = true }
                 // Reset even on success: a re-presented sheet (a later failed pick,
                 // Cancel-then-reopen) must not inherit a stale item that no longer
                 // fires `onChange` when the same photo is picked again.
                 photosPickerItem = nil
+                framingQueue.enqueue(PendingFramingItem(id: UUID(), data: data,
+                                                        type: newValue.supportedContentTypes.first ?? .image,
+                                                        origin: .library))
             }
         }
         #if os(iOS)
@@ -94,13 +104,7 @@ struct JournalCoverPickerSheet: View {
             CameraCapture { data in
                 showingCamera = false
                 if let data {
-                    Task {
-                        if await onPick(data) {
-                            dismiss()
-                        } else if cameraError.addFailed() {
-                            pickError = true
-                        }
-                    }
+                    framingQueue.enqueue(PendingFramingItem(id: UUID(), data: data, type: .jpeg, origin: .camera))
                 }
             }
             .ignoresSafeArea()
@@ -113,5 +117,19 @@ struct JournalCoverPickerSheet: View {
             }
         }
         #endif
+    }
+
+    private func resolveHead(_ item: PendingFramingItem, framing: ImageFraming) async {
+        framingQueue.popHead()
+        let (data, _) = PendingFramingQueue.resolve(item, framing: framing)
+        if await onPick(data) {
+            dismiss()
+        } else {
+            #if os(iOS)
+            if item.origin == .library || cameraError.addFailed() { pickError = true }
+            #else
+            pickError = true
+            #endif
+        }
     }
 }

@@ -12,8 +12,8 @@ final class ImageFramingTests: XCTestCase {
     /// A 32×16 image: left half red, right half blue. (Not 2×1: JPEG chroma subsampling blends
     /// neighbouring pixels, so a 1-pixel red/blue pair comes back purple and no rotation could pass.) Returned as PNG unless `jpegProperties`
     /// is given, in which case a JPEG carrying those properties (EXIF date, orientation…).
-    private func redBlue(jpegProperties: [CFString: Any]? = nil) -> Data {
-        let image = Self.redBlueImage()
+    private func redBlue(jpegProperties: [CFString: Any]? = nil, space: CGColorSpace? = nil) -> Data {
+        let image = Self.redBlueImage(space: space)
         let output = NSMutableData()
         let type = jpegProperties == nil ? UTType.png : UTType.jpeg
         let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil)!
@@ -22,9 +22,9 @@ final class ImageFramingTests: XCTestCase {
         return output as Data
     }
 
-    private static func redBlueImage() -> CGImage {
+    private static func redBlueImage(space: CGColorSpace? = nil) -> CGImage {
         let context = CGContext(data: nil, width: 32, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
-                                space: CGColorSpaceCreateDeviceRGB(),
+                                space: space ?? CGColorSpaceCreateDeviceRGB(),
                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
@@ -59,6 +59,26 @@ final class ImageFramingTests: XCTestCase {
 
     private func isRed(_ p: (UInt8, UInt8, UInt8)?) -> Bool { p.map { $0.0 > 200 && $0.2 < 60 } ?? false }
     private func isBlue(_ p: (UInt8, UInt8, UInt8)?) -> Bool { p.map { $0.2 > 200 && $0.0 < 60 } ?? false }
+
+    private func tiffOrientation(of data: Data) -> UInt32? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any] else { return nil }
+        return tiff[kCGImagePropertyTIFFOrientation] as? UInt32
+    }
+
+    private func colorSpaceName(of data: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return image.colorSpace?.name as String?
+    }
+
+    private func exifPixelX(of data: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] else { return nil }
+        return exif[kCGImagePropertyExifPixelXDimension] as? Int
+    }
 
     private func orientation(of data: Data) -> UInt32? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -160,12 +180,11 @@ final class ImageFramingTests: XCTestCase {
         ])
         let out = try XCTUnwrap(ImageFraming(rotationQuarterTurns: 2, cropRect: .unit).apply(to: input))
         XCTAssertEqual(orientation(of: out), CGImagePropertyOrientation.up.rawValue)
-        let source = try XCTUnwrap(CGImageSourceCreateWithData(out as CFData, nil))
-        let props = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
-        let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
-        // ImageIO rewrites these from the real pixels; what must NOT survive is the source's 2×1.
-        // Two turns of the displayed 16×32 image keep it 16×32, so the stale source width (32) is distinguishable.
-        if let x = exif?[kCGImagePropertyExifPixelXDimension] as? Int { XCTAssertNotEqual(x, 32) }
+        XCTAssertEqual(tiffOrientation(of: out), CGImagePropertyOrientation.up.rawValue)
+        // Two turns of the displayed 16×32 image keep it 16×32, so the stale source width (32)
+        // is distinguishable. Sanity first: the input really carries 32.
+        XCTAssertEqual(try XCTUnwrap(exifPixelX(of: input)), 32)
+        XCTAssertNotEqual(try XCTUnwrap(exifPixelX(of: out)), 32, "the stale source width must not survive")
     }
 
     /// Review Focus 1. Orientation 6 (`.right`) means "rotate 90° CW to display": the 32×16
@@ -179,6 +198,24 @@ final class ImageFramingTests: XCTestCase {
         XCTAssertTrue(isBlue(Self.rgb(of: out, fx: 0.25, fy: 0.5)))
         XCTAssertTrue(isRed(Self.rgb(of: out, fx: 0.75, fy: 0.5)))
         XCTAssertEqual(orientation(of: out), CGImagePropertyOrientation.up.rawValue)
+        XCTAssertEqual(tiffOrientation(of: out), CGImagePropertyOrientation.up.rawValue)
+    }
+
+    // MARK: Colour space
+
+    func testDisplayP3SourceStaysDisplayP3AfterARotation() throws {
+        let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+        let input = redBlue(jpegProperties: [:], space: p3)
+        XCTAssertEqual(colorSpaceName(of: input), CGColorSpace.displayP3 as String, "sanity: the fixture is tagged P3")
+        let out = try XCTUnwrap(ImageFraming(rotationQuarterTurns: 1, cropRect: .unit).apply(to: input))
+        XCTAssertEqual(colorSpaceName(of: out), CGColorSpace.displayP3 as String, "a rotate must not collapse P3 to DeviceRGB")
+    }
+
+    func testSRGBishSourceKeepsItsColorSpaceAfterARotation() throws {
+        let input = redBlue(jpegProperties: [:])
+        let before = try XCTUnwrap(colorSpaceName(of: input))
+        let out = try XCTUnwrap(ImageFraming(rotationQuarterTurns: 1, cropRect: .unit).apply(to: input))
+        XCTAssertEqual(colorSpaceName(of: out), before, "the DeviceRGB fallback path must not change the space")
     }
 
     func testNonImageBytesReturnNil() {

@@ -83,9 +83,14 @@ struct ImageFraming: Equatable, Sendable {
         if turns == 0 { return image }
         let w = image.width, h = image.height
         let (outW, outH) = turns % 2 == 0 ? (w, h) : (h, w)
-        guard let context = CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        // Draw in the source's own colour space so a Display P3 photo stays P3; DeviceRGB only
+        // when the source is untagged or its space cannot back an RGBA8 context (gray, indexed).
+        func makeContext(_ space: CGColorSpace) -> CGContext? {
+            CGContext(data: nil, width: outW, height: outH, bitsPerComponent: 8, bytesPerRow: 0,
+                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        }
+        guard let context = image.colorSpace.flatMap(makeContext) ?? makeContext(CGColorSpaceCreateDeviceRGB())
+        else { return nil }
         context.interpolationQuality = .none  // a quarter turn moves whole pixels; never resample
         context.translateBy(x: CGFloat(outW) / 2, y: CGFloat(outH) / 2)
         context.rotate(by: -CGFloat(turns) * .pi / 2)

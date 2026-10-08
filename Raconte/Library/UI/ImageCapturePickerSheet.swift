@@ -32,7 +32,9 @@ import UIKit
 /// original. A library batch dismisses when its LAST item resolves, as before; a camera shot
 /// still feeds the #134 tally. Library and file picks, like the camera shot, are enqueued only
 /// once their picker reports dismissed (`loadedPicks`, flushed from `showingPhotosPicker` /
-/// `showingFileImporter` going false): a framing cover requested while the picker is still
+/// `showingFileImporter` going false — whether PhotosUI writes `isPresented` false at the end of
+/// its dismissal is unverified; the owner smoke gates it, and the fallback is an inline
+/// PhotosPicker in a `.sheet(onDismiss:)`): a framing cover requested while the picker is still
 /// animating out can be dropped (#182), stranding the head with no cover up.
 struct ImageCapturePickerSheet: View {
     /// Returns false when a given item's bytes didn't take (`ImageStoreError

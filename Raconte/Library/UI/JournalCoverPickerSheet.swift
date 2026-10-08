@@ -11,7 +11,9 @@ import UIKit
 /// photo-library permission on either platform, which is the whole reason it's used here
 /// instead of the legacy `PHPhotoLibrary` API. A library pick is enqueued for framing only
 /// once the picker reports dismissed (`loadedPick`, flushed from `showingPhotosPicker` going
-/// false), same reason as the camera shot: a cover requested mid-dismissal can drop (#182).
+/// false — whether PhotosUI writes `isPresented` false at the end of its dismissal is unverified;
+/// the owner smoke gates it, and the fallback is an inline PhotosPicker in a
+/// `.sheet(onDismiss:)`), same reason as the camera shot: a cover requested mid-dismissal can drop (#182).
 struct JournalCoverPickerSheet: View {
     let journalName: String
     /// The current cover's JPEG bytes, shown large at the top of the sheet — the tiny

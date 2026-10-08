@@ -40,6 +40,13 @@ struct ImageFullScreenViewer: View {
     @State private var replacementTarget: ImageSidecar?
     @State private var showingReplaceConfirmation = false
     @State private var replaceFailed = false
+    /// #121: Crop tapped, original bytes still loading — blocks a double-tap and a swipe.
+    @State private var loadingCrop = false
+    /// #121: the framing view's Use, held until the cover has finished dismissing — a dialog
+    /// requested in the same update as the dismissal is dropped on iOS.
+    @State private var pendingUse: PendingUse?
+
+    struct PendingUse { let framing: ImageFraming; let session: CropSession }
 
     struct CropSession: Identifiable { let id = UUID(); let sidecar: ImageSidecar; let original: Data }
 
@@ -89,7 +96,7 @@ struct ImageFullScreenViewer: View {
                 #endif
                 ToolbarItem(placement: .primaryAction) {
                     Button("Crop", systemImage: "crop") { beginCrop() }
-                        .disabled(images.isEmpty || removing || cropping != nil)
+                        .disabled(images.isEmpty || removing || loadingCrop || cropping != nil)
                         .accessibilityIdentifier("entryDetail.images.crop")
                 }
                 ToolbarItem(placement: .destructiveAction) {
@@ -99,6 +106,7 @@ struct ImageFullScreenViewer: View {
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
+                        .disabled(removing)
                 }
             }
             .confirmationDialog("Remove this image?", isPresented: $showingRemoveConfirmation,
@@ -120,16 +128,16 @@ struct ImageFullScreenViewer: View {
             }
         }
         #if os(iOS)
-        .fullScreenCover(item: $cropping) { session in framingView(session) }
+        .fullScreenCover(item: $cropping, onDismiss: finishPendingCrop) { session in framingView(session) }
         #else
-        .sheet(item: $cropping) { session in framingView(session) }
+        .sheet(item: $cropping, onDismiss: finishPendingCrop) { session in framingView(session) }
         #endif
     }
 
     private func framingView(_ session: CropSession) -> some View {
         ImageFramingView(data: session.original, onUse: { framing in
+            pendingUse = PendingUse(framing: framing, session: session)
             cropping = nil
-            finishCrop(framing: framing, session: session)
         }, onCancel: { cropping = nil })
         .id(session.id)
     }
@@ -153,9 +161,11 @@ struct ImageFullScreenViewer: View {
     }
 
     private func beginCrop() {
-        guard images.indices.contains(safeIndex) else { return }
+        guard images.indices.contains(safeIndex), !loadingCrop else { return }
         let sidecar = images[safeIndex]
+        loadingCrop = true
         Task {
+            defer { loadingCrop = false }
             guard let original = await model.originalData(captureID: captureID, imageID: sidecar.id) else {
                 replaceFailed = true
                 return
@@ -164,16 +174,32 @@ struct ImageFullScreenViewer: View {
         }
     }
 
+    /// Runs once the framing cover has finished dismissing. An item swap can fire onDismiss
+    /// on iOS, hence the `cropping == nil` guard.
+    private func finishPendingCrop() {
+        guard cropping == nil, let use = pendingUse else { return }
+        pendingUse = nil
+        finishCrop(framing: use.framing, session: use.session)
+    }
+
     /// The `session` is the one that was SHOWN — never `images[safeIndex]` re-read now (the
     /// owner may have swiped meanwhile; CLAUDE.md: capture the id when the intent is armed).
+    /// The full-resolution encode runs off the main actor; `removing` is the busy flag.
     private func finishCrop(framing: ImageFraming, session: CropSession) {
-        switch Self.cropOutcome(framing: framing, original: session.original) {
-        case .nothing:
-            if !framing.isIdentity { replaceFailed = true }
-        case .confirmReplace(let framed):
-            pendingReplacement = framed
-            replacementTarget = session.sidecar
-            showingReplaceConfirmation = true
+        removing = true
+        Task {
+            let original = session.original
+            let outcome = await Task.detached { Self.cropOutcome(framing: framing, original: original) }.value
+            removing = false
+            switch outcome {
+            case .nothing:
+                if !framing.isIdentity { replaceFailed = true }
+            case .confirmReplace(let framed):
+                selectedIndex = images.firstIndex { $0.id == session.sidecar.id } ?? selectedIndex
+                pendingReplacement = framed
+                replacementTarget = session.sidecar
+                showingReplaceConfirmation = true
+            }
         }
     }
 

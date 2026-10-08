@@ -460,12 +460,13 @@ final class SyncImageIngestTests: XCTestCase {
         await ex.acceptRemote(try imageRecord(id: secondImageID, bytes: pngBytes()))
         let before = await landedImages().map(\.id).sorted()
         XCTAssertEqual(before, [imageID, secondImageID].sorted(), "sanity")
+        let thumbnail = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: imageID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnail.path), "sanity: thumbnail exists first")
 
         await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
 
         let after = await landedImages().map(\.id)
         XCTAssertEqual(after, [secondImageID])
-        let thumbnail = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: imageID)
         XCTAssertFalse(FileManager.default.fileExists(atPath: thumbnail.path), "the derived thumbnail goes too")
     }
 
@@ -481,9 +482,15 @@ final class SyncImageIngestTests: XCTestCase {
         await ex.attach(engine: engine)
         await ex.acceptRemote(try imageRecord(id: imageID, bytes: pngBytes()))
         await notified.reset()
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let imageName = SyncRecordName.image(captureID: captureID, imageID: imageID).rawValue
+        let fieldsBefore = await bookkeeping.systemFields(for: imageName)
+        XCTAssertNotNil(fieldsBefore, "sanity: ingest archived the image's system fields")
 
         await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
 
+        let fieldsAfter = await bookkeeping.systemFields(for: imageName)
+        XCTAssertNil(fieldsAfter, "the deletion forgets the archived server state")
         let marked = await notified.wasMarked
         let saved = await engine.savedNames
         let deleted = await engine.deletedNames
@@ -495,12 +502,51 @@ final class SyncImageIngestTests: XCTestCase {
                        "a queued save for the vanished image is withdrawn")
     }
 
-    /// Review Focus 4: the true cascade — the entry itself is already gone here.
+    /// The true cascade — the entry itself is already gone here.
     func testInboundImageDeletionForAMissingCaptureIsANoOp() async throws {
-        let ex = exchange()
+        let notified = Notified()
+        let ex = exchange(localStoreDidChange: { await notified.mark() })
+        let engine = FakeCloudEngine()
+        await ex.attach(engine: engine)
+
         await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
         XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
                        "a deletion must never recreate a capture directory")
+        let marked = await notified.wasMarked
+        let saved = await engine.savedNames
+        let deleted = await engine.deletedNames
+        let dropped = await engine.droppedNames
+        XCTAssertFalse(marked, "nothing changed locally, nothing to announce")
+        XCTAssertTrue(saved.isEmpty)
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(dropped.isEmpty)
+    }
+
+    /// A PARKED image (trashed capture) is withdrawn by its deletion: otherwise it lands on
+    /// the next rehydrate and reconcile re-pushes it as a create — the duplicate returns.
+    func testAnInboundImageDeletionWithdrawsAParkedImage() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let ex = exchange()
+        await ex.acceptRemote(try imageRecord(id: imageID, bytes: pngBytes()))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path), "sanity: it parked")
+
+        await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
+        if FileManager.default.fileExists(atPath: parkURL.path) {
+            let raw = try Data(contentsOf: parkURL)
+            let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: raw) as? [String: Any])
+            let ids = (json["images"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+            XCTAssertFalse(ids.contains(imageID), "the park must no longer list the deleted image")
+        }
+        let landed = await landedImages().map(\.id)
+        XCTAssertTrue(landed.isEmpty)
+
+        try setTrashed(false)
+        await ex.rehydrateParkedImages()
+        let landedAfter = await landedImages().map(\.id)
+        XCTAssertFalse(landedAfter.contains(imageID), "a deleted image must not land on restore")
     }
 
     private actor Notified {

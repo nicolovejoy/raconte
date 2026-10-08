@@ -540,12 +540,11 @@ final class LibraryScreenModel {
     /// that the engine internally dedupes a queued save against a queued delete for the
     /// same record.
     ///
-    /// **This is the narrower, accurate guarantee the delete actually gives: it stops
-    /// the server record from being resurrected by a future refetch/wipe or a newly
-    /// paired device. It does NOT reach a device that is already synced and stays
-    /// live** — there is no producer yet for an inbound single-image-deletion event
-    /// (see `CloudEngineControl`'s `.image` cascade-ignore comment), so an
-    /// already-showing image keeps showing there until that inbound piece is built.
+    /// **Reach:** it stops the server record from being resurrected by a future
+    /// refetch/wipe or a newly paired device, and it reaches a device that is already
+    /// synced and stays live — the inbound consumer is
+    /// `SyncRecordExchange.acceptRemoteImageDeletion` (#121), so a remote device
+    /// removes its local copy when the deletion is fetched.
     /// Same placement as `trashEntry`/`purge`'s own delete hooks above.
     ///
     /// Fired unconditionally, matching the method's idempotence: `SyncCoordinator

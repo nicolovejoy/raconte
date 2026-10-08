@@ -3155,9 +3155,10 @@ actor SyncRecordExchange: CloudRecordExchange {
     }
 
     /// An inbound ENTRY deletion (M4 T11, design §5). See
-    /// `CloudEngineControl.acceptRemoteEntryDeletion`'s doc comment for why every other
-    /// record kind never reaches this file at all — they cascade with the same Entry
-    /// deletion this handles.
+    /// `CloudEngineControl.acceptRemoteEntryDeletion`'s doc comment for why the cascade
+    /// child kinds (audio, revision, liveLog, markerStream) never reach this file at
+    /// all — they cascade with the same Entry deletion this handles. Image deletions
+    /// route to `acceptRemoteImageDeletion`.
     ///
     /// **Routes through `StagedRemover` exclusively — never `RecoveryExecutor`, never a
     /// raw `FileManager.removeItem` on `captures/` itself (R3).** The staged rename is
@@ -3249,6 +3250,15 @@ actor SyncRecordExchange: CloudRecordExchange {
         }
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        // A PARKED copy of the image must not outlive its deletion: it would land on the
+        // next rehydrate and reconcile would re-push it as a create. Withdraw it from both
+        // park locations (re-read fresh; never creates a directory).
+        reconcileParkedImagesWriteback(
+            url: AppContainer.syncStagingPendingImagesURL(containerRoot: containerRoot, captureID: captureID),
+            handledIDs: [imageID])
+        reconcileParkedImagesWriteback(
+            url: directory.appendingPathComponent(AppContainer.syncStagingPendingImagesFileName),
+            handledIDs: [imageID])
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
@@ -3260,6 +3270,7 @@ actor SyncRecordExchange: CloudRecordExchange {
             return
         }
         await imageStore.removeImage(captureID: captureID, imageID: imageID)
+        log.notice("sync: inbound image deletion removed \(imageID, privacy: .public) from \(captureID, privacy: .public)")
         let name = SyncRecordName.image(captureID: captureID, imageID: imageID)
         await engine?.dropPendingSaves([name])
         await forgetServerState(for: name)

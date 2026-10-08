@@ -12,6 +12,10 @@ import SwiftUI
 /// This view dismisses itself immediately after a successful remove rather than trying
 /// to keep the viewer open on a shrunk, renumbered image list — the caller's strip
 /// picks up the change on its own next refresh.
+///
+/// #121: Crop presents `ImageFramingView` over the original; Use with a real framing asks
+/// "Replace the original?" and then `onReplace` adds the framed image at the old slot and
+/// removes the original — the viewer dismisses as after Remove.
 struct ImageFullScreenViewer: View {
     let model: LibraryScreenModel
     let captureID: String
@@ -21,10 +25,30 @@ struct ImageFullScreenViewer: View {
     /// `LibraryScreenModel.removeImage` write and re-read; this view has no direct
     /// store access of its own, matching the picker sheet's `onPick` convention.
     let onRemove: (ImageSidecar) async -> Void
+    /// #121: replace `sidecar`'s bytes with the framed `Data` — the caller runs
+    /// `LibraryScreenModel.replaceImage`. false → the viewer alerts and stays up.
+    let onReplace: (ImageSidecar, Data) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var showingRemoveConfirmation = false
     @State private var removing = false
+    /// #121: the original bytes of the image being cropped, while the framing view is up.
+    @State private var cropping: CropSession?
+    /// #121: set from the framing view's Use; drives the "Replace the original?" dialog.
+    @State private var pendingReplacement: Data?
+    /// #121: the sidecar the framed bytes belong to — captured when Use fires.
+    @State private var replacementTarget: ImageSidecar?
+    @State private var showingReplaceConfirmation = false
+    @State private var replaceFailed = false
+
+    struct CropSession: Identifiable { let id = UUID(); let sidecar: ImageSidecar; let original: Data }
+
+    /// What a Use from the framing view does — pure, pinned in `ImageFullScreenViewerCropTests`.
+    enum ImageCropOutcome: Equatable { case nothing, confirmReplace(Data) }
+    nonisolated static func cropOutcome(framing: ImageFraming, original: Data) -> ImageCropOutcome {
+        guard !framing.isIdentity, let framed = framing.apply(to: original) else { return .nothing }
+        return .confirmReplace(framed)
+    }
 
     var body: some View {
         NavigationStack {
@@ -63,6 +87,11 @@ struct ImageFullScreenViewer: View {
                         .accessibilityIdentifier("entryDetail.images.viewer.next")
                 }
                 #endif
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Crop", systemImage: "crop") { beginCrop() }
+                        .disabled(images.isEmpty || removing || cropping != nil)
+                        .accessibilityIdentifier("entryDetail.images.crop")
+                }
                 ToolbarItem(placement: .destructiveAction) {
                     Button("Remove", role: .destructive) { showingRemoveConfirmation = true }
                         .disabled(images.isEmpty || removing)
@@ -79,7 +108,30 @@ struct ImageFullScreenViewer: View {
             } message: {
                 Text("This can’t be undone.")
             }
+            .confirmationDialog("Replace the original?", isPresented: $showingReplaceConfirmation,
+                                titleVisibility: .visible) {
+                Button("Replace", role: .destructive) { replace() }
+                Button("Cancel", role: .cancel) { pendingReplacement = nil; replacementTarget = nil }
+            } message: {
+                Text("The uncropped image is deleted.")
+            }
+            .alert("Couldn’t Use That Photo", isPresented: $replaceFailed) {
+                Button("OK", role: .cancel) {}
+            }
         }
+        #if os(iOS)
+        .fullScreenCover(item: $cropping) { session in framingView(session) }
+        #else
+        .sheet(item: $cropping) { session in framingView(session) }
+        #endif
+    }
+
+    private func framingView(_ session: CropSession) -> some View {
+        ImageFramingView(data: session.original, onUse: { framing in
+            cropping = nil
+            finishCrop(framing: framing, session: session)
+        }, onCancel: { cropping = nil })
+        .id(session.id)
     }
 
     private var safeIndex: Int { min(max(selectedIndex, 0), max(images.count - 1, 0)) }
@@ -97,6 +149,46 @@ struct ImageFullScreenViewer: View {
         Task {
             await onRemove(sidecar)
             dismiss()
+        }
+    }
+
+    private func beginCrop() {
+        guard images.indices.contains(safeIndex) else { return }
+        let sidecar = images[safeIndex]
+        Task {
+            guard let original = await model.originalData(captureID: captureID, imageID: sidecar.id) else {
+                replaceFailed = true
+                return
+            }
+            cropping = CropSession(sidecar: sidecar, original: original)
+        }
+    }
+
+    /// The `session` is the one that was SHOWN — never `images[safeIndex]` re-read now (the
+    /// owner may have swiped meanwhile; CLAUDE.md: capture the id when the intent is armed).
+    private func finishCrop(framing: ImageFraming, session: CropSession) {
+        switch Self.cropOutcome(framing: framing, original: session.original) {
+        case .nothing:
+            if !framing.isIdentity { replaceFailed = true }
+        case .confirmReplace(let framed):
+            pendingReplacement = framed
+            replacementTarget = session.sidecar
+            showingReplaceConfirmation = true
+        }
+    }
+
+    private func replace() {
+        guard let data = pendingReplacement, let target = replacementTarget else { return }
+        pendingReplacement = nil
+        replacementTarget = nil
+        removing = true
+        Task {
+            if await onReplace(target, data) {
+                dismiss()
+            } else {
+                removing = false
+                replaceFailed = true
+            }
         }
     }
 }

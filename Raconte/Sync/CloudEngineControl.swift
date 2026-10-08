@@ -331,6 +331,14 @@ protocol CloudRecordExchange: Sendable {
     /// already handles — the whole capture directory (everything they would each
     /// individually name) goes with one staged rename.
     func acceptRemoteEntryDeletion(captureID: String) async
+
+    /// #121: an inbound deletion for ONE Image record whose Entry is still live — the one
+    /// child deletion that is NOT a cascade. Produced by `LibraryScreenModel.removeImage`
+    /// (and by `replaceImage`'s remove half) on another device; consumed here by removing
+    /// the local `.orig`/sidecar/thumbnail trio and telling the library. Fires no outbound
+    /// hook — an inbound write never echoes back out as a local mutation. A capture that is
+    /// already gone (the true cascade) is a no-op.
+    func acceptRemoteImageDeletion(captureID: String, imageID: String) async
 }
 
 /// The production `CloudEngineControl`: a thin wrapper around `CKSyncEngine` plus its
@@ -600,20 +608,13 @@ actor CloudKitEngineControl: CloudEngineControl, CKSyncEngineDelegate {
                     await exchange.acceptRemoteJournalDeletion(id: id)
                 case .entry(let captureID):
                     await exchange.acceptRemoteEntryDeletion(captureID: captureID)
-                case .audio, .revision, .liveLog, .markerStream, .image:
-                    // `.image` (image-capture design) sits here on the same cascade
-                    // reasoning as its siblings — an Image record carries the same
-                    // `.deleteSelf` `entryRef`, and THIS branch is still correct for
-                    // that true cascade case (the parent Entry deleted). The one shape
-                    // that is NOT a cascade — a remote removal of ONE image from a
-                    // still-live entry — now HAS an outbound producer
-                    // (`LibraryScreenModel.removeImage`, residual-review fix: it now
-                    // fires a real `noteLocalDelete` for the image record), but still
-                    // has no INBOUND consumer: nothing here acts on that event to
-                    // remove the image from a remote device's own local copy. That gap
-                    // is real, known, and belongs with inbound image ingest (plan
-                    // Task 5), not here.
-                    //
+                case .image(let captureID, let imageID):
+                    // #121: the one child deletion that is NOT a cascade — a remote removal
+                    // of ONE image from a still-live entry. When the Entry itself was
+                    // deleted this arrives alongside `.entry`'s cascade and the handler's
+                    // "capture gone → no-op" branch covers it in either order.
+                    await exchange.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+                case .audio, .revision, .liveLog, .markerStream:
                     // These cascade from the SAME Entry deletion `.entry` above already
                     // handles (design §5: children carry `.deleteSelf`, so purging the
                     // Entry takes them with it server-side) — whatever order their own

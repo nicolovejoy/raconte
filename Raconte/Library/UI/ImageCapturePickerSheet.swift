@@ -30,7 +30,10 @@ import UIKit
 /// #121: every landed shot or picked item runs through `ImageFramingView` first
 /// (`framingQueue`, head-first); Use hands the framed JPEG to `onPick`, Cancel hands the
 /// original. A library batch dismisses when its LAST item resolves, as before; a camera shot
-/// still feeds the #134 tally.
+/// still feeds the #134 tally. Library and file picks, like the camera shot, are enqueued only
+/// once their picker reports dismissed (`loadedPicks`, flushed from `showingPhotosPicker` /
+/// `showingFileImporter` going false): a framing cover requested while the picker is still
+/// animating out can be dropped (#182), stranding the head with no cover up.
 struct ImageCapturePickerSheet: View {
     /// Returns false when a given item's bytes didn't take (`ImageStoreError
     /// .invalidImage`, or the write failed) — every other item in a multi-select batch
@@ -50,7 +53,10 @@ struct ImageCapturePickerSheet: View {
     /// Raises `pickError` for a failed verdict once the FRAMING cover is down (#182): every
     /// failure now surfaces after a framing cover, and an alert set while it dismisses drops.
     @State private var framingError = CameraErrorRelay()
+    /// Loaded library/file picks held until the picker is down; see `flushLoadedPicks`.
+    @State private var loadedPicks: [PendingFramingItem] = []
     #if os(iOS)
+    @State private var showingPhotosPicker = false
     @State private var showingCamera = false
     /// #121: a landed shot waits here until the camera cover is fully down, then joins the
     /// framing queue from `onDismiss` — never two covers in one transaction.
@@ -75,7 +81,7 @@ struct ImageCapturePickerSheet: View {
                         .foregroundStyle(InkTone.inkSecondary.color)
                         .accessibilityIdentifier("imageCapture.summary")
                 }
-                PhotosPicker("Choose from Library…", selection: $photosPickerItems, matching: .images)
+                Button("Choose from Library…") { showingPhotosPicker = true }
                     .accessibilityIdentifier("imageCapture.choosePhoto")
                 #else
                 Button("Choose from Files…") { showingFileImporter = true }
@@ -105,7 +111,11 @@ struct ImageCapturePickerSheet: View {
         .onChange(of: framingQueue.head?.id) { old, new in
             if old == nil, new != nil { framingError.cameraPresented() }
         }
+        .onChange(of: pickerIsShowing) { _, shown in
+            if !shown { flushLoadedPicks() }
+        }
         #if os(iOS)
+        .photosPicker(isPresented: $showingPhotosPicker, selection: $photosPickerItems, matching: .images)
         .onChange(of: photosPickerItems) { _, newValue in
             guard !newValue.isEmpty else { return }
             let items = newValue
@@ -138,6 +148,23 @@ struct ImageCapturePickerSheet: View {
             }
         }
         #endif
+    }
+
+    private var pickerIsShowing: Bool {
+        #if os(iOS)
+        showingPhotosPicker
+        #else
+        showingFileImporter
+        #endif
+    }
+
+    /// Moves loaded picks into the framing queue. Whichever of "picker down" and "loads
+    /// finished" comes last calls this; it is a no-op while the picker is still up.
+    private func flushLoadedPicks() {
+        guard !pickerIsShowing, !loadedPicks.isEmpty else { return }
+        let items = loadedPicks
+        loadedPicks = []
+        framingQueue.enqueue(contentsOf: items)
     }
 
     /// Takes `item` off the queue, hands it to `onPick` under `framing`, then does the
@@ -183,7 +210,8 @@ struct ImageCapturePickerSheet: View {
             return
         }
         if anyFailed { framingQueue.recordLibraryLoadFailure() }
-        framingQueue.enqueue(contentsOf: loaded)
+        loadedPicks.append(contentsOf: loaded)
+        flushLoadedPicks()
     }
     #else
     private func enqueueFileImporterURLs(_ urls: [URL]) async {
@@ -205,7 +233,8 @@ struct ImageCapturePickerSheet: View {
             return
         }
         if anyFailed { framingQueue.recordLibraryLoadFailure() }
-        framingQueue.enqueue(contentsOf: loaded)
+        loadedPicks.append(contentsOf: loaded)
+        flushLoadedPicks()
     }
 
     private static func contentType(of url: URL) -> UTType {

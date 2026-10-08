@@ -113,4 +113,17 @@ final class PendingFramingQueueTests: XCTestCase {
         queue.finishResolving(c, landed: false)
         XCTAssertFalse(queue.libraryBatchIsOver)
     }
+
+    /// A camera failure inside an open library batch must not be swallowed by an all-clear close.
+    func testCameraFailureInsideAnOpenLibraryBatchFailsTheBatch() throws {
+        var queue = PendingFramingQueue()
+        queue.enqueue(item(1))
+        queue.enqueue(item(2, origin: .camera))
+        let l = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(l, landed: true)
+        let c = try XCTUnwrap(queue.beginResolving())
+        queue.finishResolving(c, landed: false)
+        XCTAssertTrue(queue.libraryBatchIsOver)
+        XCTAssertTrue(queue.closeLibraryBatch())
+    }
 }

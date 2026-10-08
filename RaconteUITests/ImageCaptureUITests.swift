@@ -242,7 +242,9 @@ final class ImageCaptureUITests: XCTestCase {
         waitUntil(20, "the strip never showed the replacement") {
             thumbnails.count == 1 && thumbnails.firstMatch.identifier != idBefore
         }
-        XCTAssertFalse(app.buttons["entryDetail.images.crop"].firstMatch.exists, "the viewer dismisses after Replace")
+        waitUntil(10, "the viewer did not dismiss after Replace") {
+            !app.buttons["entryDetail.images.crop"].firstMatch.exists
+        }
     }
 
     /// Use with NO change (no rotate, no drag) must do nothing: no dialog, same id.
@@ -272,6 +274,7 @@ final class ImageCaptureUITests: XCTestCase {
                       "the viewer stays up")
         // Library/Capture also have bare "Done" buttons; the viewer's carries an identifier.
         press(app.buttons["entryDetail.images.viewer.done"].firstMatch)
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 10), "the strip never came back after Done")
         XCTAssertEqual(thumbnails.firstMatch.identifier, idBefore)
     }
 }

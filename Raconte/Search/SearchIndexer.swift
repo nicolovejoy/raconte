@@ -82,10 +82,11 @@ actor SearchIndexer {
                 // Read, and wordless: not an error, nothing to find.
                 await dropIfKnown(entry.captureID, known: known, report: &report)
             case .unreadable:
-                // A read error is not evidence the text is gone: whatever row the index
-                // holds for this entry stays, and the next scan tries again.
+                // A read error is not evidence the text is gone: a row the index already
+                // holds for this entry stays, an entry with no row gets none, and the next
+                // scan tries again.
                 report.failed += 1
-                Self.log.notice("search: transcript unreadable for \(entry.captureID, privacy: .public), its row is kept")
+                Self.log.notice("search: transcript unreadable for \(entry.captureID, privacy: .public), not indexed this pass; a row it already has is kept")
             }
         }
 

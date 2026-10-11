@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import Raconte
 
@@ -104,5 +105,118 @@ final class SearchIndexTests: XCTestCase {
         _ = try SearchIndex(databaseURL: url)
         let values = try url.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertFalse(values.isExcludedFromBackup ?? false)
+    }
+
+    // MARK: Damage found after a successful open
+
+    private static let populatedCount = 60
+
+    /// Builds an index whose three tables each span several pages, then closes it.
+    private func makePopulatedIndex(at databaseURL: URL) async throws {
+        let index = try SearchIndex(databaseURL: databaseURL)
+        let filler = String(repeating: "lorem ipsum dolor sit amet ", count: 60)
+        for i in 0..<Self.populatedCount {
+            try await index.upsert(captureID: "E\(i)", fingerprint: "f\(i)", body: "entry\(i) \(filler)")
+        }
+    }
+
+    /// How to damage a page of the closed database file, from outside SQLite.
+    private enum PageDamage {
+        /// The whole page becomes 0xFF: `quick_check` fails with SQLITE_CORRUPT.
+        case overwritten
+        /// One header byte (the fragmented-free-bytes count) is off by one. Every row on the
+        /// page still reads; `quick_check` REPORTS the page and returns normally.
+        case headerByteOffByOne
+    }
+
+    /// Damages the LAST leaf page of `table`, found by walking the b-tree's right-most
+    /// pointers from its root. No open-time read reaches that page (they stop at the first
+    /// row), so only a check of the whole file can find the damage.
+    private func damageLastLeafPage(of table: String, in databaseURL: URL, _ damage: PageDamage) throws {
+        let (rootPage, pageSize) = try DatabaseQueue(path: databaseURL.path).read { db in
+            (try Int.fetchOne(db, sql: "SELECT rootpage FROM sqlite_master WHERE name = ?", arguments: [table]),
+             try Int.fetchOne(db, sql: "PRAGMA page_size"))
+        }
+        let root = try XCTUnwrap(rootPage, "no table named \(table)")
+        let size = try XCTUnwrap(pageSize)
+        let handle = try FileHandle(forUpdating: databaseURL)
+        defer { try? handle.close() }
+        // SQLite file format: byte 0 of a table b-tree page is 0x05 (interior) or 0x0D
+        // (leaf); an interior page keeps its right-most child's page number, big-endian,
+        // in bytes 8..<12; byte 7 counts the page's fragmented free bytes.
+        var page = root
+        var header = Data()
+        for _ in 0..<8 {
+            try handle.seek(toOffset: UInt64((page - 1) * size))
+            header = try XCTUnwrap(try handle.read(upToCount: 12))
+            guard header.count == 12, header[0] == 0x05 else { break }
+            page = header[8..<12].reduce(0) { $0 << 8 | Int($1) }
+        }
+        XCTAssertNotEqual(page, root, "fixture sanity: \(table) must span more than one page")
+        XCTAssertEqual(header.first, 0x0D, "fixture sanity: the walk must end on a table leaf page")
+        guard header.count == 12 else { return }
+        let offset = UInt64((page - 1) * size)
+        switch damage {
+        case .overwritten:
+            try handle.seek(toOffset: offset)
+            try handle.write(contentsOf: Data(repeating: 0xFF, count: size))
+        case .headerByteOffByOne:
+            try handle.seek(toOffset: offset + 7)
+            try handle.write(contentsOf: Data([header[7] == 0 ? 1 : header[7] - 1]))
+        }
+        try handle.synchronize()
+    }
+
+    /// Reopens a damaged index and requires it to have been recreated: nothing remembered,
+    /// and fit to index and search again.
+    private func assertReopenedIndexWasRecreated(_ databaseURL: URL,
+                                                 file: StaticString = #filePath, line: UInt = #line) async throws {
+        let repaired = try SearchIndex(databaseURL: databaseURL)
+        let prints = try await repaired.fingerprints()
+        XCTAssertEqual(prints.count, 0, "a damaged index must be recreated, so every entry is indexed again",
+                       file: file, line: line)
+        try await repaired.upsert(captureID: "N", fingerprint: "1", body: "alpha after the repair")
+        let hits = try await repaired.search(SearchQuery(text: "alpha"))
+        XCTAssertEqual(hits.map(\.captureID), ["N"], file: file, line: line)
+    }
+
+    private func assertADamagedPageIsRepaired(table: String, _ damage: PageDamage,
+                                              file: StaticString = #filePath, line: UInt = #line) async throws {
+        try await makePopulatedIndex(at: url)
+        // Control: the open check keeps a healthy index.
+        let healthy = try await SearchIndex(databaseURL: url).fingerprints()
+        XCTAssertEqual(healthy.count, Self.populatedCount, file: file, line: line)
+        try damageLastLeafPage(of: table, in: url, damage)
+        try await assertReopenedIndexWasRecreated(url, file: file, line: line)
+    }
+
+    // The table that holds the bodies. Before the open check a search that reached the page
+    // threw SQLITE_CORRUPT, and no relaunch repaired it.
+    func testADamagedBodyPageIsRepairedAtOpen() async throws {
+        try await assertADamagedPageIsRepaired(table: "entry_text_content", .overwritten)
+    }
+
+    // The full-text index itself, where the damage was silent.
+    func testADamagedFullTextIndexPageIsRepairedAtOpen() async throws {
+        try await assertADamagedPageIsRepaired(table: "entry_text_data", .overwritten)
+    }
+
+    // Damage the check reports rather than throws on: the answer is not "ok", and that alone
+    // must recreate the index.
+    func testDamageTheCheckOnlyReportsIsRepairedAtOpen() async throws {
+        try await assertADamagedPageIsRepaired(table: "entry_text_content", .headerByteOffByOne)
+    }
+
+    // The file is sound and the schema is not: only a read of the table itself can tell.
+    func testAMissingFullTextTableIsRepairedAtOpen() async throws {
+        try await makePopulatedIndex(at: url)
+        try await DatabaseQueue(path: url.path).write { try $0.execute(sql: "DROP TABLE entry_text") }
+        try await assertReopenedIndexWasRecreated(url)
+    }
+
+    func testAMissingStateTableIsRepairedAtOpen() async throws {
+        try await makePopulatedIndex(at: url)
+        try await DatabaseQueue(path: url.path).write { try $0.execute(sql: "DROP TABLE entry_index_state") }
+        try await assertReopenedIndexWasRecreated(url)
     }
 }

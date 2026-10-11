@@ -44,9 +44,23 @@ actor SearchIndex {
             }
         }
         try migrator.migrate(queue)
-        // A corrupt file can open and then fail on first read — probe it now.
-        _ = try queue.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM entry_index_state") }
+        // A damaged file can open, and even migrate, and then fail on a page or a table that
+        // nothing has read yet. Check the whole file and read both tables now: a throw here
+        // sends `init` down its recreate path, which is all the repair a derivative needs.
+        try queue.read { db in
+            let report = try String.fetchAll(db, sql: "PRAGMA quick_check")
+            guard report == ["ok"] else { throw Damaged(problems: report.count) }
+            _ = try Int.fetchOne(db, sql: "SELECT count(*) FROM entry_index_state")
+            _ = try Int64.fetchOne(db, sql: "SELECT rowid FROM entry_text LIMIT 1")
+        }
         return queue
+    }
+
+    /// `quick_check` found something. Carries a count only: the check's own report is never
+    /// logged.
+    private struct Damaged: LocalizedError {
+        var problems: Int
+        var errorDescription: String? { "integrity check reported \(problems) problem(s)" }
     }
 
     func fingerprints() throws -> [String: String] {

@@ -19,8 +19,8 @@
   file must be that list minus exactly the sync keys. `EntitlementsParityTests` fails
   if it drifts, so there is no need to remember.
 
-  Used as `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements` on the
-  xcodebuild command line; nothing in `project.yml` points at it, and no shipping build
+  Used as `CODE_SIGN_ENTITLEMENTS="$PWD/Raconte/Raconte-nocloud.entitlements"` on the
+  xcodebuild command line (absolute: the setting also reaches SwiftPM package targets); nothing in `project.yml` points at it, and no shipping build
   ever uses it.
 -->
 <plist version="1.0">

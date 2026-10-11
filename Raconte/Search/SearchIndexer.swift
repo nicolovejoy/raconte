@@ -32,7 +32,10 @@ actor SearchIndexer {
         do {
             known = try await index.fingerprints()
         } catch {
-            Self.log.notice("search: fingerprints unreadable, the index will be rebuilt: \(error.localizedDescription, privacy: .public)")
+            // Nothing is rebuilt here. With no fingerprints every listed entry looks new, so
+            // this pass reads and writes each one again and removes none. A damaged file is
+            // recreated at the next open (`SearchIndex.open`).
+            Self.log.notice("search: fingerprints unreadable, this pass re-indexes every listed entry: \(error.localizedDescription, privacy: .public)")
         }
         let listed = Set(entries.map(\.captureID))
         let gone = known.keys.filter { !listed.contains($0) }

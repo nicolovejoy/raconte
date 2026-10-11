@@ -69,8 +69,8 @@ final class AppServices {
                "AppServices must thread ONE LibraryScreenModel into CaptureScreenModel")
         // #194: the search index. Same container root as the exporter above (derived from the
         // library's captures root, so the UI-test harness root is honoured). Opened off the
-        // main actor; the library then hands it every scan's entries. One rescan after
-        // attaching covers a launch scan that finished before the index was ready.
+        // main actor; the library then hands it every scan's entries.
+        // `attach` itself reconciles a scan that published before the index was ready.
         let containerRoot = AppContainer.containerRoot(capturesRoot: library.capturesRoot)
         Task { [weak self] in
             let services = await Task.detached(priority: .utility) {
@@ -80,7 +80,6 @@ final class AppServices {
             self.search = services
             guard let indexer = services.indexer else { return }
             self.library.attach(searchReconciler: indexer)
-            await self.library.rescan()
         }
     }
 }

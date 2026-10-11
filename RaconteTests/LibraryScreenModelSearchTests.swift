@@ -1,32 +1,6 @@
 import XCTest
 @testable import Raconte
 
-/// Counts reconcile calls and blocks until released, to prove coalescing.
-actor FakeReconciler: SearchReconciling {
-    var calls: [[String]] = []
-    private var gate: CheckedContinuation<Void, Never>?
-    func reconcile(_ entries: [SearchIndexer.Entry]) async -> SearchIndexer.Report {
-        calls.append(entries.map(\.captureID))
-        await withCheckedContinuation { gate = $0 }
-        return .init()
-    }
-    /// True when a parked call was released. False means nothing was parked.
-    @discardableResult func release() -> Bool {
-        guard let g = gate else { return false }
-        gate = nil; g.resume(); return true
-    }
-    /// Returns once `n` calls have parked (or after ~2 s, so a broken build fails an
-    /// assertion instead of hanging the suite).
-    func waitForParkedCall(_ n: Int) async {
-        for _ in 0..<400 where !(calls.count >= n && gate != nil) { try? await Task.sleep(for: .milliseconds(5)) }
-    }
-}
-
-/// Bounded wait for the model to go idle (~2 s), same reason.
-@MainActor func waitUntilIdle(_ model: LibraryScreenModel) async {
-    for _ in 0..<400 where model.searchIndexing { try? await Task.sleep(for: .milliseconds(5)) }
-}
-
 /// #194 Task 6: the library model hands every scan's entries (live and trashed) to the
 /// reconciler, one reconcile at a time.
 @MainActor
@@ -79,8 +53,13 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         _ = await model.rescan()
         XCTAssertTrue(model.trashed.contains { $0.captureID == trashedID }, "fixture sanity")
         await fake.waitForParkedCall(1)
-        let ids = await fake.calls.first ?? []
-        XCTAssertEqual(Set(ids), Set([liveID, trashedID]))
+        let handed = await fake.calls.first ?? []
+        XCTAssertEqual(Set(handed.map(\.captureID)), Set([liveID, trashedID]))
+        for entry in handed {
+            XCTAssertEqual(entry.directory,
+                           SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: entry.captureID))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: entry.directory.path))
+        }
         let released = await fake.release(); XCTAssertTrue(released)
         await waitUntilIdle(model)
     }
@@ -103,6 +82,7 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         let afterSecond = await fake.calls.count
         XCTAssertEqual(afterSecond, 2)           // nothing queued after the follow-up
         XCTAssertFalse(model.searchIndexing)
+        XCTAssertEqual(model.searchIndexRevision, 2)   // two completed passes
     }
 
     func testSearchIndexingIsTrueWhileAReconcileRuns() async throws {
@@ -131,5 +111,50 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         let released = await fake.release(); XCTAssertTrue(released)
         await waitUntilIdle(model)
         XCTAssertEqual(model.searchIndexRevision, 1)
+    }
+
+    /// Counts the publishes the model announces, to prove a scan did or did not happen.
+    private final class CountingObserver: LibraryRescanObserver {
+        var count = 0
+        func libraryDidRescan() { count += 1 }
+    }
+
+    func testAttachAfterAPublishedScanReconcilesThePublishedEntriesWithoutRescanning() async throws {
+        try writeCapture(liveID)
+        try writeCapture(trashedID, trashed: true)
+        let model = model()
+        let observer = CountingObserver()
+        model.rescanObserver = observer
+        _ = await model.rescan()
+        XCTAssertEqual(observer.count, 1)
+        let fake = FakeReconciler()
+        model.attach(searchReconciler: fake)
+        await fake.waitForParkedCall(1)
+        let calls = await fake.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(Set(calls[0].map(\.captureID)), Set([liveID, trashedID]))
+        XCTAssertEqual(observer.count, 1, "attach must not scan again")
+        let released = await fake.release(); XCTAssertTrue(released)
+        await waitUntilIdle(model)
+    }
+
+    func testAttachBeforeAnyScanStartsNothing() async throws {
+        try writeCapture(liveID)
+        let model = model()
+        let fake = FakeReconciler()
+        model.attach(searchReconciler: fake)
+        var count = await fake.calls.count
+        XCTAssertEqual(count, 0)
+        XCTAssertFalse(model.searchIndexing)
+        _ = await model.rescan()
+        await fake.waitForParkedCall(1)
+        count = await fake.calls.count
+        XCTAssertEqual(count, 1)
+        let first = await fake.calls.first ?? []
+        XCTAssertEqual(first.map(\.captureID), [liveID], "never an empty list")
+        let released = await fake.release(); XCTAssertTrue(released)
+        await waitUntilIdle(model)
+        count = await fake.calls.count
+        XCTAssertEqual(count, 1)
     }
 }

@@ -76,7 +76,10 @@ actor ImageStore {
     /// by the plan and carries nothing thumbnail-related — but the thumbnail file's own
     /// presence/absence at `SegmentLayout.imageThumbnailURL`, checked wherever "does
     /// this image have a usable thumbnail" needs an answer).
-    func addImage(captureID: String, data: Data, sourceUTType: String?) async throws -> ImageSidecar {
+    ///
+    /// `imageID` lets `LibraryScreenModel.replaceImage` (#121) file a replacement at the old
+    /// image's ULID timestamp; the default mints.
+    func addImage(captureID: String, data: Data, sourceUTType: String?, imageID: String? = nil) async throws -> ImageSidecar {
         let directory = captureDirectory(captureID: captureID)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
@@ -87,7 +90,7 @@ actor ImageStore {
             throw ImageStoreError.invalidImage
         }
 
-        let imageID = mintImageID()
+        let imageID = imageID ?? mintImageID()
         let sidecar = ImageSidecar(id: imageID, originalExtension: info.ext, mime: info.mime,
                                    bytes: data.count, sha256: Self.sha256Hex(data),
                                    width: info.width, height: info.height,

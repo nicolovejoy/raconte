@@ -1982,7 +1982,7 @@ Run, in order:
 2. The full macOS unit recipe (CLAUDE.md "Test (macOS)"), timeout 600000, FOREGROUND. Read
    `Executed N tests` from the LAST summary line. Expected: main's latest CI unit count (read it
    from the job log of main's most recent code-carrying run — not from a commit message) **minus 4**
-   (#197 deleted a 4-test file) **plus 13 + 7 + 5 + 5 + 6 + 3 + 3 = 42**. State the arithmetic in the PR.
+   (#197 deleted a 4-test file) **expected unit = baseline − 4 (#197) + 50 (ImageFramingTests 15, PendingFramingQueueTests 10, CropRectGestureTests 7, ImageFramingViewTests 5, LibraryScreenModelBlankEntryTests +5, SyncImageIngestTests +4, ImageFullScreenViewerCropTests 3, ImageStoreTests +1); UI = baseline + 2.** Read the baseline from the PR #197 CI run (unit 2286 incl. 1 skipped, UI 68) → expected **2336 unit (1 skipped), 70 UI**. State the arithmetic in the PR.
 3. The iOS compile check.
 4. Straggler grep over `Raconte RaconteTests RaconteUITests` for: `no INBOUND consumer`
    (the deleted comment claim), and confirm every `ImageFullScreenViewer(` call passes `onReplace`.

@@ -3155,9 +3155,10 @@ actor SyncRecordExchange: CloudRecordExchange {
     }
 
     /// An inbound ENTRY deletion (M4 T11, design §5). See
-    /// `CloudEngineControl.acceptRemoteEntryDeletion`'s doc comment for why every other
-    /// record kind never reaches this file at all — they cascade with the same Entry
-    /// deletion this handles.
+    /// `CloudEngineControl.acceptRemoteEntryDeletion`'s doc comment for why the cascade
+    /// child kinds (audio, revision, liveLog, markerStream) never reach this file at
+    /// all — they cascade with the same Entry deletion this handles. Image deletions
+    /// route to `acceptRemoteImageDeletion`.
     ///
     /// **Routes through `StagedRemover` exclusively — never `RecoveryExecutor`, never a
     /// raw `FileManager.removeItem` on `captures/` itself (R3).** The staged rename is
@@ -3234,6 +3235,45 @@ actor SyncRecordExchange: CloudRecordExchange {
             await forgetServerState(for: name)
         }
 
+        await localStoreDidChange?()
+    }
+
+    /// #121 — see `CloudRecordExchange.acceptRemoteImageDeletion`. Local write only, through
+    /// `ImageStore.removeImage` (idempotent: an unknown id is a no-op), then
+    /// `localStoreDidChange` so the library rescans. Never `noteLocalChange`/`noteLocalDelete`.
+    /// Retires this device's bookkeeping for the name the same way an entry deletion does, so
+    /// a reconciliation scan does not treat the vanished artifact as never-uploaded.
+    func acceptRemoteImageDeletion(captureID: String, imageID: String) async {
+        guard let containerRoot else {
+            log.debug("sync: no container root wired — image deletion ingest skipped")
+            return
+        }
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
+        let directory = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: captureID)
+        // A PARKED copy of the image must not outlive its deletion: it would land on the
+        // next rehydrate and reconcile would re-push it as a create. Withdraw it from both
+        // park locations (re-read fresh; never creates a directory).
+        reconcileParkedImagesWriteback(
+            url: AppContainer.syncStagingPendingImagesURL(containerRoot: containerRoot, captureID: captureID),
+            handledIDs: [imageID])
+        reconcileParkedImagesWriteback(
+            url: directory.appendingPathComponent(AppContainer.syncStagingPendingImagesFileName),
+            handledIDs: [imageID])
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            log.debug("sync: image deletion for \(captureID, privacy: .public) — capture already gone, no-op")
+            return
+        }
+        guard let imageStore else {
+            log.notice("sync: no image store wired — image deletion \(imageID, privacy: .public) skipped")
+            return
+        }
+        await imageStore.removeImage(captureID: captureID, imageID: imageID)
+        log.notice("sync: inbound image deletion removed \(imageID, privacy: .public) from \(captureID, privacy: .public)")
+        let name = SyncRecordName.image(captureID: captureID, imageID: imageID)
+        await engine?.dropPendingSaves([name])
+        await forgetServerState(for: name)
         await localStoreDidChange?()
     }
 

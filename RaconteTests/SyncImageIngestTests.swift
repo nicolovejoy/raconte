@@ -448,6 +448,113 @@ final class SyncImageIngestTests: XCTestCase {
                        "a purged entry's park must not be orphaned forever")
     }
 
+    // MARK: Inbound single-image deletion (#121)
+
+    /// #121: before this, an inbound Image deletion was ignored on cascade reasoning, so a
+    /// device already showing the image kept it — after a remote crop (add new + delete old)
+    /// that is a visible duplicate. The consumer removes the local trio, nothing more.
+    func testAnInboundImageDeletionForALiveCaptureRemovesTheLocalImage() async throws {
+        try mkCaptureDirectory()
+        let ex = exchange()
+        await ex.acceptRemote(try imageRecord(id: imageID, bytes: pngBytes()))
+        await ex.acceptRemote(try imageRecord(id: secondImageID, bytes: pngBytes()))
+        let before = await landedImages().map(\.id).sorted()
+        XCTAssertEqual(before, [imageID, secondImageID].sorted(), "sanity")
+        let thumbnail = SegmentLayout.imageThumbnailURL(captureDirectory: captureDirectory, imageID: imageID)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnail.path), "sanity: thumbnail exists first")
+
+        await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
+        let after = await landedImages().map(\.id)
+        XCTAssertEqual(after, [secondImageID])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: thumbnail.path), "the derived thumbnail goes too")
+    }
+
+    /// An inbound write must never echo back out as a local mutation: no save, no delete
+    /// enqueued on the engine. Pinned through `localStoreDidChange` firing (the model
+    /// rescans) while the attached `FakeCloudEngine` (`SyncCoordinatorTests.swift`) records
+    /// no `enqueueSaves`/`enqueueDeletes` — only the `dropPendingSaves` bookkeeping retire.
+    func testAnInboundImageDeletionNotifiesTheStoreButEnqueuesNothing() async throws {
+        try mkCaptureDirectory()
+        let notified = Notified()
+        let ex = exchange(localStoreDidChange: { await notified.mark() })
+        let engine = FakeCloudEngine()
+        await ex.attach(engine: engine)
+        await ex.acceptRemote(try imageRecord(id: imageID, bytes: pngBytes()))
+        await notified.reset()
+        let bookkeeping = SyncBookkeepingStore(root: AppContainer.syncRoot(containerRoot: containerRoot))
+        let imageName = SyncRecordName.image(captureID: captureID, imageID: imageID).rawValue
+        let fieldsBefore = await bookkeeping.systemFields(for: imageName)
+        XCTAssertNotNil(fieldsBefore, "sanity: ingest archived the image's system fields")
+
+        await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
+        let fieldsAfter = await bookkeeping.systemFields(for: imageName)
+        XCTAssertNil(fieldsAfter, "the deletion forgets the archived server state")
+        let marked = await notified.wasMarked
+        let saved = await engine.savedNames
+        let deleted = await engine.deletedNames
+        let dropped = await engine.droppedNames
+        XCTAssertTrue(marked, "the library must learn the image is gone")
+        XCTAssertTrue(saved.isEmpty, "an inbound delete is not a local change to push")
+        XCTAssertTrue(deleted.isEmpty, "an inbound delete is not a local delete to push")
+        XCTAssertEqual(dropped, [[.image(captureID: captureID, imageID: imageID)]],
+                       "a queued save for the vanished image is withdrawn")
+    }
+
+    /// The true cascade — the entry itself is already gone here.
+    func testInboundImageDeletionForAMissingCaptureIsANoOp() async throws {
+        let notified = Notified()
+        let ex = exchange(localStoreDidChange: { await notified.mark() })
+        let engine = FakeCloudEngine()
+        await ex.attach(engine: engine)
+
+        await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: captureDirectory.path),
+                       "a deletion must never recreate a capture directory")
+        let marked = await notified.wasMarked
+        let saved = await engine.savedNames
+        let deleted = await engine.deletedNames
+        let dropped = await engine.droppedNames
+        XCTAssertFalse(marked, "nothing changed locally, nothing to announce")
+        XCTAssertTrue(saved.isEmpty)
+        XCTAssertTrue(deleted.isEmpty)
+        XCTAssertTrue(dropped.isEmpty)
+    }
+
+    /// A PARKED image (trashed capture) is withdrawn by its deletion: otherwise it lands on
+    /// the next rehydrate and reconcile re-pushes it as a create — the duplicate returns.
+    func testAnInboundImageDeletionWithdrawsAParkedImage() async throws {
+        try mkCaptureDirectory()
+        try setTrashed(true)
+        let ex = exchange()
+        await ex.acceptRemote(try imageRecord(id: imageID, bytes: pngBytes()))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: parkURL.path), "sanity: it parked")
+
+        await ex.acceptRemoteImageDeletion(captureID: captureID, imageID: imageID)
+
+        if FileManager.default.fileExists(atPath: parkURL.path) {
+            let raw = try Data(contentsOf: parkURL)
+            let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: raw) as? [String: Any])
+            let ids = (json["images"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+            XCTAssertFalse(ids.contains(imageID), "the park must no longer list the deleted image")
+        }
+        let landed = await landedImages().map(\.id)
+        XCTAssertTrue(landed.isEmpty)
+
+        try setTrashed(false)
+        await ex.rehydrateParkedImages()
+        let landedAfter = await landedImages().map(\.id)
+        XCTAssertFalse(landedAfter.contains(imageID), "a deleted image must not land on restore")
+    }
+
+    private actor Notified {
+        private(set) var wasMarked = false
+        func mark() { wasMarked = true }
+        func reset() { wasMarked = false }
+    }
+
     // MARK: Ingest — no ImageStore wired: park, never drop
 
     /// An optional dependency being absent is not a reason to lose an owner's

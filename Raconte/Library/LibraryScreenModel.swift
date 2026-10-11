@@ -135,6 +135,47 @@ final class LibraryScreenModel {
     /// pair (there are many) would leak one for the length of the test process.
     weak var rescanObserver: (any LibraryRescanObserver)?
 
+    // MARK: Search index (#194)
+
+    /// Nil until `attach(searchReconciler:)`; every build without an index leaves it nil.
+    private var searchReconciler: (any SearchReconciling)?
+    /// True from the moment a reconcile is scheduled until the last coalesced pass ends.
+    private(set) var searchIndexing = false
+    /// Moves once per COMPLETED pass: the signal "the index may have changed" that the
+    /// search screen observes to re-run its visible query.
+    private(set) var searchIndexRevision = 0
+    private var reconcilePending = false
+    private var reconcileRunning = false
+
+    func attach(searchReconciler: any SearchReconciling) { self.searchReconciler = searchReconciler }
+
+    /// One reconcile at a time; any number of requests during a run collapse into exactly
+    /// one follow-up. The follow-up re-reads the entries when it starts, so it sees the
+    /// latest scan.
+    private func scheduleSearchReconcile() {
+        guard searchReconciler != nil else { return }
+        if reconcileRunning { reconcilePending = true; return }
+        reconcileRunning = true
+        searchIndexing = true
+        Task { [weak self] in await self?.runSearchReconcile() }
+    }
+
+    private func runSearchReconcile() async {
+        defer { reconcileRunning = false; searchIndexing = false }
+        repeat {
+            reconcilePending = false
+            // Trashed entries stay in `captures/<id>` until permanently removed, so they
+            // are handed over too: restoring one must not need a reindex.
+            let entries = (allEntries + trashed).map {
+                SearchIndexer.Entry(
+                    captureID: $0.captureID,
+                    directory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: $0.captureID))
+            }
+            _ = await searchReconciler?.reconcile(entries)
+            searchIndexRevision += 1
+        } while reconcilePending
+    }
+
     /// #82: whichever capture id `CaptureCoordinator.activeCaptureID` currently names,
     /// or `nil` when unattached. `@MainActor`, not `@Sendable` — honest about
     /// `activeCaptureID`'s real isolation rather than claiming this can be called from
@@ -352,6 +393,7 @@ final class LibraryScreenModel {
         // observer's whole job is to compare a receipt against `allEntries`, so it must
         // never see a half-applied scan or one this model has already abandoned.
         rescanObserver?.libraryDidRescan()
+        scheduleSearchReconcile()
         return true
     }
 

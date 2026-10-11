@@ -22,6 +22,9 @@ final class AppServices {
     /// only place that pairs `CFBundleShortVersionString`/`CFBundleVersion` for the
     /// export manifest.
     let exportRunner: ExportRunner
+    /// #194: nil until the index has been opened off the main actor (a few milliseconds;
+    /// never on the launch path). Nothing on screen depends on it yet.
+    private(set) var search: SearchServices?
 
     init() {
         let library = LibraryScreenModel.live()
@@ -64,6 +67,21 @@ final class AppServices {
         // same style as `CaptureScreenModel.swift:173`/`:214`.
         assert(capture.library === library,
                "AppServices must thread ONE LibraryScreenModel into CaptureScreenModel")
+        // #194: the search index. Same container root as the exporter above (derived from the
+        // library's captures root, so the UI-test harness root is honoured). Opened off the
+        // main actor; the library then hands it every scan's entries. One rescan after
+        // attaching covers a launch scan that finished before the index was ready.
+        let containerRoot = AppContainer.containerRoot(capturesRoot: library.capturesRoot)
+        Task { [weak self] in
+            let services = await Task.detached(priority: .utility) {
+                SearchServices(containerRoot: containerRoot)
+            }.value
+            guard let self else { return }
+            self.search = services
+            guard let indexer = services.indexer else { return }
+            self.library.attach(searchReconciler: indexer)
+            await self.library.rescan()
+        }
     }
 }
 

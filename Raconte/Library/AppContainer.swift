@@ -16,6 +16,7 @@ import Foundation
 ///       quarantine/<name>/     repaired-out unreadable-sidecar captures (#81, never deleted)
 ///       sync/                  sync bookkeeping cache, disposable (M4 T2)
 ///       sync/staging/<ULID>/   new-entry ingest assembly area, disposable (M4 T7)
+///       search/index.sqlite    full-text index, disposable, excluded from backup (#194)
 enum AppContainer {
     static let directoryName = "Raconte"
     static let capturesDirectoryName = "captures"
@@ -61,6 +62,11 @@ enum AppContainer {
     /// nothing but a rebuild, never data, because `captures/` is never touched until the
     /// final `rename(2)` succeeds.
     static let syncStagingDirectoryName = "staging"
+    /// #194: the search index's own directory — a sibling of `captures/`, never inside it,
+    /// for the reason this type's header gives. `SearchIndex` marks its PARENT directory
+    /// excluded from backup, so the database must live in a directory of its own.
+    static let searchDirectoryName = "search"
+    static let searchIndexFileName = "index.sqlite"
 
     /// Application Support/Raconte, created on demand. Falls back to the temporary
     /// directory if Application Support is unavailable, matching the pre-existing
@@ -111,6 +117,14 @@ enum AppContainer {
 
     static func quarantineURL(containerRoot: URL, name: String) -> URL {
         quarantineRoot(containerRoot: containerRoot).appendingPathComponent(name, isDirectory: true)
+    }
+
+    static func searchRoot(containerRoot: URL) -> URL {
+        containerRoot.appendingPathComponent(searchDirectoryName, isDirectory: true)
+    }
+
+    static func searchIndexURL(containerRoot: URL) -> URL {
+        searchRoot(containerRoot: containerRoot).appendingPathComponent(searchIndexFileName)
     }
 
     static func syncRoot(containerRoot: URL) -> URL {

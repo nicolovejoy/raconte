@@ -141,8 +141,9 @@ final class LibraryScreenModel {
     private var searchReconciler: (any SearchReconciling)?
     /// True from the moment a reconcile is scheduled until the last coalesced pass ends.
     private(set) var searchIndexing = false
-    /// Moves once per COMPLETED pass: the signal "the index may have changed" that the
-    /// search screen observes to re-run its visible query.
+    /// Moves after each pass that indexed or removed something, and only then: the signal
+    /// "a query may now answer differently" that the search screen observes to re-run its
+    /// visible query. A pass that changed nothing leaves it alone.
     private(set) var searchIndexRevision = 0
     private var reconcilePending = false
     private var reconcileRunning = false
@@ -185,8 +186,9 @@ final class LibraryScreenModel {
                     captureID: $0.captureID,
                     directory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: $0.captureID))
             }
-            _ = await searchReconciler?.reconcile(entries)
-            searchIndexRevision += 1
+            if let report = await searchReconciler?.reconcile(entries), report.changedTheIndex {
+                searchIndexRevision += 1
+            }
         } while reconcilePending
     }
 

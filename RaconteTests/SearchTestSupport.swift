@@ -1,0 +1,28 @@
+import XCTest
+@testable import Raconte
+
+/// Counts reconcile calls and blocks until released, to prove coalescing.
+actor FakeReconciler: SearchReconciling {
+    var calls: [[SearchIndexer.Entry]] = []
+    private var gate: CheckedContinuation<Void, Never>?
+    func reconcile(_ entries: [SearchIndexer.Entry]) async -> SearchIndexer.Report {
+        calls.append(entries)
+        await withCheckedContinuation { gate = $0 }
+        return .init()
+    }
+    /// True when a parked call was released. False means nothing was parked.
+    @discardableResult func release() -> Bool {
+        guard let g = gate else { return false }
+        gate = nil; g.resume(); return true
+    }
+    /// Returns once `n` calls have parked (or after ~2 s, so a broken build fails an
+    /// assertion instead of hanging the suite).
+    func waitForParkedCall(_ n: Int) async {
+        for _ in 0..<400 where !(calls.count >= n && gate != nil) { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+}
+
+/// Bounded wait for the model to go idle (~2 s), same reason.
+@MainActor func waitUntilIdle(_ model: LibraryScreenModel) async {
+    for _ in 0..<400 where model.searchIndexing { try? await Task.sleep(for: .milliseconds(5)) }
+}

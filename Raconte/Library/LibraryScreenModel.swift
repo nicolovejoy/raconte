@@ -146,8 +146,18 @@ final class LibraryScreenModel {
     private(set) var searchIndexRevision = 0
     private var reconcilePending = false
     private var reconcileRunning = false
+    /// Set when a scan publishes. `attach` reconciles the published list only after this:
+    /// before the first publish the entry lists are empty, and reconciling `[]` would
+    /// remove every row from the index.
+    private var searchScanPublished = false
 
-    func attach(searchReconciler: any SearchReconciling) { self.searchReconciler = searchReconciler }
+    /// Attaching after a scan has published reconciles that list at once (no rescan, so
+    /// nothing supersedes a scan in flight); attaching before the first publish does
+    /// nothing and the launch scan reconciles.
+    func attach(searchReconciler: any SearchReconciling) {
+        self.searchReconciler = searchReconciler
+        if searchScanPublished { scheduleSearchReconcile() }
+    }
 
     /// One reconcile at a time; any number of requests during a run collapse into exactly
     /// one follow-up. The follow-up re-reads the entries when it starts, so it sees the
@@ -393,6 +403,7 @@ final class LibraryScreenModel {
         // observer's whole job is to compare a receipt against `allEntries`, so it must
         // never see a half-applied scan or one this model has already abandoned.
         rescanObserver?.libraryDidRescan()
+        searchScanPublished = true
         scheduleSearchReconcile()
         return true
     }

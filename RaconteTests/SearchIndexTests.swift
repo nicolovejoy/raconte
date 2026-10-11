@@ -98,6 +98,30 @@ final class SearchIndexTests: XCTestCase {
         XCTAssertEqual(matchTexts(hits.first { $0.captureID == "B" }), ["ecole"])
     }
 
+    // The same three texts through the real pipeline: whatever FTS5 emits around a combining
+    // mark, no marker reaches the snippet and the match is the matched token.
+    func testSnippetsOfTextWithCombiningMarksCarryNoMarkers() async throws {
+        let index = try SearchIndex(databaseURL: url)
+        let rows: [(id: String, body: String, query: String)] = [
+            ("keycap", "step 1\u{FE0F}\u{20E3} done", "1"),
+            ("devanagari", "\u{928}\u{92E}\u{938}\u{94D}\u{924}\u{947} \u{926}\u{941}\u{928}\u{93F}\u{92F}\u{93E}",
+             "\u{928}\u{92E}\u{938}"),
+            ("arabic", "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E} \u{627}\u{644}\u{648}\u{644}\u{62F}", "\u{643}"),
+        ]
+        for row in rows {
+            try await index.upsert(captureID: row.id, fingerprint: "1", body: row.body)
+        }
+        for row in rows {
+            let hits = try await index.search(SearchQuery(text: row.query))
+            XCTAssertEqual(hits.map(\.captureID), [row.id])
+            let snippet = try XCTUnwrap(hits.first?.snippet, row.id)
+            // Short bodies: the snippet is the whole body, so nothing may be lost or added.
+            XCTAssertEqual(Array(snippet.text.unicodeScalars), Array(row.body.unicodeScalars), row.id)
+            XCTAssertEqual(snippet.matches.map { Array(snippet.text[$0].unicodeScalars) },
+                           [Array(row.query.unicodeScalars)], row.id)
+        }
+    }
+
     // An index never flags a directory it was merely handed: that is how an archive root came
     // to be excluded from backup. `SearchServices` marks `search/` by name
     // (`SearchServicesTests.testIndexLivesInItsOwnBackupExcludedDirectoryBesideCaptures`).

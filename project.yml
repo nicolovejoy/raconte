@@ -5,6 +5,10 @@ options:
     iOS: "26.0"
     macOS: "26.0"
   createIntermediateGroups: true
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    exactVersion: "7.11.1"
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -36,6 +40,8 @@ targets:
     type: application
     supportedDestinations: [iOS, macOS]
     sources: [Raconte]
+    dependencies:
+      - package: GRDB
     info:
       path: Raconte/Info.plist
       properties:

@@ -290,11 +290,13 @@ final class SearchIndexTests: XCTestCase {
         XCTAssertEqual(try markerOccurrencesOnDisk(), 0)
     }
 
-    // An edit replaces the row: the words the owner removed go too.
+    // An edit replaces the row: the words the owner removed go too. The second row is the
+    // control: it must survive, or an index that was simply recreated would pass too.
     func testReplacedTextDoesNotLingerInTheFile() async throws {
         do {
             let index = try SearchIndex(databaseURL: url)
             try await index.upsert(captureID: "A", fingerprint: "1", body: markedBody)
+            try await index.upsert(captureID: "B", fingerprint: "1", body: "unrelated words stay")
         }
         XCTAssertGreaterThanOrEqual(try markerOccurrencesOnDisk(), 13,
                                     "fixture sanity: twelve in the body and the index term")
@@ -303,6 +305,8 @@ final class SearchIndexTests: XCTestCase {
             try await index.upsert(captureID: "A", fingerprint: "2", body: "the entry after the edit")
             let hits = try await index.search(SearchQuery(text: "edit"))
             XCTAssertEqual(hits.map(\.captureID), ["A"])
+            let kept = try await index.search(SearchQuery(text: "unrelated"))
+            XCTAssertEqual(kept.map(\.captureID), ["B"])
         }
         XCTAssertEqual(try markerOccurrencesOnDisk(), 0)
     }

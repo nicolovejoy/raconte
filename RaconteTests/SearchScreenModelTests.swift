@@ -13,7 +13,7 @@ final class SearchScreenModelTests: XCTestCase {
 
     // MARK: Fixtures
 
-    private func writeCapture(_ id: String, capturesRoot: URL) throws {
+    private func writeCapture(_ id: String, capturedAt created: Date, capturesRoot: URL) throws {
         let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
         let segs = SegmentLayout.segmentsDirectory(captureDirectory: dir)
         try FileManager.default.createDirectory(at: segs, withIntermediateDirectories: true)
@@ -21,24 +21,28 @@ final class SearchScreenModelTests: XCTestCase {
         let format = AudioFormatDescriptor(sampleRate: 48_000, channels: 1,
                                            commonFormat: .pcmFormatFloat32,
                                            interleaved: false, bytesPerFrame: 4)
-        let created = Date(timeIntervalSince1970: 1_000)
         let manifest = Manifest(captureID: id, createdAt: created, state: .captured,
                                 stateSeq: 1, stateUpdatedAt: created, format: format)
         try CaptureCoding.encoder().encode(manifest)
             .write(to: SegmentLayout.manifestURL(captureDirectory: dir))
     }
 
-    /// A library over its own temporary container, whose one scan has published `liveID`.
-    private func scannedLibrary() async throws -> LibraryScreenModel {
+    /// A library over its own temporary container, whose one scan has published `liveID`
+    /// and whatever `others` names.
+    private func scannedLibrary(liveCapturedAt: Date = Date(timeIntervalSince1970: 1_000),
+                                also others: [(id: String, capturedAt: Date)] = []) async throws -> LibraryScreenModel {
         let containerRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("SearchScreenModel-\(UUID().uuidString)", isDirectory: true)
         let capturesRoot = AppContainer.capturesRoot(containerRoot: containerRoot)
         try FileManager.default.createDirectory(at: capturesRoot, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: containerRoot) }
-        try writeCapture(liveID, capturesRoot: capturesRoot)
+        try writeCapture(liveID, capturedAt: liveCapturedAt, capturesRoot: capturesRoot)
+        for other in others {
+            try writeCapture(other.id, capturedAt: other.capturedAt, capturesRoot: capturesRoot)
+        }
         let library = LibraryScreenModel(capturesRoot: capturesRoot, journalsContainerRoot: containerRoot)
         _ = await library.rescan()
-        XCTAssertEqual(library.allEntries.map(\.captureID), [liveID], "fixture sanity")
+        XCTAssertEqual(Set(library.allEntries.map(\.captureID)), Set([liveID] + others.map(\.id)), "fixture sanity")
         return library
     }
 
@@ -76,6 +80,23 @@ final class SearchScreenModelTests: XCTestCase {
         let released = await fake.release(hits)
         XCTAssertTrue(released, "query \(call) never reached the index")
         await running.value
+    }
+
+    /// Types "ab" and answers it with a hit for each of `ids`: the one query the re-join
+    /// tests allow. Each of them ends by asserting the index was asked exactly once.
+    private func paint(_ model: SearchScreenModel, _ fake: FakeSearching, _ ids: [String]) async {
+        model.text = "ab"
+        await answerRefresh(model, fake, call: 1, with: ids.map { hit($0, "ab") })
+    }
+
+    private func assertAskedOnce(_ fake: FakeSearching, file: StaticString = #filePath, line: UInt = #line) async {
+        let calls = await fake.calls
+        XCTAssertEqual(calls, 1, "the list must follow the library and the filters without asking the index again",
+                       file: file, line: line)
+    }
+
+    private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        cal.date(from: DateComponents(year: y, month: m, day: d, hour: 12))!
     }
 
     // MARK: filterAndSort
@@ -275,5 +296,160 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertTrue(released, "no second query: the model did not follow the index")
         await waitForResults(model, count: 1)
         XCTAssertEqual(model.results.map(\.id), [liveID])
+    }
+    // MARK: Results follow the library and the filters, with no query
+
+    func testATrashedResultLeavesTheListWithoutAQuery() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID])
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+
+        let trashed = await library.trashEntry(liveID)
+        XCTAssertTrue(trashed)
+        await waitForResults(model, count: 0)
+        XCTAssertTrue(model.results.isEmpty, "a trashed entry is still listed")
+        await assertAskedOnce(fake)
+    }
+
+    /// The index keeps a trashed entry, so the answer on hand already names it. Restoring
+    /// it is enough to list it.
+    func testARestoredEntryAppearsWithoutAQuery() async throws {
+        let library = try await scannedLibrary()
+        let trashed = await library.trashEntry(liveID)
+        XCTAssertTrue(trashed)
+        XCTAssertTrue(library.allEntries.isEmpty, "fixture sanity")
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID])
+        XCTAssertTrue(model.results.isEmpty, "fixture sanity: an entry in the trash is not listed")
+
+        let restored = await library.restoreEntry(liveID)
+        XCTAssertTrue(restored)
+        await waitForResults(model, count: 1)
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        await assertAskedOnce(fake)
+    }
+
+    /// The row is the library's CURRENT row for the entry, not the one that was there when
+    /// the index answered.
+    func testAMovedEntryIsListedWithItsNewJournal() async throws {
+        let library = try await scannedLibrary()
+        let journal = try await library.journalStore.create(name: "France")
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID])
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        XCTAssertNil(model.results.first?.item.journalID, "fixture sanity: unfiled to begin with")
+
+        let moved = await library.moveEntry(liveID, toJournal: journal.id)
+        XCTAssertTrue(moved)
+        for _ in 0..<400 where model.results.first?.item.journalID != journal.id {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        XCTAssertEqual(model.results.first?.item.journalID, journal.id)
+        XCTAssertEqual(model.results.first?.item.journal?.name, "France")
+        await assertAskedOnce(fake)
+    }
+
+    func testChangingTheJournalScopeFiltersTheHitsOnHand() async throws {
+        let other = ULID.make()
+        let library = try await scannedLibrary(also: [(other, Date(timeIntervalSince1970: 2_000))])
+        let first = try await library.journalStore.create(name: "1987")
+        let second = try await library.journalStore.create(name: "France")
+        var moved = await library.moveEntry(liveID, toJournal: first.id)
+        XCTAssertTrue(moved)
+        moved = await library.moveEntry(other, toJournal: second.id)
+        XCTAssertTrue(moved)
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID, other])
+        XCTAssertEqual(model.results.map(\.id), [other, liveID])
+
+        // No await between a change and its assertion: the setter itself re-joins.
+        model.journalScope = .journal(first.id)
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        model.journalScope = .journal(second.id)
+        XCTAssertEqual(model.results.map(\.id), [other])
+        model.journalScope = .unfiled
+        XCTAssertTrue(model.results.isEmpty)
+        model.journalScope = .all
+        XCTAssertEqual(model.results.map(\.id), [other, liveID])
+        await assertAskedOnce(fake)
+    }
+
+    func testChangingTheDateFilterFiltersTheHitsOnHand() async throws {
+        let later = ULID.make()
+        let library = try await scannedLibrary(liveCapturedAt: day(2020, 6, 1), also: [(later, day(2024, 6, 1))])
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID, later])
+        XCTAssertEqual(model.results.map(\.id), [later, liveID])
+
+        model.dateFilter = .custom(from: PartialDate(year: 2023), to: nil)
+        XCTAssertEqual(model.results.map(\.id), [later])
+        model.dateFilter = .custom(from: nil, to: PartialDate(year: 2021))
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        model.dateFilter = .custom(from: PartialDate(year: 2021), to: PartialDate(year: 2022))
+        XCTAssertTrue(model.results.isEmpty)
+        model.dateFilter = .anyTime
+        XCTAssertEqual(model.results.map(\.id), [later, liveID])
+        await assertAskedOnce(fake)
+    }
+
+    /// A real change to the library's entries (a second capture appears) that leaves
+    /// `liveID` live and matching, then the model's library observation gets its turn on
+    /// the main actor. What is asserted after this must hold at every instant, so there is
+    /// no event to wait for; the yields only make sure a re-join, were one coming, has
+    /// happened.
+    private func changeTheLibrary(_ library: LibraryScreenModel) async throws {
+        let before = library.allEntries.count
+        try writeCapture(ULID.make(), capturedAt: Date(timeIntervalSince1970: 3_000),
+                         capturesRoot: library.capturesRoot)
+        _ = await library.rescan()
+        XCTAssertEqual(library.allEntries.count, before + 1, "fixture sanity: the library changed")
+        for _ in 0..<10 { await Task.yield() }
+    }
+
+    /// Review focus 1 from the other side. Deleting the text empties the list; the hits
+    /// behind it must go too, or the next filter or library change joins them back under an
+    /// empty field.
+    func testAClearedListIsNotRepaintedByAFilterOrLibraryChange() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID])
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+
+        model.text = ""
+        XCTAssertTrue(model.results.isEmpty)
+        try await changeTheLibrary(library)
+        XCTAssertTrue(model.results.isEmpty, "a library change repainted a cleared list")
+        model.journalScope = .unfiled                       // the entry is unfiled: it would match
+        XCTAssertTrue(model.results.isEmpty, "a scope change repainted a cleared list")
+        model.dateFilter = .custom(from: PartialDate(year: 1960), to: nil)
+        XCTAssertTrue(model.results.isEmpty, "a date change repainted a cleared list")
+        await assertAskedOnce(fake)
+    }
+
+    /// Cannot happen today (the index is connected once), but the states allow it: an index
+    /// that goes away takes its answers with it, at once.
+    func testConnectingAsUnavailableClearsTheResults() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        await paint(model, fake, [liveID])
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+
+        model.connect(searching: nil, unavailableReason: "disk full")
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertEqual(model.unavailableReason, "disk full")
+        try await changeTheLibrary(library)
+        XCTAssertTrue(model.results.isEmpty, "a library change repainted an unavailable index's answer")
+        model.journalScope = .unfiled                       // the entry is unfiled: it would match
+        XCTAssertTrue(model.results.isEmpty, "a scope change repainted an unavailable index's answer")
+        await assertAskedOnce(fake)
     }
 }

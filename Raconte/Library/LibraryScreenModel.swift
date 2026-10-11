@@ -162,12 +162,16 @@ final class LibraryScreenModel {
     /// One reconcile at a time; any number of requests during a run collapse into exactly
     /// one follow-up. The follow-up re-reads the entries when it starts, so it sees the
     /// latest scan.
+    ///
+    /// `.utility`, stated: a bare `Task` would inherit the priority of whoever published
+    /// the scan (user-initiated for every UI-driven rescan), and the pass reads every entry
+    /// even when nothing changed.
     private func scheduleSearchReconcile() {
         guard searchReconciler != nil else { return }
         if reconcileRunning { reconcilePending = true; return }
         reconcileRunning = true
         searchIndexing = true
-        Task { [weak self] in await self?.runSearchReconcile() }
+        Task(priority: .utility) { [weak self] in await self?.runSearchReconcile() }
     }
 
     private func runSearchReconcile() async {

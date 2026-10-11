@@ -113,6 +113,23 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         XCTAssertEqual(model.searchIndexRevision, 1)
     }
 
+    /// The pass is derivative work, O(entries) on every scan: it must not inherit the
+    /// priority of whatever published the scan (user-initiated, for a UI-driven rescan).
+    func testTheReconcileRunsAtUtilityPriority() async throws {
+        XCTAssertNotEqual(Task.basePriority, .utility,
+                          "fixture sanity: the publishing task must not itself be a utility task")
+        try writeCapture(liveID)
+        let model = model()
+        let fake = FakeReconciler()
+        model.attach(searchReconciler: fake)
+        _ = await model.rescan()
+        await fake.waitForParkedCall(1)
+        let priorities = await fake.basePriorities
+        XCTAssertEqual(priorities, [.utility])
+        let released = await fake.release(); XCTAssertTrue(released)
+        await waitUntilIdle(model)
+    }
+
     /// Counts the publishes the model announces, to prove a scan did or did not happen.
     private final class CountingObserver: LibraryRescanObserver {
         var count = 0

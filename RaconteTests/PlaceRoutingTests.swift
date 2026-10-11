@@ -21,7 +21,7 @@ final class PlaceRoutingTests: XCTestCase {
                                      dateRanges: ["j1": "1987"],
                                      includesDebug: false)
         XCTAssertEqual(rows.map(\.place),
-                       [.home, .capture, .journal("j1"), .journal("j2"), .allEntries, .trash, .about],
+                       [.home, .capture, .journal("j1"), .journal("j2"), .allEntries, .trash, .search, .about],
                        "j1 (older) must render before j2 (newer) despite arriving second")
         XCTAssertEqual(rows[2].title, "1987")
         XCTAssertEqual(rows[2].subtitle, "1987")
@@ -134,6 +134,7 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertEqual(PlaceRouting.journalScope(for: .journal("j1")), .journal("j1"))
         XCTAssertNil(PlaceRouting.journalScope(for: .capture))
         XCTAssertNil(PlaceRouting.journalScope(for: .trash))
+        XCTAssertNil(PlaceRouting.journalScope(for: .search))
         XCTAssertNil(PlaceRouting.journalScope(for: .about))
         XCTAssertNil(PlaceRouting.journalScope(for: .debug))
     }
@@ -218,6 +219,13 @@ final class PlaceRoutingTests: XCTestCase {
         XCTAssertEqual(rows.map(\.place).prefix(2), [.home, .capture])
     }
 
+    /// #194: the Search row's position, by identifier — after Trash, before About.
+    func testSidebarRowSitsBetweenTrashAndAbout() {
+        let ids = SidebarModel.rows(journals: [], dateRanges: [:], includesDebug: false)
+            .map(\.accessibilityIdentifier)
+        XCTAssertEqual(ids.suffix(3), ["sidebar.trash", "sidebar.search", "sidebar.about"])
+    }
+
     func testResolveHomeIsIdentity() {
         XCTAssertEqual(PlaceRouting.resolve(.home, journals: []), .home)
     }
@@ -233,6 +241,7 @@ final class PlaceRoutingTests: XCTestCase {
             (.capture, "Capture", "mic.circle", "sidebar.capture"),
             (.allEntries, "All Entries", "books.vertical", "sidebar.allEntries"),
             (.trash, "Trash", "trash", "sidebar.trash"),
+            (.search, "Search", "magnifyingglass", "sidebar.search"),
             (.about, "About", "info.circle", "sidebar.about"),
             (.debug, "Debug", "ladybug", "sidebar.debug"),
         ]

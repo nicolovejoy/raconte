@@ -236,6 +236,10 @@ struct ContentView: View {
             TrashView(model: services.library)
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
+        case .search:
+            SearchView(model: services.searchScreen, library: services.library)
+                .tint(InkTone.accent.color)
+                .background(InkTone.paper.color)
         case .about:
             AboutView(sync: services.sync, exportRunner: services.exportRunner)
                 .tint(InkTone.accent.color)
@@ -259,7 +263,7 @@ struct ContentView: View {
             return "All Entries"
         case .journal(let id):
             return services.library.journals.first(where: { $0.id == id })?.name ?? "Library"
-        case .home, .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .search, .about, .debug:
             return "Library"
         }
     }

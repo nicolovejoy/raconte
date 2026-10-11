@@ -6,13 +6,17 @@ actor FakeReconciler: SearchReconciling {
     var calls: [[SearchIndexer.Entry]] = []
     /// The base priority of the task each call arrived on (not its escalated priority).
     private(set) var basePriorities: [TaskPriority?] = []
+    /// What a call returns when it is released. The default is a pass that changed nothing.
+    private var report = SearchIndexer.Report()
     private var gate: CheckedContinuation<Void, Never>?
     func reconcile(_ entries: [SearchIndexer.Entry]) async -> SearchIndexer.Report {
         calls.append(entries)
         basePriorities.append(Task.basePriority)
         await withCheckedContinuation { gate = $0 }
-        return .init()
+        return report
     }
+    /// Sets the report for the parked call and every later one, until set again.
+    func willReport(_ report: SearchIndexer.Report) { self.report = report }
     /// True when a parked call was released. False means nothing was parked.
     @discardableResult func release() -> Bool {
         guard let g = gate else { return false }

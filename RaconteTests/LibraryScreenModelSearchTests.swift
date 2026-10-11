@@ -73,16 +73,20 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         await fake.waitForParkedCall(1)          // #1 is parked inside the fake
         _ = await model.rescan()
         _ = await model.rescan()                 // two more while #1 runs
+        await fake.willReport(.init(indexed: 1))
         var released = await fake.release(); XCTAssertTrue(released)
         await fake.waitForParkedCall(2)
         let afterFirst = await fake.calls.count
         XCTAssertEqual(afterFirst, 2)
+        XCTAssertEqual(model.searchIndexRevision, 1)   // #1 changed the index
+        XCTAssertTrue(model.searchIndexing)            // one stretch of indexing, not two
+        await fake.willReport(.init(removed: 1))
         released = await fake.release(); XCTAssertTrue(released)
         await waitUntilIdle(model)
         let afterSecond = await fake.calls.count
         XCTAssertEqual(afterSecond, 2)           // nothing queued after the follow-up
         XCTAssertFalse(model.searchIndexing)
-        XCTAssertEqual(model.searchIndexRevision, 2)   // two completed passes
+        XCTAssertEqual(model.searchIndexRevision, 2)   // and so did the coalesced follow-up
     }
 
     func testSearchIndexingIsTrueWhileAReconcileRuns() async throws {
@@ -99,7 +103,34 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         XCTAssertFalse(model.searchIndexing)
     }
 
-    func testEachCompletedPassBumpsSearchIndexRevision() async throws {
+    /// One whole pass: rescan, wait for reconcile number `call` to park, release it with `report`.
+    private func runPass(_ model: LibraryScreenModel, _ fake: FakeReconciler, call: Int,
+                         reporting report: SearchIndexer.Report) async {
+        _ = await model.rescan()
+        await fake.waitForParkedCall(call)
+        await fake.willReport(report)
+        let released = await fake.release(); XCTAssertTrue(released)
+        await waitUntilIdle(model)
+    }
+
+    /// The revision says "a query may now answer differently". A pass that wrote nothing
+    /// must not move it, or the search screen re-runs its query after every rescan.
+    func testAPassThatChangedNothingLeavesSearchIndexRevisionAlone() async throws {
+        try writeCapture(liveID)
+        let model = model()
+        let fake = FakeReconciler()
+        model.attach(searchReconciler: fake)
+        _ = await model.rescan()
+        await fake.waitForParkedCall(1)
+        XCTAssertTrue(model.searchIndexing)            // the pass still shows as indexing
+        await fake.willReport(.init(unchanged: 1))
+        let released = await fake.release(); XCTAssertTrue(released)
+        await waitUntilIdle(model)
+        XCTAssertFalse(model.searchIndexing)
+        XCTAssertEqual(model.searchIndexRevision, 0)
+    }
+
+    func testOnlyAPassThatIndexedOrRemovedBumpsSearchIndexRevision() async throws {
         try writeCapture(liveID)
         let model = model()
         let fake = FakeReconciler()
@@ -108,9 +139,19 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         _ = await model.rescan()
         await fake.waitForParkedCall(1)
         XCTAssertEqual(model.searchIndexRevision, 0)   // not before the pass completes
+        await fake.willReport(.init(indexed: 1))
         let released = await fake.release(); XCTAssertTrue(released)
         await waitUntilIdle(model)
         XCTAssertEqual(model.searchIndexRevision, 1)
+        // Failures and unchanged entries wrote nothing a query could see.
+        await runPass(model, fake, call: 2, reporting: .init(unchanged: 1, failed: 2))
+        XCTAssertEqual(model.searchIndexRevision, 1)
+        await runPass(model, fake, call: 3, reporting: .init(removed: 1))
+        XCTAssertEqual(model.searchIndexRevision, 2)
+        await runPass(model, fake, call: 4, reporting: .init(unchanged: 1))
+        XCTAssertEqual(model.searchIndexRevision, 2)
+        let calls = await fake.calls.count
+        XCTAssertEqual(calls, 4)
     }
 
     /// The pass is derivative work, O(entries) on every scan: it must not inherit the

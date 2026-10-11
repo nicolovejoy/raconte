@@ -14,6 +14,10 @@ actor SearchIndexer {
         var removed = 0
         var unchanged = 0
         var failed = 0
+
+        /// True when the pass wrote something a query could answer differently for.
+        /// Failures and unchanged entries wrote nothing.
+        var changedTheIndex: Bool { indexed + removed > 0 }
     }
 
     private let index: SearchIndex

@@ -86,11 +86,59 @@ final class SearchIndexerTests: XCTestCase {
         try SearchCaptureFixture.writeLiveLog(dir, records: [])
         // Precondition: the log exists, so the fingerprint is non-nil and the body is what is empty.
         XCTAssertNotNil(SearchFingerprint.compute(directory: dir))
-        XCTAssertNil(EntryTranscriptLoader.fullText(captureDirectory: dir))
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir), .empty)
         let report = await indexer.reconcile([.init(captureID: ULID.make(), directory: dir)])
         XCTAssertEqual(report, .init(indexed: 0, removed: 0, unchanged: 0, failed: 0))
         let known = try await index.fingerprints()
         XCTAssertTrue(known.isEmpty)
+    }
+
+    /// A read error is not evidence the text is gone: the entry counts as failed and
+    /// whatever the index holds for it stays, findable, under its old fingerprint.
+    func testUnreadableTranscriptIsCountedFailedAndItsRowIsKept() async throws {
+        let index = try SearchIndex(databaseURL: root.appendingPathComponent("index.sqlite"))
+        let indexer = SearchIndexer(index: index)
+        var entries: [SearchIndexer.Entry] = []
+        for name in ["known", "never-indexed"] {
+            let dir = root.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            entries.append(.init(captureID: ULID.make(), directory: dir))
+        }
+        let known = try XCTUnwrap(entries.first), neverIndexed = try XCTUnwrap(entries.last)
+        try SearchCaptureFixture.writeLiveLog(known.directory, records: ["alpha one"])
+        let first = await indexer.reconcile([known])
+        XCTAssertEqual(first, .init(indexed: 1, removed: 0, unchanged: 0, failed: 0))
+        let before = try await index.fingerprints()
+
+        // The log grows (so its fingerprint moves) and then cannot be read.
+        try SearchCaptureFixture.writeLiveLog(known.directory, records: ["alpha one", "beta two"])
+        try SearchCaptureFixture.sealLiveLog(known.directory)
+        try SearchCaptureFixture.writeLiveLog(neverIndexed.directory, records: ["gamma three"])
+        try SearchCaptureFixture.sealLiveLog(neverIndexed.directory)
+        XCTAssertNotEqual(SearchFingerprint.compute(directory: known.directory), before[known.captureID],
+                          "fixture sanity: the fingerprint moved, so the body is read")
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: known.directory), .unreadable)
+
+        let report = await indexer.reconcile(entries)
+        XCTAssertEqual(report, .init(indexed: 0, removed: 0, unchanged: 0, failed: 2))
+        let found = try await ids(index, "alpha")
+        XCTAssertEqual(found, [known.captureID])
+        let after = try await index.fingerprints()
+        XCTAssertEqual(after, before, "the old row and its old fingerprint, nothing else")
+    }
+
+    /// Readable and wordless is a different answer: the words really are gone.
+    func testAKnownEntryWhoseTextBecameEmptyIsRemovedNotFailed() async throws {
+        let (index, indexer, entries) = try makeThree()
+        _ = await indexer.reconcile(entries)
+        try SearchCaptureFixture.writeCanonical(entries[0].directory, n: 2, spans: [""])
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: entries[0].directory), .empty)
+        let report = await indexer.reconcile(entries)
+        XCTAssertEqual(report, .init(indexed: 0, removed: 1, unchanged: 2, failed: 0))
+        let gone = try await ids(index, "alpha")
+        XCTAssertTrue(gone.isEmpty)
+        let known = try await index.fingerprints()
+        XCTAssertNil(known[entries[0].captureID])
     }
 
     /// Damages the real index from a second connection: `fingerprints()` still reads the

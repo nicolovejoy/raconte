@@ -66,16 +66,23 @@ actor SearchIndexer {
                 report.unchanged += 1
                 continue
             }
-            guard let body = EntryTranscriptLoader.fullText(captureDirectory: entry.directory) else {
+            switch EntryTranscriptLoader.fullText(captureDirectory: entry.directory) {
+            case .text(let body):
+                do {
+                    try await index.upsert(captureID: entry.captureID, fingerprint: fingerprint, body: body)
+                    report.indexed += 1
+                } catch {
+                    report.failed += 1
+                    Self.log.notice("search: index write failed for \(entry.captureID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                }
+            case .empty:
+                // Read, and wordless: not an error, nothing to find.
                 await dropIfKnown(entry.captureID, known: known, report: &report)
-                continue
-            }
-            do {
-                try await index.upsert(captureID: entry.captureID, fingerprint: fingerprint, body: body)
-                report.indexed += 1
-            } catch {
+            case .unreadable:
+                // A read error is not evidence the text is gone: whatever row the index
+                // holds for this entry stays, and the next scan tries again.
                 report.failed += 1
-                Self.log.notice("search: index write failed for \(entry.captureID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                Self.log.notice("search: transcript unreadable for \(entry.captureID, privacy: .public), its row is kept")
             }
         }
 

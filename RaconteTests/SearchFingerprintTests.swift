@@ -38,6 +38,21 @@ enum SearchCaptureFixture {
         }
         try writer.close()
     }
+
+    /// A `canonical-<n>.json` that is there and does not decode.
+    static func writeUndecodableCanonical(_ dir: URL, n: Int) throws {
+        let transcript = SegmentLayout.transcriptDirectory(captureDirectory: dir)
+        try FileManager.default.createDirectory(at: transcript, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: SegmentLayout.canonicalTranscriptURL(captureDirectory: dir, revision: n))
+    }
+
+    /// Leaves `live.jsonl` in place and unreadable (mode 000): it still stats, so it still
+    /// has a fingerprint, and reading it fails.
+    static func sealLiveLog(_ dir: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: SegmentLayout.liveTranscriptURL(captureDirectory: dir).path)
+    }
 }
 
 final class SearchFingerprintTests: XCTestCase {

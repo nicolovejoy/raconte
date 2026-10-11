@@ -25,7 +25,14 @@ actor SearchIndex {
     }
 
     private static func open(_ url: URL) throws -> DatabaseQueue {
-        let queue = try DatabaseQueue(path: url.path)
+        // Never set `publicStatementArguments = true` here and never log `expandedDescription`:
+        // error descriptions from this queue are logged, and the transcript body is a bound argument.
+        var configuration = Configuration()
+        // A deleted or edited entry's words must not survive in the file: freed pages are
+        // zeroed (the connection default leaves freed overflow pages as they were). The
+        // other half is the FTS5 option in the migration below.
+        configuration.prepareDatabase { db in try db.execute(sql: "PRAGMA secure_delete = ON") }
+        let queue = try DatabaseQueue(path: url.path, configuration: configuration)
         var migrator = DatabaseMigrator()
         // The migrator's table is the schema version. A schema or tokenizer change is a new
         // migration that drops both tables; the empty fingerprints then rebuild everything.
@@ -35,6 +42,9 @@ actor SearchIndex {
                 t.column("captureID").notIndexed()
                 t.column("body")
             }
+            // A delete takes the row's terms out of the full-text index itself, rather than
+            // leaving them for a later merge to drop. Persistent, stored with the table.
+            try db.execute(sql: "INSERT INTO entry_text(entry_text, rank) VALUES('secure-delete', 1)")
             // The state table owns the integer id; the FTS row shares it as its rowid, so no
             // statement ever has to scan `entry_text` by its unindexed captureID.
             try db.create(table: "entry_index_state") { t in

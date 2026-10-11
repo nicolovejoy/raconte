@@ -219,4 +219,67 @@ final class SearchIndexTests: XCTestCase {
         try await DatabaseQueue(path: url.path).write { try $0.execute(sql: "DROP TABLE entry_index_state") }
         try await assertReopenedIndexWasRecreated(url)
     }
+
+    // MARK: Deleted text does not linger in the file
+
+    /// Lowercase ASCII, so the stored body and the folded index term are the same bytes.
+    private static let marker = "zqxjkvmarker"
+
+    /// About 20 KB carrying the marker twelve times: long enough to spill onto overflow
+    /// pages, which the connection's default leaves untouched when it frees them.
+    private var markedBody: String {
+        let filler = String(repeating: "lorem ipsum dolor sit amet ", count: 60)
+        return (0..<12).map { _ in "\(Self.marker) \(filler)" }.joined()
+    }
+
+    /// Occurrences of the marker in the raw bytes of every file in the index's directory.
+    private func markerOccurrencesOnDisk() throws -> Int {
+        let needle = Data(Self.marker.utf8)
+        var count = 0
+        let directory = url.deletingLastPathComponent()
+        for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) {
+            let data = try Data(contentsOf: directory.appendingPathComponent(name))
+            var from = data.startIndex
+            while let hit = data.range(of: needle, in: from..<data.endIndex) {
+                count += 1
+                from = hit.upperBound
+            }
+        }
+        return count
+    }
+
+    // "Delete Now" removes the capture's files; the index must not be where its words survive.
+    func testRemovedTextDoesNotLingerInTheFile() async throws {
+        do {
+            let index = try SearchIndex(databaseURL: url)
+            try await index.upsert(captureID: "A", fingerprint: "1", body: markedBody)
+            try await index.upsert(captureID: "B", fingerprint: "1", body: "unrelated words stay")
+        }
+        XCTAssertGreaterThanOrEqual(try markerOccurrencesOnDisk(), 13,
+                                    "fixture sanity: twelve in the body and the index term")
+        do {
+            let index = try SearchIndex(databaseURL: url)
+            try await index.remove(captureIDs: ["A"])
+            let kept = try await index.search(SearchQuery(text: "unrelated"))
+            XCTAssertEqual(kept.map(\.captureID), ["B"])
+        }
+        XCTAssertEqual(try markerOccurrencesOnDisk(), 0)
+    }
+
+    // An edit replaces the row: the words the owner removed go too.
+    func testReplacedTextDoesNotLingerInTheFile() async throws {
+        do {
+            let index = try SearchIndex(databaseURL: url)
+            try await index.upsert(captureID: "A", fingerprint: "1", body: markedBody)
+        }
+        XCTAssertGreaterThanOrEqual(try markerOccurrencesOnDisk(), 13,
+                                    "fixture sanity: twelve in the body and the index term")
+        do {
+            let index = try SearchIndex(databaseURL: url)
+            try await index.upsert(captureID: "A", fingerprint: "2", body: "the entry after the edit")
+            let hits = try await index.search(SearchQuery(text: "edit"))
+            XCTAssertEqual(hits.map(\.captureID), ["A"])
+        }
+        XCTAssertEqual(try markerOccurrencesOnDisk(), 0)
+    }
 }

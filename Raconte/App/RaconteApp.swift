@@ -22,6 +22,10 @@ final class AppServices {
     /// only place that pairs `CFBundleShortVersionString`/`CFBundleVersion` for the
     /// export manifest.
     let exportRunner: ExportRunner
+    /// #194: nil until the index has been opened off the main actor (a few milliseconds;
+    /// never on the launch path), and nil for good where `SearchServices.live` builds
+    /// nothing (the unit-test runner, an Xcode preview). Nothing on screen depends on it yet.
+    private(set) var search: SearchServices?
 
     init() {
         let library = LibraryScreenModel.live()
@@ -64,6 +68,24 @@ final class AppServices {
         // same style as `CaptureScreenModel.swift:173`/`:214`.
         assert(capture.library === library,
                "AppServices must thread ONE LibraryScreenModel into CaptureScreenModel")
+        // #194: the search index. Same container root as the exporter above (derived from the
+        // library's captures root, so the UI-test harness root is honoured). Opened off the
+        // main actor; the library then hands it every scan's entries.
+        // `attach` itself reconciles a scan that published before the index was ready.
+        // `SearchServices.live` is the only way in, and it answers nil where no index may be
+        // built (the unit-test runner, whose host is this app over the real container; an
+        // Xcode preview): then nothing is constructed, opened or attached.
+        let containerRoot = AppContainer.containerRoot(capturesRoot: library.capturesRoot)
+        let environment = ProcessInfo.processInfo.environment
+        Task { [weak self] in
+            let services = await Task.detached(priority: .utility) {
+                SearchServices.live(containerRoot: containerRoot, environment: environment)
+            }.value
+            guard let self, let services else { return }
+            self.search = services
+            guard let indexer = services.indexer else { return }
+            self.library.attach(searchReconciler: indexer)
+        }
     }
 }
 

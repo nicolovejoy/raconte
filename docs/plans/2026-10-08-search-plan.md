@@ -13,15 +13,24 @@
 ## Global Constraints
 
 - `project.yml` is the source of truth; after any new file or package: `xcodegen generate`. New source files AND new test files both need the regen (CLAUDE.md, memory `new-test-file-needs-xcodegen-regen`).
-- Unit suite: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements test` — never `CODE_SIGNING_ALLOWED=NO`. The owner's `/Applications/Raconte.app` must not be running. Use `-only-testing:RaconteTests/<Class>` while iterating; the full suite once per task. Dispatch with `timeout: 600000`.
-- UI suite is CI-only on this laptop (CoreSimulator out of date) — write UI tests, run them in CI, and read `Executed N tests` from the job log (`gh run view --job <id> --log`), never from a commit message.
+- Unit suite: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="$PWD/Raconte/Raconte-nocloud.entitlements" test` — never `CODE_SIGNING_ALLOWED=NO`. (Path made absolute in Task 1: with a package in the build the relative form fails on GRDB's bundle target.) The owner's `/Applications/Raconte.app` must not be running. Use `-only-testing:RaconteTests/<Class>` while iterating; the full suite once per task. Dispatch with `timeout: 600000`.
+- ~~UI suite is CI-only on this laptop (CoreSimulator out of date)~~ **Amended 2026-10-10:** the simulator works on this laptop again — the pre-flight ran `AboutUITests` green on iPhone 17 (iOS 26.5). Run the UI classes you add or touch locally, one class per call: `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath .superpowers/dd -only-testing:RaconteUITests/<Class> test`, foreground, `timeout: 600000`. UI RED proofs are local. The WHOLE UI suite is still judged by CI (it exceeds the ten-minute cap locally); read `Executed N tests` from the job log (`gh api --allow-escape-sequences repos/nicolovejoy/raconte/actions/jobs/<id>/logs | grep -a Executed`), never from a commit message.
+- **Unit baselines:** `main` after #198 = **2336** executed, 1 skipped in CI (job 114357411506); locally 2336 executed, 0 failures (Task 1's run). Build into `.superpowers/dd` inside the worktree: the pre-flight's probe built into `/private/tmp` and `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` failed there and nowhere else.
 - Index path `AppContainer.root()/search/index.sqlite` — NEVER under `captures/`.
 - Paper screens take a `TypeRole`, never a bare text style or size literal; `SearchView.swift` goes into `RaconteTests/SourceScanning.swift`'s `paperScreenFiles`.
 - Never request a presentation in the same transaction that dismisses another; `.sheet` on the screen's outer view, never a `Section`.
 - Inbound-sync rule holds: the indexer only READS the archive. It never writes under `captures/` and never fires `noteLocalChange`.
 - Logging the owner reads back: `.notice`, not `.info`.
-- Commit trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`; PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; PRs end open — merges are Nico's.
+- Commit trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` (the session that runs the plan; this line named the authoring session's model before); PR bodies end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`; PRs end open — merges are Nico's.
 - Every test gets a RED proof (stash the production change or assert against the pre-change behaviour) before it is reported green; a test that cannot fail is a plan defect — report it.
+
+### Added by the pre-flight (2026-10-10) — see "Pre-flight amendments" below
+
+- **Stacked, unattended (owner ruling 2026-10-10: "all 3 please").** PR 1 `feat/194-search-index` → base `main`. PR 2 `feat/194-search-place` → base `feat/194-search-index`. PR 3 `feat/194-search-highlight` → base `feat/194-search-place`. Wherever a phase heading says "off `main` after PR N merges", read "stacked on PR N's branch". All three PRs end open; Nico merges them in order.
+- **Pushes and PRs are the controller's.** Phase A1's branch is pushed and its PR opened as a draft right after Task 1, so CI proves the GRDB package resolves on the runners while Tasks 2–6 proceed; after that each phase is pushed at its close. `pull_request` is the only CI trigger off `main`, so a branch with no PR gets no CI.
+- **Never log transcript text, snippet text or the query string.** CaptureIDs, counts and durations only.
+- **No `Image` in a macOS `Menu` label** (CLAUDE.md, #69): the chip labels are text-only.
+- **Local runs:** every `xcodebuild` call is foreground with `timeout: 600000`, never backgrounded. Never erase, delete or recreate a simulator. Before a macOS test run `pgrep -x Raconte` must print nothing; if the owner's app is running, do not kill it — report BLOCKED.
 
 ## Review Focus
 
@@ -30,6 +39,57 @@
 3. **An entry edited after it was indexed** — the next scan re-indexes it (fingerprint moved) and the viewer's `0 of 0` state never crashes. Pinned in Tasks 5 and 12.
 4. **Diacritics and case** — "etaient" must find "Étaient" in both the index and the in-entry highlighter, or the list promises what the entry cannot show. Pinned in Tasks 3 and 11.
 5. **Date filter edge** — an entry dated on the last day of a chosen year is IN that year (exclusive upper bound built from `dateInterval(of:for:).end`). Pinned in Task 8.
+
+## Pre-flight amendments (2026-10-10)
+
+Made by the session that ran the plan, before Task 1, from two sources: the prompt-lab research
+reply (`~/src/.handoff/raconte-prompt-lab.md`, 2026-10-08, which landed after this plan was
+written — the spec promises to fold it in) and a conflict scan of the plan against itself, the
+spec and the code at `9587f639`. The owner has NOT reviewed the written spec or this plan; the
+three PRs are his first look. Each amendment is repeated inside the task it changes, marked
+**Amendment**, and wins over older text in that task where they differ.
+
+1. **GRDB stays** (reply recommended raw `SQLite3`). CLAUDE.md's Stack names GRDB, both documents
+   are written for it, and the reply's own exception applies (not owning C-pointer code under
+   strict concurrency). Costs if wrong: the inside of `SearchIndex` and `project.yml`.
+2. **GRDB is pinned with `exactVersion`** (Task 1). `Package.resolved` lives in the gitignored
+   generated project, so `from:` would let CI and release builds pick up any new 7.x unreviewed.
+3. **Shared rowids** (Task 3, from the reply). `DELETE FROM entry_text WHERE captureID = ?` is a
+   full scan of the FTS table per upsert — quadratic on a cold start. The state table owns an
+   integer id and the FTS row shares it.
+4. **The migrator is the schema version** (Task 3). The reply asked for `PRAGMA user_version`;
+   under GRDB the migration table already is one. A schema or tokenizer change is a new
+   migration that drops both tables, and the empty fingerprints rebuild everything.
+5. **Backup exclusion** (Task 3, from the reply). The index is a second plaintext copy of every
+   transcript; its directory is marked `isExcludedFromBackup`, as `StagedRemoval.swift` does.
+   File protection: the archive sets none explicitly (grep-verified), so the index inherits the
+   same platform default — nothing to add.
+6. **Rebuild timing** (Task 5, from the reply). One `.notice` line per reconcile that changed
+   anything, with counts and elapsed milliseconds, so the owner's first real run reports it.
+7. **Elisions** (Tasks 3 and 11). `unicode61` splits `l'école` at the apostrophe; ICU's
+   `.byWords` does not. The Task 11 highlighter as written would show `0 of 0` for a hit the
+   list promised (Review Focus 4). The highlighter splits on non-letter-non-number, the rule
+   `SearchQuery.terms` already uses; Task 3 pins the index side.
+8. **Deterministic fakes** (Tasks 6 and 8). `release()` before the reconcile has parked is a
+   no-op and the test then hangs or reads zero calls. Fakes gain `waitForCalls(_:)`; fixed
+   sleeps become bounded polls.
+9. **The superseded-query test could not fail** (Task 8, Review Focus 1). With a 150 ms
+   debounce, `text = "ab"; text = ""` cancels the first query before it runs, so the test
+   passes with the generation guard deleted. Rewritten to park a real query, with a hit that
+   joins a real entry and a positive control.
+10. **Re-query when the index changes** (Tasks 6 and 8). Nothing in the plan re-ran the visible
+    query when a reconcile finished: type during "Indexing…" and "No matches" stayed until the
+    next keystroke. `LibraryScreenModel.searchIndexRevision` moves per completed pass and
+    `SearchScreenModel` observes it.
+11. **"Search is unavailable"** (Tasks 8 and 9). The spec's error state had no task.
+12. **Task 8 references `SearchView`, which Task 9 creates.** Task 8 lands a stub so the route
+    compiles; Task 9 fills it in.
+13. **Dropped:** the spec's "test pins that `Raconte.xcodeproj` references GRDB only through
+    `project.yml`". The project file is gitignored and generated; there is nothing to pin.
+14. **Smoke commands carry no bare backslash** (CLAUDE.md shared conventions): paths are quoted.
+15. **Test-count arithmetic moves with the amendments:** A1 +34 unit, A2 +13 unit / +3 UI,
+    A3 +10 unit / +1 UI. If a task's report states a different number of tests, the report wins
+    and the PR body says why.
 
 ---
 
@@ -53,8 +113,14 @@ In `project.yml`, after the `options:` block and before `settings:`:
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
-    from: "7.9.0"
+    exactVersion: "7.11.1"
 ```
+
+**Amendment (pre-flight 2):** pinned with `exactVersion`, not `from:`. `7.11.1` is the release the
+research reply confirmed on 2026-10-08 (swift-tools 6.1, no transitive dependencies,
+`SQLITE_ENABLE_FTS5` defined). If a newer 7.x exists today, still pin `7.11.1`; if `7.11.1` does
+not resolve, pin the newest 7.x that does and say so. Report the resolved version AND its git
+revision (from the generated project's `Package.resolved`) so the PR body can state both.
 
 In the `Raconte` target, add:
 
@@ -312,12 +378,57 @@ final class SearchIndexTests: XCTestCase {
         let again = try SearchIndex(databaseURL: url)
         XCTAssertEqual(try await again.fingerprints(), ["A": "1"])
     }
+    // Amendment (pre-flight 7): the tokenizer splits at an apostrophe, so the stem of an elided
+    // word is findable. Task 11's highlighter must apply the same rule.
+    func testElidedWordIsFoundByItsStem() async throws {
+        let index = try SearchIndex(databaseURL: url)
+        try await index.upsert(captureID: "A", fingerprint: "1", body: "l'école d'été")
+        let hits = try await index.search(SearchQuery(text: "ecole"))
+        XCTAssertEqual(hits.map(\.captureID), ["A"])
+        XCTAssertEqual(hits.first?.snippet.matches.map { String(hits.first!.snippet.text[$0]) }, ["école"])
+    }
+    // Amendment (pre-flight 5): a second plaintext copy of every transcript stays out of backups.
+    func testIndexDirectoryIsExcludedFromBackup() throws {
+        _ = try SearchIndex(databaseURL: url)
+        let values = try url.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+    }
 }
 ```
 
+**Amendment (pre-flight 3, 4, 5) — the schema and the three write paths below are replaced:**
+
+- Schema. The state table owns an integer id and the FTS row shares it as its `rowid`:
+
+```swift
+            try db.create(table: "entry_index_state") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("captureID", .text).notNull().unique()
+                t.column("fingerprint", .text).notNull()
+            }
+```
+
+- `upsert`, one write transaction: `SELECT id FROM entry_index_state WHERE captureID = ?`. Found →
+  `DELETE FROM entry_text WHERE rowid = ?` and `UPDATE entry_index_state SET fingerprint = ? WHERE id = ?`.
+  Not found → `INSERT INTO entry_index_state(captureID, fingerprint)` and take `db.lastInsertedRowID`.
+  Then `INSERT INTO entry_text(rowid, captureID, body) VALUES (?, ?, ?)` with that id.
+- `remove`: per id, look the state row up by `captureID`, `DELETE FROM entry_text WHERE rowid = ?`,
+  then delete the state row.
+- **No statement may filter `entry_text` by `captureID`.** An `UNINDEXED` FTS column has no index;
+  that `WHERE` is a full scan of every stored transcript, once per upsert. `captureID` stays in
+  the FTS table only so `search` can SELECT it.
+- After `createDirectory`, mark the directory excluded from backup — the `StagedRemoval.swift:52`
+  precedent (`var values = URLResourceValues(); values.isExcludedFromBackup = true;
+  try directory.setResourceValues(values)` on a `var` URL). A failure here is logged at `.notice`
+  and does not fail `init`. RED proof for the backup test: remove the call.
+- No `PRAGMA user_version`: the migrator's table is the schema version. Leave a one-line comment
+  saying a schema or tokenizer change is a new migration that drops both tables.
+
 - [ ] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement** — the block below predates the amendment above. Its `init`, `open`'s
+FTS table, `fingerprints` and `search` stand; its `entry_index_state` table, `upsert` and `remove`
+are SUPERSEDED — write the amended versions, do not transcribe these three.
 
 ```swift
 import Foundation
@@ -642,6 +753,11 @@ actor SearchIndexer {
 }
 ```
 
+**Amendment (pre-flight 6):** `reconcile` measures itself (`ContinuousClock`) and, when
+`indexed + removed + failed > 0`, logs ONE `.notice` line before returning:
+`search: reconcile indexed=… removed=… unchanged=… failed=… in …ms`. A run that changed nothing
+logs nothing (it happens after every rescan). Counts and a duration only — never transcript text.
+
 - [ ] **Step 4: Run, expect PASS.** RED proof: comment out the fingerprint comparison and watch `unchanged` fail.
 
 - [ ] **Step 5: regen, full suite, commit** — `feat(#194): SearchIndexer — fingerprint reconcile of the archive into the index`
@@ -658,6 +774,13 @@ actor SearchIndexer {
 **Interfaces:**
 - Produces: `protocol SearchReconciling: Sendable { func reconcile(_ entries: [SearchIndexer.Entry]) async -> SearchIndexer.Report }` (conformed by `SearchIndexer`; a fake in tests); `LibraryScreenModel.attach(searchReconciler:)`; `private(set) var searchIndexing: Bool`; `final class SearchServices { let index: SearchIndex?; let indexer: SearchIndexer?; let unavailableReason: String? }`.
 
+**Amendment (pre-flight 8, 10) — the tests below replace the plan's originals.** The originals
+called `release()` right after `rescan()`; the reconcile runs in an unstructured `Task`, so
+`release()` could arrive before the fake had parked — a no-op, then a hang or a zero-call read.
+Every test now waits for the call it is about to release, and every "nothing more happens"
+assertion waits for `searchIndexing == false` instead of sleeping a fixed 50 ms. Also added:
+`searchIndexRevision`, which Task 8 observes to re-run the visible query.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```swift
@@ -670,7 +793,22 @@ actor FakeReconciler: SearchReconciling {
         await withCheckedContinuation { gate = $0 }
         return .init()
     }
-    func release() { gate?.resume(); gate = nil }
+    /// True when a parked call was released. A false return means nothing was parked — the
+    /// test called it too early; assert on it.
+    @discardableResult func release() -> Bool {
+        guard let g = gate else { return false }
+        gate = nil; g.resume(); return true
+    }
+    /// Returns once `n` calls have PARKED (or after ~2 s, so a broken build fails an assertion
+    /// instead of hanging the suite).
+    func waitForParkedCall(_ n: Int) async {
+        for _ in 0..<400 where !(calls.count >= n && gate != nil) { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+}
+
+/// Bounded wait for the model to go idle (~2 s), same reason.
+@MainActor func waitUntilIdle(_ model: LibraryScreenModel) async {
+    for _ in 0..<400 where model.searchIndexing { try? await Task.sleep(for: .milliseconds(5)) }
 }
 
 func testRescanHandsAllEntriesAndTrashedToTheReconciler() async throws {
@@ -678,28 +816,48 @@ func testRescanHandsAllEntriesAndTrashedToTheReconciler() async throws {
     let fake = FakeReconciler()
     model.attach(searchReconciler: fake)
     _ = await model.rescan()
-    await fake.release()
+    await fake.waitForParkedCall(1)
     let ids = await fake.calls.first ?? []
     XCTAssertEqual(Set(ids), Set([liveID, trashedID]))
+    let released = await fake.release(); XCTAssertTrue(released)
+    await waitUntilIdle(model)
 }
 
 func testRescansDuringAReconcileCoalesceIntoExactlyOneMore() async throws {
     let fake = FakeReconciler()
     model.attach(searchReconciler: fake)
-    _ = await model.rescan()                 // starts reconcile #1 (blocked)
+    _ = await model.rescan()                 // starts reconcile #1
+    await fake.waitForParkedCall(1)          // #1 is parked inside the fake
     _ = await model.rescan()
     _ = await model.rescan()                 // two more while #1 runs
-    await fake.release()                     // #1 finishes → exactly one follow-up starts
-    try await Task.sleep(for: .milliseconds(50))
-    XCTAssertEqual(await fake.calls.count, 2)
-    await fake.release()
-    try await Task.sleep(for: .milliseconds(50))
-    XCTAssertEqual(await fake.calls.count, 2)   // nothing queued after the follow-up
+    var released = await fake.release(); XCTAssertTrue(released)   // #1 finishes → exactly one follow-up
+    await fake.waitForParkedCall(2)
+    let afterFirst = await fake.calls.count
+    XCTAssertEqual(afterFirst, 2)
+    released = await fake.release(); XCTAssertTrue(released)
+    await waitUntilIdle(model)
+    let afterSecond = await fake.calls.count
+    XCTAssertEqual(afterSecond, 2)              // nothing queued after the follow-up
     XCTAssertFalse(model.searchIndexing)
 }
 
-func testSearchIndexingIsTrueWhileAReconcileRuns() async throws { … true after rescan, false after release }
+func testSearchIndexingIsTrueWhileAReconcileRuns() async throws {
+    … rescan; waitForParkedCall(1); XCTAssertTrue(model.searchIndexing); release; waitUntilIdle; XCTAssertFalse …
+}
+
+func testEachCompletedPassBumpsSearchIndexRevision() async throws {
+    … XCTAssertEqual(model.searchIndexRevision, 0); rescan; waitForParkedCall(1);
+      XCTAssertEqual(model.searchIndexRevision, 0)      // not before the pass completes
+      release; waitUntilIdle; XCTAssertEqual(model.searchIndexRevision, 1) …
+}
 ```
+
+`searchIndexRevision`: `private(set) var searchIndexRevision = 0` on `LibraryScreenModel`,
+incremented inside the `repeat` loop right after each `reconcile` call returns (so a coalesced
+follow-up bumps it again). It is the signal "the index may have changed"; Task 8's model observes
+it. Name the container helper `AppContainer.searchRoot(containerRoot:)` to match its siblings
+`syncRoot` / `quarantineRoot` — the file list above says `searchDirectory`, written before the
+file was read.
 
 - [ ] **Step 2: Run, expect FAIL.**
 
@@ -750,13 +908,30 @@ Call `scheduleSearchReconcile()` in `rescan()` right after `rescanObserver?.libr
 ### Task 7 (A1 close): final review, PR 1
 
 - [ ] Whole-branch review (most capable model), one fix round, scoped re-review.
-- [ ] Test count: baseline (from main's latest code-carrying CI job log) + Tasks 1–6 additions (1 + 9 + 6 + 7 + 5 + 3 = **+31** unit; UI unchanged). State both numbers in the PR body with the job-log source.
-- [ ] PR body: what/why, the GRDB decision (one paragraph, link the spec), smoke steps for the owner — self-contained, build-number first:
-  1. About → App → Build shows the new build number.
-  2. Quit the app; `ls ~/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application\ Support/Raconte/search/` lists `index.sqlite` (Mac).
-  3. Record a short entry, wait for the transcript, quit → the file's modification time moved.
-  Nothing else changes in this PR.
-- [ ] Open the PR; stop. Merge is Nico's. Build 27 bump happens on main after merge (owner smoke).
+- [ ] Test count: baseline (from main's latest code-carrying CI job log) + Tasks 1–6 additions (1 + 9 + 8 + 7 + 5 + 4 = **+34** unit after the pre-flight amendments — Task 3 +2, Task 6 +1; UI unchanged) — **as built: +76** (2336 → 2412: the tasks' own tests, their review fix rounds, and the whole-branch review's fix wave; the PR body carries the breakdown). State both numbers in the PR body with the job-log source.
+- [ ] PR body: what/why, the GRDB decision (one paragraph: the research reply recommended raw `SQLite3`, why GRDB stayed, the pinned version and revision, link the spec), that the owner has not reviewed the written spec or plan, the pre-flight amendments by number, and smoke steps for the owner — self-contained, build-number first:
+  **Rewritten after the whole-branch review (2026-10-10).** The original four steps could not
+  fail on this laptop: the unit-test host had already built `search/index.sqlite` in the real Mac
+  container, so "the file exists" was true before any smoke build ran, and the timing line only
+  prints when something changed. (The index is now off under the unit-test runner and under
+  previews.) The smoke runs on a build of `main` after the merge, cut per CLAUDE.md:
+  1. Quit Raconte. Delete the index the test runs left behind, so the first launch is a cold
+     build: `rm -r "$HOME/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte/search"`
+  2. Launch the smoke build. About → App → Build shows the build number handed over with it.
+  3. `/usr/bin/log show --last 10m --predicate 'subsystem == "org.pianohouseproject.raconte" AND category == "search"'`
+     prints ONE line, `search: reconcile indexed=N removed=0 unchanged=0 failed=0 in …ms`. N is the
+     number of entries with a transcript (52 on the laptop on 2026-10-10) and the milliseconds are
+     the cold-rebuild time. Fail: no line, `failed` above 0, or a line saying `unreadable, recreating`.
+  4. `tmutil isexcluded` on the archive root, its `captures`, and its `search` prints `[Included]`,
+     `[Included]`, `[Excluded]`, in that order. Fail: the root or `captures` is `[Excluded]`.
+  5. Quit and launch again, then repeat step 3's command with `--last 2m`: NO new line. A reconcile
+     line means a pass rewrote an unchanged index; `unreadable, recreating` means the open check
+     rejected a healthy index.
+  6. Record a short entry, wait for its transcript, repeat step 3's command: one new line with
+     `indexed=1`.
+  Nothing else changes in this PR. On the iPhone the first cold build happens unobserved; its
+  timing line needs a log collect.
+- [ ] **Amendment (stacked run):** the PR is already open as a draft from the first push; mark it ready, leave it open. Do NOT stop: Phase A2 starts on `feat/194-search-place`, branched from this branch's head. Merge is Nico's. Build 27 bump happens on main after merge (owner smoke).
 
 ---
 
@@ -848,7 +1023,106 @@ final class SearchScreenModelTests: XCTestCase {
 }
 ```
 
-Give `SearchScreenModel` a `protocol SearchQuerying: Sendable { func search(_ query: SearchQuery) async throws -> [SearchHit] }` (conformed by `SearchIndex`) so tests inject a fake; the model takes `(searching: (any SearchQuerying)?, library: LibraryScreenModel, currentJournal: CurrentJournal)`.
+Give `SearchScreenModel` a `protocol SearchQuerying: Sendable { func search(_ query: SearchQuery) async throws -> [SearchHit] }` (conformed by `SearchIndex`) so tests inject a fake; the model takes `(searching: (any SearchQuerying)?, unavailableReason: String?, library: LibraryScreenModel, currentJournal: CurrentJournal)`.
+
+**Amendments to this task (pre-flight 9, 10, 11, 12):**
+
+- **(12) `SearchView` does not exist until Task 9, and this task's `ContentView` case names it.**
+  Create `Raconte/Search/UI/SearchView.swift` here as a stub — the real init signature (model,
+  library, and the router however `.trash`'s screen receives it; read `ContentView`'s `.trash`
+  case), a body of `List { }` with `.navigationTitle("Search")` and nothing else. Task 9 fills it
+  in. The stub is not yet in `paperScreenFiles`.
+- **(11) "Search is unavailable" has an owner.** The model stores `let unavailableReason: String?`
+  (`AppServices` passes `services.search?.unavailableReason`, and a nil `searching`). Add:
+
+```swift
+    func testAnUnavailableIndexReportsItsReasonAndNeverHasResults() async {
+        let model = SearchScreenModel(searching: nil, unavailableReason: "disk full", library: library, currentJournal: current)
+        model.text = "alpha"; await model.refresh()
+        XCTAssertEqual(model.unavailableReason, "disk full"); XCTAssertTrue(model.results.isEmpty)
+    }
+```
+
+- **(9) `testResultsForASupersededQueryAreDropped` above cannot fail — replace it.** With the
+  150 ms debounce, `text = "ab"; text = ""` cancels the first query before it ever calls the
+  index, so the test passes with the generation guard deleted; and its fake returned no hit that
+  joins an entry, so nothing could repaint anyway. Replacement — the fixture's library must hold
+  one LIVE entry whose captureID the fake's hit carries (mint it with `ULID.make()`; a
+  non-ULID id is skipped by code paths elsewhere):
+
+```swift
+    /// Parks each search until released, then returns the hits it was given.
+    actor FakeSearching: SearchQuerying {
+        var calls = 0
+        private var gate: CheckedContinuation<[SearchHit], Never>?
+        func search(_ query: SearchQuery) async throws -> [SearchHit] {
+            calls += 1
+            return await withCheckedContinuation { gate = $0 }
+        }
+        @discardableResult func release(_ hits: [SearchHit]) -> Bool {
+            guard let g = gate else { return false }
+            gate = nil; g.resume(returning: hits); return true
+        }
+        func waitForParkedCall(_ n: Int) async {
+            for _ in 0..<400 where !(calls >= n && gate != nil) { try? await Task.sleep(for: .milliseconds(5)) }
+        }
+    }
+
+    // Positive control: the fixture CAN paint a result. Without it the next test proves nothing.
+    func testAQueryThatIsNotSupersededPublishesItsHit() async {
+        model.text = "ab"
+        let running = Task { await model.refresh() }        // refresh() runs now, no debounce
+        await fake.waitForParkedCall(1)
+        let released = await fake.release([SearchHit(captureID: liveID, snippet: .parse("ab"))])
+        XCTAssertTrue(released); await running.value
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+    }
+    func testResultsForASupersededQueryAreDropped() async {
+        model.text = "ab"
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(1)                     // the query is IN the index, parked
+        model.text = ""                                     // superseded while in flight
+        XCTAssertTrue(model.results.isEmpty); XCTAssertFalse(model.hasQuery)   // cleared at once
+        let released = await fake.release([SearchHit(captureID: liveID, snippet: .parse("ab"))])
+        XCTAssertTrue(released); await running.value
+        XCTAssertTrue(model.results.isEmpty)                // the late hit did not repaint
+        XCTAssertFalse(model.hasQuery)
+    }
+```
+
+  Requirement this pins: setting `text` to a value with no pattern clears `results` and
+  `hasQuery` synchronously (not after the debounce) and bumps the query generation. RED proof:
+  delete the generation check in `refresh()` — the late hit repaints and the last
+  `XCTAssertTrue(model.results.isEmpty)` fails, while the positive control stays green.
+- **(10) A finished reconcile re-runs the visible query.** The model observes
+  `library.searchIndexRevision` itself — model-owned observation, the mechanism
+  `CaptureScreenModel` uses for its own state (CLAUDE.md: never a view's `.onChange` for
+  something that must happen) — and calls `refresh()` when it moves and `hasQuery` is true. Add:
+
+```swift
+    func testAFinishedReconcileRerunsTheCurrentQuery() async {
+        // library has an attached reconciler fake that returns immediately; `fake` (FakeSearching)
+        // answers the first search with [] and the second with the live entry's hit.
+        model.text = "ab"
+        let first = Task { await model.refresh() }
+        await fake.waitForParkedCall(1); await fake.release([]); await first.value
+        XCTAssertTrue(model.results.isEmpty)
+        _ = await library.rescan()                           // → a reconcile pass → revision moves
+        await fake.waitForParkedCall(2)                      // the model re-queried on its own
+        await fake.release([SearchHit(captureID: liveID, snippet: .parse("ab"))])
+        … bounded wait for results …
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+    }
+```
+
+  RED proof: remove the observation — `waitForParkedCall(2)` times out and the assertion fails.
+
+- **The debounce is injectable.** `SearchScreenModel.init` takes `debounce: Duration = .milliseconds(150)`.
+  The three tests above build the model with `.seconds(3600)`: otherwise the debounced query for
+  `"ab"` fires on its own at 150 ms, and in the re-query test it would satisfy
+  `waitForParkedCall(2)` without the observation existing — a pass that proves nothing.
+
+Test count for this task after the amendments: `SearchDateFilterTests` 4 + `SearchScreenModelTests` 9 = **+13**.
 
 - [ ] **Step 2: Run, expect FAIL** (new `Place` case alone breaks the build until every switch is handled — do the `Place` edit first, build, then the tests).
 
@@ -871,6 +1145,23 @@ Give `SearchScreenModel` a `protocol SearchQuerying: Sendable { func search(_ qu
 **Interfaces:**
 - Consumes: `SearchScreenModel`, `LibraryScreenModel.journals` (`displayOrdered`), `router.select`/`detailPath` for opening an entry (`pushedRouter.detailPath.append(.entry(id))` — follow `ContentView.swift:106-110`'s pattern and its comment about never appending in the same transaction as another navigation).
 - Produces identifiers: `search.field` (the `.searchable` field is found by XCUITest as `app.searchFields.firstMatch`; add `.accessibilityIdentifier("search.field")` on the List for the screen), `search.chip.journal`, `search.chip.date`, `search.result.<captureID>`, `search.empty` (the hint), `search.noMatches`, `search.indexing`.
+
+**Amendments to this task (pre-flight 11, 12, and the Global Constraints added 2026-10-10):**
+
+- `SearchView.swift` already exists as Task 8's stub; this task replaces its body. Its init stays
+  whatever Task 8 gave it (the `SearchView(model:library:router:)` in Step 2 is illustrative).
+- **RED proof is local and comes first.** Write the three UI tests, run `SearchUITests` on the
+  simulator against Task 8's stub, and record all three failing on `waitForExistence`. Then build
+  the view and run the class green. (This replaces Step 3's "replace the body with `EmptyView()`"
+  and its "push and read the UI job log".)
+- **"Search is unavailable":** when `model.unavailableReason` is non-nil the list shows one row,
+  "Search is unavailable" (`TypeRole.body`) with the reason under it (`TypeRole.footnote`),
+  identifier `search.unavailable`, and no chips, hint or results.
+- **Chip labels are text-only** — no `Image`, no `Label` with an icon, inside either `Menu` label
+  (CLAUDE.md, #69: macOS paints an `Image` in a `Menu` label at intrinsic size).
+- **Result waits are 15 s, not 5.** The seeded entry is only findable once the launch scan's
+  reconcile has indexed it; Task 8's re-query repaints when it lands. A cold CI simulator is slow.
+- The view never logs the query text.
 
 - [ ] **Step 1: Write the failing UI tests**
 
@@ -961,11 +1252,11 @@ Row: `SearchResultRow` shows the date line (reuse the library row's date formatt
 ### Task 10 (A2 close): final review, PR 2
 
 - [ ] Whole-branch review, one fix round, scoped re-review.
-- [ ] Counts: unit baseline (fresh from main's log after PR 1) + Task 8 (4 + 6 = **+10**) ; UI baseline + **3**.
+- [ ] Counts: unit baseline (**amended, stacked run:** PR 1's own CI job log, since PR 1 has not merged) + Task 8 (4 + 9 = **+13** after the pre-flight amendments) ; UI baseline + **3**.
 - [ ] PR body smoke, self-contained, both platforms:
   - Mac: About → Build N. Sidebar → Search (between Trash and About). Field has focus; type a word you know you said in a recent entry → a row with that word highlighted; tap → the entry opens. Journal chip → a journal you did not say it in → "No matches"; All journals → back. Date chip → Last year → only last year's entries.
   - iPhone: same path; the field is in the navigation bar; check the chips are tappable with a thumb.
-- [ ] Open the PR; stop.
+- [ ] **Amendment (stacked run):** PR 2's base is `feat/194-search-index`, and its body says so and says "merge #<PR 1> first". Mark it ready, leave it open, and continue: Phase A3 starts on `feat/194-search-highlight`, branched from this branch's head.
 
 ---
 
@@ -1025,7 +1316,41 @@ final class TranscriptHighlighterTests: XCTestCase {
 
 - [ ] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement** — `matches`: fold with `text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)`; folding can change character counts for some scripts, so walk the ORIGINAL string's word boundaries (`enumerateSubstrings(in:options: .byWords)`), fold each word, and test `hasPrefix` per term — ranges then come from the original string. Sort by `lowerBound`. `attributed`: background `InkTone.accent.color.opacity(0.35)` for matches, `.opacity(0.7)` for `current`.
+**Amendment (pre-flight 7) — the word rule changes, and two tests are added:**
+
+```swift
+    // The index splits at an apostrophe (Task 3 pins it); the highlighter must too, or the
+    // list promises a match the entry shows as "0 of 0".
+    func testElidedWordMatchesItsStem() {
+        let t = "l'école d'été"
+        XCTAssertEqual(TranscriptHighlighter.matches(in: t, terms: ["ecole"]).map { String(t[$0]) }, ["école"])
+    }
+    // Terms are folded too: SearchQuery.terms lowercases but keeps accents.
+    func testAccentedTermMatchesUnaccentedText() {
+        XCTAssertEqual(TranscriptHighlighter.matches(in: "etaient", terms: ["étai"]).count, 1)
+    }
+```
+
+A "word" is a maximal run of Characters where `isLetter || isNumber` — the rule
+`SearchQuery.terms` already uses and the one `unicode61` applies — NOT
+`enumerateSubstrings(.byWords)`: ICU keeps `l'école` as one word, the index does not. Walk the
+ORIGINAL string once, collecting those runs with their ranges; fold each run AND each term with
+`folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)`; a run matches when
+its folded form `hasPrefix` a folded term; the highlighted range is the first
+`term.count` Characters of the run when that is well-defined, else the whole run (state which
+the tests pin: `["string", "string"]` in `testWordStartPrefixOnly` means the prefix, not the
+word). RED proof for the elision test: the `.byWords` implementation returns no match.
+
+The four pattern-match sites on `.entry` (line numbers at `9587f639`): `ContentView.swift:31`
+and `EntryPager.swift:40` bind the id (`case .entry(let id)` becomes `case .entry(let id, _)`,
+or binds the highlight where it is needed); `Place.swift:195` and `Place.swift:273` are
+`case .entry = …` and compile unchanged. There is no `== .entry(…)` comparison in either
+target (grep-verified) — keep it that way: an equality test against `.entry(id)` would silently
+stop matching a highlighted destination.
+
+Test count for this task after the amendment: **+8**.
+
+- [ ] **Step 3: Implement** — (the `.byWords` instruction in this step is SUPERSEDED by the amendment above) `matches`: fold with `text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)`; folding can change character counts for some scripts, so walk the ORIGINAL string's word boundaries (`enumerateSubstrings(in:options: .byWords)`), fold each word, and test `hasPrefix` per term — ranges then come from the original string. Sort by `lowerBound`. `attributed`: background `InkTone.accent.color.opacity(0.35)` for matches, `.opacity(0.7)` for `current`.
 
 - [ ] **Step 4: Run, expect PASS.** RED proof: a `contains`-based implementation makes `testWordStartPrefixOnly` fail (3 hits).
 
@@ -1071,13 +1396,13 @@ func testOpeningFromSearchShowsTheMatchBar() {
 
 - [ ] **Step 3: Implement.** In `EntryDetailView`: `@State private var cursor: SearchMatchCursor?` built in `refresh()` after the transcript loads when `highlight != nil` — paragraph texts are `transcript.paragraphs?.map(\.text) ?? [transcript.text ?? ""]`. The prose `ScrollView` gets a `ScrollViewReader`; each paragraph `Text` gets `.id("para.\(index)")` (the single-text branch `.id("para.0")`); when `cursor.currentParagraph` changes, `withAnimation { proxy.scrollTo("para.\(i)", anchor: .center) }` — in `.onChange(of: cursor?.current)` and once in `.task` after the first load. The paragraph `Text`s render `TranscriptHighlighter.attributed(paragraph.text, matches: cursor.paragraphMatches[i], current: cursor.currentIndexWithin(i))` when a cursor exists, else today's rendering untouched (identifiers unchanged; the `accessibilityValue` of the text stays the plain string). The bar: an `HStack` above the prose, shown only when `highlight != nil`, Buttons `chevron.left`/`chevron.right`, `Text(cursor.label)` with `detail.search.count`, `TypeRole.label`. `page(to:)` (next/previous entry) pushes `.entry(id)` with no highlight — verify by reading it; `replaceTopEntry(with:)` in the router also stays highlight-free.
 
-- [ ] **Step 4: Verify** — full unit suite; push for the UI run. RED proof for the UI test: remove the bar and watch `detail.search.count` time out.
+- [ ] **Step 4: Verify** — full unit suite; run `SearchUITests` locally on the simulator (amended 2026-10-10: the simulator works here; the controller pushes for the whole-suite CI run). RED proof for the UI test: run it before the bar exists and watch `detail.search.count` time out.
 
 - [ ] **Step 5: regen, commit** — `feat(#194): entry opens on the match — highlighted prose, match bar, scroll to paragraph`
 
 ### Task 13 (A3 close): final review, PR 3
 
 - [ ] Whole-branch review, one fix round, scoped re-review.
-- [ ] Counts: unit baseline + Task 11 (6) + Task 12 (2) = **+8**; UI baseline + **1**.
+- [ ] Counts: unit baseline (**amended, stacked run:** PR 2's own CI job log) + Task 11 (8 after the pre-flight amendment) + Task 12 (2) = **+10**; UI baseline + **1**.
 - [ ] PR body smoke: Mac and iPhone — Search → a word → tap a result → the entry opens with the word highlighted and the bar reading "1 of N"; › moves to the next and the page scrolls; ‹ wraps; swipe/arrow to the next entry → no bar, no highlight; Back to the result list keeps the query.
-- [ ] Open the PR; stop. Then update the #194 issue with what shipped and what is deferred (mixed phrase+prefix patterns, trigram substring matching, relevance ranking, entry descriptions).
+- [ ] **Amendment (stacked run):** PR 3's base is `feat/194-search-place`; its body says "merge #<PR 1>, then #<PR 2>, first". Mark it ready, leave it open; stop. Then comment on the #194 issue with the three PR links, the merge order, and what is deferred (mixed phrase+prefix patterns, trigram substring matching, relevance ranking, entry descriptions, and from the research reply: English stemming, `-excluded` words and `OR`). Do not use a closing keyword next to `#194` anywhere — the issue closes when Nico says the smoke passed.

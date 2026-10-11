@@ -330,6 +330,45 @@ enum EntryTranscriptLoader {
         }
     }
 
+    /// What `fullText` found. Three answers, deliberately: a transcript that failed to read is
+    /// not one with no words in it.
+    enum FullText: Sendable, Equatable {
+        /// The text the detail screen shows. Never empty.
+        case text(String)
+        /// Read, and there are no words: no transcript at all, or one with nothing in it.
+        case empty
+        /// Something is there and it did not read. Not evidence that the text is gone.
+        case unreadable
+    }
+
+    /// #194: the whole text the search index stores — exactly what `load(…, .compute)`
+    /// shows as `text`: the canonical current revision (`TranscriptChain.current` over the
+    /// ordered chain, spans joined by `TranscriptChain.plainText`), else the live log's
+    /// consolidated committed text. No attribution, no snippet truncation. Read-only. Takes
+    /// no `expectedRecords`: in `load` that value only drives a degradation flag and never
+    /// the text.
+    static func fullText(captureDirectory: URL) -> FullText {
+        let chain = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory)
+        if let chain, let current = TranscriptChain.current(TranscriptChain.ordered(chain.revisions)) {
+            let text = TranscriptChain.plainText(current)
+            return text.isEmpty ? .empty : .text(text)
+        }
+        // No readable revision: the live log, the same fallback `load` takes.
+        let loaded = LiveTranscriptReader.load(captureDirectory: captureDirectory)
+        switch loaded.source {
+        case .present:
+            let text = LiveTranscriptReader.consolidate(loaded.records).committedText
+            if !text.isEmpty { return .text(text) }
+        case .unreadable:
+            return .unreadable
+        case .absent:
+            break
+        }
+        // No words from the log. A chain that is there and did not read is not "empty".
+        if let chain, chain.listingUnreadable || !chain.unreadableFiles.isEmpty { return .unreadable }
+        return .empty
+    }
+
     /// The MACHINE transcript alone: `live.jsonl`, consolidated, with the canonical chain
     /// deliberately not consulted at all (T7 Task 4, ruling Q5 — Gate A finding I3).
     ///

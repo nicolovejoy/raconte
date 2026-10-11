@@ -1,8 +1,11 @@
 import Foundation
 
-/// O(1) change detection per entry for the search index: no transcript body is decoded
-/// and `live.jsonl` is never read, only stat'ed. Read-only.
+/// Cheap change detection per entry for the search index. `live.jsonl` is never read, only
+/// stat'ed. No transcript body is decoded when `head.json` is trusted; otherwise
+/// `validatedHead` rebuilds the head in memory, which costs what the library scan already
+/// pays. Read-only.
 enum SearchFingerprint {
+    /// Take the fingerprint BEFORE reading the body it describes (see `SearchIndexer.reconcile`).
     /// `nil` when the directory has neither a canonical head nor a live log.
     static func compute(directory: URL) -> String? {
         // Same precedence as `EntryTranscriptLoader`: a canonical current wins.

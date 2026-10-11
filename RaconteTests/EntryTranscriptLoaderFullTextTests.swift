@@ -9,23 +9,23 @@ final class EntryTranscriptLoaderFullTextTests: XCTestCase {
 
     func testCanonicalSpansAreJoined() throws {
         try SearchCaptureFixture.writeCanonical(dir, n: 1, spans: ["the new", "strings arrived"])
-        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: nil),
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir),
                        "the new strings arrived")
     }
 
     func testFallsBackToConsolidatedCommittedText() throws {
         try SearchCaptureFixture.writeLiveLog(dir, records: ["one", "two"])
-        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: 2), "one two")
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir), "one two")
     }
 
     func testNothingIsNil() {
-        XCTAssertNil(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: nil))
+        XCTAssertNil(EntryTranscriptLoader.fullText(captureDirectory: dir))
     }
 
     func testCanonicalWinsOverALiveLogWhenBothExist() throws {
         try SearchCaptureFixture.writeLiveLog(dir, records: ["live one", "live two"])
         try SearchCaptureFixture.writeCanonical(dir, n: 1, spans: ["edited", "text"])
-        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: 2),
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir),
                        "edited text")
     }
 
@@ -35,7 +35,7 @@ final class EntryTranscriptLoaderFullTextTests: XCTestCase {
         try SearchCaptureFixture.writeCanonical(dir, n: 1, spans: ["first span", "second span", "third"])
         let canonical = EntryTranscriptLoader.load(captureDirectory: dir, expectedRecords: nil,
                                                    attribution: .compute(sampleRate: sampleRate))
-        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: nil),
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: dir),
                        canonical.text)
         XCTAssertEqual(canonical.text, "first span second span third")
 
@@ -44,7 +44,7 @@ final class EntryTranscriptLoaderFullTextTests: XCTestCase {
         try SearchCaptureFixture.writeLiveLog(liveOnly, records: ["alpha", "beta", "gamma"])
         let live = EntryTranscriptLoader.load(captureDirectory: liveOnly, expectedRecords: 3,
                                               attribution: .compute(sampleRate: sampleRate))
-        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: liveOnly, expectedRecords: 3),
+        XCTAssertEqual(EntryTranscriptLoader.fullText(captureDirectory: liveOnly),
                        live.text)
         XCTAssertEqual(live.text, "alpha beta gamma")
     }
@@ -52,7 +52,7 @@ final class EntryTranscriptLoaderFullTextTests: XCTestCase {
     func testFullTextIsNotTruncatedToASnippet() throws {
         let long = String(repeating: "word ", count: 200)
         try SearchCaptureFixture.writeCanonical(dir, n: 1, spans: [long, "end"])
-        let text = try XCTUnwrap(EntryTranscriptLoader.fullText(captureDirectory: dir, expectedRecords: nil))
+        let text = try XCTUnwrap(EntryTranscriptLoader.fullText(captureDirectory: dir))
         XCTAssertGreaterThan(text.count, 500)
         XCTAssertTrue(text.hasSuffix("end"))
     }

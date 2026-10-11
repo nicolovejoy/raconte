@@ -45,4 +45,33 @@ final class SearchServicesTests: XCTestCase {
         XCTAssertNil(services.indexer)
         XCTAssertNotNil(services.unavailableReason)
     }
+
+    // MARK: The unit-test gate
+
+    func testSearchIsOnForAPlainLaunch() {
+        XCTAssertTrue(SearchServices.isEnabled(environment: [:]))
+        XCTAssertTrue(SearchServices.isEnabled(environment: ["HOME": "/Users/someone", "TMPDIR": "/tmp"]))
+    }
+
+    func testSearchIsOffWhenTheAppIsHostedByXCTest() {
+        XCTAssertFalse(SearchServices.isEnabled(
+            environment: ["XCTestConfigurationFilePath": "/tmp/Raconte.xctestconfiguration"]))
+        // Xcode can hand the host the key with an empty value: the key is what counts.
+        XCTAssertFalse(SearchServices.isEnabled(environment: ["XCTestConfigurationFilePath": ""]))
+    }
+
+    /// UI tests launch the app as its own process, keyed to a throwaway container, with no
+    /// XCTest configuration: they keep the real wiring.
+    func testSearchStaysOnUnderTheUITestHarness() {
+        XCTAssertTrue(SearchServices.isEnabled(environment: ["RACONTE_UITEST_ID": UUID().uuidString]))
+    }
+
+    /// The gate, asserted from inside the environment it exists for. This suite's host is the
+    /// real app over the owner's real Mac container; `AppServices` reads this same answer.
+    func testThisTestHostKeepsSearchOff() {
+        let environment = ProcessInfo.processInfo.environment
+        XCTAssertNotNil(environment["XCTestConfigurationFilePath"],
+                        "this test is only meaningful while it runs under XCTest")
+        XCTAssertFalse(SearchServices.isEnabled(environment: environment))
+    }
 }

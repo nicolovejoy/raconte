@@ -18,6 +18,19 @@ final class SearchServices: Sendable {
 
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
+    /// Whether this launch builds a search index at all. Off when the app is the unit suite's
+    /// test host (`XCTestConfigurationFilePath` in the environment): that host is the real
+    /// app over the owner's real container, and a test run has no business opening or
+    /// maintaining an index there. On under the UI-test harness, a separate process over a
+    /// throwaway container, so UI tests exercise the real wiring.
+    ///
+    /// Pure, so the policy is unit-tested; `AppServices` passes the process environment. Not
+    /// `SyncCoordinator.isHostedByTestRunner`: that one also refuses under
+    /// `RACONTE_UITEST_ID`, where search must stay on.
+    static func isEnabled(environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] == nil
+    }
+
     /// Opens (creating if needed) `search/index.sqlite` under `containerRoot`. Does file
     /// work, so callers keep it off the main actor.
     init(containerRoot: URL) {

@@ -72,8 +72,53 @@ final class SearchSnippetTests: XCTestCase {
         XCTAssertEqual(s.matches.map { String(s.text[$0]) }, ["a", "c"])
     }
     func testAttributedCarriesABackgroundOnEachMatch() {
-        let s = SearchSnippet.parse("x \(o)y\(c) z")
-        let runs = s.attributed.runs.filter { $0.backgroundColor != nil }
-        XCTAssertEqual(runs.count, 1)
+        let s = SearchSnippet.parse("x \(o)y\(c) z \(o)w\(c)")
+        let attributed = s.attributed
+        let highlighted = attributed.runs.filter { $0.backgroundColor != nil }
+            .map { String(attributed[$0.range].characters) }
+        XCTAssertEqual(highlighted, ["y", "w"])
+        XCTAssertEqual(String(attributed.characters), "x y z w")
+    }
+
+    private func markerScalars(in text: String) -> [Unicode.Scalar] {
+        text.unicodeScalars.filter { $0 == "\u{E000}" || $0 == "\u{E001}" }
+    }
+
+    /// FTS5 ends a token before a combining mark it does not fold, so the close marker lands
+    /// directly in front of one. As Characters the two are one grapheme, which is neither the
+    /// marker nor text: the marker leaked into the snippet and the match was lost. These are
+    /// FTS5's own outputs for the three bodies.
+    func testACloseMarkerInFrontOfACombiningMarkNeverLeaks() {
+        let rows: [(name: String, marked: String, text: String, match: String)] = [
+            // Keycap one: digit, U+FE0F, U+20E3.
+            ("keycap", "step \(o)1\(c)\u{FE0F}\u{20E3} done", "step 1\u{FE0F}\u{20E3} done", "1"),
+            // Devanagari: the token ends before the virama U+094D.
+            ("devanagari", "\(o)\u{928}\u{92E}\u{938}\(c)\u{94D}\u{924}\u{947}",
+             "\u{928}\u{92E}\u{938}\u{94D}\u{924}\u{947}", "\u{928}\u{92E}\u{938}"),
+            // Arabic with harakat: each letter is followed by a fatha U+064E.
+            ("arabic", "\(o)\u{643}\(c)\u{64E}\u{62A}\u{64E}\u{628}\u{64E}",
+             "\u{643}\u{64E}\u{62A}\u{64E}\u{628}\u{64E}", "\u{643}"),
+        ]
+        for row in rows {
+            let s = SearchSnippet.parse(row.marked)
+            XCTAssertEqual(markerScalars(in: s.text), [], row.name)
+            XCTAssertEqual(Array(s.text.unicodeScalars), Array(row.text.unicodeScalars), row.name)
+            XCTAssertEqual(s.matches.map { Array(s.text[$0].unicodeScalars) },
+                           [Array(row.match.unicodeScalars)], row.name)
+        }
+    }
+
+    func testAnUnclosedOpenMarkerIsDropped() {
+        let s = SearchSnippet.parse("\(o)a\(c) b \(o)c")
+        XCTAssertEqual(markerScalars(in: s.text), [])
+        XCTAssertEqual(s.text, "a b c")
+        XCTAssertEqual(s.matches.map { String(s.text[$0]) }, ["a"])
+    }
+
+    func testAStrayCloseMarkerIsDropped() {
+        let s = SearchSnippet.parse("a\(c) b \(o)c\(c)\(c) d")
+        XCTAssertEqual(markerScalars(in: s.text), [])
+        XCTAssertEqual(s.text, "a b c d")
+        XCTAssertEqual(s.matches.map { String(s.text[$0]) }, ["c"])
     }
 }

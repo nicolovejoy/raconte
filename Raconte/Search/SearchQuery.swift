@@ -40,23 +40,48 @@ struct SearchQuery: Sendable, Equatable {
 
 /// FTS5 `snippet()` output with private-use markers, parsed into text + match ranges.
 struct SearchSnippet: Sendable, Equatable {
-    static let openMarker = "\u{E000}"
-    static let closeMarker = "\u{E001}"
+    private static let openScalar: Unicode.Scalar = "\u{E000}"
+    private static let closeScalar: Unicode.Scalar = "\u{E001}"
+    static let openMarker = String(openScalar)
+    static let closeMarker = String(closeScalar)
 
     var text: String
+    /// Aligned to unicode scalars, not always to Characters: a match can end inside a
+    /// grapheme (see `parse`).
     var matches: [Range<String.Index>]
 
+    /// By unicode scalar, never by Character. FTS5 ends a token before a combining mark it
+    /// does not fold (a keycap's U+FE0F, a virama, Arabic harakat), so the close marker can
+    /// sit directly in front of one; as Characters the two are a single grapheme that is
+    /// neither the marker nor text. An open marker with no close, and a close with no open,
+    /// are dropped.
     static func parse(_ marked: String) -> SearchSnippet {
-        var text = ""
-        var matches: [Range<String.Index>] = []
-        var openAt: String.Index?
-        for ch in marked {
-            switch String(ch) {
-            case openMarker: openAt = text.endIndex
-            case closeMarker:
-                if let start = openAt { matches.append(start..<text.endIndex); openAt = nil }
-            default: text.append(ch)
+        var scalars = String.UnicodeScalarView()
+        var count = 0
+        var spans: [Range<Int>] = []   // scalar offsets into the stripped text
+        var openAt: Int?
+        for scalar in marked.unicodeScalars {
+            switch scalar {
+            case openScalar: openAt = count
+            case closeScalar:
+                if let start = openAt { spans.append(start..<count); openAt = nil }
+            default:
+                scalars.append(scalar)
+                count += 1
             }
+        }
+        // Indices are taken from the finished string, in one forward walk.
+        let text = String(scalars)
+        let view = text.unicodeScalars
+        var index = view.startIndex
+        var offset = 0
+        var matches: [Range<String.Index>] = []
+        for span in spans {
+            index = view.index(index, offsetBy: span.lowerBound - offset)
+            let lower = index
+            index = view.index(index, offsetBy: span.count)
+            offset = span.upperBound
+            matches.append(lower..<index)
         }
         return SearchSnippet(text: text, matches: matches)
     }

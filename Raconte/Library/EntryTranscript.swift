@@ -334,8 +334,9 @@ enum EntryTranscriptLoader {
     /// shows as `text`: the canonical current revision (`TranscriptChain.current` over the
     /// ordered chain, spans joined by `TranscriptChain.plainText`), else the live log's
     /// consolidated committed text. No attribution, no snippet truncation. `nil` when
-    /// there is nothing to index. Read-only.
-    static func fullText(captureDirectory: URL, expectedRecords: Int?) -> String? {
+    /// there is nothing to index. Read-only. Takes no `expectedRecords`: in `load` that value
+    /// only drives a degradation flag and never the text.
+    static func fullText(captureDirectory: URL) -> String? {
         if let chain = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory),
            let current = TranscriptChain.current(TranscriptChain.ordered(chain.revisions)) {
             let text = TranscriptChain.plainText(current)

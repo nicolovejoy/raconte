@@ -97,10 +97,12 @@ final class SearchIndexTests: XCTestCase {
         XCTAssertEqual(matchTexts(hits.first { $0.captureID == "B" }), ["ecole"])
     }
 
-    // A second plaintext copy of every transcript stays out of backups.
-    func testIndexDirectoryIsExcludedFromBackup() throws {
+    // An index never flags a directory it was merely handed: that is how an archive root came
+    // to be excluded from backup. `SearchServices` marks `search/` by name
+    // (`SearchServicesTests.testIndexLivesInItsOwnBackupExcludedDirectoryBesideCaptures`).
+    func testOpeningAnIndexLeavesItsDirectoryInBackups() throws {
         _ = try SearchIndex(databaseURL: url)
         let values = try url.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])
-        XCTAssertEqual(values.isExcludedFromBackup, true)
+        XCTAssertFalse(values.isExcludedFromBackup ?? false)
     }
 }

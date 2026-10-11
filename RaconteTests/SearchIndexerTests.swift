@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import Raconte
 
@@ -90,5 +91,34 @@ final class SearchIndexerTests: XCTestCase {
         XCTAssertEqual(report, .init(indexed: 0, removed: 0, unchanged: 0, failed: 0))
         let known = try await index.fingerprints()
         XCTAssertTrue(known.isEmpty)
+    }
+
+    /// Damages the real index from a second connection: `fingerprints()` still reads the
+    /// state table, but `remove` and `upsert` need `entry_text` and now throw.
+    private func dropFullTextTable() throws {
+        let queue = try DatabaseQueue(path: root.appendingPathComponent("index.sqlite").path)
+        try queue.write { try $0.execute(sql: "DROP TABLE entry_text") }
+    }
+
+    func testFailedRemoveIsCountedFailedNotRemoved() async throws {
+        let (_, indexer, entries) = try makeThree()
+        _ = await indexer.reconcile(entries)
+        try dropFullTextTable()
+        let report = await indexer.reconcile(Array(entries.dropLast()))
+        XCTAssertEqual(report.removed, 0)
+        XCTAssertEqual(report.failed, 1)
+        XCTAssertEqual(report.unchanged, 2)
+    }
+
+    func testFailedUpsertIsCountedFailedNotIndexedAndRunContinues() async throws {
+        let (_, indexer, entries) = try makeThree()
+        _ = await indexer.reconcile(entries)
+        try dropFullTextTable()
+        try SearchCaptureFixture.writeCanonical(entries[0].directory, n: 2, spans: ["alpha edited"])
+        try SearchCaptureFixture.writeCanonical(entries[1].directory, n: 2, spans: ["beta edited"])
+        let report = await indexer.reconcile(entries)
+        XCTAssertEqual(report.indexed, 0)
+        XCTAssertEqual(report.failed, 2)
+        XCTAssertEqual(report.unchanged, 1)
     }
 }

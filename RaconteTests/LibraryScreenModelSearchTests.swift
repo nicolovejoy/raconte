@@ -132,7 +132,8 @@ final class LibraryScreenModelSearchTests: XCTestCase {
         await fake.waitForParkedCall(1)
         let calls = await fake.calls
         XCTAssertEqual(calls.count, 1)
-        XCTAssertEqual(Set(calls[0].map(\.captureID)), Set([liveID, trashedID]))
+        let firstCall = try XCTUnwrap(calls.first, "attach produced no reconcile call")
+        XCTAssertEqual(Set(firstCall.map(\.captureID)), Set([liveID, trashedID]))
         XCTAssertEqual(observer.count, 1, "attach must not scan again")
         let released = await fake.release(); XCTAssertTrue(released)
         await waitUntilIdle(model)

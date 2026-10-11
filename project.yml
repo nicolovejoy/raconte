@@ -8,7 +8,10 @@ options:
 packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
-    exactVersion: "7.11.1"
+    # GRDB 7.11.1, pinned by revision rather than by tag: a tag can be moved, and
+    # Package.resolved lives in the generated (gitignored) project, so this line is the
+    # only thing in the repo that fixes what gets built. To upgrade, set the new tag's commit.
+    revision: b83108d10f42680d78f23fe4d4d80fc88dab3212
 settings:
   base:
     SWIFT_VERSION: "6.0"

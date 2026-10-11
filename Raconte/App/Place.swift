@@ -17,6 +17,7 @@ enum Place: Hashable, Sendable {
     case journal(String)      // journal id
     case allEntries
     case trash
+    case search
     case about
     case debug
 }
@@ -35,8 +36,8 @@ struct PlaceRow: Identifiable, Equatable, Sendable {
 enum SidebarModel {
     /// Row order and titles (locked): Home, Capture, then one row per journal in
     /// DISPLAY order (`Array<Journal>.displayOrdered` — createdAt ascending, id
-    /// tie-break), then All Entries, then Trash, then About, then Debug when
-    /// `includesDebug`. Superseded 2026-08-21 (owner report, issue #79): this used to
+    /// tie-break), then All Entries, then Trash, then Search (#194), then About, then Debug
+    /// when `includesDebug`. Superseded 2026-08-21 (owner report, issue #79): this used to
     /// say "registry order", but registry order is per-device insertion history and
     /// differs between devices — the sidebar showed a different journal order on every
     /// device and surface as a result. Home prepended 2026-08-29 (#108): the bookshelf
@@ -86,6 +87,13 @@ enum SidebarModel {
                              systemImage: "trash",
                              journalID: nil,
                              accessibilityIdentifier: "sidebar.trash"))
+        // #194: after the lists it searches, ahead of the two utility rows.
+        rows.append(PlaceRow(place: .search,
+                             title: "Search",
+                             subtitle: nil,
+                             systemImage: "magnifyingglass",
+                             journalID: nil,
+                             accessibilityIdentifier: "sidebar.search"))
 
         // #89: Release-visible diagnostics (version, environment, sync status). Listed
         // in EVERY build — bottom-of-list utility, but Debug stays last where the
@@ -162,7 +170,7 @@ enum PlaceRouting {
         switch place {
         case .journal(let id):
             return journals.contains { $0.id == id } ? place : .capture
-        case .home, .capture, .allEntries, .trash, .about, .debug:
+        case .home, .capture, .allEntries, .trash, .search, .about, .debug:
             return place
         }
     }
@@ -206,7 +214,7 @@ enum PlaceRouting {
             return .all
         case .journal(let id):
             return .journal(id)
-        case .home, .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .search, .about, .debug:
             return nil
         }
     }

@@ -75,6 +75,13 @@ final class SearchServicesTests: XCTestCase {
         XCTAssertTrue(SearchServices.isEnabled(environment: ["RACONTE_UITEST_ID": UUID().uuidString]))
     }
 
+    /// `#Preview { ContentView(services: AppServices()) }` builds the same composition root; on
+    /// a Mac destination that is the sandboxed app over the real container, running whatever
+    /// the working tree holds. Detected the way the sync gate detects it.
+    func testSearchIsOffUnderAnXcodePreview() {
+        XCTAssertFalse(SearchServices.isEnabled(environment: ["XCODE_RUNNING_FOR_PREVIEWS": "1"]))
+    }
+
     /// The gate, asserted from inside the environment it exists for. This suite's host is the
     /// real app over the owner's real Mac container; `AppServices` reads this same answer.
     func testThisTestHostKeepsSearchOff() {

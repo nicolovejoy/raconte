@@ -18,17 +18,23 @@ final class SearchServices: Sendable {
 
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
-    /// Whether this launch builds a search index at all. Off when the app is the unit suite's
-    /// test host (`XCTestConfigurationFilePath` in the environment): that host is the real
-    /// app over the owner's real container, and a test run has no business opening or
-    /// maintaining an index there. On under the UI-test harness, a separate process over a
-    /// throwaway container, so UI tests exercise the real wiring.
+    /// Whether this launch builds a search index at all. Off in two cases:
     ///
-    /// Pure, so the policy is unit-tested; `AppServices` passes the process environment. Not
-    /// `SyncCoordinator.isHostedByTestRunner`: that one also refuses under
-    /// `RACONTE_UITEST_ID`, where search must stay on.
+    /// 1. **Hosted by XCTest** (`XCTestConfigurationFilePath` in the environment). The unit
+    ///    suite's host is the real app over the owner's real container, and a test run has no
+    ///    business opening or maintaining an index there.
+    /// 2. **An Xcode preview** (`XCODE_RUNNING_FOR_PREVIEWS` is `1`). `ContentView`'s
+    ///    `#Preview` builds the same `AppServices`, over the same container on a Mac.
+    ///
+    /// On under the UI-test harness, a separate process over a throwaway container, so UI
+    /// tests exercise the real wiring.
+    ///
+    /// Pure, so the policy is unit-tested; the caller passes the process environment. The
+    /// same detection as `SyncCoordinator.isHostedByTestRunner`, minus its `RACONTE_UITEST_ID`
+    /// case, which is why that one is not reused here.
     static func isEnabled(environment: [String: String]) -> Bool {
         environment["XCTestConfigurationFilePath"] == nil
+            && environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1"
     }
 
     /// Opens (creating if needed) `search/index.sqlite` under `containerRoot`. Does file

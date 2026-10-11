@@ -26,14 +26,21 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
   recording until a click on blank space; fine once recording stops. Mechanism unconfirmed.
 - Shared-conventions blocks in `CLAUDE.md` and `AGENTS.md` re-synced (v=28022362f01b).
 
-**Next steps:**
-1. **Phase 1 — prove sync.** Re-check iPhone About → Sync (Account / Last push) idle; then the
-   M4 acceptance gate (`docs/plans/2026-08-17-m4-sync-implementation-plan.md` Gate B): verified
-   export first, delete the app from the mini, reinstall, archive reconstructs. Never run.
-2. **Phase 2 — transcript integrity:** T8 final pass before editing, with #44, #51, #2.
-3. **Phase 3 — capture-flow batch:** #185, #181, #182, #104, #107, #83 (+#27), tests #177/#179.
-4. **Phase 4 — design sweep:** #170 type hierarchy (+#173), then #55, #86.
-5. Dedupe #109→#121 and #27→#83 (owner call). #134 has no iPhone smoke on record yet.
+**Next steps** (order agreed 2026-10-08; state as of 2026-10-10):
+1. **Gate 0 — owner smoke.** #197 (#196, EXIF backdate suggestion removed) and #198 (#121 crop +
+   rotate) are merged (`327bc93a`); build 27 is not cut. Its smoke also answers #195's scope and
+   the queued #181 / #83 smokes. #134 has no iPhone smoke on record yet.
+2. **A — search (#194).** Three stacked PRs, to merge in order: A1 index core (#199,
+   `feat/194-search-index`), A2 Search place, A3 in-entry highlight. Design and plan:
+   `docs/plans/2026-10-08-search-design.md`, `-search-plan.md`. The owner has not reviewed the
+   written spec or plan; the PRs are the review.
+3. **B — #195** (camera stays open for several photos), scoped by the build 27 smoke.
+4. **C — capture-flow batch:** only #107 is left, and it needs a design ruling first (record
+   into the entry, or a new capture whose images move).
+5. **D — transcript integrity:** T8 final pass before editing, with #44, #51, #2.
+6. **E — design sweep:** #170 type hierarchy (+#173), then #55, #86.
+7. **Owner-only, any time:** #187 M4 acceptance gate (`docs/plans/2026-08-17-m4-sync-implementation-plan.md`
+   Gate B; never run) and #189 part 1 (one capture with live transcription on an OS 27 device).
 
 ## What Raconte is
 

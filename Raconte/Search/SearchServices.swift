@@ -33,8 +33,22 @@ final class SearchServices: Sendable {
 
     /// Opens (creating if needed) `search/index.sqlite` under `containerRoot`. Does file
     /// work, so callers keep it off the main actor.
+    ///
+    /// The index is a second plaintext copy of every transcript, so `search/` is kept out of
+    /// backups. The flag goes on that directory BY NAME and on nothing else: it covers
+    /// everything beneath the directory that carries it.
     init(containerRoot: URL) {
         do {
+            var searchRoot = AppContainer.searchRoot(containerRoot: containerRoot)
+            try FileManager.default.createDirectory(at: searchRoot, withIntermediateDirectories: true)
+            // A backup hint must never block opening the index.
+            do {
+                var values = URLResourceValues()
+                values.isExcludedFromBackup = true
+                try searchRoot.setResourceValues(values)
+            } catch {
+                Self.log.notice("search index: could not exclude from backup: \(error.localizedDescription, privacy: .public)")
+            }
             let index = try SearchIndex(databaseURL: AppContainer.searchIndexURL(containerRoot: containerRoot))
             self.index = index
             self.indexer = SearchIndexer(index: index)

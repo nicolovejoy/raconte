@@ -9,20 +9,11 @@ actor SearchIndex {
     private let queue: DatabaseQueue
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
-    /// The index needs a directory of its own: that directory is marked excluded from backup,
-    /// so a file placed directly in a shared folder would exclude everything beside it.
+    /// Creates the database's directory if needed and sets nothing on it: whoever chose the
+    /// directory owns its backup policy (`SearchServices` does, for `search/`).
     init(databaseURL: URL) throws {
-        var directory = databaseURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // The index is a second plaintext copy of every transcript: keep it out of backups.
-        // A backup hint must never block opening the index.
-        do {
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try directory.setResourceValues(values)
-        } catch {
-            Self.log.notice("search index: could not exclude from backup: \(error.localizedDescription, privacy: .public)")
-        }
+        try FileManager.default.createDirectory(at: databaseURL.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
         do {
             queue = try Self.open(databaseURL)
         } catch {

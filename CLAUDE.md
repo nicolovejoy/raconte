@@ -26,14 +26,18 @@ Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file 
   recording until a click on blank space; fine once recording stops. Mechanism unconfirmed.
 - Shared-conventions blocks in `CLAUDE.md` and `AGENTS.md` re-synced (v=28022362f01b).
 
-**Next steps** (order agreed 2026-10-08; state as of 2026-10-10):
+**Next steps** (order agreed 2026-10-08; state as of 2026-10-11):
 1. **Gate 0 — owner smoke.** #197 (#196, EXIF backdate suggestion removed) and #198 (#121 crop +
    rotate) are merged (`327bc93a`); build 27 is not cut. Its smoke also answers #195's scope and
    the queued #181 / #83 smokes. #134 has no iPhone smoke on record yet.
-2. **A — search (#194).** Three stacked PRs, to merge in order: A1 index core (#199,
-   `feat/194-search-index`), A2 Search place, A3 in-entry highlight. Design and plan:
-   `docs/plans/2026-10-08-search-design.md`, `-search-plan.md`. The owner has not reviewed the
-   written spec or plan; the PRs are the review.
+2. **A — search (#194).** Three stacked PRs, to merge in order. A1 index core is merged (#199,
+   `cab33c54`); its Mac smoke is in the PR body and waits for a build of `main`. A2 Search place
+   is draft PR #200 (`feat/194-search-place`, worktree `raconte-wt-194`): Task 8 is in with one
+   review finding open (the model needs an "answered" state, so "No matches" cannot show before
+   the first answer), and Task 9, the real `SearchView`, is not started. A3 in-entry highlight
+   has no branch yet. Design and plan: `docs/plans/2026-10-08-search-design.md`,
+   `-search-plan.md`. The owner has not reviewed the written spec or plan, and has not ruled on
+   GRDB against raw `SQLite3` (#199 "Read first", item 2); the PRs are the review.
 3. **B — #195** (camera stays open for several photos), scoped by the build 27 smoke.
 4. **C — capture-flow batch:** only #107 is left, and it needs a design ruling first (record
    into the entry, or a new capture whose images move).

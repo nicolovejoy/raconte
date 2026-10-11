@@ -330,6 +330,20 @@ enum EntryTranscriptLoader {
         }
     }
 
+    /// #194: the whole text the search index stores — exactly what `load(…, .compute)`
+    /// shows as `text`: the canonical current revision (`TranscriptChain.current` over the
+    /// ordered chain, spans joined by `TranscriptChain.plainText`), else the live log's
+    /// consolidated committed text. No attribution, no snippet truncation. `nil` when
+    /// there is nothing to index. Read-only.
+    static func fullText(captureDirectory: URL, expectedRecords: Int?) -> String? {
+        if let chain = TranscriptRevisionStore.loadChain(captureDirectory: captureDirectory),
+           let current = TranscriptChain.current(TranscriptChain.ordered(chain.revisions)) {
+            let text = TranscriptChain.plainText(current)
+            return text.isEmpty ? nil : text
+        }
+        return machineLiveText(captureDirectory: captureDirectory)
+    }
+
     /// The MACHINE transcript alone: `live.jsonl`, consolidated, with the canonical chain
     /// deliberately not consulted at all (T7 Task 4, ruling Q5 — Gate A finding I3).
     ///

@@ -24,11 +24,22 @@ actor SearchIndexer {
     func reconcile(_ entries: [Entry]) async -> Report {
         let started = ContinuousClock.now
         var report = Report()
-        let known = (try? await index.fingerprints()) ?? [:]
+        var known: [String: String] = [:]
+        do {
+            known = try await index.fingerprints()
+        } catch {
+            Self.log.notice("search: fingerprints unreadable, the index will be rebuilt: \(error.localizedDescription, privacy: .public)")
+        }
         let listed = Set(entries.map(\.captureID))
         let gone = known.keys.filter { !listed.contains($0) }
-        if !gone.isEmpty, (try? await index.remove(captureIDs: Array(gone))) != nil {
-            report.removed = gone.count
+        if !gone.isEmpty {
+            do {
+                try await index.remove(captureIDs: Array(gone))
+                report.removed = gone.count
+            } catch {
+                report.failed += gone.count
+                Self.log.notice("search: removing \(gone.count) gone entries failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         for entry in entries {
@@ -36,6 +47,7 @@ actor SearchIndexer {
             guard FileManager.default.fileExists(atPath: entry.directory.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
                 report.failed += 1
+                Self.log.notice("search: capture directory missing for \(entry.captureID, privacy: .public)")
                 continue
             }
             // Fingerprint first, body second. If a write lands between the two reads, this
@@ -59,11 +71,12 @@ actor SearchIndexer {
                 report.indexed += 1
             } catch {
                 report.failed += 1
+                Self.log.notice("search: index write failed for \(entry.captureID, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
 
         if report.indexed + report.removed + report.failed > 0 {
-            let ms = (ContinuousClock.now - started) / .milliseconds(1)
+            let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
             Self.log.notice("search: reconcile indexed=\(report.indexed) removed=\(report.removed) unchanged=\(report.unchanged) failed=\(report.failed) in \(ms)ms")
         }
         return report
@@ -71,6 +84,12 @@ actor SearchIndexer {
 
     private func dropIfKnown(_ captureID: String, known: [String: String], report: inout Report) async {
         guard known[captureID] != nil else { return }
-        if (try? await index.remove(captureIDs: [captureID])) != nil { report.removed += 1 }
+        do {
+            try await index.remove(captureIDs: [captureID])
+            report.removed += 1
+        } catch {
+            report.failed += 1
+            Self.log.notice("search: removing \(captureID, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

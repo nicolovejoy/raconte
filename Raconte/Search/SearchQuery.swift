@@ -7,12 +7,17 @@ import SwiftUI
 struct SearchQuery: Sendable, Equatable {
     var text: String
 
-    /// The trimmed input when it is one whole double-quoted string, else nil.
+    /// Straight and typographic double quotes. iOS and macOS smart punctuation converts typed
+    /// `"` to these, and SwiftUI's `.searchable` cannot turn that off.
+    private static let quoteMarks: Set<Character> = ["\"", "\u{201C}", "\u{201D}", "\u{201E}", "\u{201F}", "\u{AB}", "\u{BB}"]
+
+    /// The trimmed input when it is one whole quoted string, else nil.
     private var quotedPhrase: String? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.count >= 2, t.hasPrefix("\""), t.hasSuffix("\"") else { return nil }
+        guard t.count >= 2, let first = t.first, let last = t.last,
+              Self.quoteMarks.contains(first), Self.quoteMarks.contains(last) else { return nil }
         let inner = t.dropFirst().dropLast()
-        guard !inner.contains("\"") else { return nil }
+        guard !inner.contains(where: { Self.quoteMarks.contains($0) }) else { return nil }
         return String(inner)
     }
 

@@ -135,6 +135,63 @@ final class LibraryScreenModel {
     /// pair (there are many) would leak one for the length of the test process.
     weak var rescanObserver: (any LibraryRescanObserver)?
 
+    // MARK: Search index (#194)
+
+    /// Nil until `attach(searchReconciler:)`; every build without an index leaves it nil.
+    private var searchReconciler: (any SearchReconciling)?
+    /// True from the moment a reconcile is scheduled until the last coalesced pass ends.
+    private(set) var searchIndexing = false
+    /// Moves after each pass that indexed or removed something, and only then: the signal
+    /// "a query may now answer differently" that the search screen observes to re-run its
+    /// visible query. A pass that changed nothing leaves it alone.
+    private(set) var searchIndexRevision = 0
+    private var reconcilePending = false
+    private var reconcileRunning = false
+    /// Set when a scan publishes. `attach` reconciles the published list only after this:
+    /// before the first publish the entry lists are empty, and reconciling `[]` would
+    /// remove every row from the index.
+    private var searchScanPublished = false
+
+    /// Attaching after a scan has published reconciles that list at once (no rescan, so
+    /// nothing supersedes a scan in flight); attaching before the first publish does
+    /// nothing and the launch scan reconciles.
+    func attach(searchReconciler: any SearchReconciling) {
+        self.searchReconciler = searchReconciler
+        if searchScanPublished { scheduleSearchReconcile() }
+    }
+
+    /// One reconcile at a time; any number of requests during a run collapse into exactly
+    /// one follow-up. The follow-up re-reads the entries when it starts, so it sees the
+    /// latest scan.
+    ///
+    /// `.utility`, stated: a bare `Task` would inherit the priority of whoever published
+    /// the scan (user-initiated for every UI-driven rescan), and the pass reads every entry
+    /// even when nothing changed.
+    private func scheduleSearchReconcile() {
+        guard searchReconciler != nil else { return }
+        if reconcileRunning { reconcilePending = true; return }
+        reconcileRunning = true
+        searchIndexing = true
+        Task(priority: .utility) { [weak self] in await self?.runSearchReconcile() }
+    }
+
+    private func runSearchReconcile() async {
+        defer { reconcileRunning = false; searchIndexing = false }
+        repeat {
+            reconcilePending = false
+            // Trashed entries stay in `captures/<id>` until permanently removed, so they
+            // are handed over too: restoring one must not need a reindex.
+            let entries = (allEntries + trashed).map {
+                SearchIndexer.Entry(
+                    captureID: $0.captureID,
+                    directory: SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: $0.captureID))
+            }
+            if let report = await searchReconciler?.reconcile(entries), report.changedTheIndex {
+                searchIndexRevision += 1
+            }
+        } while reconcilePending
+    }
+
     /// #82: whichever capture id `CaptureCoordinator.activeCaptureID` currently names,
     /// or `nil` when unattached. `@MainActor`, not `@Sendable` — honest about
     /// `activeCaptureID`'s real isolation rather than claiming this can be called from
@@ -352,6 +409,8 @@ final class LibraryScreenModel {
         // observer's whole job is to compare a receipt against `allEntries`, so it must
         // never see a half-applied scan or one this model has already abandoned.
         rescanObserver?.libraryDidRescan()
+        searchScanPublished = true
+        scheduleSearchReconcile()
         return true
     }
 

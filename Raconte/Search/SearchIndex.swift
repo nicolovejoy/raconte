@@ -9,6 +9,8 @@ actor SearchIndex {
     private let queue: DatabaseQueue
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
+    /// The index needs a directory of its own: that directory is marked excluded from backup,
+    /// so a file placed directly in a shared folder would exclude everything beside it.
     init(databaseURL: URL) throws {
         var directory = databaseURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

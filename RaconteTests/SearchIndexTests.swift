@@ -25,24 +25,31 @@ final class SearchIndexTests: XCTestCase {
 
     func testUpsertReplacesNotDuplicates() async throws {
         let index = try SearchIndex(databaseURL: url)
+        try await index.upsert(captureID: "B", fingerprint: "9", body: "gamma")
         try await index.upsert(captureID: "A", fingerprint: "1", body: "alpha")
         try await index.upsert(captureID: "A", fingerprint: "2", body: "beta")
         let alpha = try await index.search(SearchQuery(text: "alpha"))
         let beta = try await index.search(SearchQuery(text: "beta"))
+        let gamma = try await index.search(SearchQuery(text: "gamma"))
         let prints = try await index.fingerprints()
         XCTAssertTrue(alpha.isEmpty)
-        XCTAssertEqual(beta.count, 1)
-        XCTAssertEqual(prints, ["A": "2"])
+        XCTAssertEqual(beta.map(\.captureID), ["A"])
+        XCTAssertEqual(gamma.map(\.captureID), ["B"])
+        XCTAssertEqual(prints, ["A": "2", "B": "9"])
     }
 
     func testRemoveDropsBothTables() async throws {
         let index = try SearchIndex(databaseURL: url)
         try await index.upsert(captureID: "A", fingerprint: "1", body: "alpha")
-        try await index.remove(captureIDs: ["A"])
-        let hits = try await index.search(SearchQuery(text: "alpha"))
+        try await index.upsert(captureID: "B", fingerprint: "9", body: "gamma")
+        // An unknown id ahead of "A" must not stop the loop.
+        try await index.remove(captureIDs: ["missing", "A"])
+        let gone = try await index.search(SearchQuery(text: "alpha"))
+        let kept = try await index.search(SearchQuery(text: "gamma"))
         let prints = try await index.fingerprints()
-        XCTAssertTrue(hits.isEmpty)
-        XCTAssertTrue(prints.isEmpty)
+        XCTAssertTrue(gone.isEmpty)
+        XCTAssertEqual(kept.map(\.captureID), ["B"])
+        XCTAssertEqual(prints, ["B": "9"])
     }
 
     func testEmptyQueryReturnsNothingWithoutError() async throws {
@@ -78,13 +85,16 @@ final class SearchIndexTests: XCTestCase {
         XCTAssertEqual(matchTexts(hits.first), ["école"])
     }
 
-    // SearchQuery keeps accents and lowercases; the tokenizer folds at MATCH time.
+    // SearchQuery keeps accents and lowercases; the tokenizer folds at MATCH time. The
+    // unaccented row is what pins the fold: without it an accent-keeping tokenizer passes.
     func testAccentedCapitalisedQueryFindsTheSameRow() async throws {
         let index = try SearchIndex(databaseURL: url)
         try await index.upsert(captureID: "A", fingerprint: "1", body: "l'école d'été")
+        try await index.upsert(captureID: "B", fingerprint: "1", body: "une ecole")
         let hits = try await index.search(SearchQuery(text: "École"))
-        XCTAssertEqual(hits.map(\.captureID), ["A"])
-        XCTAssertEqual(matchTexts(hits.first), ["école"])
+        XCTAssertEqual(Set(hits.map(\.captureID)), ["A", "B"])
+        XCTAssertEqual(matchTexts(hits.first { $0.captureID == "A" }), ["école"])
+        XCTAssertEqual(matchTexts(hits.first { $0.captureID == "B" }), ["ecole"])
     }
 
     // A second plaintext copy of every transcript stays out of backups.

@@ -908,13 +908,29 @@ Call `scheduleSearchReconcile()` in `rescan()` right after `rescanObserver?.libr
 ### Task 7 (A1 close): final review, PR 1
 
 - [ ] Whole-branch review (most capable model), one fix round, scoped re-review.
-- [ ] Test count: baseline (from main's latest code-carrying CI job log) + Tasks 1–6 additions (1 + 9 + 8 + 7 + 5 + 4 = **+34** unit after the pre-flight amendments — Task 3 +2, Task 6 +1; UI unchanged). State both numbers in the PR body with the job-log source.
+- [ ] Test count: baseline (from main's latest code-carrying CI job log) + Tasks 1–6 additions (1 + 9 + 8 + 7 + 5 + 4 = **+34** unit after the pre-flight amendments — Task 3 +2, Task 6 +1; UI unchanged) — **as built: +76** (2336 → 2412: the tasks' own tests, their review fix rounds, and the whole-branch review's fix wave; the PR body carries the breakdown). State both numbers in the PR body with the job-log source.
 - [ ] PR body: what/why, the GRDB decision (one paragraph: the research reply recommended raw `SQLite3`, why GRDB stayed, the pinned version and revision, link the spec), that the owner has not reviewed the written spec or plan, the pre-flight amendments by number, and smoke steps for the owner — self-contained, build-number first:
-  1. About → App → Build shows the build number handed over with the smoke build.
-  2. Quit the app; `ls "$HOME/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte/search/"` lists `index.sqlite` (Mac). (Quoted path, no backslash — CLAUDE.md shared conventions.)
-  3. `/usr/bin/log show --last 10m --predicate 'subsystem == "org.pianohouseproject.raconte" AND category == "search"'` prints one `search: reconcile indexed=N … in …ms` line: N is the number of entries with a transcript, and the milliseconds are the full-rebuild time the research reply asked for.
-  4. Record a short entry, wait for the transcript, quit → the file's modification time moved.
-  Nothing else changes in this PR.
+  **Rewritten after the whole-branch review (2026-10-10).** The original four steps could not
+  fail on this laptop: the unit-test host had already built `search/index.sqlite` in the real Mac
+  container, so "the file exists" was true before any smoke build ran, and the timing line only
+  prints when something changed. (The index is now off under the unit-test runner and under
+  previews.) The smoke runs on a build of `main` after the merge, cut per CLAUDE.md:
+  1. Quit Raconte. Delete the index the test runs left behind, so the first launch is a cold
+     build: `rm -r "$HOME/Library/Containers/org.pianohouseproject.raconte/Data/Library/Application Support/Raconte/search"`
+  2. Launch the smoke build. About → App → Build shows the build number handed over with it.
+  3. `/usr/bin/log show --last 10m --predicate 'subsystem == "org.pianohouseproject.raconte" AND category == "search"'`
+     prints ONE line, `search: reconcile indexed=N removed=0 unchanged=0 failed=0 in …ms`. N is the
+     number of entries with a transcript (52 on the laptop on 2026-10-10) and the milliseconds are
+     the cold-rebuild time. Fail: no line, `failed` above 0, or a line saying `unreadable, recreating`.
+  4. `tmutil isexcluded` on the archive root, its `captures`, and its `search` prints `[Included]`,
+     `[Included]`, `[Excluded]`, in that order. Fail: the root or `captures` is `[Excluded]`.
+  5. Quit and launch again, then repeat step 3's command with `--last 2m`: NO new line. A reconcile
+     line means a pass rewrote an unchanged index; `unreadable, recreating` means the open check
+     rejected a healthy index.
+  6. Record a short entry, wait for its transcript, repeat step 3's command: one new line with
+     `indexed=1`.
+  Nothing else changes in this PR. On the iPhone the first cold build happens unobserved; its
+  timing line needs a log collect.
 - [ ] **Amendment (stacked run):** the PR is already open as a draft from the first push; mark it ready, leave it open. Do NOT stop: Phase A2 starts on `feat/194-search-place`, branched from this branch's head. Merge is Nico's. Build 27 bump happens on main after merge (owner smoke).
 
 ---

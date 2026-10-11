@@ -50,6 +50,45 @@ every launch — the cost `head.json` exists to avoid).
 The index is a **disposable derivative of the archive**. Files stay ground truth; deleting
 the index file loses nothing but a rebuild.
 
+### Research reply, folded in 2026-10-10
+
+prompt-lab answered on 2026-10-08 (`~/src/.handoff/raconte-prompt-lab.md`), after this document
+and the plan were committed. Folded in by the session that ran the plan; the owner has not
+reviewed this section.
+
+- **It recommended raw `SQLite3` in one actor, not GRDB.** GRDB stays: CLAUDE.md's Stack already
+  names it, both documents are written for it, and the reply itself lists "would rather not own
+  C-pointer code under strict concurrency" as a reason to pick it. The SQL carries over unchanged
+  if this is reversed; the cost is the inside of `SearchIndex` and one block of `project.yml`.
+  GRDB is pinned by exact version, because `Package.resolved` sits in the gitignored project.
+- **Shared rowids.** An `UNINDEXED` FTS column has no index, so deleting an FTS row by
+  `captureID` scans every stored transcript. The state table owns an integer id and the FTS row
+  uses it as its `rowid`:
+
+```sql
+CREATE TABLE entry_index_state(
+    id INTEGER PRIMARY KEY AUTOINCREMENT, captureID TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL);
+-- entry_text.rowid == entry_index_state.id; captureID stays in entry_text only to be SELECTed
+```
+
+- **Schema version.** The reply asked for `PRAGMA user_version` and delete-on-mismatch. GRDB's
+  migration table is that version; a schema or tokenizer change is a migration that drops both
+  tables, after which the empty fingerprints rebuild everything.
+- **A second plaintext copy.** The `search/` directory is excluded from backup. The archive sets
+  no explicit file protection, so the index inherits the same platform default. Nothing about
+  it syncs or is exported.
+- **Rebuild time.** Each reconcile that changes anything logs its counts and elapsed
+  milliseconds at `.notice`; PR 1's smoke reads the first one.
+- **Tokenizer vs highlighter.** `unicode61` splits `l'école` at the apostrophe. The in-entry
+  highlighter therefore splits on non-letter-non-number too, not on ICU word boundaries, or a
+  French elision would be found by the list and shown as `0 of 0` in the entry.
+- **Not taken, deferred to #194's follow-ups:** English stemming (`porter`), `-excluded` words
+  and `OR`, per-field columns with `bm25()` weighting (there is one field today), relevance
+  order (results stay in date order — the owner's model is the journal).
+- **Also added by the same pre-flight:** a finished reconcile re-runs the visible query (typing
+  during "Indexing…" no longer strands "No matches"); the "Search is unavailable" state below
+  has a task.
+
 ## Architecture
 
 ### `SearchIndex` — the store (new, `Raconte/Search/SearchIndex.swift`, actor)
@@ -242,6 +281,40 @@ Three PRs, each smoke-tested before the next starts:
   top (no highlight yet). Smoke on Mac and iPhone.
 - **A3 — in-entry highlight:** `SearchHighlight`, `TranscriptHighlighter`, match bar,
   scroll-to-paragraph.
+
+## As built — PR 1 (index core), 2026-10-10
+
+Where the code differs from the sections above. The sections are left as written so the
+reasoning stays readable; this list is what shipped in PR 1.
+
+- **Schema:** the second form above (shared rowids), in one migration `v1`, with FTS5's
+  `secure-delete` option on and `PRAGMA secure_delete = ON` on the connection, so the text of a
+  deleted or edited entry does not linger in the file.
+- **`SearchQuery.pattern`** is built from `terms` (letters-and-numbers runs, lowercased), not from
+  the raw text: GRDB's ASCII tokenizer let a lone `…` through as a token. A wholly quoted input is
+  a phrase with straight or curly quotes. Typed text still never reaches the FTS5 parser raw.
+- **No `expectedRecords`** anywhere in search: it never affected the text.
+  `SearchIndexer.Entry` is `captureID` and `directory`.
+- **`EntryTranscriptLoader.fullText`** returns text, empty, or unreadable. Unreadable counts
+  `failed` and KEEPS the entry's existing row (the "Body" bullet above says removed).
+- **Open check:** after the migrator, `PRAGMA quick_check` plus one read of each table; anything
+  but `ok` takes the recreate-once path. Damage found after a successful open is repaired at the
+  next launch.
+- **Backup exclusion** is applied by `SearchServices`, by name, to `search/` — never by the index
+  to "its parent".
+- **Where search does not run:** under the unit-test runner and under Xcode previews
+  (`SearchServices.live` is the one gated way in). The unit-test host is the real app over the
+  owner's real Mac container.
+- **Trigger:** the model reconciles after every PUBLISHED scan, and `attach` reconciles a scan
+  that published before it; there is no extra launch scan. The reconcile task runs at utility
+  priority. `searchIndexRevision` moves only when a pass changed the index.
+- **GRDB** is pinned by revision (`b83108d1`, 7.11.1), not by tag.
+- **The test pinning the xcodeproj's package reference** (Testing, last bullet) was not written:
+  the project file is generated and gitignored.
+
+Known limits, stated in PR 1's body: œ/æ ligatures are not folded; a cold build commits once per
+entry; an entry whose only revision stops decoding is dropped without being counted failed; no
+highlight in a snippet where a match ends inside a grapheme (keycap emoji, Indic, Arabic).
 
 ## Not touched
 

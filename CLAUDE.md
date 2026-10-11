@@ -95,14 +95,17 @@ runs with the real app as its test host, so an unsandboxed run makes `AppContain
 the owner's real `~/Library/Application Support/Raconte` rather than a container — the
 launching app would scan and sweep his actual archive. Never `CODE_SIGNING_ALLOWED=NO`
 here. (`EntitlementsParityTests` pins the override against the generated file, so adding
-a capability to project.yml and forgetting the override fails loudly.)
+a capability to project.yml and forgetting the override fails loudly.) The entitlements
+path is ABSOLUTE since GRDB (#194): a command-line build setting also reaches the package's own
+targets, and a relative path resolves against the package checkout (`Build input file cannot be
+found: …/checkouts/GRDB.swift/Raconte/Raconte-nocloud.entitlements`).
 
 📋 **COPY THE BELOW**:
 
 ```
 xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements test
+  CODE_SIGN_ENTITLEMENTS="$PWD/Raconte/Raconte-nocloud.entitlements" test
 ```
 
 Owner-smoke app build (macOS) — real automatic signing, so the app actually carries the

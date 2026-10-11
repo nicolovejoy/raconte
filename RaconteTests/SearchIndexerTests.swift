@@ -141,6 +141,118 @@ final class SearchIndexerTests: XCTestCase {
         XCTAssertNil(known[entries[0].captureID])
     }
 
+    // MARK: Read-only against the archive
+
+    private struct FileStamp: Equatable {
+        var size: UInt64
+        var modified: Date
+        var fileNumber: UInt64
+    }
+
+    /// Every file and directory under `directory`, by relative path.
+    private func snapshot(_ directory: URL) throws -> [String: FileStamp] {
+        var out: [String: FileStamp] = [:]
+        let base = directory.standardizedFileURL.path
+        let walker = try XCTUnwrap(FileManager.default.enumerator(atPath: base))
+        for case let relative as String in walker {
+            let attributes = try FileManager.default.attributesOfItem(atPath: base + "/" + relative)
+            out[relative] = FileStamp(
+                size: try XCTUnwrap(attributes[.size] as? UInt64),
+                modified: try XCTUnwrap(attributes[.modificationDate] as? Date),
+                fileNumber: try XCTUnwrap(attributes[.systemFileNumber] as? UInt64))
+        }
+        return out
+    }
+
+    /// The paths that differ between two snapshots: added, removed, or restamped.
+    private func differences(_ a: [String: FileStamp], _ b: [String: FileStamp]) -> [String] {
+        Set(a.keys).union(b.keys).filter { a[$0] != b[$0] }.sorted()
+    }
+
+    /// The indexer's whole licence is to READ `captures/`. A cold pass (everything indexed)
+    /// and a warm pass (nothing to do) over every shape of entry leave each path, size,
+    /// modification date and file number exactly as they were.
+    func testReconcileWritesNothingUnderCaptures() async throws {
+        let capturesRoot = AppContainer.capturesRoot(containerRoot: root)
+        let store = TranscriptRevisionStore(capturesRoot: capturesRoot, deviceIDProvider: { "test-device" })
+        var entries: [SearchIndexer.Entry] = []
+        func makeEntry() throws -> SearchIndexer.Entry {
+            let id = ULID.make()
+            let dir = SegmentLayout.captureDirectory(capturesRoot: capturesRoot, captureID: id)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let entry = SearchIndexer.Entry(captureID: id, directory: dir)
+            entries.append(entry)
+            return entry
+        }
+
+        // A trusted head: `head.json` matches the chain, so no revision body is decoded.
+        let trusted = try makeEntry()
+        try SearchCaptureFixture.writeCanonical(trusted.directory, n: 1, spans: ["alpha trusted"])
+        try await store.persistHead(captureID: trusted.captureID)
+        // No head at all.
+        let headless = try makeEntry()
+        try SearchCaptureFixture.writeCanonical(headless.directory, n: 1, spans: ["beta first"])
+        try SearchCaptureFixture.writeCanonical(headless.directory, n: 2, spans: ["beta second"])
+        // A stale head: persisted, then the chain moved on.
+        let stale = try makeEntry()
+        try SearchCaptureFixture.writeCanonical(stale.directory, n: 1, spans: ["gamma first"])
+        try await store.persistHead(captureID: stale.captureID)
+        try SearchCaptureFixture.writeCanonical(stale.directory, n: 2, spans: ["gamma second"])
+        // A trashed entry: handed over like any other, and its head is never stamped.
+        let trashed = try makeEntry()
+        try SearchCaptureFixture.writeCanonical(trashed.directory, n: 1, spans: ["delta trashed"])
+        try EntryMetadataStore.write(EntryMetadata(trashedAt: Date(timeIntervalSince1970: 2_000)),
+                                     url: SegmentLayout.entryMetadataURL(captureDirectory: trashed.directory))
+        // The live log only.
+        let liveOnly = try makeEntry()
+        try SearchCaptureFixture.writeLiveLog(liveOnly.directory, records: ["epsilon live", "log"])
+        // An undecodable revision beside a readable log.
+        let damaged = try makeEntry()
+        try SearchCaptureFixture.writeLiveLog(damaged.directory, records: ["zeta fallback"])
+        try SearchCaptureFixture.writeUndecodableCanonical(damaged.directory, n: 1)
+        // Nothing to index: an empty log, an undecodable revision alone, an empty directory.
+        try SearchCaptureFixture.writeLiveLog(try makeEntry().directory, records: [])
+        try SearchCaptureFixture.writeUndecodableCanonical(try makeEntry().directory, n: 1)
+        _ = try makeEntry()
+        // Unreadable: counted failed on every pass.
+        let sealed = try makeEntry()
+        try SearchCaptureFixture.writeLiveLog(sealed.directory, records: ["eta sealed"])
+        try SearchCaptureFixture.sealLiveLog(sealed.directory)
+
+        // The index is a sibling of captures/, as in the app.
+        let index = try SearchIndex(databaseURL: AppContainer.searchIndexURL(containerRoot: root))
+        let indexer = SearchIndexer(index: index)
+
+        let before = try snapshot(capturesRoot)
+        XCTAssertGreaterThan(before.count, 25, "fixture sanity: the snapshot covers the fixture tree")
+        XCTAssertNotNil(before["\(trusted.captureID)/transcript/head.json"], "fixture sanity: a head was persisted")
+
+        let cold = await indexer.reconcile(entries)
+        let afterCold = try snapshot(capturesRoot)
+        let warm = await indexer.reconcile(entries)
+        let afterWarm = try snapshot(capturesRoot)
+
+        // The passes really did read these directories.
+        XCTAssertEqual(cold, .init(indexed: 6, removed: 0, unchanged: 0, failed: 1))
+        XCTAssertEqual(warm, .init(indexed: 0, removed: 0, unchanged: 6, failed: 1))
+        let found = try await ids(index, "gamma")
+        XCTAssertEqual(found, [stale.captureID])
+
+        XCTAssertEqual(differences(before, afterCold), [], "the cold pass changed these paths under captures/")
+        XCTAssertEqual(differences(before, afterWarm), [], "the warm pass changed these paths under captures/")
+
+        // Control: the snapshot does see a write, a growth and a new file.
+        try Data("x".utf8).write(to: liveOnly.directory.appendingPathComponent("stray"))
+        let handle = try FileHandle(forWritingTo: SegmentLayout.liveTranscriptURL(captureDirectory: damaged.directory))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.close()
+        let changed = differences(before, try snapshot(capturesRoot))
+        XCTAssertTrue(changed.contains("\(liveOnly.captureID)/stray"), "a new file")
+        XCTAssertTrue(changed.contains("\(liveOnly.captureID)"), "its directory's modification date")
+        XCTAssertTrue(changed.contains("\(damaged.captureID)/transcript/live.jsonl"), "a file that grew")
+    }
+
     /// Damages the real index from a second connection: `fingerprints()` still reads the
     /// state table, but `remove` and `upsert` need `entry_text` and now throw.
     private func dropFullTextTable() throws {

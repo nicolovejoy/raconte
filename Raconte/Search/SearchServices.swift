@@ -8,9 +8,9 @@ protocol SearchReconciling: Sendable {
 
 extension SearchIndexer: SearchReconciling {}
 
-/// The index and its indexer, built once at launch. A failure to open the index is not an
-/// error the app surfaces at launch: `index` is nil and `unavailableReason` says why, and
-/// search simply reports itself unavailable.
+/// The index and its indexer, built once at launch, through `live` and nothing else. A
+/// failure to open the index is not an error the app surfaces at launch: `index` is nil and
+/// `unavailableReason` says why, and search simply reports itself unavailable.
 final class SearchServices: Sendable {
     let index: SearchIndex?
     let indexer: SearchIndexer?
@@ -37,13 +37,21 @@ final class SearchServices: Sendable {
             && environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1"
     }
 
-    /// Opens (creating if needed) `search/index.sqlite` under `containerRoot`. Does file
-    /// work, so callers keep it off the main actor.
+    /// The one way in. Nil, meaning "this launch builds no index", wherever `isEnabled` says
+    /// off: then nothing is constructed and nothing is created on disk. Otherwise opens
+    /// (creating if needed) `search/index.sqlite` under `containerRoot`, which is file work,
+    /// so callers keep it off the main actor.
+    static func live(containerRoot: URL, environment: [String: String]) -> SearchServices? {
+        guard isEnabled(environment: environment) else { return nil }
+        return SearchServices(containerRoot: containerRoot)
+    }
+
+    /// Private: `live` is the only caller, so nothing can build an index around the gate.
     ///
     /// The index is a second plaintext copy of every transcript, so `search/` is kept out of
     /// backups. The flag goes on that directory BY NAME and on nothing else: it covers
     /// everything beneath the directory that carries it.
-    init(containerRoot: URL) {
+    private init(containerRoot: URL) {
         do {
             var searchRoot = AppContainer.searchRoot(containerRoot: containerRoot)
             try FileManager.default.createDirectory(at: searchRoot, withIntermediateDirectories: true)

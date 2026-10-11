@@ -21,8 +21,11 @@ final class SearchServicesTests: XCTestCase {
         try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup ?? false
     }
 
+    /// A launch that may build an index, as the factory sees it.
+    private let plainLaunch: [String: String] = [:]
+
     func testIndexLivesInItsOwnDirectoryBesideCaptures() throws {
-        let services = SearchServices(containerRoot: containerRoot)
+        let services = try XCTUnwrap(SearchServices.live(containerRoot: containerRoot, environment: plainLaunch))
         XCTAssertNotNil(services.index)
         XCTAssertNotNil(services.indexer)
         XCTAssertNil(services.unavailableReason)
@@ -39,7 +42,7 @@ final class SearchServicesTests: XCTestCase {
     /// "not excluded" half is only evidence where the flag works, so it stays in this test.
     func testOnlyTheSearchDirectoryIsExcludedFromBackup() throws {
         try BackupExclusionProbe.skipUnlessTheFlagCanBeMeasured(under: FileManager.default.temporaryDirectory)
-        let services = SearchServices(containerRoot: containerRoot)
+        let services = try XCTUnwrap(SearchServices.live(containerRoot: containerRoot, environment: plainLaunch))
         XCTAssertNotNil(services.index)
         XCTAssertTrue(try excluded(AppContainer.searchRoot(containerRoot: containerRoot)))
         XCTAssertFalse(try excluded(containerRoot), "the archive's own root must stay in backups")
@@ -49,13 +52,41 @@ final class SearchServicesTests: XCTestCase {
     func testAnUnopenableIndexLeavesServicesUnavailableWithoutThrowing() throws {
         // `search` is a regular file, so the index directory cannot be created.
         try Data("x".utf8).write(to: AppContainer.searchRoot(containerRoot: containerRoot))
-        let services = SearchServices(containerRoot: containerRoot)
+        let services = try XCTUnwrap(SearchServices.live(containerRoot: containerRoot, environment: plainLaunch))
         XCTAssertNil(services.index)
         XCTAssertNil(services.indexer)
         XCTAssertNotNil(services.unavailableReason)
     }
 
-    // MARK: The unit-test gate
+    // MARK: The one gated way in
+
+    private func names(in directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    /// The unit-test host's real shape: the key present with an EMPTY value. Nothing is
+    /// built, and nothing appears on disk.
+    func testTheFactoryBuildsNothingUnderTheUnitTestRunner() throws {
+        let before = try names(in: containerRoot)
+        let services = SearchServices.live(containerRoot: containerRoot,
+                                           environment: ["XCTestConfigurationFilePath": ""])
+        XCTAssertNil(services)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: AppContainer.searchRoot(containerRoot: containerRoot).path), "no search/ directory may appear")
+        XCTAssertEqual(try names(in: containerRoot), before)
+    }
+
+    func testTheFactoryBuildsTheIndexForAPlainLaunch() throws {
+        let services = try XCTUnwrap(SearchServices.live(containerRoot: containerRoot, environment: plainLaunch))
+        XCTAssertNotNil(services.index)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: AppContainer.searchRoot(containerRoot: containerRoot).path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+        XCTAssertEqual(try names(in: containerRoot), ["captures", "search"])
+    }
+
+    // MARK: The gate
 
     func testSearchIsOnForAPlainLaunch() {
         XCTAssertTrue(SearchServices.isEnabled(environment: [:]))
@@ -83,11 +114,14 @@ final class SearchServicesTests: XCTestCase {
     }
 
     /// The gate, asserted from inside the environment it exists for. This suite's host is the
-    /// real app over the owner's real Mac container; `AppServices` reads this same answer.
-    func testThisTestHostKeepsSearchOff() {
+    /// real app over the owner's real Mac container. `AppServices` makes this same call with
+    /// this same environment; here it is aimed at a temporary root.
+    func testThisTestHostKeepsSearchOff() throws {
         let environment = ProcessInfo.processInfo.environment
         XCTAssertNotNil(environment["XCTestConfigurationFilePath"],
                         "this test is only meaningful while it runs under XCTest")
         XCTAssertFalse(SearchServices.isEnabled(environment: environment))
+        XCTAssertNil(SearchServices.live(containerRoot: containerRoot, environment: environment))
+        XCTAssertEqual(try names(in: containerRoot), ["captures"])
     }
 }

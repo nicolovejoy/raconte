@@ -21,7 +21,7 @@ final class SearchServicesTests: XCTestCase {
         try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup ?? false
     }
 
-    func testIndexLivesInItsOwnBackupExcludedDirectoryBesideCaptures() throws {
+    func testIndexLivesInItsOwnDirectoryBesideCaptures() throws {
         let services = SearchServices(containerRoot: containerRoot)
         XCTAssertNotNil(services.index)
         XCTAssertNotNil(services.indexer)
@@ -29,12 +29,21 @@ final class SearchServicesTests: XCTestCase {
         let search = AppContainer.searchRoot(containerRoot: containerRoot)
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: search.appendingPathComponent("index.sqlite").path))
-        XCTAssertTrue(try excluded(search))
-        XCTAssertFalse(try excluded(containerRoot), "the archive's own root must stay in backups")
-        XCTAssertFalse(try excluded(AppContainer.capturesRoot(containerRoot: containerRoot)))
         // A sibling of captures/, never inside it.
         XCTAssertEqual(search.deletingLastPathComponent().standardizedFileURL.path,
                        containerRoot.standardizedFileURL.path)
+    }
+
+    /// `search/` is kept out of backups, and nothing else is: the flag goes on that directory
+    /// by name. Skips where the flag cannot be set or read back at all (CI runners); the
+    /// "not excluded" half is only evidence where the flag works, so it stays in this test.
+    func testOnlyTheSearchDirectoryIsExcludedFromBackup() throws {
+        try BackupExclusionProbe.skipUnlessTheFlagCanBeMeasured(under: FileManager.default.temporaryDirectory)
+        let services = SearchServices(containerRoot: containerRoot)
+        XCTAssertNotNil(services.index)
+        XCTAssertTrue(try excluded(AppContainer.searchRoot(containerRoot: containerRoot)))
+        XCTAssertFalse(try excluded(containerRoot), "the archive's own root must stay in backups")
+        XCTAssertFalse(try excluded(AppContainer.capturesRoot(containerRoot: containerRoot)))
     }
 
     func testAnUnopenableIndexLeavesServicesUnavailableWithoutThrowing() throws {

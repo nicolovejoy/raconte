@@ -124,7 +124,7 @@ final class SearchIndexTests: XCTestCase {
 
     // An index never flags a directory it was merely handed: that is how an archive root came
     // to be excluded from backup. `SearchServices` marks `search/` by name
-    // (`SearchServicesTests.testIndexLivesInItsOwnBackupExcludedDirectoryBesideCaptures`).
+    // (`SearchServicesTests.testOnlyTheSearchDirectoryIsExcludedFromBackup`).
     func testOpeningAnIndexLeavesItsDirectoryInBackups() throws {
         _ = try SearchIndex(databaseURL: url)
         let values = try url.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])

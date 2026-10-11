@@ -8,6 +8,9 @@
 /// consumed it from the `.onChange`, which had already fired, so a failure sat
 /// unconsumed until the next camera round-trip and alerted against that shot.
 ///
+/// Since #121 it is driven by whichever cover precedes a verdict (the framing cover), not
+/// the camera cover; the method names are kept because `CameraErrorRelayTests` pin them.
+///
 /// Pure, so both orderings pin in `CameraErrorRelayTests`; the simulator has no camera.
 struct CameraErrorRelay: Equatable {
     private var coverIsDown = true

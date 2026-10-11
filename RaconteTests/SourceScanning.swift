@@ -35,6 +35,7 @@ let paperScreenFiles = [
     "Raconte/Library/UI/EntryInfoSheet.swift",
     "Raconte/Library/UI/TranscriptEditorView.swift",
     "Raconte/Library/UI/RevisionHistoryView.swift",
+    "Raconte/Library/UI/ImageFramingView.swift",
     "Raconte/Library/UI/JournalPickerSheet.swift",
     "Raconte/Library/UI/JournalSpanEditor.swift",
     "Raconte/Library/UI/JournalEditorView.swift",

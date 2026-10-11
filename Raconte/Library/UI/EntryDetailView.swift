@@ -791,10 +791,14 @@ struct EntryDetailView: View {
 
     private var imageViewer: some View {
         ImageFullScreenViewer(model: model, captureID: captureID, images: images,
-                              selectedIndex: viewerIndex) { sidecar in
+                              selectedIndex: viewerIndex, onRemove: { sidecar in
             await model.removeImage(captureID, imageID: sidecar.id)
             await refresh()
-        }
+        }, onReplace: { sidecar, data in
+            let ok = await model.replaceImage(captureID, imageID: sidecar.id, data: data)
+            if ok { await refresh() }
+            return ok
+        })
     }
 
     // MARK: - Transcript

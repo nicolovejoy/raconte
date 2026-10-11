@@ -87,6 +87,18 @@ final class ImageStoreTests: XCTestCase {
         }
     }
 
+    /// #121: `replaceImage` mints the replacement's id itself (at the old image's ULID
+    /// timestamp) — the store must file under the id it is handed, not a fresh mint.
+    func testAddImageWithAnExplicitIDFilesUnderThatID() async throws {
+        let s = store()
+        let explicit = ULID.make()
+        let source = ImageThumbnailerTests.makeJPEG(width: 10, height: 10, color: (1, 1, 1))
+        let sidecar = try await s.addImage(captureID: captureID, data: source, sourceUTType: nil, imageID: explicit)
+        XCTAssertEqual(sidecar.id, explicit)
+        let listed = await s.images(captureID: captureID).map(\.id)
+        XCTAssertEqual(listed, [explicit])
+    }
+
     // MARK: addImage — invalidImage, no orphaned partial files
 
     func testAddImageWithNonImageBytesThrowsInvalidImageAndWritesNothing() async throws {

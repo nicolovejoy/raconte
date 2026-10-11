@@ -29,6 +29,7 @@ final class BatchRecordProviderTests: XCTestCase {
         func resolvePushConflicts(_ serverRecords: [CKRecord]) async -> PushConflictResolution { .init() }
         func acceptRemoteJournalDeletion(id: String) async {}
         func acceptRemoteEntryDeletion(captureID: String) async {}
+        func acceptRemoteImageDeletion(captureID: String, imageID: String) async {}
     }
 
     private final class RemoveRecorder: @unchecked Sendable {

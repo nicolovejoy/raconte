@@ -56,8 +56,8 @@ Rules:
   drop the pixel-geometry keys that no longer describe the output (`PixelWidth`,
   `PixelHeight`, `{Exif}` `PixelXDimension`/`PixelYDimension`, the orientation keys as
   above), and encode via `CameraJPEG.encode(image:orientation:metadata:quality:)` at 0.9 —
-  so `ImageEXIF.capturedAt` (hence the backdate suggestion on add) still finds
-  `DateTimeOriginal`. (#191's rule: a re-encode that drops the date is a regression.)
+  so `ImageEXIF.capturedAt` (the sidecar's `capturedAt`) still finds `DateTimeOriginal`.
+  (#191's rule: a re-encode that drops the photo's own date is a regression.)
 - Crop rect is clamped to (0,0,1,1) and to a minimum size before use; a degenerate rect
   (zero area after clamping to pixels) is treated as identity-crop, never as a nil result.
 - Output pixel size: rotated width/height swapped for odd turns; crop applied in pixels by

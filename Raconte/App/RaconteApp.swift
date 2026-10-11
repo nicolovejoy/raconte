@@ -24,14 +24,22 @@ final class AppServices {
     let exportRunner: ExportRunner
     /// #194: nil until the index has been opened off the main actor (a few milliseconds;
     /// never on the launch path), and nil for good where `SearchServices.live` builds
-    /// nothing (the unit-test runner, an Xcode preview). Nothing on screen depends on it yet.
+    /// nothing (the unit-test runner, an Xcode preview). `searchScreen` is connected to it
+    /// when it lands.
     private(set) var search: SearchServices?
+    /// #194: the Search place's model. Built with no index, because there is none yet at
+    /// `init`; where `search` stays nil it stays unconnected and finds nothing.
+    let searchScreen: SearchScreenModel
 
     init() {
         let library = LibraryScreenModel.live()
         self.library = library
         self.capture = CaptureScreenModel.liveWithTranscription(library: library)
         self.router = AppRouter()
+        // Constructed and nothing else: no file is read and no query runs until the owner
+        // types. The same per-device current journal the capture screen files into.
+        self.searchScreen = SearchScreenModel(searching: nil, unavailableReason: nil,
+                                              library: library, currentJournal: CurrentJournal())
         // Built from the library's own stores, never its own copies — see
         // `SyncCoordinator.live(library:)`.
         self.sync = SyncCoordinator.live(library: library)
@@ -83,6 +91,9 @@ final class AppServices {
             }.value
             guard let self, let services else { return }
             self.search = services
+            // Ready, or unavailable with its reason: either way the screen stops waiting.
+            self.searchScreen.connect(searching: services.index,
+                                      unavailableReason: services.unavailableReason)
             guard let indexer = services.indexer else { return }
             self.library.attach(searchReconciler: indexer)
         }

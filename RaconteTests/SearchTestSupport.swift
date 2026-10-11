@@ -33,3 +33,39 @@ actor FakeReconciler: SearchReconciling {
 @MainActor func waitUntilIdle(_ model: LibraryScreenModel) async {
     for _ in 0..<400 where model.searchIndexing { try? await Task.sleep(for: .milliseconds(5)) }
 }
+
+/// Parks each search until it is released with the hits to return, or failed.
+actor FakeSearching: SearchQuerying {
+    struct Failure: Error {}
+
+    /// Every query received, in order.
+    private(set) var queries: [SearchQuery] = []
+    var calls: Int { queries.count }
+    /// Parked calls, oldest first.
+    private var gates: [CheckedContinuation<[SearchHit], any Error>] = []
+
+    func search(_ query: SearchQuery) async throws -> [SearchHit] {
+        queries.append(query)
+        return try await withCheckedThrowingContinuation { gates.append($0) }
+    }
+    /// Answers the oldest parked call. False means nothing was parked.
+    @discardableResult func release(_ hits: [SearchHit]) -> Bool {
+        guard !gates.isEmpty else { return false }
+        gates.removeFirst().resume(returning: hits); return true
+    }
+    /// Makes the oldest parked call throw. False means nothing was parked.
+    @discardableResult func fail() -> Bool {
+        guard !gates.isEmpty else { return false }
+        gates.removeFirst().resume(throwing: Failure()); return true
+    }
+    /// Returns once `n` calls have arrived and one is parked (or after ~2 s, so a broken
+    /// build fails an assertion instead of hanging the suite).
+    func waitForParkedCall(_ n: Int) async {
+        for _ in 0..<400 where !(calls >= n && !gates.isEmpty) { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+}
+
+/// Bounded wait (~2 s) for the search screen to publish exactly `count` results.
+@MainActor func waitForResults(_ model: SearchScreenModel, count: Int) async {
+    for _ in 0..<400 where model.results.count != count { try? await Task.sleep(for: .milliseconds(5)) }
+}

@@ -298,17 +298,18 @@ open /Applications/Raconte.app
 - Backdates are sticky: editable with explicit overrides, never clearable by one tap.
   Owner wants metadata edits auditable eventually (fold into T6 revision design).
 
-<!-- SHARED-CONVENTIONS:BEGIN v=2ed9fb390e55 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
+<!-- SHARED-CONVENTIONS:BEGIN v=c254cba18982 — auto-managed, do not edit here; source: prompt-lab/workflow/claude-md-shared.md (edit + re-sync) -->
 ## Shared conventions
 
 <!-- These are Nico's cross-repo output rules. They're materialized into each repo's
-CLAUDE.md and AGENTS.md so every agent (local, cloud, third-party) sees them as plain
-text. Source of truth: prompt-lab/workflow/claude-md-shared.md — edit there and
-re-sync, never here. -->
+CLAUDE.md so every agent (local, cloud, headless) sees them as plain text. Source of
+truth: prompt-lab/workflow/claude-md-shared.md — edit there and re-sync, never here. -->
 
 - **Clickable URLs.** When pointing at any web destination (dashboard, repo, PR, deploy, settings, docs, localhost), print the full bare URL — `https://example.com` or `http://localhost:8080` — on its own, never just the page's name and never a markdown `[label](url)` link. Nico's terminal auto-linkifies raw `https://` text, so a bare URL is one-click and stays copyable.
 
 - **Number your questions.** Any time you ask Nico more than one question, present them as a numbered list (1., 2., 3.) so he can answer by number with no ambiguity. A single standalone question needs no number.
+
+- **Never ask Nico to recall a past moment.** No "think of the last time X happened", "walk me through the last time…", or any question he can only answer by remembering an event. Look the history up yourself (the prompt-history DB, git, logs, the data), then propose something concrete for him to react to, or ask directly what he wants. This overrides the brainstorming skill's "walk me through the last time" question style (Nico, 2026-11-03).
 
 - **Self-contained smoke-test instructions.** When you ask Nico to manually test or verify an app or website, assume zero carried-over context — he should never scroll back or recall a URL/path/credential from earlier. Always include: the exact URL (full `https://…` or `http://localhost:…`, restated even if mentioned above), the precise steps in order, and what a pass vs. fail looks like. Repetition here is a feature, not clutter.
 
@@ -318,11 +319,11 @@ re-sync, never here. -->
 
 - **No bare backslash in a copy-paste command block.** A `\` is load-bearing shell syntax that renders invisibly and gets silently dropped somewhere between the markdown render, the clipboard, and zsh. `find … -exec test -e {} \; -delete` arrived in the terminal as `… {} ; -delete`, which zsh split into two commands and reported as `find: -exec: no terminating ";"` plus `command not found: -delete` (2026-09-20). Quote it instead — `';'` is exactly equivalent to `\;` and survives any copy path. For the same reason never break a command across lines with a trailing `\`: write one long line, however wide it wraps.
 
-- **Codex branches are named `codex/<description>`.** When working in this repo via Codex CLI, always create a working branch under the `codex/` prefix (e.g. `codex/fix-flaky-test`) rather than working directly on `main` or an unprefixed branch. Claude Code has no visibility into other tools' running sessions (`ListAgents` only sees Claude sessions), so this prefix is the one signal a Claude session can check for — a local or remote `codex/*` branch means Codex has touched or is touching this repo, even though its session itself is invisible. Claude branches keep whatever naming they already use; only Codex adopts this new prefix.
-
-- **Codex: run commands in a form a rule can match.** Codex approval rules match a command's leading tokens, so a wrapped command never matches an existing allow and every variant prompts again, then leaves a dead one-off "don't ask again" rule behind (36 of them in five days, 2026-09-23). The program is the first token: call helpers and tools directly, never through `/bin/zsh -lc "…"`, never with a `PATH=…` or other `VAR=…` prefix, never with `$(…)` in the arguments. Work only inside your clone (one long-lived `~/src/<repo>-codex`, no worktrees, no scratch clones — everything outside it escalates, except the cross-repo handoff log at `~/src/.handoff`, which is granted). Redirect output only to files inside the workspace, and keep temp files in a gitignored `tmp/` there, never `/private/tmp`. If a tool is missing from `PATH`, report it: the fix belongs in `~/.zprofile` (Nico's edit), not in an inline `PATH=` prefix.
-
 - **Reader-facing text lives in content or copy files, not inline in components.** Some repos ship French alongside English (selected-projects mirrors the site under `/fr`; ibuild4you has French public pages). There, every new string goes in the repo's strings/copy module or content folder, with its translation, and an English copy edit means updating the French twin too. Elsewhere, keeping text out of components is what makes `/localize` cheap later. Terms and register: `prompt-lab/workflow/localization/fr-glossary.md`.
 
 - **A review another agent must act on goes on the PR.** A review that another agent must act on, or that must outlive the session, is posted as a PR comment (`gh pr comment`), where the next session or agent finds it. Live, in-session reviews between Nico and the agent stay in chat. There is no devlog.md: the history DB is the one session record.
+
+- **Browser testing runs headless.** A headed browser takes focus on Nico's Mac. Run Playwright headless, with Edge (`channel: 'msedge'`) for desktop runs wherever a config picks a browser. Never use `headless: false`, `--headed`, `--debug`, `--ui` or `PWDEBUG` unless Nico asks for it in this session. For a visual check, take a screenshot or record a trace (`trace: 'on-first-retry'` or `'on'`) instead of opening a window. The Claude-in-Chrome extension is the one thing that drives Nico's real Chrome, on purpose.
+
+- **WebKit test runs record no frames on a Mac.** While the display is asleep, macOS WindowServer keeps every captured window buffer until a display wakes, and at 65,536 it aborts and ends the login session (2026-11-09; https://github.com/microsoft/playwright/issues/43066). Playwright's WebKit trace screenshots and video capture 25 times a second. In any config with a WebKit project, set `screenshots: false` on the trace for local runs (`trace: { mode: 'retain-on-failure', screenshots: false }`, any mode) and leave video off; CI on Linux may keep them. With that set, `--trace on` stays safe. Plain `page.screenshot` is fine, and Edge and Chromium are unaffected. Do not use `caffeinate -d` for this: it cannot wake a sleeping display and has no time limit around a command. Healthy reading: `ioclasscount IOSurface` between 400 and 900.
 <!-- SHARED-CONVENTIONS:END -->

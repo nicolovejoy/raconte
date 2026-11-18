@@ -277,4 +277,38 @@ final class ImageCaptureUITests: XCTestCase {
         XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 10), "the strip never came back after Done")
         XCTAssertEqual(thumbnails.firstMatch.identifier, idBefore)
     }
+
+    /// #201 (owner smoke of build 27): with the crop box at its starting size the handles sat
+    /// on the edge of the screen. The seeded image is square, so in a portrait window it is
+    /// as wide as the layout allows — the crop rectangle must stop 3/8 inch (about 57 pt on
+    /// an iPhone) short of both sides, and of the bottom.
+    func testCropRectangleStartsInsideTheScreenMargins() {
+        let app = launchApp(seedImageEntry: true)
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+        openPlace(app, "sidebar.allEntries")
+        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(entryLink.waitForExistence(timeout: 20))
+        waitUntil(20, "seeded image never produced a row thumbnail") { entryLink.label.contains("Entry photo") }
+        press(entryLink)
+        let thumbnails = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15))
+        press(thumbnails.firstMatch)
+        let crop = app.buttons["entryDetail.images.crop"].firstMatch
+        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop")
+        press(crop)
+
+        let cropRect = app.descendants(matching: .any).matching(identifier: "imageFraming.cropRect").firstMatch
+        XCTAssertTrue(cropRect.waitForExistence(timeout: 15), "the framing screen never appeared")
+        // The preview decodes after the screen appears; until then the rectangle is empty.
+        waitUntil(15, "the crop rectangle never took a size") { cropRect.frame.width > 50 }
+
+        let screen = app.windows.firstMatch.frame
+        let frame = cropRect.frame
+        let margin: CGFloat = 57
+        XCTAssertGreaterThanOrEqual(frame.minX - screen.minX, margin, "left handles too close to the edge")
+        XCTAssertGreaterThanOrEqual(screen.maxX - frame.maxX, margin, "right handles too close to the edge")
+        XCTAssertGreaterThanOrEqual(screen.maxY - frame.maxY, margin, "bottom handles too close to the edge")
+    }
 }

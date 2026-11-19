@@ -126,4 +126,11 @@ final class PendingFramingQueueTests: XCTestCase {
         XCTAssertTrue(queue.libraryBatchIsOver)
         XCTAssertTrue(queue.closeLibraryBatch())
     }
+
+    func testACameraShotStartsInsetAndALibraryPickStartsFull() {
+        let shot = PendingFramingItem(id: UUID(), data: Data(), type: .jpeg, origin: .camera)
+        let pick = PendingFramingItem(id: UUID(), data: Data(), type: .jpeg, origin: .library)
+        XCTAssertEqual(shot.startingCropRect, CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8))
+        XCTAssertEqual(pick.startingCropRect, CGRect(x: 0, y: 0, width: 1, height: 1))
+    }
 }

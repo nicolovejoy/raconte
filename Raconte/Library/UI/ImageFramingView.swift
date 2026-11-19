@@ -49,27 +49,48 @@ enum ImageFramingLayout {
 }
 
 /// #121: the framing screen — freeform crop rectangle with corner and edge handles over the
-/// fitted image, one Rotate button (a clockwise quarter turn per tap; the rect resets), Cancel
-/// and Use. Owns nothing but `framing` and the decoded preview; hands an `ImageFraming` back
-/// through `onUse` and never touches the bytes beyond decoding the preview. The presenter
-/// (a picker sheet, the full-screen viewer) applies it and dismisses this view.
+/// fitted image, one Rotate button (a clockwise quarter turn per tap; the rect resets to
+/// `startingCropRect`), Cancel and Use. Owns nothing but `framing`, the gesture `interaction`,
+/// the `pinching` gesture flag and the decoded preview; hands an `ImageFraming` back through
+/// `onUse` and never touches the bytes beyond decoding the preview. The presenter (a picker
+/// sheet, the full-screen viewer) applies it and dismisses this view.
+///
+/// #203: the rectangle starts at `startingCropRect`, which the presenter states (a camera shot
+/// starts inset, a library pick and a stored image at the full photo), and Rotate resets it
+/// there. A two-finger pinch anywhere on the screen resizes it about its centre, keeping its
+/// shape; the photo never moves. `CropInteraction` decides whether a drag or the pinch owns
+/// the rectangle, so a finger left over from a pinch never moves it.
 ///
 /// Pinned near-black like the capture screen, so every system control pins `.dark`
 /// (CLAUDE.md UI rule). Presented from the presenter's OUTER view — `.fullScreenCover` on
 /// iOS, `.sheet` on macOS — never from a `Section`.
 struct ImageFramingView: View {
     let data: Data
+    let startingCropRect: CGRect
     let onUse: (ImageFraming) -> Void
     let onCancel: () -> Void
 
-    @State private var framing = ImageFraming.identity
-    /// The rect at the start of the current drag — deltas are applied to this, not to the
-    /// live rect, so a drag is one continuous transform rather than a sum of rounded steps.
-    @State private var dragStartRect: CGRect?
+    @State private var framing: ImageFraming
+    /// Which gesture owns the rectangle, and the rect it started from — a gesture's cumulative
+    /// value is applied to that, not to the live rect, so a drag or a pinch is one continuous
+    /// transform rather than a sum of rounded steps.
+    @State private var interaction = CropInteraction()
+    /// True while the pinch runs. A `@GestureState` resets when the gesture ends AND when it is
+    /// cancelled, where `onEnded` misses the cancel, so the pinch ends from this flag.
+    @GestureState private var pinching = false
     /// The source decoded ONCE (transform-applied, ≤2048 px) and the current turn of it —
     /// never recomputed per render: a drag re-renders every frame.
     @State private var upright: CGImage?
     @State private var rotatedPreview: CGImage?
+
+    init(data: Data, startingCropRect: CGRect,
+         onUse: @escaping (ImageFraming) -> Void, onCancel: @escaping () -> Void) {
+        self.data = data
+        self.startingCropRect = startingCropRect
+        self.onUse = onUse
+        self.onCancel = onCancel
+        _framing = State(initialValue: ImageFraming(rotationQuarterTurns: 0, cropRect: startingCropRect))
+    }
 
     var body: some View {
         NavigationStack {
@@ -86,6 +107,12 @@ struct ImageFramingView: View {
                     }
                     cropOverlay(in: imageRect)
                 }
+                // Simultaneous, so it works anywhere on the screen and alongside the children's
+                // drags; `CropInteraction` keeps the two from fighting over the rectangle.
+                .simultaneousGesture(pinchGesture)
+            }
+            .onChange(of: pinching) { _, now in
+                if !now { interaction.pinchEnded() }
             }
             .ignoresSafeArea(edges: .bottom)
             .task {
@@ -107,8 +134,10 @@ struct ImageFramingView: View {
                         .accessibilityIdentifier("imageFraming.cancel")
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Rotate", systemImage: "rotate.right") { framing = framing.rotated() }
-                        .accessibilityIdentifier("imageFraming.rotate")
+                    Button("Rotate", systemImage: "rotate.right") {
+                        framing = framing.rotated(resettingTo: startingCropRect)
+                    }
+                    .accessibilityIdentifier("imageFraming.rotate")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Use") { onUse(framing) }
@@ -204,25 +233,37 @@ struct ImageFramingView: View {
         }
     }
 
+    // Drags end from `onEnded` only, never a `@GestureState`: all nine share this view, and
+    // with two fingers down one drag's reset would end the other while its finger is still on
+    // the glass.
     private func moveGesture(in imageRect: CGRect) -> some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
-                let start = dragStartRect ?? framing.cropRect
-                dragStartRect = start
+                guard let start = interaction.dragChanged(from: value.startLocation, current: framing.cropRect)
+                else { return }
                 framing.cropRect = CropRectGesture.moved(
                     start, by: ImageFramingLayout.unitDelta(value.translation, in: imageRect))
             }
-            .onEnded { _ in dragStartRect = nil }
+            .onEnded { value in interaction.dragEnded(from: value.startLocation) }
     }
 
     private func resizeGesture(_ handle: CropHandle, in imageRect: CGRect) -> some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
-                let start = dragStartRect ?? framing.cropRect
-                dragStartRect = start
+                guard let start = interaction.dragChanged(from: value.startLocation, current: framing.cropRect)
+                else { return }
                 framing.cropRect = CropRectGesture.resized(
                     start, handle: handle, by: ImageFramingLayout.unitDelta(value.translation, in: imageRect))
             }
-            .onEnded { _ in dragStartRect = nil }
+            .onEnded { value in interaction.dragEnded(from: value.startLocation) }
+    }
+
+    private var pinchGesture: some Gesture {
+        MagnifyGesture()
+            .updating($pinching) { _, state, _ in state = true }
+            .onChanged { value in
+                let start = interaction.pinchChanged(current: framing.cropRect)
+                framing.cropRect = CropRectGesture.scaled(start, by: value.magnification)
+            }
     }
 }

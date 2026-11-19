@@ -136,7 +136,9 @@ struct ImageFullScreenViewer: View {
     }
 
     private func framingView(_ session: CropSession) -> some View {
-        ImageFramingView(data: session.original, onUse: { framing in
+        // A stored image starts at the full photo: it may have been cropped here before, and
+        // an inset start would shrink it on every re-crop.
+        ImageFramingView(data: session.original, startingCropRect: ImageFraming.identity.cropRect, onUse: { framing in
             pendingUse = PendingUse(framing: framing, session: session)
             cropping = nil
         }, onCancel: { cropping = nil })

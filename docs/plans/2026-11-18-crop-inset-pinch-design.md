@@ -35,8 +35,8 @@ Handles and the move drag are unchanged and stay freeform.
   the first smoke.
 - **Camera shots only.** Library picks and the viewer's re-crop of a stored image start at
   the full photo, as today. A library pick is not necessarily a page shot with margins, and
-  a stored image has already been through this screen: insetting on every re-crop would
-  shrink it each time. `PendingFramingItem.origin` already
+  a stored image may already have been through this screen: insetting on every re-crop
+  would shrink it each time. `PendingFramingItem.origin` already
   says which is which; the cover picker's camera shots get the inset too.
 - **Rotate returns the rectangle to the screen's starting rectangle**: inset for a camera
   shot, full photo otherwise. Today it returns to the full photo.

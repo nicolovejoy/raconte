@@ -62,6 +62,11 @@ final class SearchScreenModel {
     /// The one expression the screen's "No matches" reads: answered, and nothing listed.
     /// `hasQuery && results.isEmpty` is also true between a keystroke and its answer.
     var showsNoMatches: Bool { hasAnswer && results.isEmpty }
+    /// True when the query for the text now in the field threw: the screen says "Search
+    /// failed" rather than a blank list that reads as still searching. Cleared by the next
+    /// change of text, a successful answer, or `connect`. A failure that arrives after the
+    /// text moved on never sets it.
+    private(set) var queryFailed = false
     /// Why there is no index, when it could not be opened. Nil while it is on its way.
     private(set) var unavailableReason: String?
 
@@ -109,6 +114,7 @@ final class SearchScreenModel {
     func connect(searching: (any SearchQuerying)?, unavailableReason: String?) {
         self.searching = searching
         self.unavailableReason = unavailableReason
+        queryFailed = false
         guard askableIndex != nil else {
             supersede()
             results = []
@@ -166,14 +172,17 @@ final class SearchScreenModel {
         }
         guard generation == queryGeneration else { return }
         guard let hits else {
-            // Nothing was found out, so nothing was answered: an empty list, not "No matches".
+            // Nothing was found out, so nothing was answered: not "No matches", but a
+            // failure the screen names.
             results = []
             hasAnswer = false
+            queryFailed = true
             return
         }
         hitsOnHand = hits
         rejoin()
         hasAnswer = true
+        queryFailed = false
     }
 
     /// Pure. A hit with no row in `entries` is dropped, which is what keeps the trash out
@@ -253,6 +262,7 @@ final class SearchScreenModel {
         guard text != old else { return }
         supersede()
         hasAnswer = false
+        queryFailed = false
         debounceTask?.cancel()
         debounceTask = nil
         // `terms`, not `pattern`: building a pattern costs a round trip through an

@@ -471,6 +471,55 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertFalse(model.showsNoMatches)
     }
 
+    /// Runs one explicit query on `model` and makes the index throw for it.
+    private func failRefresh(_ model: SearchScreenModel, _ fake: FakeSearching, call: Int) async {
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(call)
+        let failed = await fake.fail()
+        XCTAssertTrue(failed, "query \(call) never reached the index")
+        await running.value
+    }
+
+    /// A failed query says so, for the text it was asked for, until the next change of
+    /// text, a successful answer, or a connect. A failure that arrives late says nothing.
+    func testAFailedQueryIsReportedUntilTheTextChangesAnAnswerLandsOrTheIndexConnects() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        model.text = "ab"
+        await answerRefresh(model, fake, call: 1, with: [])
+        XCTAssertFalse(model.queryFailed, "fixture sanity: answered")
+
+        await failRefresh(model, fake, call: 2)
+        XCTAssertTrue(model.queryFailed, "a failed query must say so")
+        XCTAssertFalse(model.showsNoMatches, "a failure is not No matches")
+        model.text = "abc"                                  // the next keystroke
+        XCTAssertFalse(model.queryFailed, "the failure belonged to the previous text")
+
+        await failRefresh(model, fake, call: 3)
+        XCTAssertTrue(model.queryFailed)
+        await answerRefresh(model, fake, call: 4, with: [hit(liveID, "abc")])
+        XCTAssertFalse(model.queryFailed, "a successful answer clears the failure")
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+
+        await failRefresh(model, fake, call: 5)
+        XCTAssertTrue(model.queryFailed)
+        model.connect(searching: fake, unavailableReason: nil)
+        XCTAssertFalse(model.queryFailed, "connect clears the failure")
+        await fake.waitForParkedCall(6)                     // connect re-ran the query
+        let released = await fake.release([])
+        XCTAssertTrue(released)
+        for _ in 0..<400 where !model.hasAnswer { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(model.hasAnswer, "fixture sanity: connect's query was answered")
+
+        let late = Task { await model.refresh() }
+        await fake.waitForParkedCall(7)
+        model.text = "abcd"                                 // superseded while in flight
+        let failedLate = await fake.fail()
+        XCTAssertTrue(failedLate); await late.value
+        XCTAssertFalse(model.queryFailed, "a late failure was reported against newer text")
+    }
+
     /// No index, no answer: not connected yet, unavailable, or gone after answering.
     func testWithoutAnIndexNothingIsAnswered() async throws {
         let library = try await scannedLibrary()

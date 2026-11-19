@@ -37,7 +37,7 @@ enum EntryPager {
                              orderedIDs: [String],
                              direction: PagingDirection) -> String? {
         guard PlaceRouting.journalScope(for: place) != nil,
-              case .entry(let current)? = detailPath.last
+              case .entry(let current, _)? = detailPath.last
         else { return nil }
         return neighborID(of: current, in: orderedIDs, direction: direction)
     }

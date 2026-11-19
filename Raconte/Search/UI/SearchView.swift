@@ -92,8 +92,11 @@ struct SearchView: View {
         }
     }
 
+    /// The highlight is the terms the listed rows answered, not the field's text: between a
+    /// keystroke and its answer the rows on screen are still the last answer's.
     private func resultLink(_ result: SearchResult) -> some View {
-        NavigationLink(value: LibraryDestination.entry(result.id)) {
+        NavigationLink(value: LibraryDestination.entry(
+            result.id, highlight: SearchHighlight(terms: model.answeredTerms))) {
             SearchResultRow(result: result)
         }
         // On the link, not the row: a NavigationLink merges its label into one element.

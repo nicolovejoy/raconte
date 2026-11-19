@@ -28,7 +28,7 @@ struct ContentView: View {
                 detailRoot
                     .navigationDestination(for: LibraryDestination.self) { destination in
                         switch destination {
-                        case .entry(let captureID, _):
+                        case .entry(let captureID, let highlight):
                             // The `else` is not decoration (issue #32): a destination
                             // builder that returns nothing still pushes, so an unresolvable
                             // id used to land the owner on a blank page with no way to tell
@@ -40,7 +40,8 @@ struct ContentView: View {
                                                 pagingEnabled: PlaceRouting.journalScope(
                                                     for: services.router.place) != nil,
                                                 onPage: { services.router.replaceTopEntry(with: $0) },
-                                                onOpenJournal: { services.router.select(.journal($0)) })
+                                                onOpenJournal: { services.router.select(.journal($0)) },
+                                                highlight: highlight)
                                     // #101, load-bearing: a page turn REPLACES this path
                                     // element in place, and a same-depth value change does
                                     // not reliably re-identify the destination view — the

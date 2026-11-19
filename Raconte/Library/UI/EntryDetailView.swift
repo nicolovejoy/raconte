@@ -537,12 +537,11 @@ struct EntryDetailView: View {
 
     /// `‹ 1 of 4 ›` above the prose.
     private func matchBar(_ cursor: SearchMatchCursor, proxy: ScrollViewProxy) -> some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 4) {
             Button {
                 moveMatch(proxy) { $0.previous() }
             } label: {
-                Label("Previous Match", systemImage: "chevron.left")
-                    .labelStyle(.iconOnly)
+                matchStepLabel("Previous Match", systemImage: "chevron.left")
             }
             .disabled(cursor.total == 0)
             .accessibilityIdentifier("detail.search.previous")
@@ -556,8 +555,7 @@ struct EntryDetailView: View {
             Button {
                 moveMatch(proxy) { $0.next() }
             } label: {
-                Label("Next Match", systemImage: "chevron.right")
-                    .labelStyle(.iconOnly)
+                matchStepLabel("Next Match", systemImage: "chevron.right")
             }
             .disabled(cursor.total == 0)
             .accessibilityIdentifier("detail.search.next")
@@ -565,14 +563,25 @@ struct EntryDetailView: View {
             Spacer(minLength: 0)
         }
         .buttonStyle(.plain)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 24)
+        // The 44 pt buttons are the bar's height; the inset puts the first glyph near the
+        // prose's 24 pt margin.
+        .padding(.horizontal, 10)
         .background(InkTone.paperInset.color)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(InkTone.hairline.color)
                 .frame(height: 1)
         }
+    }
+
+    /// A ‹ or › glyph in a 44 pt square. Under `.plain` the tap target is the label, so
+    /// without the frame and the shape it was the glyph alone. The title is the
+    /// accessibility label.
+    private func matchStepLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .labelStyle(.iconOnly)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     // MARK: #101 paging

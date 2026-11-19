@@ -88,8 +88,14 @@ final class SearchUITests: XCTestCase {
         let count = app.staticTexts["detail.search.count"]
         XCTAssertTrue(count.waitForExistence(timeout: 15), "the entry opened from Search has no match bar")
         XCTAssertEqual(count.label, "1 of 1")
-        XCTAssertTrue(app.buttons["detail.search.previous"].exists)
-        XCTAssertTrue(app.buttons["detail.search.next"].exists)
+        // Thumb-sized: the tap target is the 44 pt frame, not the glyph (8 x 15 pt). 43.5, not
+        // 44: a laid-out frame reads back as 43.99999.
+        for id in ["detail.search.previous", "detail.search.next"] {
+            let button = app.buttons[id]
+            XCTAssertTrue(button.exists)
+            XCTAssertGreaterThanOrEqual(button.frame.width, 43.5, "\(id) is \(button.frame.size), not thumb-sized")
+            XCTAssertGreaterThanOrEqual(button.frame.height, 43.5, "\(id) is \(button.frame.size), not thumb-sized")
+        }
     }
 
     /// "No matches" only once the index has answered the text in the field, so this wait is

@@ -43,6 +43,8 @@ let paperScreenFiles = [
     "Raconte/Library/UI/VoiceAttributedText.swift",
     "Raconte/Capture/UI/PlaybackProgressLine.swift",
     "Raconte/App/ExportConfirmationSheet.swift",
+    "Raconte/Search/UI/SearchView.swift",
+    "Raconte/Search/UI/SearchResultRow.swift",
 ]
 
 /// Repo root, derived from this file's location (RaconteTests/ → repo).

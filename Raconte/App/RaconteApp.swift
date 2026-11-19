@@ -24,14 +24,22 @@ final class AppServices {
     let exportRunner: ExportRunner
     /// #194: nil until the index has been opened off the main actor (a few milliseconds;
     /// never on the launch path), and nil for good where `SearchServices.live` builds
-    /// nothing (the unit-test runner, an Xcode preview). Nothing on screen depends on it yet.
+    /// nothing (the unit-test runner, an Xcode preview). `searchScreen` is connected to it
+    /// when it lands.
     private(set) var search: SearchServices?
+    /// #194: the Search place's model. Built with no index, because there is none yet at
+    /// `init`; where `search` stays nil it stays unconnected and finds nothing.
+    let searchScreen: SearchScreenModel
 
     init() {
         let library = LibraryScreenModel.live()
         self.library = library
         self.capture = CaptureScreenModel.liveWithTranscription(library: library)
         self.router = AppRouter()
+        // Constructed and nothing else: no file is read and no query runs until the owner
+        // types. The same per-device current journal the capture screen files into.
+        self.searchScreen = SearchScreenModel(searching: nil, unavailableReason: nil,
+                                              library: library, currentJournal: CurrentJournal())
         // Built from the library's own stores, never its own copies — see
         // `SyncCoordinator.live(library:)`.
         self.sync = SyncCoordinator.live(library: library)
@@ -55,6 +63,8 @@ final class AppServices {
         // the Capture row (and Home's "New entry", and All Entries' record button) file
         // into the journal the owner was just looking at.
         Self.wireJournalFollowing(router: router, capture: capture)
+        // #194: each arrival at the Search place re-seeds its scope and focuses its field.
+        Self.wireSearchArrival(router: router, searchScreen: searchScreen)
         // #82: `deleteJournal`'s on-demand resolution of a worthless zero-frame blocker
         // must never resolve out from under a capture that is actively recording — this
         // is the only way it can tell. Weak: `capture` already holds `library` strongly
@@ -83,6 +93,9 @@ final class AppServices {
             }.value
             guard let self, let services else { return }
             self.search = services
+            // Ready, or unavailable with its reason: either way the screen stops waiting.
+            self.searchScreen.connect(searching: services.index,
+                                      unavailableReason: services.unavailableReason)
             guard let indexer = services.indexer else { return }
             self.library.attach(searchReconciler: indexer)
         }
@@ -96,6 +109,12 @@ extension AppServices {
     /// Weak: `capture` already holds `library`, and the router is owned alongside both.
     static func wireJournalFollowing(router: AppRouter, capture: CaptureScreenModel) {
         router.onJournalSelected = { [weak capture] in capture?.adoptViewedJournal($0) }
+    }
+
+    /// #194 (Ruling 34), a function of its own for the same reason: a test pins it with a
+    /// model over a temporary library. Weak, as above.
+    static func wireSearchArrival(router: AppRouter, searchScreen: SearchScreenModel) {
+        router.onSearchArrived = { [weak searchScreen] in searchScreen?.arrived() }
     }
 }
 

@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 /// `.trash` retired (nav T5): Trash is now its own sidebar place (`Place.trash`), reached
 /// directly rather than as a push nested under the library screen.
 enum LibraryDestination: Hashable {
-    case entry(String)
+    /// `highlight` is set only by a Search result: the terms the entry's detail view marks.
+    case entry(String, highlight: SearchHighlight? = nil)
     /// The journal editor (Task 6), pushed from `LibraryCoverBand.onEdit`. Journal id.
     case journalEditor(String)
 }

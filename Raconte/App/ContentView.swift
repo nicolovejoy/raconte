@@ -28,7 +28,7 @@ struct ContentView: View {
                 detailRoot
                     .navigationDestination(for: LibraryDestination.self) { destination in
                         switch destination {
-                        case .entry(let captureID):
+                        case .entry(let captureID, _):
                             // The `else` is not decoration (issue #32): a destination
                             // builder that returns nothing still pushes, so an unresolvable
                             // id used to land the owner on a blank page with no way to tell

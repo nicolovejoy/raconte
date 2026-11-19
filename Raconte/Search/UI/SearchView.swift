@@ -93,7 +93,8 @@ struct SearchView: View {
     }
 
     private func resultLink(_ result: SearchResult) -> some View {
-        NavigationLink(value: LibraryDestination.entry(result.id)) {
+        NavigationLink(value: LibraryDestination.entry(
+            result.id, highlight: SearchHighlight(terms: SearchQuery(text: model.text).terms))) {
             SearchResultRow(result: result)
         }
         // On the link, not the row: a NavigationLink merges its label into one element.

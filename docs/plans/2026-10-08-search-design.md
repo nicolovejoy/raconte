@@ -344,6 +344,32 @@ Known limits: no result limit on the query; "This year" / "Last year" read the s
 the model; a one-letter elision term (`l'éco`) highlights other words with that letter, by the
 index's prefix rule.
 
+## As built — PR 3 (viewer highlight), 2026-11-18
+
+Where the entry view differs from "Viewer highlight" above:
+
+- **The highlight carries the terms the listed rows answered** (`SearchScreenModel.answeredTerms`),
+  not the text being typed. Empty terms are no highlight: no bar, no cursor.
+- **The match bar is pinned above the scroll view** (`.safeAreaInset(edge: .top)`), not inside the
+  scrolling text, so it stays with its buttons while the current match is centred. The chevrons
+  are 44 pt targets.
+- **The cursor's paragraphs are what the screen draws**, and it is rebuilt in the same main-actor
+  turn as each transcript assignment, never after an await.
+- **A single-block entry scrolls too** (owner decision 4): the anchor is the match's Character
+  offset over the text's length. It is an estimate. An entry with paragraphs scrolls the matched
+  paragraph to the centre.
+- **One scroll on arrival, then only previous/next scroll.** Returning from the editor, revision
+  history or voice marking does not re-centre.
+- **A word is a run of letters or numbers**, not ICU's `.byWords`, so `l'école` matches `ecole`
+  as it does in the index.
+
+Known limits: a quoted phrase is marked word by word, so the count can exceed what the list
+found; the list's snippet marks whole words and the entry marks the typed prefix; the entry
+folds ß/ss, ligatures, Cyrillic ё/й and Greek accents where the index does not; a word holding a
+zero-width joiner can be listed and show "0 of 0"; on an entry with images the arrival scroll
+runs before the image strip loads, so the text can move down by the strip's height afterwards;
+the highlight does not follow an edit that moves the matches until the entry is reopened.
+
 ## Not touched
 
 `LibraryScanner`'s read path and `head.json`'s shape; `TranscriptRevisionStore`'s write path

@@ -453,6 +453,50 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertFalse(model.showsNoMatches)
     }
 
+    /// Task 12: an opened row highlights the words its rows were found by, not the words in
+    /// the field. Between a keystroke and its answer the list still shows the last answer's
+    /// rows, so the terms stay that answer's; they go wherever the results go.
+    func testTheAnsweredTermsAreTheQueryTheListedRowsAnswered() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        XCTAssertEqual(model.answeredTerms, [])
+        model.text = "ab"
+        XCTAssertEqual(model.answeredTerms, [], "asked is not answered")
+        await answerRefresh(model, fake, call: 1, with: [hit(liveID, "ab")])
+        XCTAssertEqual(model.answeredTerms, ["ab"])
+
+        model.text = "ab cd"                                // the next keystroke
+        XCTAssertEqual(model.results.map(\.id), [liveID], "fixture sanity: the last answer's rows stay")
+        XCTAssertEqual(model.answeredTerms, ["ab"], "the rows on screen answered \"ab\", not \"ab cd\"")
+
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(2)
+        model.text = "ab cde"                               // superseded while in flight
+        let released = await fake.release([hit(liveID, "ab cd")])
+        XCTAssertTrue(released); await running.value
+        XCTAssertEqual(model.answeredTerms, ["ab"], "a superseded answer named its terms")
+
+        await answerRefresh(model, fake, call: 3, with: [hit(liveID, "ab cde")])
+        XCTAssertEqual(model.answeredTerms, ["ab", "cde"])
+
+        await failRefresh(model, fake, call: 4)
+        XCTAssertTrue(model.results.isEmpty, "fixture sanity: a failure empties the list")
+        XCTAssertEqual(model.answeredTerms, [], "a failed query answered nothing")
+
+        await answerRefresh(model, fake, call: 5, with: [hit(liveID, "ab cde")])
+        XCTAssertEqual(model.answeredTerms, ["ab", "cde"])
+        model.text = ""                                     // deleted to empty
+        XCTAssertEqual(model.answeredTerms, [], "the terms leave with the results")
+
+        model.text = "ab"
+        await answerRefresh(model, fake, call: 6, with: [hit(liveID, "ab")])
+        XCTAssertEqual(model.answeredTerms, ["ab"])
+        model.connect(searching: nil, unavailableReason: "gone")
+        XCTAssertTrue(model.results.isEmpty, "fixture sanity: no index clears the list")
+        XCTAssertEqual(model.answeredTerms, [], "no index, no answer")
+    }
+
     /// A query that threw found nothing out: the list empties, but it is not "No matches".
     func testAFailedQueryIsNotNoMatches() async throws {
         let library = try await scannedLibrary()

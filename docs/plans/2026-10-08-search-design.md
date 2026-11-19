@@ -313,8 +313,36 @@ reasoning stays readable; this list is what shipped in PR 1.
   the project file is generated and gitignored.
 
 Known limits, stated in PR 1's body: œ/æ ligatures are not folded; a cold build commits once per
-entry; an entry whose only revision stops decoding is dropped without being counted failed; no
-highlight in a snippet where a match ends inside a grapheme (keycap emoji, Indic, Arabic).
+entry; an entry whose only revision stops decoding is dropped without being counted failed.
+(The fourth limit listed there, no highlight where a match ends inside a grapheme, was fixed in
+PR 2: the highlight rounds out to the whole character.)
+
+## As built — PR 2 (Search place), 2026-11-18
+
+Where the screen and model differ from the sections above:
+
+- **The model is connected to the index after launch** (`connect(searching:unavailableReason:)`).
+  The index opens off the main actor, so the model exists first; until it is connected a query
+  yields nothing and no error, and connecting re-runs the current query.
+- **Results follow the library without a query.** The model keeps the last query's hits and
+  re-joins them on a scope change, a date change and any change of the library's entries, so
+  trash, restore, move and backdate show at once.
+- **"No matches" waits for an answer.** The model publishes whether the CURRENT text has been
+  answered; the row shows only for an answered, empty result. A failed query shows "Search
+  failed" instead, and "Search is unavailable" shows when the index could not be opened.
+- **The journal chip is seeded on each arrival at Search from another place** (owner ruling 6),
+  not once per launch. Back from a result is not an arrival: scope, text and results stay. A
+  picked scope lasts one visit. Arrival is the router's place moving into `.search`; on iPhone,
+  backing out to the sidebar and tapping Search again is therefore not one.
+- **The field is focused once per arrival.** On iPhone the keyboard still returns on Back from a
+  result: iOS's search field restores itself when it was active as the result opened.
+- **⌘F** is claimed only while the Search screen itself is on top, not with an entry pushed.
+- **"Indexing…"** shows once a rebuild has lasted 750 ms.
+- **Custom dates:** Done with both ends off means Any time.
+
+Known limits: no result limit on the query; "This year" / "Last year" read the system clock in
+the model; a one-letter elision term (`l'éco`) highlights other words with that letter, by the
+index's prefix rule.
 
 ## Not touched
 

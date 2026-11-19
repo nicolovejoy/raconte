@@ -4,7 +4,8 @@ import SwiftUI
 /// results as rows that open their entry.
 ///
 /// Everything the list shows is `SearchScreenModel`'s: the view sets the text and the two
-/// filters and reads back `results`, `hasQuery`, `showsNoMatches` and `unavailableReason`.
+/// filters and reads back `results`, `hasQuery`, `queryFailed`, `showsNoMatches` and
+/// `unavailableReason`.
 /// Between a keystroke and its answer the list keeps whatever results are on hand and shows
 /// neither the hint nor "No matches".
 ///
@@ -35,6 +36,8 @@ struct SearchView: View {
                         .foregroundStyle(InkTone.inkSecondary.color)
                         .listRowBackground(InkTone.paper.color)
                         .accessibilityIdentifier("search.empty")
+                } else if model.queryFailed {
+                    failedRow
                 } else if model.showsNoMatches {
                     Text("No matches")
                         .font(TypeRole.body.font)
@@ -95,6 +98,22 @@ struct SearchView: View {
         }
         // On the link, not the row: a NavigationLink merges its label into one element.
         .accessibilityIdentifier("search.result.\(result.id)")
+        .listRowBackground(InkTone.paper.color)
+    }
+
+    /// The query for the text in the field threw. A relaunch reopens the index, and
+    /// `SearchIndex.init` recreates one it cannot read, so that is what the row says.
+    private var failedRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Search failed")
+                .font(TypeRole.body.font)
+                .foregroundStyle(InkTone.ink.color)
+            Text("Quit and reopen Raconte to repair the search index.")
+                .font(TypeRole.footnote.font)
+                .foregroundStyle(InkTone.inkSecondary.color)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("search.failed")
         .listRowBackground(InkTone.paper.color)
     }
 

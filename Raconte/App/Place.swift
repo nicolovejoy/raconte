@@ -295,11 +295,18 @@ final class AppRouter {
     /// a change the view sees.
     private(set) var searchFieldFocusRequest = 0
 
-    /// ⌘F in the Search place. Anywhere else a no-op: the command exists only there
+    /// True while the Search screen itself is on top: the Search place with nothing pushed
+    /// over it. An entry opened from a result keeps `place == .search`, but its field is not
+    /// on screen, and ⌘F there belongs to the entry (`TranscriptEditorView`'s Find).
+    var claimsSearchFind: Bool {
+        place == .search && detailPath.isEmpty
+    }
+
+    /// ⌘F on the Search screen. Anywhere else a no-op: the command exists only there
     /// (`RaconteCommands`), and this guard keeps the router honest if it is ever called
     /// from somewhere else.
     func requestSearchFieldFocus() {
-        guard place == .search else { return }
+        guard claimsSearchFind else { return }
         searchFieldFocusRequest &+= 1
     }
 }

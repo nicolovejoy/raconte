@@ -32,11 +32,13 @@ struct RaconteCommands: Commands {
             Button("New Journal…") { services.router.requestNewJournal() }
                 .keyboardShortcut("n", modifiers: .command)
         }
-        // #194: ⌘F focuses the search field, in the Search place only. Elsewhere the item is
-        // not in the menu at all, so ⌘F reaches whatever handled it before. Ahead of the
-        // system Find submenu, so this item is the one a ⌘F matches first.
+        // #194: ⌘F focuses the search field, only while the Search screen itself is on top
+        // (`AppRouter.claimsSearchFind`). Elsewhere, including an entry opened from a result,
+        // the item is not in the menu at all, so ⌘F reaches whatever handled it before (the
+        // transcript editor's Find). Ahead of the system Find submenu, so this item is the
+        // one a ⌘F matches first.
         CommandGroup(before: .textEditing) {
-            if services.router.place == .search {
+            if services.router.claimsSearchFind {
                 Button("Find in Search") { services.router.requestSearchFieldFocus() }
                     .keyboardShortcut("f", modifiers: .command)
             }

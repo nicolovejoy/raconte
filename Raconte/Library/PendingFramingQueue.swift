@@ -13,14 +13,10 @@ struct PendingFramingItem: Identifiable, Equatable, Sendable {
     /// last item lands.
     enum Origin: Equatable, Sendable { case camera, library }
 
-    /// #203: where the crop rectangle starts. A camera shot starts inset; a library pick
-    /// starts at the full photo.
-    var startingCropRect: CGRect {
-        switch origin {
-        case .camera: ImageFraming.cameraStartRect
-        case .library: ImageFraming.identity.cropRect
-        }
-    }
+    /// #203, #206: where the crop rectangle starts. Inset, whichever flow brought the image:
+    /// every item here is new to the app. Only the viewer's re-crop of a stored image starts
+    /// at the full photo, and it does not come through this queue.
+    var startingCropRect: CGRect { ImageFraming.newImageStartRect }
 }
 
 /// #121: the items a picker sheet still has to run through `ImageFramingView`, head first.

@@ -153,11 +153,11 @@ struct EntryDetailView: View {
                     }
                 }
                 // #194: next/previous bring the current match's paragraph into view.
-                .onChange(of: cursor?.current) { _, _ in scrollToCurrentMatch(proxy, arriving: false) }
+                .onChange(of: cursor?.current) { _, _ in scrollToCurrentMatch(proxy) }
                 // After the first load, once the images strip above the prose is in.
                 .task {
                     await refresh()
-                    scrollToCurrentMatch(proxy, arriving: true)
+                    scrollToCurrentMatch(proxy)
                 }
         }
         #if os(iOS)
@@ -494,17 +494,21 @@ struct EntryDetailView: View {
                                              paragraphTexts: Self.searchParagraphTexts(Self.transcriptDisplay(transcript)))
     }
 
-    /// Paragraph granularity: SwiftUI cannot scroll to a character. The paragraph is
-    /// centred. The single text is one paragraph, so it scrolls to its top on arrival and
-    /// stays put after that: moving back to its top on every next/previous would scroll
-    /// away from the match.
-    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy, arriving: Bool) {
-        guard let paragraph = cursor?.currentParagraph else { return }
-        let singleText: Bool
-        if case .plain = Self.transcriptDisplay(transcript) { singleText = true } else { singleText = false }
-        guard arriving || !singleText else { return }
+    /// SwiftUI cannot scroll to a character. A paragraph is centred. The single text (every
+    /// entry never voice-marked) is one view, so it is scrolled by a fractional anchor: the
+    /// match's place in the text (Ruling 37). `scrollTo` lines the text's point at that
+    /// fraction up with the viewport's point at the same fraction, which puts the match
+    /// roughly on screen for evenly wrapped prose. An approximation, not a measurement.
+    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy) {
+        guard let cursor, let paragraph = cursor.currentParagraph else { return }
+        let anchor: UnitPoint
+        if case .plain = Self.transcriptDisplay(transcript) {
+            anchor = UnitPoint(x: 0.5, y: cursor.currentMatchFraction ?? 0)
+        } else {
+            anchor = .center
+        }
         withAnimation {
-            proxy.scrollTo(Self.paragraphScrollID(paragraph), anchor: singleText ? .top : .center)
+            proxy.scrollTo(Self.paragraphScrollID(paragraph), anchor: anchor)
         }
     }
 

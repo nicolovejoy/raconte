@@ -83,6 +83,28 @@ final class SearchMatchCursorTests: XCTestCase {
                        [2, 4, 8], "the ranges are found in the new text")
     }
 
+    /// Ruling 37: a transcript drawn as one `Text` is scrolled by a fractional anchor, the
+    /// current match's Character offset over its paragraph's Character count.
+    func testCurrentMatchFractionIsItsCharacterOffsetWithinItsParagraph() {
+        // Paragraph 0 has no match, so a fraction over the whole entry would differ.
+        var c = SearchMatchCursor(paragraphTexts: ["zz", "a xxxxxx a"], terms: ["a"])
+        XCTAssertEqual(c.currentMatchFraction, 0)
+        c.next()
+        XCTAssertEqual(c.currentMatchFraction, 0.9, "9 Characters into a 10-Character paragraph")
+        c.next()
+        XCTAssertEqual(c.currentMatchFraction, 0, "wraps back to the first match")
+
+        // Characters, not UTF-16 units: each é is two scalars here, one Character.
+        let accented = SearchMatchCursor(paragraphTexts: ["e\u{301}e\u{301} a"], terms: ["a"])
+        XCTAssertEqual(accented.currentMatchFraction, 0.75)
+    }
+
+    func testMatchFractionIsNilWithNoMatchAndZeroForAnEmptyText() {
+        XCTAssertNil(SearchMatchCursor(paragraphTexts: ["x"], terms: ["q"]).currentMatchFraction)
+        XCTAssertNil(SearchMatchCursor(paragraphTexts: [], terms: ["q"]).currentMatchFraction)
+        XCTAssertEqual(SearchMatchCursor.fraction(of: "".startIndex, in: ""), 0)
+    }
+
     // MARK: The texts the cursor is built over
 
     private func paragraph(_ text: String) -> TranscriptAttribution.Paragraph {

@@ -108,6 +108,30 @@ final class SearchSnippetTests: XCTestCase {
         }
     }
 
+    /// The same three bodies, rendered: a match that ends inside a grapheme is highlighted
+    /// out to the end of that grapheme, never dropped. `AttributedString` cannot take a bound
+    /// that splits a Character.
+    func testAMatchEndingInsideAGraphemeIsHighlightedToTheGraphemeEnd() {
+        let rows: [(name: String, marked: String, highlighted: String)] = [
+            ("keycap", "step \(o)1\(c)\u{FE0F}\u{20E3} done", "1\u{FE0F}\u{20E3}"),
+            ("arabic", "\(o)\u{643}\(c)\u{64E}\u{62A}\u{64E}\u{628}\u{64E}", "\u{643}\u{64E}"),
+        ]
+        for row in rows {
+            let attributed = SearchSnippet.parse(row.marked).attributed
+            let highlighted = attributed.runs.filter { $0.backgroundColor != nil }
+                .map { Array(String(attributed[$0.range].characters).unicodeScalars) }
+            XCTAssertEqual(highlighted, [Array(row.highlighted.unicodeScalars)], row.name)
+        }
+        // Devanagari: where the grapheme ends depends on the Unicode version's conjunct rule,
+        // so only that the match is highlighted, from its first letter, is pinned.
+        let devanagari = SearchSnippet.parse("\(o)\u{928}\u{92E}\u{938}\(c)\u{94D}\u{924}\u{947}").attributed
+        let runs = devanagari.runs.filter { $0.backgroundColor != nil }
+            .map { String(devanagari[$0.range].characters) }
+        XCTAssertEqual(runs.count, 1, "devanagari")
+        XCTAssertTrue(runs.first?.unicodeScalars.starts(with: "\u{928}\u{92E}\u{938}".unicodeScalars) ?? false,
+                      "devanagari")
+    }
+
     func testAnUnclosedOpenMarkerIsDropped() {
         let s = SearchSnippet.parse("\(o)a\(c) b \(o)c")
         XCTAssertEqual(markerScalars(in: s.text), [])

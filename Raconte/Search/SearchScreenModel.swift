@@ -182,6 +182,17 @@ final class SearchScreenModel {
             .map(\.result)
     }
 
+    /// What the journal chip says for `scope`. Pure. A journal id the registry no longer
+    /// holds still scopes the list (`EntryListFilter` matches on the raw id), so the chip
+    /// says it is unknown rather than falling back to another name.
+    static func journalScopeTitle(_ scope: JournalScope, in journals: [Journal]) -> String {
+        switch scope {
+        case .all: return "All journals"
+        case .unfiled: return "Unfiled"
+        case .journal(let id): return journals.first { $0.id == id }?.name ?? "Unknown journal"
+        }
+    }
+
     /// The type and the numeric code, nothing else: an FTS5 syntax error's description
     /// quotes the query text. For a GRDB `DatabaseError` the code is SQLite's extended
     /// result code (its `CustomNSError` conformance).

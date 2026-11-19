@@ -289,4 +289,17 @@ final class AppRouter {
     func requestNewJournal() {
         showingNewJournalPrompt = true
     }
+
+    /// #194, ⌘F: bumped once per request; `SearchView` focuses its field when it moves. A
+    /// count rather than a flag, so a second press with the field already focused is still
+    /// a change the view sees.
+    private(set) var searchFieldFocusRequest = 0
+
+    /// ⌘F in the Search place. Anywhere else a no-op: the command exists only there
+    /// (`RaconteCommands`), and this guard keeps the router honest if it is ever called
+    /// from somewhere else.
+    func requestSearchFieldFocus() {
+        guard place == .search else { return }
+        searchFieldFocusRequest &+= 1
+    }
 }

@@ -4,13 +4,41 @@ import ImageIO
 /// #121: the pure layout rules of `ImageFramingView` — where the fitted image sits inside
 /// its container, and how a drag in points becomes a delta in the crop rect's unit space.
 enum ImageFramingLayout {
-    static func fittedImageRect(imageSize: CGSize, in container: CGSize) -> CGRect {
-        guard imageSize.width > 0, imageSize.height > 0, container.width > 0, container.height > 0 else {
+    /// The square a handle answers a touch in, centred on the crop rectangle's edge.
+    static let handleHitSize: CGFloat = 28
+
+    /// #201 (owner, build 27 smoke): the handles must sit at least 3/8 inch inside the edge
+    /// of the screen. The image is as large as the handles can reach, so the margin is on
+    /// the image. An iPhone is about 153 pt to the inch, which makes 3/8 inch about 57 pt.
+    /// The top is smaller: the container starts below the navigation bar, and needs only
+    /// room for a handle's hit target.
+    static let touchMargins = EdgeInsets(top: 24, leading: 60, bottom: 60, trailing: 60)
+    /// With a pointer there is no finger to make room for; the margin only keeps a whole
+    /// handle inside the window.
+    static let pointerMargins = EdgeInsets(top: 24, leading: 24, bottom: 24, trailing: 24)
+
+    static var margins: EdgeInsets {
+        #if os(iOS)
+        touchMargins
+        #else
+        pointerMargins
+        #endif
+    }
+
+    /// The image scaled to fit the container less `margins`, centred in what they leave.
+    static func fittedImageRect(imageSize: CGSize, in container: CGSize,
+                                margins: EdgeInsets = EdgeInsets()) -> CGRect {
+        // Plain numbers, not a CGRect: `CGRect.width` is always positive, which would turn
+        // a container smaller than its margins into room that is not there.
+        let availableWidth = container.width - margins.leading - margins.trailing
+        let availableHeight = container.height - margins.top - margins.bottom
+        guard imageSize.width > 0, imageSize.height > 0, availableWidth > 0, availableHeight > 0 else {
             return CGRect(origin: CGPoint(x: container.width / 2, y: container.height / 2), size: .zero)
         }
-        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
+        let scale = min(availableWidth / imageSize.width, availableHeight / imageSize.height)
         let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
-        return CGRect(x: (container.width - size.width) / 2, y: (container.height - size.height) / 2,
+        return CGRect(x: margins.leading + (availableWidth - size.width) / 2,
+                      y: margins.top + (availableHeight - size.height) / 2,
                       width: size.width, height: size.height)
     }
 
@@ -43,12 +71,11 @@ struct ImageFramingView: View {
     @State private var upright: CGImage?
     @State private var rotatedPreview: CGImage?
 
-    private static let handleSize: CGFloat = 28
-
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
-                let imageRect = ImageFramingLayout.fittedImageRect(imageSize: previewSize, in: geometry.size)
+                let imageRect = ImageFramingLayout.fittedImageRect(imageSize: previewSize, in: geometry.size,
+                                                                   margins: ImageFramingLayout.margins)
                 ZStack(alignment: .topLeading) {
                     Color.black
                     if let rotatedPreview {
@@ -145,7 +172,8 @@ struct ImageFramingView: View {
             Circle()
                 .fill(.white)
                 .frame(width: 14, height: 14)
-                .frame(width: Self.handleSize, height: Self.handleSize) // larger hit target
+                .frame(width: ImageFramingLayout.handleHitSize,
+                       height: ImageFramingLayout.handleHitSize) // larger hit target
                 .contentShape(Rectangle())
                 .position(center)
                 .gesture(resizeGesture(handle, in: imageRect))

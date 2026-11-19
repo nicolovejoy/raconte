@@ -136,7 +136,8 @@ struct ImageFullScreenViewer: View {
     }
 
     private func framingView(_ session: CropSession) -> some View {
-        ImageFramingView(data: session.original, onUse: { framing in
+        // A stored image has already had its margins removed, so it starts at the full photo.
+        ImageFramingView(data: session.original, startingCropRect: ImageFraming.identity.cropRect, onUse: { framing in
             pendingUse = PendingUse(framing: framing, session: session)
             cropping = nil
         }, onCancel: { cropping = nil })

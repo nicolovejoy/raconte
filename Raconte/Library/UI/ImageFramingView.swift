@@ -56,7 +56,7 @@ enum ImageFramingLayout {
 /// sheet, the full-screen viewer) applies it and dismisses this view.
 ///
 /// #203: the rectangle starts at `startingCropRect`, which the presenter states (a camera shot
-/// starts inset, a library pick and a stored image at the full photo), and Rotate resets it
+/// and a library pick start inset, a stored image at the full photo), and Rotate resets it
 /// there. A two-finger pinch anywhere on the screen resizes it about its centre, keeping its
 /// shape; the photo never moves. `CropInteraction` decides whether a drag or the pinch owns
 /// the rectangle, so a finger left over from a pinch never moves it.

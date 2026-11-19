@@ -98,7 +98,7 @@ final class CropRectGestureTests: XCTestCase {
     /// `isIdentity` is false and the untouched original is re-encoded.
     func testPinchingInThenFullyOutIsExactlyTheFullPhoto() {
         let full = CGRect(x: 0, y: 0, width: 1, height: 1)
-        for start in [ImageFraming.cameraStartRect, full] {
+        for start in [ImageFraming.newImageStartRect, full] {
             for k in 20...95 {
                 let m = CGFloat(k) / 100
                 let out = CropRectGesture.scaled(CropRectGesture.scaled(start, by: m), by: 50)
@@ -110,7 +110,7 @@ final class CropRectGestureTests: XCTestCase {
     }
 
     func testPinchingFullyInLandsExactlyOnTheMinimumSide() {
-        for start in [ImageFraming.cameraStartRect, CGRect(x: 0, y: 0, width: 1, height: 1)] {
+        for start in [ImageFraming.newImageStartRect, CGRect(x: 0, y: 0, width: 1, height: 1)] {
             for k in 20...95 {
                 let m = CGFloat(k) / 100
                 let out = CropRectGesture.scaled(CropRectGesture.scaled(start, by: m), by: 0.001)
@@ -121,7 +121,7 @@ final class CropRectGestureTests: XCTestCase {
 
     func testPinchResultIsAlwaysClamped() {
         let rects = [quarter,
-                     ImageFraming.cameraStartRect,
+                     ImageFraming.newImageStartRect,
                      CGRect(x: 0, y: 0, width: 1, height: 1),
                      CGRect(x: 0.1, y: 0.1, width: 0.4, height: 0.8),
                      CGRect(x: 0.2, y: 0.2, width: 0.2, height: 0.6),

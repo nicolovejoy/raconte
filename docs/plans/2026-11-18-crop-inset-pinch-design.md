@@ -38,6 +38,11 @@ Handles and the move drag are unchanged and stay freeform.
   a stored image may already have been through this screen: insetting on every re-crop
   would shrink it each time. `PendingFramingItem.origin` already
   says which is which; the cover picker's camera shots get the inset too.
+  **Overtaken by #206 (owner, 2026-11-19):** library picks start inset as well, every one of
+  them: single picks, several imported at once, the journal cover's library pick and the
+  Mac file import. Only the viewer's re-crop of a stored image still starts at the full
+  photo. The cost below now applies to an imported photo too; its original stays in the
+  Photos library.
 - **Rotate returns the rectangle to the screen's starting rectangle**: inset for a camera
   shot, full photo otherwise. Today it returns to the full photo.
 - **Pinch at an edge.** The rectangle grows around its centre. When a side meets the photo's

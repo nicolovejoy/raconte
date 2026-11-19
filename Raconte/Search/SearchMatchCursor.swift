@@ -28,6 +28,15 @@ struct SearchMatchCursor: Equatable {
         return SearchMatchCursor(paragraphTexts: paragraphTexts, terms: terms)
     }
 
+    /// The cursor after the entry's transcript is read again. `old` when it was built over
+    /// the same texts, so a refresh that reads the same words keeps the owner's place;
+    /// otherwise a fresh one, because `old`'s ranges index into the texts it was built over.
+    static func refreshed(_ old: SearchMatchCursor?, highlight: SearchHighlight?,
+                          paragraphTexts: [String]) -> SearchMatchCursor? {
+        if let old, old.paragraphTexts == paragraphTexts { return old }
+        return forEntry(highlight: highlight, paragraphTexts: paragraphTexts)
+    }
+
     var total: Int { paragraphMatches.reduce(0) { $0 + $1.count } }
 
     /// "1 of 4", or "0 of 0".

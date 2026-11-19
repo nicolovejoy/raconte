@@ -63,6 +63,26 @@ final class SearchMatchCursorTests: XCTestCase {
                                                   paragraphTexts: ["a"])?.label, "0 of 0")
     }
 
+    /// The detail screen rebuilds its cursor after every transcript read. The same words keep
+    /// the owner's place; changed words (an edit, a revert) get a fresh cursor, because the
+    /// old ranges index into the old texts.
+    func testRefreshedKeepsThePlaceOnlyWhileTheTextsAreTheSame() {
+        let highlight = SearchHighlight(terms: ["a"])
+        var old = SearchMatchCursor(paragraphTexts: ["a x a"], terms: ["a"])
+        old.next()
+        XCTAssertEqual(old.current, 1)
+
+        let same = SearchMatchCursor.refreshed(old, highlight: highlight, paragraphTexts: ["a x a"])
+        XCTAssertEqual(same?.current, 1, "the same words keep the current match")
+
+        let changed = ["x a a x a"]
+        let fresh = SearchMatchCursor.refreshed(old, highlight: highlight, paragraphTexts: changed)
+        XCTAssertEqual(fresh?.current, 0, "changed words start again at the first match")
+        XCTAssertEqual(fresh?.paragraphTexts, changed)
+        XCTAssertEqual(fresh?.matches(inParagraph: 0).map { changed[0].distance(from: changed[0].startIndex, to: $0.lowerBound) },
+                       [2, 4, 8], "the ranges are found in the new text")
+    }
+
     // MARK: The texts the cursor is built over
 
     private func paragraph(_ text: String) -> TranscriptAttribution.Paragraph {

@@ -83,6 +83,8 @@ final class SearchScreenModel {
     private var seedWaitsForJournals = false
     /// At most one journals observation at a time, however many arrivals wait for it.
     private var journalsObservationArmed = false
+    /// Set by an arrival, spent by the first `takeFieldFocusRequest()` after it.
+    private var fieldFocusPending = false
 
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
@@ -118,18 +120,28 @@ final class SearchScreenModel {
     }
 
     /// An arrival at the Search place from another place (`AppRouter.onSearchArrived`;
-    /// Ruling 34). Starts the visit in the journal captures are being filed into — the
+    /// Ruling 34). Asks for field focus once (`takeFieldFocusRequest`) and starts the visit
+    /// in the journal captures are being filed into — the
     /// journal the owner last looked at — or All journals when there is none. Back from an
     /// opened result is not an arrival, so a scope picked during the visit lasts until the
     /// owner leaves. If there is a current journal but the library has not published its
     /// journals yet (the launch scan is still running), the seed waits for them.
     func arrived() {
+        fieldFocusPending = true
         if currentJournal.storedID != nil, library.journals.isEmpty {
             seedWaitsForJournals = true
             if !journalsObservationArmed { armJournalsObservation() }
         } else {
             seedScope()
         }
+    }
+
+    /// Whether the screen appearing now should focus the search field: true once per
+    /// arrival, false after that. The view asks from `onAppear`, which also fires on Back
+    /// from an opened result, where the keyboard would cover the results he came back to.
+    func takeFieldFocusRequest() -> Bool {
+        defer { fieldFocusPending = false }
+        return fieldFocusPending
     }
 
     /// Asks the index about the current text now, with no debounce, in place of any

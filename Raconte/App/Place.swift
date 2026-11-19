@@ -224,7 +224,7 @@ enum PlaceRouting {
 @MainActor @Observable
 final class AppRouter {
     /// Moving INTO `.search` from another place is an arrival at Search (#194): the one
-    /// moment the Search screen re-seeds its journal scope. Re-selecting
+    /// moment the Search screen re-seeds its journal scope and focuses its field. Re-selecting
     /// Search while already there, and Back from an opened result, are not arrivals — the
     /// place never left `.search`.
     var place: Place = PlaceRouting.launchPlace {

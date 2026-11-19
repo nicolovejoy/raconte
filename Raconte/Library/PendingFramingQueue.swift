@@ -12,6 +12,15 @@ struct PendingFramingItem: Identifiable, Equatable, Sendable {
     /// camera shot feeds the #134 tally and stays up; a library batch dismisses when the
     /// last item lands.
     enum Origin: Equatable, Sendable { case camera, library }
+
+    /// #203: where the crop rectangle starts. A camera shot starts inset; a library pick
+    /// starts at the full photo.
+    var startingCropRect: CGRect {
+        switch origin {
+        case .camera: ImageFraming.cameraStartRect
+        case .library: ImageFraming.identity.cropRect
+        }
+    }
 }
 
 /// #121: the items a picker sheet still has to run through `ImageFramingView`, head first.
@@ -102,12 +111,14 @@ extension View {
                              onDismiss: @escaping () -> Void) -> some View {
         #if os(iOS)
         fullScreenCover(item: item, onDismiss: onDismiss) { pending in
-            ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+            ImageFramingView(data: pending.data, startingCropRect: pending.startingCropRect,
+                             onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
                 .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #else
         sheet(item: item, onDismiss: onDismiss) { pending in
-            ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+            ImageFramingView(data: pending.data, startingCropRect: pending.startingCropRect,
+                             onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
                 .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #endif

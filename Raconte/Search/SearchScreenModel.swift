@@ -52,6 +52,10 @@ final class SearchScreenModel {
         didSet { rejoin() }
     }
     private(set) var results: [SearchResult] = []
+    /// The terms of the query `results` answered — what an opened row highlights. Not the
+    /// field's: between a keystroke and its answer the list still shows the last answer's
+    /// rows. Set where an answer is kept, emptied wherever `results` is.
+    private(set) var answeredTerms: [String] = []
     /// False when `text` holds no word to search for.
     private(set) var hasQuery = false
     /// True once the index has answered the text now in the field and `results` is that
@@ -118,6 +122,7 @@ final class SearchScreenModel {
         guard askableIndex != nil else {
             supersede()
             results = []
+            answeredTerms = []
             hasAnswer = false
             return
         }
@@ -160,12 +165,14 @@ final class SearchScreenModel {
         debounceTask = nil
         guard hasQuery, let searching = askableIndex else {
             results = []
+            answeredTerms = []
             hasAnswer = false
             return
         }
+        let query = SearchQuery(text: text)
         let hits: [SearchHit]?
         do {
-            hits = try await searching.search(SearchQuery(text: text))
+            hits = try await searching.search(query)
         } catch {
             Self.log.notice("search: query failed (\(Self.failureSummary(error), privacy: .public))")
             hits = nil
@@ -175,11 +182,13 @@ final class SearchScreenModel {
             // Nothing was found out, so nothing was answered: not "No matches", but a
             // failure the screen names.
             results = []
+            answeredTerms = []
             hasAnswer = false
             queryFailed = true
             return
         }
         hitsOnHand = hits
+        answeredTerms = query.terms
         rejoin()
         hasAnswer = true
         queryFailed = false
@@ -270,6 +279,7 @@ final class SearchScreenModel {
         hasQuery = !SearchQuery(text: text).terms.isEmpty
         guard hasQuery else {
             results = []
+            answeredTerms = []
             return
         }
         debounceTask = Task { [weak self, debounce] in

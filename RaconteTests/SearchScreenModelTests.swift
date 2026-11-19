@@ -240,6 +240,91 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertNil(model.unavailableReason, "one failed query is not an unavailable index")
     }
 
+    // MARK: Answered
+
+    /// "No matches" is an answer, so it waits for one. Between a keystroke and its answer
+    /// the list is empty and nothing has been answered; the next keystroke and an emptied
+    /// field both take the answer back.
+    func testNoMatchesWaitsForTheAnswerToTheCurrentText() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        model.text = "ab"
+        XCTAssertTrue(model.hasQuery && model.results.isEmpty, "fixture sanity: a query and an empty list")
+        XCTAssertFalse(model.hasAnswer); XCTAssertFalse(model.showsNoMatches)
+
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(1)                     // the query is IN the index, parked
+        XCTAssertFalse(model.hasAnswer, "asked is not answered")
+        XCTAssertFalse(model.showsNoMatches, "No matches before the index has answered")
+        let released = await fake.release([])
+        XCTAssertTrue(released); await running.value
+        XCTAssertTrue(model.hasAnswer)
+        XCTAssertTrue(model.showsNoMatches, "the index answered with nothing")
+
+        model.text = "abc"                                  // the next keystroke
+        XCTAssertFalse(model.hasAnswer, "an answer to \"ab\" is not an answer to \"abc\"")
+        XCTAssertFalse(model.showsNoMatches)
+        await answerRefresh(model, fake, call: 2, with: [])
+        XCTAssertTrue(model.showsNoMatches)
+
+        model.text = ""                                     // deleted to empty
+        XCTAssertFalse(model.hasAnswer); XCTAssertFalse(model.showsNoMatches)
+    }
+
+    /// An answer that arrives after the text moved on answered an earlier question.
+    func testASupersededAnswerDoesNotCountAsAnswered() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        model.text = "ab"
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(1)
+        model.text = "abc"                                  // superseded while in flight
+        let released = await fake.release([])
+        XCTAssertTrue(released); await running.value
+        XCTAssertFalse(model.hasAnswer, "the late answer for \"ab\" was kept for \"abc\"")
+        XCTAssertFalse(model.showsNoMatches)
+    }
+
+    /// A query that threw found nothing out: the list empties, but it is not "No matches".
+    func testAFailedQueryIsNotNoMatches() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, library: library)
+        model.text = "ab"
+        await answerRefresh(model, fake, call: 1, with: [])
+        XCTAssertTrue(model.showsNoMatches, "fixture sanity: answered with nothing")
+
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(2)
+        let failed = await fake.fail()
+        XCTAssertTrue(failed); await running.value
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertFalse(model.hasAnswer, "a failed query is not an answer")
+        XCTAssertFalse(model.showsNoMatches)
+    }
+
+    /// No index, no answer: not connected yet, unavailable, or gone after answering.
+    func testWithoutAnIndexNothingIsAnswered() async throws {
+        let library = try await scannedLibrary()
+        let notYet = model(searching: nil, library: library)
+        notYet.text = "ab"; await notYet.refresh()
+        XCTAssertFalse(notYet.hasAnswer, "not connected yet"); XCTAssertFalse(notYet.showsNoMatches)
+
+        let unavailable = model(searching: nil, unavailableReason: "disk full", library: library)
+        unavailable.text = "ab"; await unavailable.refresh()
+        XCTAssertFalse(unavailable.hasAnswer, "unavailable"); XCTAssertFalse(unavailable.showsNoMatches)
+
+        let fake = FakeSearching()
+        let lost = model(searching: fake, library: library)
+        lost.text = "ab"
+        await answerRefresh(lost, fake, call: 1, with: [])
+        XCTAssertTrue(lost.showsNoMatches, "fixture sanity: answered with nothing")
+        lost.connect(searching: nil, unavailableReason: "disk full")
+        XCTAssertFalse(lost.hasAnswer, "the index went away"); XCTAssertFalse(lost.showsNoMatches)
+    }
+
     // MARK: Availability
 
     func testAnUnavailableIndexReportsItsReasonAndNeverHasResults() async throws {

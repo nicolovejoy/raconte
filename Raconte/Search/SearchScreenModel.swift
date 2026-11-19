@@ -48,6 +48,14 @@ final class SearchScreenModel {
     private(set) var results: [SearchResult] = []
     /// False when `text` holds no word to search for.
     private(set) var hasQuery = false
+    /// True once the index has answered the text now in the field and `results` is that
+    /// answer, joined. False from a change of text until its answer lands, after a query
+    /// that failed, and while there is no index to ask. An answer that arrives after the
+    /// text moved on never sets it. A re-query of the same text keeps it.
+    private(set) var hasAnswer = false
+    /// The one expression the screen's "No matches" reads: answered, and nothing listed.
+    /// `hasQuery && results.isEmpty` is also true between a keystroke and its answer.
+    var showsNoMatches: Bool { hasAnswer && results.isEmpty }
     /// Why there is no index, when it could not be opened. Nil while it is on its way.
     private(set) var unavailableReason: String?
 
@@ -92,6 +100,7 @@ final class SearchScreenModel {
         guard searching != nil, unavailableReason == nil else {
             supersede()
             results = []
+            hasAnswer = false
             return
         }
         guard hasQuery else { return }
@@ -115,18 +124,27 @@ final class SearchScreenModel {
         let generation = supersede()
         guard hasQuery, let searching else {
             results = []
+            hasAnswer = false
             return
         }
-        var hits: [SearchHit] = []
+        let hits: [SearchHit]?
         do {
             hits = try await searching.search(SearchQuery(text: text))
         } catch {
             // The type only. An FTS5 syntax error's description quotes the query text.
             Self.log.notice("search: query failed (\(String(describing: type(of: error)), privacy: .public))")
+            hits = nil
         }
         guard generation == queryGeneration else { return }
+        guard let hits else {
+            // Nothing was found out, so nothing was answered: an empty list, not "No matches".
+            results = []
+            hasAnswer = false
+            return
+        }
         hitsOnHand = hits
         rejoin()
+        hasAnswer = true
     }
 
     /// Pure. A hit with no row in `entries` is dropped, which is what keeps the trash out
@@ -174,6 +192,7 @@ final class SearchScreenModel {
     private func textChanged(from old: String) {
         guard text != old else { return }
         supersede()
+        hasAnswer = false
         debounceTask?.cancel()
         debounceTask = nil
         // `terms`, not `pattern`: building a pattern costs a round trip through an

@@ -50,4 +50,11 @@ enum SearchDateFilter: Sendable, Equatable {
             return start == end ? start : "\(start) – \(end)"
         }
     }
+
+    /// What the Custom… sheet's Done writes for its two optional ends. Both ends off is
+    /// Any time: a "Custom" chip that filters nothing would say the list is narrowed when
+    /// it is not.
+    static func choosing(from: PartialDate?, to: PartialDate?) -> SearchDateFilter {
+        from == nil && to == nil ? .anyTime : .custom(from: from, to: to)
+    }
 }

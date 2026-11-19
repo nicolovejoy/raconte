@@ -50,10 +50,10 @@ enum ImageFramingLayout {
 
 /// #121: the framing screen — freeform crop rectangle with corner and edge handles over the
 /// fitted image, one Rotate button (a clockwise quarter turn per tap; the rect resets to
-/// `startingCropRect`), Cancel and Use. Owns nothing but `framing`, the gesture `interaction`
-/// and the decoded preview; hands an `ImageFraming` back through `onUse` and never touches
-/// the bytes beyond decoding the preview. The presenter (a picker sheet, the full-screen
-/// viewer) applies it and dismisses this view.
+/// `startingCropRect`), Cancel and Use. Owns nothing but `framing`, the gesture `interaction`,
+/// the `pinching` gesture flag and the decoded preview; hands an `ImageFraming` back through
+/// `onUse` and never touches the bytes beyond decoding the preview. The presenter (a picker
+/// sheet, the full-screen viewer) applies it and dismisses this view.
 ///
 /// #203: the rectangle starts at `startingCropRect`, which the presenter states (a camera shot
 /// starts inset, a library pick and a stored image at the full photo), and Rotate resets it

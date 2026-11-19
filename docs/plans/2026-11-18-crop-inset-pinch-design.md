@@ -1,6 +1,7 @@
 # Crop: inset start and pinch to resize
 
-Date: 2026-11-18. Status: awaiting owner approval. Small change, one PR.
+Date: 2026-11-18. Status: approved by the owner 2026-11-18; calls changed while building are
+marked as such below. Small change, one PR.
 
 ## Why
 
@@ -59,6 +60,11 @@ keeps the original bytes. With the inset start, shoot then Use discards the oute
 of a camera shot. The dimmed band shows what will go. Dragging the rectangle back to the
 full photo still stores the original untouched (`isIdentity`). Owner was told this.
 
+Every camera shot is now re-encoded on Use unless the rectangle is taken back to the full
+photo: a second JPEG generation at quality 0.9, where before an untouched Use kept the
+original bytes. Cancel on the crop screen still keeps a camera shot whole, so for a camera
+shot Cancel and Use now differ.
+
 ## Approaches considered
 
 - **A. Pinch resizes the rectangle (chosen).** One pure function next to `moved` and
@@ -81,9 +87,9 @@ full photo still stores the original untouched (`isIdentity`). Owner was told th
   device gestures don't). The unit tests pin the math; the owner smoke on an iPhone proves
   the gesture.
 - The #201 margins are untouched.
-- `ImageCaptureUITests` taps Use on an untouched camera item at lines 234 and 269 and reads
-  the crop rectangle at 302. Any assertion there that assumes a full-photo start for a
-  camera shot has to change with this.
+- No existing UI test reaches the camera path (the simulator has no camera). The Use taps
+  in `ImageCaptureUITests` are viewer re-crops of a stored image, which still start at the
+  full photo, so none of their assertions change with this.
 
 ## Not in scope
 

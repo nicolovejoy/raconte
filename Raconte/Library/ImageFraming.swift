@@ -25,14 +25,15 @@ struct ImageFraming: Equatable, Sendable {
         normalisedTurns == 0 && Self.clamped(cropRect) == Self.identity.cropRect
     }
 
-    /// #203: where a camera shot's crop rectangle starts, 10% in from every edge of the photo
+    /// #203, #206: where the crop rectangle starts for an image new to the app (a camera shot
+    /// or a library pick), 10% in from every edge of the photo
     /// (`docs/plans/2026-11-18-crop-inset-pinch-design.md`). The owner photographs a page with
     /// margin around it, so the crop he wants is nearly always inside the photo. Not
-    /// `identity`, so a shot left alone is cropped to it.
-    static let cameraStartRect = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+    /// `identity`, so an image left alone is cropped to it.
+    static let newImageStartRect = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
 
     /// One more clockwise quarter turn. The crop rect resets to `rect` (the full image unless
-    /// a caller says otherwise, as the camera flow does with `cameraStartRect`): a rect chosen
+    /// a caller says otherwise, as the picker sheets do with `newImageStartRect`): a rect chosen
     /// against the previous orientation has no meaning against the new one.
     func rotated(resettingTo rect: CGRect = ImageFraming.identity.cropRect) -> ImageFraming {
         ImageFraming(rotationQuarterTurns: normalisedTurns + 1, cropRect: rect)

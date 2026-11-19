@@ -125,13 +125,13 @@ final class ImageFramingTests: XCTestCase {
 
     func testRotatedResetsToTheRectItIsGiven() {
         let framing = ImageFraming(rotationQuarterTurns: 0, cropRect: CGRect(x: 0.3, y: 0.3, width: 0.2, height: 0.2))
-        let next = framing.rotated(resettingTo: ImageFraming.cameraStartRect)
+        let next = framing.rotated(resettingTo: ImageFraming.newImageStartRect)
         XCTAssertEqual(next.normalisedTurns, 1)
         XCTAssertEqual(next.cropRect, CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8))
     }
 
-    func testTheCameraStartRectIsNotIdentitySoAnUntouchedUseCrops() {
-        let framing = ImageFraming(rotationQuarterTurns: 0, cropRect: ImageFraming.cameraStartRect)
+    func testTheNewImageStartRectIsNotIdentitySoAnUntouchedUseCrops() {
+        let framing = ImageFraming(rotationQuarterTurns: 0, cropRect: ImageFraming.newImageStartRect)
         XCTAssertFalse(framing.isIdentity)
     }
 

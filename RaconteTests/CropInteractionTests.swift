@@ -96,6 +96,13 @@ final class CropInteractionTests: XCTestCase {
         XCTAssertEqual(i.dragChanged(from: p3, current: c), c)
     }
 
+    func testADragFromTheSamePointAfterTheOwnerEndedStartsFromTheLiveRect() {
+        var i = CropInteraction()
+        _ = i.dragChanged(from: p1, current: a)
+        i.dragEnded(from: p1)
+        XCTAssertEqual(i.dragChanged(from: p1, current: b), b)
+    }
+
     func testASecondPinchStartsFromTheLiveRect() {
         var i = CropInteraction()
         _ = i.pinchChanged(current: a)

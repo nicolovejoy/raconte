@@ -32,7 +32,7 @@
 
 Conditions the spec implies that are most likely to bite, most likely first. Each names the task that pins it.
 
-1. **A pinch that starts with both fingers on the rectangle.** The first finger begins a move drag. Expected: the rectangle scales, and does not jump or slide. Pinned in Task 2 (`testAPinchStartsFromTheLiveRectAndSilencesTheDrag`, `testBothFingersOfAPinchStayIgnoredAfterIt`) and Task 3 (the UI test pinches on the rectangle itself).
+1. **A pinch that starts with both fingers on the rectangle or its handles.** Each finger also begins a drag; XCUITest's pinch puts its two fingers on the rectangle's top-left and bottom-right corner handles, so two handle drags run alongside the pinch. Expected: the rectangle scales around its centre, and does not jump or slide. Pinned in Task 2 (`testAPinchStartsFromTheLiveRectAndSilencesTheDrag`, `testBothFingersOfAPinchStayIgnoredAfterIt`) and Task 3 (the UI test's pinch: without the pinch wiring its two handle drags shrink the rectangle off-centre). A drag that moves the rectangle before the pinch is recognised is not reached in the simulator, where the pinch reports first on every frame; Task 2 pins it.
 2. **One finger lifts, the other keeps moving.** The surviving drag still reports its translation from before the pinch. Expected: nothing moves until that finger lifts too. Pinned in Task 2 (`testTheDragThatLostToAPinchStaysIgnoredUntilItEnds`).
 3. **A gesture that is cancelled, not ended** (a system alert, the app going to the background). `onEnded` does not fire. Expected: the next drag and the next pinch work normally. Pinned in Task 2 (`testADragThatNeverEndedBlocksNeitherTheNextDragNorTheNextPinch`) and by the `@GestureState` rule in Task 3.
 4. **Pinching out against an edge, and pinching a long thin rectangle.** Expected: it slides to keep growing, stops when one side fills the photo, keeps its shape, and never drops below `ImageFraming.minimumSide`. Pinned in Task 1.
@@ -360,8 +360,8 @@ Add to `ImageCaptureUITests`, after `testCropRectangleStartsInsideTheScreenMargi
 
 ```swift
 let before = cropRect.frame
-// Both fingers land ON the rectangle, so the first one begins a move drag: this is the
-// Review Focus 1 case, not a pinch on blank space.
+// The fingers land on the top-left and bottom-right handles, so two handle drags are in
+// play alongside the pinch.
 cropRect.pinch(withScale: 0.5, velocity: -1)
 waitUntil(10, "the pinch never shrank the crop rectangle") { cropRect.frame.width < before.width * 0.8 }
 let after = cropRect.frame

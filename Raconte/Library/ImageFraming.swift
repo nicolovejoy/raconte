@@ -26,8 +26,9 @@ struct ImageFraming: Equatable, Sendable {
     }
 
     /// #203: where a camera shot's crop rectangle starts, 10% in from every edge of the photo
-    /// (`docs/plans/2026-11-18-crop-inset-pinch-design.md`), so the handles are reachable
-    /// before the first touch. Not `identity`, so a shot left alone is cropped to it.
+    /// (`docs/plans/2026-11-18-crop-inset-pinch-design.md`). The owner photographs a page with
+    /// margin around it, so the crop he wants is nearly always inside the photo. Not
+    /// `identity`, so a shot left alone is cropped to it.
     static let cameraStartRect = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
 
     /// One more clockwise quarter turn. The crop rect resets to `rect` (the full image unless

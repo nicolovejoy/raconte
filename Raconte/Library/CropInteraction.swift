@@ -11,6 +11,13 @@ import CoreGraphics
 ///
 /// The type cannot see a cancelled pinch: the caller must call `pinchEnded()` on end AND on
 /// cancel.
+///
+/// A drag cancelled without `dragEnded(from:)` is tolerated: the next drag from a different
+/// point starts fresh, and the next pinch starts from the live rectangle. The one residue is
+/// that a later drag starting at the exact same point is treated as the old one (ignored if
+/// it was ignored, or applied to the old start if it was the owner). The view ends drags from
+/// `onEnded` only, on purpose: nine drag gestures cannot share one `@GestureState` flag, since
+/// with two fingers down one finger's reset would end the other's drag.
 struct CropInteraction: Equatable, Sendable {
     /// The drag being applied: its `startLocation` and the rectangle it began from.
     private var dragLocation: CGPoint?

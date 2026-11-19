@@ -320,37 +320,69 @@ final class ImageCaptureUITests: XCTestCase {
     /// is recognised (in the simulator the pinch reports first on every frame); that case is
     /// pinned by `CropInteractionTests`.
     func testPinchingShrinksTheCropRectangleAndKeepsItsShape() {
-        let app = launchApp(seedImageEntry: true)
-        openCapture(app)
-        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
-        openPlace(app, "sidebar.allEntries")
-        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
-        XCTAssertTrue(entryLink.waitForExistence(timeout: 20))
-        waitUntil(20, "seeded image never produced a row thumbnail") { entryLink.label.contains("Entry photo") }
-        press(entryLink)
-        let thumbnails = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
-        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15))
-        press(thumbnails.firstMatch)
-        let crop = app.buttons["entryDetail.images.crop"].firstMatch
-        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop")
-        press(crop)
-
-        let cropRect = app.descendants(matching: .any).matching(identifier: "imageFraming.cropRect").firstMatch
-        XCTAssertTrue(cropRect.waitForExistence(timeout: 15), "the framing screen never appeared")
-        // The preview decodes after the screen appears; until then the rectangle is empty.
-        waitUntil(15, "the crop rectangle never took a size") { cropRect.frame.width > 50 }
-
-        let before = cropRect.frame
-        // The fingers land on the top-left and bottom-right handles, so two handle drags are in
-        // play alongside the pinch.
-        cropRect.pinch(withScale: 0.5, velocity: -1)
-        waitUntil(10, "the pinch never shrank the crop rectangle") { cropRect.frame.width < before.width * 0.8 }
+        let (cropRect, before) = openTheCropScreenAndPinchIn()
         let after = cropRect.frame
         XCTAssertGreaterThan(after.width, before.width * 0.2, "it must not collapse to the minimum")
         // The seeded image is square, so the rectangle starts square and a pinch must keep it so.
         XCTAssertEqual(after.width, after.height, accuracy: 3, "a pinch keeps the rectangle's shape")
         XCTAssertEqual(after.midX, before.midX, accuracy: 6, "a pinch scales around the centre, it does not slide")
         XCTAssertEqual(after.midY, before.midY, accuracy: 6)
+    }
+
+    /// #203: once a pinch has ended, a one-finger drag inside the rectangle moves it again.
+    /// The view ends the pinch from its `pinching` gesture flag; if that never happens, every
+    /// later drag is ignored and the handles and the move drag stay dead until the screen
+    /// closes.
+    func testADragStillMovesTheCropRectangleAfterAPinch() {
+        let (cropRect, _) = openTheCropScreenAndPinchIn()
+        let pinched = cropRect.frame
+
+        let centre = cropRect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        centre.press(forDuration: 0.1, thenDragTo: centre.withOffset(CGVector(dx: 40, dy: 0)))
+        waitUntil(10, "a drag after the pinch never moved the crop rectangle "
+                  + "(before \(pinched), now \(cropRect.frame))") {
+            cropRect.frame.midX >= pinched.midX + 20
+        }
+        let moved = cropRect.frame
+        XCTAssertEqual(moved.width, pinched.width, accuracy: 2, "a move drag never resizes")
+        XCTAssertEqual(moved.midY, pinched.midY, accuracy: 6, "a sideways drag does not move it up or down")
+    }
+
+    /// Seeded entry -> viewer -> Crop, then a two-finger pinch in on the crop rectangle. Returns
+    /// the rectangle and its frame from before the pinch, once the pinch has shrunk it. The
+    /// fingers land on the top-left and bottom-right handles, so two handle drags are in play
+    /// alongside the pinch.
+    private func openTheCropScreenAndPinchIn(file: StaticString = #filePath,
+                                             line: UInt = #line) -> (XCUIElement, CGRect) {
+        let app = launchApp(seedImageEntry: true)
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30), file: file, line: line)
+        openPlace(app, "sidebar.allEntries")
+        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(entryLink.waitForExistence(timeout: 20), file: file, line: line)
+        waitUntil(20, "seeded image never produced a row thumbnail", file: file, line: line) {
+            entryLink.label.contains("Entry photo")
+        }
+        press(entryLink)
+        let thumbnails = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15), file: file, line: line)
+        press(thumbnails.firstMatch)
+        let crop = app.buttons["entryDetail.images.crop"].firstMatch
+        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop", file: file, line: line)
+        press(crop)
+
+        let cropRect = app.descendants(matching: .any).matching(identifier: "imageFraming.cropRect").firstMatch
+        XCTAssertTrue(cropRect.waitForExistence(timeout: 15), "the framing screen never appeared",
+                      file: file, line: line)
+        // The preview decodes after the screen appears; until then the rectangle is empty.
+        waitUntil(15, "the crop rectangle never took a size", file: file, line: line) { cropRect.frame.width > 50 }
+
+        let before = cropRect.frame
+        cropRect.pinch(withScale: 0.5, velocity: -1)
+        waitUntil(10, "the pinch never shrank the crop rectangle", file: file, line: line) {
+            cropRect.frame.width < before.width * 0.8
+        }
+        return (cropRect, before)
     }
 }

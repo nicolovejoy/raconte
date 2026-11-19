@@ -86,11 +86,16 @@ struct SearchSnippet: Sendable, Equatable {
         return SearchSnippet(text: text, matches: matches)
     }
 
+    /// Each match highlighted, rounded out to whole Characters: `AttributedString` takes no
+    /// bound that splits a grapheme, and a match can end inside one (see `matches`).
     var attributed: AttributedString {
         var out = AttributedString(text)
+        let boundaries = Array(text.indices) + [text.endIndex]
         for range in matches {
-            guard let lower = AttributedString.Index(range.lowerBound, within: out),
-                  let upper = AttributedString.Index(range.upperBound, within: out) else { continue }
+            guard let start = boundaries.last(where: { $0 <= range.lowerBound }),
+                  let end = boundaries.first(where: { $0 >= range.upperBound }),
+                  let lower = AttributedString.Index(start, within: out),
+                  let upper = AttributedString.Index(end, within: out) else { continue }
             out[lower..<upper].backgroundColor = InkTone.accent.color.opacity(0.35)
         }
         return out

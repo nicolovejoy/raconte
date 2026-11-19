@@ -57,6 +57,34 @@ final class AppRouterCommandTests: XCTestCase {
                       + "inside JournalHeaderView's private @State")
     }
 
+    /// #194: ⌘F asks the Search screen to focus its field, in the Search place only, and only
+    /// while the Search screen itself is on top. Anywhere else the request is not made, so
+    /// nothing changes there.
+    func testSearchFieldFocusIsRequestedOnlyInTheSearchPlace() {
+        let router = AppRouter()
+        router.select(.allEntries)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 0, "outside Search, ⌘F asks for nothing")
+        XCTAssertFalse(router.claimsSearchFind)
+        router.select(.search)
+        XCTAssertTrue(router.claimsSearchFind)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 1)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 2, "each press is a new request, even with the field focused")
+
+        // A result opened over Search: the place is still `.search`, but the field is not on
+        // screen, and ⌘F belongs to the entry (the transcript editor's own Find).
+        router.detailPath = [.entry("A")]
+        XCTAssertFalse(router.claimsSearchFind, "an entry pushed over Search must not claim ⌘F")
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 2, "⌘F over a pushed entry asks for nothing")
+        router.goBack()
+        XCTAssertTrue(router.claimsSearchFind)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 3, "back on the Search screen, ⌘F focuses its field again")
+    }
+
     /// Source scan, comments stripped (repo memory: source-scanning-tests-must-strip-comments).
     func testNoGlobalEscapeBinding() throws {
         let source = strippingComments(try String(contentsOf: commandsFileURL))

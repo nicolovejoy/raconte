@@ -17,6 +17,7 @@ enum Place: Hashable, Sendable {
     case journal(String)      // journal id
     case allEntries
     case trash
+    case search
     case about
     case debug
 }
@@ -35,8 +36,8 @@ struct PlaceRow: Identifiable, Equatable, Sendable {
 enum SidebarModel {
     /// Row order and titles (locked): Home, Capture, then one row per journal in
     /// DISPLAY order (`Array<Journal>.displayOrdered` — createdAt ascending, id
-    /// tie-break), then All Entries, then Trash, then About, then Debug when
-    /// `includesDebug`. Superseded 2026-08-21 (owner report, issue #79): this used to
+    /// tie-break), then All Entries, then Trash, then Search (#194), then About, then Debug
+    /// when `includesDebug`. Superseded 2026-08-21 (owner report, issue #79): this used to
     /// say "registry order", but registry order is per-device insertion history and
     /// differs between devices — the sidebar showed a different journal order on every
     /// device and surface as a result. Home prepended 2026-08-29 (#108): the bookshelf
@@ -86,6 +87,14 @@ enum SidebarModel {
                              systemImage: "trash",
                              journalID: nil,
                              accessibilityIdentifier: "sidebar.trash"))
+        // #194: between Trash and About, the place the search plan gives it. It searches
+        // every journal and All Entries, never the trash.
+        rows.append(PlaceRow(place: .search,
+                             title: "Search",
+                             subtitle: nil,
+                             systemImage: "magnifyingglass",
+                             journalID: nil,
+                             accessibilityIdentifier: "sidebar.search"))
 
         // #89: Release-visible diagnostics (version, environment, sync status). Listed
         // in EVERY build — bottom-of-list utility, but Debug stays last where the
@@ -162,7 +171,7 @@ enum PlaceRouting {
         switch place {
         case .journal(let id):
             return journals.contains { $0.id == id } ? place : .capture
-        case .home, .capture, .allEntries, .trash, .about, .debug:
+        case .home, .capture, .allEntries, .trash, .search, .about, .debug:
             return place
         }
     }
@@ -206,7 +215,7 @@ enum PlaceRouting {
             return .all
         case .journal(let id):
             return .journal(id)
-        case .home, .capture, .trash, .about, .debug:
+        case .home, .capture, .trash, .search, .about, .debug:
             return nil
         }
     }
@@ -214,7 +223,15 @@ enum PlaceRouting {
 
 @MainActor @Observable
 final class AppRouter {
-    var place: Place = PlaceRouting.launchPlace
+    /// Moving INTO `.search` from another place is an arrival at Search (#194): the one
+    /// moment the Search screen re-seeds its journal scope and focuses its field. Re-selecting
+    /// Search while already there, and Back from an opened result, are not arrivals — the
+    /// place never left `.search`.
+    var place: Place = PlaceRouting.launchPlace {
+        didSet {
+            if place == .search, oldValue != .search { onSearchArrived?() }
+        }
+    }
     /// Bound to the detail `NavigationStack` (`ContentView.swift`, nav T5) — nav T4 shipped
     /// this unbound, since a typed path had no slot for the `RootDestination` pushes still
     /// in use then; T5 retired `RootDestination`, so the stack is homogeneous and the bind
@@ -239,6 +256,10 @@ final class AppRouter {
     /// nothing about capture. Not fired by `apply(_:)` — a background reroute after a
     /// journals pull is not the owner choosing a journal.
     @ObservationIgnored var onJournalSelected: ((String) -> Void)?
+    /// #194: fired on each arrival at the Search place (see `place`). Wired by `AppServices`
+    /// to `SearchScreenModel.arrived`; synchronous, so the screen is seeded before it first
+    /// renders for that visit.
+    @ObservationIgnored var onSearchArrived: (() -> Void)?
 
     func select(_ place: Place) {
         detailPath = PlaceRouting.detailPath(afterSelecting: place, from: self.place, path: detailPath)
@@ -279,5 +300,25 @@ final class AppRouter {
     /// alert on `ContentView` observes `showingNewJournalPrompt` directly.
     func requestNewJournal() {
         showingNewJournalPrompt = true
+    }
+
+    /// #194, ⌘F: bumped once per request; `SearchView` focuses its field when it moves. A
+    /// count rather than a flag, so a second press with the field already focused is still
+    /// a change the view sees.
+    private(set) var searchFieldFocusRequest = 0
+
+    /// True while the Search screen itself is on top: the Search place with nothing pushed
+    /// over it. An entry opened from a result keeps `place == .search`, but its field is not
+    /// on screen, and ⌘F there belongs to the entry (`TranscriptEditorView`'s Find).
+    var claimsSearchFind: Bool {
+        place == .search && detailPath.isEmpty
+    }
+
+    /// ⌘F on the Search screen. Anywhere else a no-op: the command exists only there
+    /// (`RaconteCommands`), and this guard keeps the router honest if it is ever called
+    /// from somewhere else.
+    func requestSearchFieldFocus() {
+        guard claimsSearchFind else { return }
+        searchFieldFocusRequest &+= 1
     }
 }

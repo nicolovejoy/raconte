@@ -65,10 +65,13 @@ struct SearchView: View {
         .navigationTitle("Search")
         .searchable(text: $model.text, placement: .automatic, prompt: "Search transcripts")
         .searchFocused($fieldFocused)
-        // The scope is seeded by the router on arrival (`SearchScreenModel.arrived`), never
-        // here: `onAppear` also fires on Back from an opened result.
+        // Arrival (`SearchScreenModel.arrived`, fired by the router) seeds the scope and asks
+        // for focus; this only honours the ask. `onAppear` also fires on Back from an opened
+        // result, which is not an arrival, so this does not focus the field there. (iOS's own
+        // search controller still restores a field that was active when the result opened:
+        // measured on the simulator with every line of focus code here removed.)
         .onAppear {
-            fieldFocused = true
+            if model.takeFieldFocusRequest() { fieldFocused = true }
         }
         .onChange(of: router.searchFieldFocusRequest) { _, _ in fieldFocused = true }
         .task(id: library.searchIndexing) {

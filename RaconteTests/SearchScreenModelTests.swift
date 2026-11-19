@@ -247,6 +247,25 @@ final class SearchScreenModelTests: XCTestCase {
         return (library, second, current)
     }
 
+    /// The field takes focus once per arrival. The screen's `onAppear` asks on every
+    /// appearance, and Back from an opened result is one; there the keyboard would cover the
+    /// results he came back to.
+    func testTheFieldIsFocusedOncePerArrival() async throws {
+        let (_, _, _, _, router, model) = try await routedSearch()
+        XCTAssertFalse(model.takeFieldFocusRequest(), "no arrival yet")
+        router.select(.search)
+        XCTAssertTrue(model.takeFieldFocusRequest(), "arriving focuses the field")
+
+        router.detailPath.append(.entry(liveID))  // opens a result
+        router.goBack()                           // and comes back: the screen appears again
+        XCTAssertFalse(model.takeFieldFocusRequest(), "Back from a result focused the field")
+
+        router.select(.allEntries)
+        router.select(.search)
+        XCTAssertTrue(model.takeFieldFocusRequest(), "the next arrival focuses the field again")
+        XCTAssertFalse(model.takeFieldFocusRequest(), "one focus per arrival")
+    }
+
     /// The owner can arrive before the launch scan has published the journals. The visit's
     /// seed waits for them, and is spent when they arrive — once per visit.
     func testTheScopeSeedWaitsForTheJournals() async throws {

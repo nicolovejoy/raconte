@@ -405,7 +405,7 @@ private var pinchGesture: some Gesture {
 
 Call sites:
 - `framingPresentation` (both `#if` branches): `startingCropRect: pending.startingCropRect`.
-- `ImageFullScreenViewer.framingView(_:)`: `startingCropRect: ImageFraming.identity.cropRect`, with a one-line comment that a stored image has already had its margins removed.
+- `ImageFullScreenViewer.framingView(_:)`: `startingCropRect: ImageFraming.identity.cropRect`, with a one-line comment that a stored image may have been cropped here before, so an inset start would shrink it on every re-crop.
 
 - [ ] **Step 4: Run the new UI test**
 

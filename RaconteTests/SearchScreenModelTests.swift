@@ -1,3 +1,4 @@
+import GRDB
 import XCTest
 @testable import Raconte
 
@@ -167,6 +168,52 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertEqual(model.journalScope, .all, "a later appearance must not undo the owner's choice")
     }
 
+    /// A library whose two journals are on disk but not yet published (no rescan since they
+    /// were made), and a current journal pointing at the second.
+    private func journalsNotYetPublished() async throws -> (LibraryScreenModel, Journal, CurrentJournal) {
+        let library = try await scannedLibrary()
+        _ = try await library.journalStore.create(name: "1987")
+        let second = try await library.journalStore.create(name: "France")
+        XCTAssertTrue(library.journals.isEmpty, "fixture sanity: on disk, not yet published")
+        let current = CurrentJournal(store: InMemoryJournalPreferenceStore(
+            values: [CurrentJournal.defaultsKey: second.id]))
+        return (library, second, current)
+    }
+
+    /// The screen can appear before the launch scan has published the journals. The seed
+    /// waits for them, and is spent when they arrive — once.
+    func testTheScopeSeedWaitsForTheJournals() async throws {
+        let (library, second, current) = try await journalsNotYetPublished()
+        let model = model(searching: FakeSearching(), library: library, current: current)
+        model.appeared()
+        XCTAssertEqual(model.journalScope, .all, "nothing to resolve against yet")
+
+        _ = await library.rescan()                          // the journals arrive
+        XCTAssertEqual(library.journals.count, 2, "fixture sanity")
+        for _ in 0..<400 where model.journalScope == .all { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(model.journalScope, .journal(second.id), "the seed was spent before the journals arrived")
+
+        model.journalScope = .all                           // the owner widens the search
+        _ = try await library.journalStore.create(name: "Later")
+        _ = await library.rescan()                          // and the journals change again
+        XCTAssertEqual(library.journals.count, 3, "fixture sanity")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(model.journalScope, .all, "the seed is spent once")
+    }
+
+    /// A scope the owner picks while the seed waits is his: the journals arriving later do
+    /// not replace it.
+    func testAScopeChosenBeforeTheJournalsArriveIsKept() async throws {
+        let (library, _, current) = try await journalsNotYetPublished()
+        let model = model(searching: FakeSearching(), library: library, current: current)
+        model.appeared()
+        model.journalScope = .unfiled
+        _ = await library.rescan()
+        XCTAssertEqual(library.journals.count, 2, "fixture sanity")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(model.journalScope, .unfiled, "the seed overrode the owner's choice")
+    }
+
     // MARK: Queries
 
     /// Typing is enough: nothing else has to ask. Two keystrokes inside one debounce are
@@ -182,6 +229,8 @@ final class SearchScreenModelTests: XCTestCase {
         await fake.waitForParkedCall(1)
         let asked = await fake.queries
         XCTAssertEqual(asked.first, SearchQuery(text: "ab"), "typing alone never reached the index")
+        let cancelled = await fake.arrivedCancelled
+        XCTAssertEqual(cancelled, [false], "the debounced query cancelled itself on its way in")
         let released = await fake.release([hit(liveID, "ab")])
         XCTAssertTrue(released)
         await waitForResults(model, count: 1)
@@ -238,6 +287,37 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertTrue(model.results.isEmpty, "a failed query must not leave the previous answer on screen")
         XCTAssertTrue(model.hasQuery)
         XCTAssertNil(model.unavailableReason, "one failed query is not an unavailable index")
+    }
+
+    /// An explicit query takes the pending debounced one's place: the same text is not
+    /// searched twice.
+    func testRefreshReplacesThePendingDebouncedQuery() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = SearchScreenModel(searching: fake, unavailableReason: nil, library: library,
+                                      currentJournal: CurrentJournal(store: InMemoryJournalPreferenceStore()),
+                                      debounce: .milliseconds(300))
+        model.text = "ab"                                   // schedules the debounced query
+        await answerRefresh(model, fake, call: 1, with: [hit(liveID, "ab")])
+        XCTAssertEqual(model.results.map(\.id), [liveID])
+        await fake.waitForParkedCall(2)                     // ~2 s: well past the debounce
+        let calls = await fake.calls
+        XCTAssertEqual(calls, 1, "the debounced query ran as well")
+        await fake.release([])                              // unpark a second call, if there was one
+    }
+
+    /// The failure line names the error and its numeric code, never what the error says:
+    /// an FTS5 syntax error's message quotes the query.
+    func testAFailedSearchIsLoggedByTypeAndCodeOnly() {
+        let database = DatabaseError(resultCode: .SQLITE_IOERR_READ,
+                                     message: "fts5: syntax error near \"private words\"",
+                                     sql: "SELECT captureID FROM entry_text WHERE entry_text MATCH ?",
+                                     arguments: ["private words"])
+        XCTAssertEqual(SearchScreenModel.failureSummary(database), "DatabaseError, code 266",
+                       "the extended result code, not the primary one")
+        let cocoa = NSError(domain: NSCocoaErrorDomain, code: 256,
+                            userInfo: [NSLocalizedDescriptionKey: "private words"])
+        XCTAssertEqual(SearchScreenModel.failureSummary(cocoa), "NSError, code 256")
     }
 
     // MARK: Answered
@@ -333,6 +413,22 @@ final class SearchScreenModelTests: XCTestCase {
         model.text = "alpha"; await model.refresh()
         XCTAssertEqual(model.unavailableReason, "disk full"); XCTAssertTrue(model.results.isEmpty)
         XCTAssertTrue(model.hasQuery)
+    }
+
+    /// `refresh` and `connect` share one rule: an index that comes with a reason is
+    /// unavailable, and is never asked.
+    func testAnIndexThatComesWithAReasonIsNeverAsked() async throws {
+        let library = try await scannedLibrary()
+        let fake = FakeSearching()
+        let model = model(searching: fake, unavailableReason: "disk full", library: library)
+        model.text = "ab"
+        let running = Task { await model.refresh() }
+        await fake.waitForParkedCall(1)                     // ~2 s; nothing should arrive
+        let calls = await fake.calls
+        XCTAssertEqual(calls, 0, "refresh asked an index that connect treats as unavailable")
+        await fake.release([hit(liveID, "ab")])             // unpark it, if it was asked
+        await running.value
+        XCTAssertTrue(model.results.isEmpty); XCTAssertFalse(model.hasAnswer)
     }
 
     /// The index opens off the main actor after launch, so the screen can be typed into

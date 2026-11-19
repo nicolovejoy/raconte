@@ -87,7 +87,8 @@ enum SidebarModel {
                              systemImage: "trash",
                              journalID: nil,
                              accessibilityIdentifier: "sidebar.trash"))
-        // #194: after the lists it searches, ahead of the two utility rows.
+        // #194: between Trash and About, the place the search plan gives it. It searches
+        // every journal and All Entries, never the trash.
         rows.append(PlaceRow(place: .search,
                              title: "Search",
                              subtitle: nil,

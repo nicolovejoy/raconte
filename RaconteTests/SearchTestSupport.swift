@@ -41,11 +41,15 @@ actor FakeSearching: SearchQuerying {
     /// Every query received, in order.
     private(set) var queries: [SearchQuery] = []
     var calls: Int { queries.count }
+    /// Per call, in order: whether it arrived on a cancelled task. The real index ignores
+    /// cancellation today; an async one would not.
+    private(set) var arrivedCancelled: [Bool] = []
     /// Parked calls, oldest first.
     private var gates: [CheckedContinuation<[SearchHit], any Error>] = []
 
     func search(_ query: SearchQuery) async throws -> [SearchHit] {
         queries.append(query)
+        arrivedCancelled.append(Task.isCancelled)
         return try await withCheckedThrowingContinuation { gates.append($0) }
     }
     /// Answers the oldest parked call. False means nothing was parked.

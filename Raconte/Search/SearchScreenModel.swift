@@ -28,7 +28,8 @@ struct SearchResult: Identifiable, Sendable, Equatable {
 ///
 /// Three states of the index, because it is opened off the main actor after launch:
 /// not connected yet (no index, no reason — a query finds nothing and nothing is wrong),
-/// ready, and unavailable (`unavailableReason`). `connect` moves it out of the first.
+/// ready, and unavailable (`unavailableReason`, with or without an index). `connect`
+/// moves it out of the first.
 @MainActor @Observable
 final class SearchScreenModel {
     /// The search field. Any change supersedes the query in flight. One that leaves no
@@ -38,9 +39,13 @@ final class SearchScreenModel {
         didSet { textChanged(from: oldValue) }
     }
     /// Changing either filter re-joins the hits on hand, in the setter. No query, and
-    /// nothing for the caller to follow up with.
+    /// nothing for the caller to follow up with. Setting the scope also spends the scope
+    /// seed: a scope the owner picks is never replaced by the default one.
     var journalScope: JournalScope = .all {
-        didSet { rejoin() }
+        didSet {
+            scopeSeed = .spent
+            rejoin()
+        }
     }
     var dateFilter: SearchDateFilter = .anyTime {
         didSet { rejoin() }
@@ -72,7 +77,10 @@ final class SearchScreenModel {
     /// Nil once anything supersedes it — a change of text, a newer query, an index that
     /// went away — so hits never outlive the question they answered.
     private var hitsOnHand: [SearchHit]?
-    private var scopeSeeded = false
+    /// The default scope is applied once: on the first appearance, or — when the journals
+    /// have not been published by then — when they are.
+    private enum ScopeSeed { case unspent, waitingForJournals, spent }
+    private var scopeSeed = ScopeSeed.unspent
 
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
@@ -97,7 +105,7 @@ final class SearchScreenModel {
     func connect(searching: (any SearchQuerying)?, unavailableReason: String?) {
         self.searching = searching
         self.unavailableReason = unavailableReason
-        guard searching != nil, unavailableReason == nil else {
+        guard askableIndex != nil else {
             supersede()
             results = []
             hasAnswer = false
@@ -108,21 +116,28 @@ final class SearchScreenModel {
     }
 
     /// Starts the screen in the journal captures are being filed into. First appearance
-    /// only: after that the scope is the owner's.
+    /// only: after that the scope is the owner's. If there is a current journal but the
+    /// library has not published its journals yet (the launch scan is still running), the
+    /// seed waits for them.
     func appeared() {
-        guard !scopeSeeded else { return }
-        scopeSeeded = true
-        if let journal = currentJournal.resolve(in: JournalRegistry(journals: library.journals)) {
-            journalScope = .journal(journal.id)
+        guard scopeSeed == .unspent else { return }
+        if currentJournal.storedID != nil, library.journals.isEmpty {
+            scopeSeed = .waitingForJournals
+            armJournalsObservation()
+        } else {
+            spendScopeSeed()
         }
     }
 
-    /// Asks the index about the current text now, with no debounce. Publishes only if
-    /// nothing superseded it while the index was answering. The one place a query runs;
-    /// filters and library changes never come through here.
+    /// Asks the index about the current text now, with no debounce, in place of any
+    /// debounced query still pending. Publishes only if nothing superseded it while the
+    /// index was answering. The one place a query runs; filters and library changes never
+    /// come through here.
     func refresh() async {
         let generation = supersede()
-        guard hasQuery, let searching else {
+        debounceTask?.cancel()
+        debounceTask = nil
+        guard hasQuery, let searching = askableIndex else {
             results = []
             hasAnswer = false
             return
@@ -131,8 +146,7 @@ final class SearchScreenModel {
         do {
             hits = try await searching.search(SearchQuery(text: text))
         } catch {
-            // The type only. An FTS5 syntax error's description quotes the query text.
-            Self.log.notice("search: query failed (\(String(describing: type(of: error)), privacy: .public))")
+            Self.log.notice("search: query failed (\(Self.failureSummary(error), privacy: .public))")
             hits = nil
         }
         guard generation == queryGeneration else { return }
@@ -168,7 +182,28 @@ final class SearchScreenModel {
             .map(\.result)
     }
 
+    /// The type and the numeric code, nothing else: an FTS5 syntax error's description
+    /// quotes the query text. For a GRDB `DatabaseError` the code is SQLite's extended
+    /// result code (its `CustomNSError` conformance).
+    static func failureSummary(_ error: any Error) -> String {
+        "\(String(describing: type(of: error))), code \((error as NSError).code)"
+    }
+
     // MARK: internals
+
+    /// The index to ask, or nil when there is none: not connected yet, or unavailable. A
+    /// reason makes it unavailable whether or not an index came with it. The one rule
+    /// `connect` and `refresh` both read.
+    private var askableIndex: (any SearchQuerying)? {
+        unavailableReason == nil ? searching : nil
+    }
+
+    private func spendScopeSeed() {
+        scopeSeed = .spent
+        if let journal = currentJournal.resolve(in: JournalRegistry(journals: library.journals)) {
+            journalScope = .journal(journal.id)
+        }
+    }
 
     /// Whatever is in flight, and whatever is on hand, answered an earlier question.
     @discardableResult
@@ -204,8 +239,10 @@ final class SearchScreenModel {
         }
         debounceTask = Task { [weak self, debounce] in
             try? await Task.sleep(for: debounce)
-            guard !Task.isCancelled else { return }
-            await self?.refresh()
+            guard !Task.isCancelled, let self else { return }
+            // Done waiting: `refresh()` must not cancel the task it is running on.
+            self.debounceTask = nil
+            await self.refresh()
         }
     }
 
@@ -240,6 +277,23 @@ final class SearchScreenModel {
                 guard let self else { return }
                 self.armEntriesObservation()
                 self.rejoin()
+            }
+        }
+    }
+
+    /// Armed by `appeared()` only while the scope seed waits for the journals. Re-armed
+    /// while they are still empty; spends the seed when they arrive. Same arming as above.
+    private func armJournalsObservation() {
+        withObservationTracking {
+            _ = library.journals
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.scopeSeed == .waitingForJournals else { return }
+                if self.library.journals.isEmpty {
+                    self.armJournalsObservation()
+                } else {
+                    self.spendScopeSeed()
+                }
             }
         }
     }

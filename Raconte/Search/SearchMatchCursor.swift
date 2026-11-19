@@ -55,6 +55,23 @@ struct SearchMatchCursor: Equatable {
         return found.within
     }
 
+    /// How far into its paragraph the current match starts, 0…1: its Character offset over
+    /// the paragraph's Character count. Nil with no current match. The detail screen scrolls
+    /// a transcript drawn as one `Text` by this fraction, since SwiftUI cannot scroll to a
+    /// character; for evenly wrapped prose it puts the match roughly on screen.
+    var currentMatchFraction: Double? {
+        guard let found = locate() else { return nil }
+        return Self.fraction(of: paragraphMatches[found.paragraph][found.within].lowerBound,
+                             in: paragraphTexts[found.paragraph])
+    }
+
+    /// `index`'s Character offset in `text` over `text`'s Character count; 0 for an empty text.
+    static func fraction(of index: String.Index, in text: String) -> Double {
+        let count = text.count
+        guard count > 0 else { return 0 }
+        return Double(text.distance(from: text.startIndex, to: index)) / Double(count)
+    }
+
     /// Paragraph `paragraph`'s matches; empty for an index past either end.
     func matches(inParagraph paragraph: Int) -> [Range<String.Index>] {
         paragraphMatches.indices.contains(paragraph) ? paragraphMatches[paragraph] : []

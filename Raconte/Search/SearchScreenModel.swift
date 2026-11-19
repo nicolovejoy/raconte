@@ -39,11 +39,12 @@ final class SearchScreenModel {
         didSet { textChanged(from: oldValue) }
     }
     /// Changing either filter re-joins the hits on hand, in the setter. No query, and
-    /// nothing for the caller to follow up with. Setting the scope also spends the scope
-    /// seed: a scope the owner picks is never replaced by the default one.
+    /// nothing for the caller to follow up with. Setting the scope also ends a seed that is
+    /// still waiting for the journals: a scope the owner picks during a visit is not replaced
+    /// by the default one in that visit.
     var journalScope: JournalScope = .all {
         didSet {
-            scopeSeed = .spent
+            seedWaitsForJournals = false
             rejoin()
         }
     }
@@ -77,10 +78,11 @@ final class SearchScreenModel {
     /// Nil once anything supersedes it — a change of text, a newer query, an index that
     /// went away — so hits never outlive the question they answered.
     private var hitsOnHand: [SearchHit]?
-    /// The default scope is applied once: on the first appearance, or — when the journals
-    /// have not been published by then — when they are.
-    private enum ScopeSeed { case unspent, waitingForJournals, spent }
-    private var scopeSeed = ScopeSeed.unspent
+    /// True from an arrival that found a current journal but no published journals (the
+    /// launch scan still running) until they are published, or the owner picks a scope.
+    private var seedWaitsForJournals = false
+    /// At most one journals observation at a time, however many arrivals wait for it.
+    private var journalsObservationArmed = false
 
     private static let log = Logger(subsystem: "org.pianohouseproject.raconte", category: "search")
 
@@ -115,17 +117,18 @@ final class SearchScreenModel {
         Task { [weak self] in await self?.refresh() }
     }
 
-    /// Starts the screen in the journal captures are being filed into. First appearance
-    /// only: after that the scope is the owner's. If there is a current journal but the
-    /// library has not published its journals yet (the launch scan is still running), the
-    /// seed waits for them.
-    func appeared() {
-        guard scopeSeed == .unspent else { return }
+    /// An arrival at the Search place from another place (`AppRouter.onSearchArrived`;
+    /// Ruling 34). Starts the visit in the journal captures are being filed into — the
+    /// journal the owner last looked at — or All journals when there is none. Back from an
+    /// opened result is not an arrival, so a scope picked during the visit lasts until the
+    /// owner leaves. If there is a current journal but the library has not published its
+    /// journals yet (the launch scan is still running), the seed waits for them.
+    func arrived() {
         if currentJournal.storedID != nil, library.journals.isEmpty {
-            scopeSeed = .waitingForJournals
-            armJournalsObservation()
+            seedWaitsForJournals = true
+            if !journalsObservationArmed { armJournalsObservation() }
         } else {
-            spendScopeSeed()
+            seedScope()
         }
     }
 
@@ -209,11 +212,10 @@ final class SearchScreenModel {
         unavailableReason == nil ? searching : nil
     }
 
-    private func spendScopeSeed() {
-        scopeSeed = .spent
-        if let journal = currentJournal.resolve(in: JournalRegistry(journals: library.journals)) {
-            journalScope = .journal(journal.id)
-        }
+    /// Clears the wait as a side effect (the `journalScope` setter).
+    private func seedScope() {
+        let journal = currentJournal.resolve(in: JournalRegistry(journals: library.journals))
+        journalScope = journal.map { .journal($0.id) } ?? .all
     }
 
     /// Whatever is in flight, and whatever is on hand, answered an earlier question.
@@ -292,18 +294,21 @@ final class SearchScreenModel {
         }
     }
 
-    /// Armed by `appeared()` only while the scope seed waits for the journals. Re-armed
-    /// while they are still empty; spends the seed when they arrive. Same arming as above.
+    /// Armed by `arrived()` only while the scope seed waits for the journals. Re-armed
+    /// while they are still empty; seeds the scope when they arrive. Same arming as above.
     private func armJournalsObservation() {
+        journalsObservationArmed = true
         withObservationTracking {
             _ = library.journals
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.scopeSeed == .waitingForJournals else { return }
+                guard let self else { return }
+                self.journalsObservationArmed = false
+                guard self.seedWaitsForJournals else { return }
                 if self.library.journals.isEmpty {
                     self.armJournalsObservation()
                 } else {
-                    self.spendScopeSeed()
+                    self.seedScope()
                 }
             }
         }

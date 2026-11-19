@@ -166,23 +166,73 @@ final class SearchScreenModelTests: XCTestCase {
 
     // MARK: Scope seeding
 
-    func testAppearedSeedsScopeFromCurrentJournalOnce() async throws {
+    /// Two published journals, the SECOND current (one cannot tell "the current journal" from
+    /// "the first journal"), and a real router wired to the model the way `AppServices` wires
+    /// it, sitting on All Entries.
+    private func routedSearch() async throws
+        -> (library: LibraryScreenModel, first: Journal, second: Journal, current: CurrentJournal,
+            router: AppRouter, model: SearchScreenModel) {
         let library = try await scannedLibrary()
-        // Two journals, the SECOND current: one cannot tell "the current journal" from
-        // "the first journal".
-        _ = try await library.journalStore.create(name: "1987")
+        let first = try await library.journalStore.create(name: "1987")
         let second = try await library.journalStore.create(name: "France")
         _ = await library.rescan()
         XCTAssertEqual(library.journals.count, 2, "fixture sanity")
         let current = CurrentJournal(store: InMemoryJournalPreferenceStore(
             values: [CurrentJournal.defaultsKey: second.id]))
         let model = model(searching: FakeSearching(), library: library, current: current)
+        let router = AppRouter()
+        AppServices.wireSearchArrival(router: router, searchScreen: model)
+        router.select(.allEntries)
+        return (library, first, second, current, router, model)
+    }
+
+    /// Ruling 34: the chip defaults to the last-viewed journal on EVERY arrival, not just the
+    /// first one in the process. A Mac runs for days; Search opened from journal A must not
+    /// stay scoped to whatever journal the first visit saw.
+    func testEachArrivalSeedsTheScopeFromTheCurrentJournal() async throws {
+        let (_, first, second, current, router, model) = try await routedSearch()
         XCTAssertEqual(model.journalScope, .all)
-        model.appeared()
+        router.select(.search)
+        XCTAssertEqual(model.journalScope, .journal(second.id))
+
+        router.select(.journal(first.id))         // the owner looks at the other journal
+        current.select(first)                     // which capture adopts (#183 rule 1)
+        router.select(.search)                    // and arrives at Search again
+        XCTAssertEqual(model.journalScope, .journal(first.id), "the second arrival kept the first visit's scope")
+    }
+
+    /// Back from an opened result is not an arrival: the place never left `.search`, so the
+    /// visit's scope (even one the owner picked), text and results all stay.
+    func testBackFromAnOpenedResultKeepsTheVisitsScope() async throws {
+        let (_, first, second, current, router, model) = try await routedSearch()
+        router.select(.search)
         XCTAssertEqual(model.journalScope, .journal(second.id))
         model.journalScope = .all                 // the owner widens the search
-        model.appeared()                          // and comes back to the screen
-        XCTAssertEqual(model.journalScope, .all, "a later appearance must not undo the owner's choice")
+        model.text = "ab"
+        current.select(first)                     // the current journal moves meanwhile
+
+        router.detailPath.append(.entry(liveID))  // opens a result
+        router.goBack()                           // and comes back
+        XCTAssertEqual(router.place, .search, "fixture sanity")
+        XCTAssertEqual(model.journalScope, .all, "Back from a result undid the owner's scope")
+        XCTAssertEqual(model.text, "ab")
+    }
+
+    /// A scope the owner picks lasts for that visit only. With no current journal the next
+    /// arrival starts on All journals, the screen's own default.
+    func testAPickedScopeLastsOneVisit() async throws {
+        let (_, _, second, current, router, model) = try await routedSearch()
+        router.select(.search)
+        model.journalScope = .unfiled             // the owner's pick
+        router.select(.trash)
+        router.select(.search)
+        XCTAssertEqual(model.journalScope, .journal(second.id), "a pick outlived its visit")
+
+        model.journalScope = .unfiled
+        current.select(nil as String?)            // no current journal
+        router.select(.about)
+        router.select(.search)
+        XCTAssertEqual(model.journalScope, .all, "with nothing to seed from, the pick still outlived its visit")
     }
 
     /// A library whose two journals are on disk but not yet published (no rescan since they
@@ -197,12 +247,12 @@ final class SearchScreenModelTests: XCTestCase {
         return (library, second, current)
     }
 
-    /// The screen can appear before the launch scan has published the journals. The seed
-    /// waits for them, and is spent when they arrive — once.
+    /// The owner can arrive before the launch scan has published the journals. The visit's
+    /// seed waits for them, and is spent when they arrive — once per visit.
     func testTheScopeSeedWaitsForTheJournals() async throws {
         let (library, second, current) = try await journalsNotYetPublished()
         let model = model(searching: FakeSearching(), library: library, current: current)
-        model.appeared()
+        model.arrived()
         XCTAssertEqual(model.journalScope, .all, "nothing to resolve against yet")
 
         _ = await library.rescan()                          // the journals arrive
@@ -215,7 +265,7 @@ final class SearchScreenModelTests: XCTestCase {
         _ = await library.rescan()                          // and the journals change again
         XCTAssertEqual(library.journals.count, 3, "fixture sanity")
         for _ in 0..<10 { await Task.yield() }
-        XCTAssertEqual(model.journalScope, .all, "the seed is spent once")
+        XCTAssertEqual(model.journalScope, .all, "the visit's seed is spent once")
     }
 
     /// A scope the owner picks while the seed waits is his: the journals arriving later do
@@ -223,7 +273,7 @@ final class SearchScreenModelTests: XCTestCase {
     func testAScopeChosenBeforeTheJournalsArriveIsKept() async throws {
         let (library, _, current) = try await journalsNotYetPublished()
         let model = model(searching: FakeSearching(), library: library, current: current)
-        model.appeared()
+        model.arrived()
         model.journalScope = .unfiled
         _ = await library.rescan()
         XCTAssertEqual(library.journals.count, 2, "fixture sanity")

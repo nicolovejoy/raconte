@@ -42,11 +42,15 @@ Handles and the move drag are unchanged and stay freeform.
   edge the rectangle slides to keep growing, and it stops when its width or its height
   fills the photo. It never shrinks below `ImageFraming.minimumSide` on either side.
 - **A pinch takes over from a drag.** A pinch usually starts with both fingers on the
-  rectangle, so the first finger often begins a move drag before the second lands. When
-  the pinch begins, the rectangle returns to where that drag started and the pinch owns it.
-  That drag stays ignored until its finger lifts. (Changed while planning, after the owner
-  approved: the first version said "whichever starts first owns the rectangle", which would
-  have let the drag swallow most pinches.)
+  rectangle or on two handles, so one or two drags often begin before the pinch is
+  recognised. When the pinch begins it scales the rectangle as it is at that moment, and
+  every drag in progress is ignored until its finger lifts. A second one-finger drag
+  displaces the first the same way. The rule underneath: a gesture's movement is only ever
+  applied to the rectangle that gesture started from.
+  (Changed twice while building. The approved version said "whichever starts first owns
+  the rectangle", which would have let the drag swallow most pinches. The second version
+  returned the rectangle to where the drag started, which the Task 2 review showed makes
+  the rectangle jump back after a cancelled drag.)
 
 ## Known cost
 

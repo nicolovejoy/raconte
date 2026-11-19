@@ -98,6 +98,10 @@ final class TranscriptEditorUITests: XCTestCase {
         XCTAssertTrue(transcript.waitForExistence(timeout: 15), "transcript never rendered")
         XCTAssertTrue(transcript.label.contains("the machine heard these words"),
                       "unexpected seeded transcript: \(transcript.label)")
+        // #194: the match bar belongs to an entry opened from Search. Its cursor is built in
+        // the same turn as the prose, so once the prose is up the bar would be too.
+        XCTAssertFalse(app.staticTexts["detail.search.count"].exists,
+                       "an entry opened from the Library shows a match bar")
 
         let edit = openEditRow(app)
         press(edit)

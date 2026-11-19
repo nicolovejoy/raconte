@@ -46,6 +46,12 @@ final class TranscriptHighlighterTests: XCTestCase {
         let t = "l'école d'été"
         XCTAssertEqual(TranscriptHighlighter.matches(in: t, terms: ["ecole"]).map { String(t[$0]) }, ["école"])
     }
+    // `ß` folds to `ss`, so the folded word is longer than the word and a prefix cannot be
+    // mapped back: the whole word is marked, and nothing past it.
+    func testWordWhoseFoldChangesItsLengthIsMarkedWhole() {
+        let t = "Straße x"
+        XCTAssertEqual(TranscriptHighlighter.matches(in: t, terms: ["straße"]).map { String(t[$0]) }, ["Straße"])
+    }
     // Terms are folded too: SearchQuery.terms lowercases but keeps accents.
     func testAccentedTermMatchesUnaccentedText() {
         XCTAssertEqual(TranscriptHighlighter.matches(in: "etaient", terms: ["étai"]).count, 1)

@@ -54,7 +54,9 @@ enum TranscriptHighlighter {
     }
 
     /// `text` with each match backgrounded; the `current` one (an index into `matches`) a
-    /// stronger tone. A range that is not a Character-aligned span of `text` is skipped.
+    /// stronger tone. The ranges must come from `matches(in:terms:)` over this same `text`;
+    /// what any other range does is unspecified (a probe saw foreign ranges skipped and
+    /// applied alike).
     static func attributed(_ text: String, matches: [Range<String.Index>], current: Int?) -> AttributedString {
         var out = AttributedString(text)
         for (i, range) in matches.enumerated() {

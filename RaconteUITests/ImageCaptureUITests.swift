@@ -313,7 +313,12 @@ final class ImageCaptureUITests: XCTestCase {
     }
 
     /// #203: a two-finger pinch on the crop rectangle resizes it around its centre and keeps
-    /// its shape, even though the first finger down also begins the rectangle's move drag.
+    /// its shape, even though both fingers also start handle drags. XCUITest's pinch puts its
+    /// two fingers on the rectangle's top-left and bottom-right corner handles. Without the
+    /// pinch wiring those two drags shrink the rectangle off-centre, which the centre
+    /// assertions catch. Not exercised here: a drag that moves the rectangle before the pinch
+    /// is recognised (in the simulator the pinch reports first on every frame); that case is
+    /// pinned by `CropInteractionTests`.
     func testPinchingShrinksTheCropRectangleAndKeepsItsShape() {
         let app = launchApp(seedImageEntry: true)
         openCapture(app)
@@ -337,8 +342,8 @@ final class ImageCaptureUITests: XCTestCase {
         waitUntil(15, "the crop rectangle never took a size") { cropRect.frame.width > 50 }
 
         let before = cropRect.frame
-        // Both fingers land ON the rectangle, so the first one begins a move drag: this is the
-        // Review Focus 1 case, not a pinch on blank space.
+        // The fingers land on the top-left and bottom-right handles, so two handle drags are in
+        // play alongside the pinch.
         cropRect.pinch(withScale: 0.5, velocity: -1)
         waitUntil(10, "the pinch never shrank the crop rectangle") { cropRect.frame.width < before.width * 0.8 }
         let after = cropRect.frame

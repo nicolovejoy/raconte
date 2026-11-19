@@ -127,10 +127,12 @@ final class PendingFramingQueueTests: XCTestCase {
         XCTAssertTrue(queue.closeLibraryBatch())
     }
 
-    func testACameraShotStartsInsetAndALibraryPickStartsFull() {
-        let shot = PendingFramingItem(id: UUID(), data: Data(), type: .jpeg, origin: .camera)
-        let pick = PendingFramingItem(id: UUID(), data: Data(), type: .jpeg, origin: .library)
-        XCTAssertEqual(shot.startingCropRect, CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8))
-        XCTAssertEqual(pick.startingCropRect, CGRect(x: 0, y: 0, width: 1, height: 1))
+    /// #206: every image new to the app starts inset, whichever flow brought it.
+    func testACameraShotAndALibraryPickBothStartInset() {
+        let inset = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+        for origin in [PendingFramingItem.Origin.camera, .library] {
+            let item = PendingFramingItem(id: UUID(), data: Data(), type: .jpeg, origin: origin)
+            XCTAssertEqual(item.startingCropRect, inset, "\(origin)")
+        }
     }
 }

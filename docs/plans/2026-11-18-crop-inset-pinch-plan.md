@@ -32,9 +32,9 @@
 
 Conditions the spec implies that are most likely to bite, most likely first. Each names the task that pins it.
 
-1. **A pinch that starts with both fingers on the rectangle.** The first finger begins a move drag. Expected: the rectangle scales, and does not jump or slide. Pinned in Task 2 (`testAPinchTakesOverFromADragAndReturnsToTheDragsStart`) and Task 3 (the UI test pinches on the rectangle itself).
-2. **One finger lifts, the other keeps moving.** The surviving drag still reports its translation from before the pinch. Expected: nothing moves until that finger lifts too. Pinned in Task 2 (`testTheDragThatLostToAPinchStaysIgnoredAfterThePinchEnds`).
-3. **A gesture that is cancelled, not ended** (a system alert, the app going to the background). `onEnded` does not fire. Expected: the next drag and the next pinch work normally. Pinned in Task 2 (`testADragThatNeverEndedDoesNotBlockTheNextDrag`) and by the `@GestureState` rule in Task 3.
+1. **A pinch that starts with both fingers on the rectangle.** The first finger begins a move drag. Expected: the rectangle scales, and does not jump or slide. Pinned in Task 2 (`testAPinchStartsFromTheLiveRectAndSilencesTheDrag`, `testBothFingersOfAPinchStayIgnoredAfterIt`) and Task 3 (the UI test pinches on the rectangle itself).
+2. **One finger lifts, the other keeps moving.** The surviving drag still reports its translation from before the pinch. Expected: nothing moves until that finger lifts too. Pinned in Task 2 (`testTheDragThatLostToAPinchStaysIgnoredUntilItEnds`).
+3. **A gesture that is cancelled, not ended** (a system alert, the app going to the background). `onEnded` does not fire. Expected: the next drag and the next pinch work normally. Pinned in Task 2 (`testADragThatNeverEndedBlocksNeitherTheNextDragNorTheNextPinch`) and by the `@GestureState` rule in Task 3.
 4. **Pinching out against an edge, and pinching a long thin rectangle.** Expected: it slides to keep growing, stops when one side fills the photo, keeps its shape, and never drops below `ImageFraming.minimumSide`. Pinned in Task 1.
 5. **Rotate on a camera shot.** Expected: the rectangle returns to the 10% inset, not to the full photo. The pure rule is pinned in Task 1. The view's use of it for a camera shot cannot be reached by a UI test (no camera in the simulator), so it is an owner-smoke item, listed in Task 3.
 
@@ -185,20 +185,27 @@ struct CropInteraction: Equatable, Sendable {
     /// for one drag and so identifies it. Returns the rectangle the drag's cumulative
     /// translation applies to, or nil when this update must be ignored.
     mutating func dragChanged(from startLocation: CGPoint, current: CGRect) -> CGRect?
-    mutating func dragEnded()
+    /// The drag identified by `startLocation` ended. Forgets it, whether it was the owner
+    /// or an ignored one.
+    mutating func dragEnded(from startLocation: CGPoint)
     /// A pinch update. Returns the rectangle the pinch's cumulative magnification applies to.
     mutating func pinchChanged(current: CGRect) -> CGRect
     mutating func pinchEnded()
 }
 ```
 
-Rules, each one a test below:
+The one invariant behind every rule: a gesture's cumulative translation or magnification is
+only ever applied to the rectangle that gesture started from. A drag whose start rectangle
+is no longer the truth is ignored for the rest of its life, never re-based.
+
+Rules, each one a test below (revised 2026-11-18 after the Task 2 review; see the ledger):
 - A drag's first update records `current` as its start; later updates of the same drag return that start.
-- A pinch's first update records its start; later updates return it.
-- A pinch that begins while a drag is active starts from THE DRAG'S start rectangle, and marks that drag (by `startLocation`) ignored.
-- A drag update while a pinch is active returns nil and marks that drag ignored.
-- An ignored drag stays ignored after the pinch ends, until `dragEnded()` or until a drag with a different `startLocation` arrives.
-- A drag with a new `startLocation` always begins a fresh drag, even if `dragEnded()` was never called for the previous one.
+- A drag with a different `startLocation` takes over: it starts fresh from `current`, and the drag it displaced is ignored from then on. This covers a second finger on another handle, and a drag that was cancelled without `dragEnded`.
+- A pinch's first update records `current` as its start, always the live rectangle; later updates return it. A drag that was active when the pinch began is ignored from then on.
+- A drag update while a pinch is active returns nil, and that drag is ignored from then on.
+- An ignored drag stays ignored after the pinch ends, until `dragEnded(from:)` names it. More than one drag can be ignored at once (two fingers on two handles).
+- `dragEnded(from:)` for a drag that is not the owner leaves the owner alone.
+- The type cannot detect a cancelled pinch. The caller must call `pinchEnded()` on end AND on cancel (Task 3 does it from a `@GestureState` reset).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -212,6 +219,7 @@ final class CropInteractionTests: XCTestCase {
     private let c = CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4)   // after some pinch
     private let p1 = CGPoint(x: 100, y: 100)
     private let p2 = CGPoint(x: 240, y: 300)
+    private let p3 = CGPoint(x: 60, y: 420)
 
     func testADragAppliesToTheRectItStartedFrom() {
         var i = CropInteraction()
@@ -225,10 +233,10 @@ final class CropInteractionTests: XCTestCase {
         XCTAssertEqual(i.pinchChanged(current: c), a)
     }
 
-    func testAPinchTakesOverFromADragAndReturnsToTheDragsStart() {
+    func testAPinchStartsFromTheLiveRectAndSilencesTheDrag() {
         var i = CropInteraction()
         _ = i.dragChanged(from: p1, current: a)
-        XCTAssertEqual(i.pinchChanged(current: b), a, "the pinch scales from where the drag began")
+        XCTAssertEqual(i.pinchChanged(current: b), b, "the pinch scales the rectangle as it is, never a remembered one")
         XCTAssertNil(i.dragChanged(from: p1, current: b), "the drag is ignored while the pinch runs")
     }
 
@@ -238,14 +246,27 @@ final class CropInteractionTests: XCTestCase {
         XCTAssertNil(i.dragChanged(from: p1, current: a))
     }
 
-    func testTheDragThatLostToAPinchStaysIgnoredAfterThePinchEnds() {
+    func testTheDragThatLostToAPinchStaysIgnoredUntilItEnds() {
         var i = CropInteraction()
         _ = i.dragChanged(from: p1, current: a)
         _ = i.pinchChanged(current: b)
         i.pinchEnded()
         XCTAssertNil(i.dragChanged(from: p1, current: c), "its translation predates the pinch; applying it would jump")
-        i.dragEnded()
+        i.dragEnded(from: p1)
         XCTAssertEqual(i.dragChanged(from: p1, current: c), c, "a new drag from the same point works once the old one ended")
+    }
+
+    func testBothFingersOfAPinchStayIgnoredAfterIt() {
+        // Two fingers on two handles: two drags, both silenced by the pinch.
+        var i = CropInteraction()
+        _ = i.pinchChanged(current: a)
+        XCTAssertNil(i.dragChanged(from: p1, current: a))
+        XCTAssertNil(i.dragChanged(from: p2, current: a))
+        i.pinchEnded()
+        XCTAssertNil(i.dragChanged(from: p1, current: c))
+        XCTAssertNil(i.dragChanged(from: p2, current: c), "the second ignored drag must not be forgotten")
+        i.dragEnded(from: p1)
+        XCTAssertNil(i.dragChanged(from: p2, current: c), "ending one finger does not revive the other")
     }
 
     func testANewDragAfterAPinchStartsFromTheScaledRect() {
@@ -255,18 +276,36 @@ final class CropInteractionTests: XCTestCase {
         XCTAssertEqual(i.dragChanged(from: p2, current: c), c)
     }
 
-    func testADragThatNeverEndedDoesNotBlockTheNextDrag() {
+    func testASecondFingerOnAnotherHandleTakesOverAndTheFirstIsIgnored() {
         var i = CropInteraction()
-        _ = i.dragChanged(from: p1, current: a)   // cancelled: dragEnded() never arrives
+        XCTAssertEqual(i.dragChanged(from: p1, current: a), a)
+        XCTAssertEqual(i.dragChanged(from: p2, current: b), b, "the newer drag starts from the live rect")
+        XCTAssertNil(i.dragChanged(from: p1, current: c), "the displaced drag is never re-based")
+        XCTAssertEqual(i.dragChanged(from: p2, current: c), b)
+    }
+
+    func testEndingAnIgnoredDragLeavesTheOwnerAlone() {
+        var i = CropInteraction()
+        _ = i.dragChanged(from: p1, current: a)
+        _ = i.dragChanged(from: p2, current: b)
+        i.dragEnded(from: p1)
+        XCTAssertEqual(i.dragChanged(from: p2, current: c), b)
+    }
+
+    func testADragThatNeverEndedBlocksNeitherTheNextDragNorTheNextPinch() {
+        var i = CropInteraction()
+        _ = i.dragChanged(from: p1, current: a)   // cancelled: dragEnded never arrives; the rect is now b
         XCTAssertEqual(i.dragChanged(from: p2, current: b), b)
+        i.dragEnded(from: p2)
+        XCTAssertEqual(i.pinchChanged(current: c), c, "a pinch never returns to a dead drag's start")
     }
 
     func testAnIgnoredDragThatNeverEndedDoesNotBlockTheNextDrag() {
         var i = CropInteraction()
         _ = i.pinchChanged(current: a)
         XCTAssertNil(i.dragChanged(from: p1, current: a))
-        i.pinchEnded()                            // the ignored drag is cancelled, no dragEnded()
-        XCTAssertEqual(i.dragChanged(from: p2, current: c), c)
+        i.pinchEnded()                            // the ignored drag is cancelled, no dragEnded
+        XCTAssertEqual(i.dragChanged(from: p3, current: c), c)
     }
 
     func testASecondPinchStartsFromTheLiveRect() {
@@ -289,11 +328,13 @@ Private state is the implementer's choice; the rules and tests above determine t
 
 - [ ] **Step 4: Run the class**
 
-Expected: 9 tests executed, 9 pass. If it reports 0 tests or the class is missing, the project was not regenerated.
+Expected: 12 tests executed, 12 pass. If it reports 0 tests or the class is missing, the project was not regenerated.
 
-- [ ] **Step 5: Prove the takeover test can fail**
+- [ ] **Step 5: Prove two tests can fail**
 
-Temporarily make `pinchChanged` always start from `current`. Expected: `testAPinchTakesOverFromADragAndReturnsToTheDragsStart` fails. Restore and re-run to green.
+Mutant 1: when a different drag takes over, do not record the displaced drag as ignored. Expected: `testASecondFingerOnAnotherHandleTakesOverAndTheFirstIsIgnored` fails.
+Mutant 2: keep only ONE ignored drag (each new ignored drag replaces the last). Expected: `testBothFingersOfAPinchStayIgnoredAfterIt` fails.
+Restore after each and re-run to green.
 
 - [ ] **Step 6: Commit**
 
@@ -343,7 +384,7 @@ Expected: FAIL with "the pinch never shrank the crop rectangle". Any other failu
 In `ImageFramingView`:
 - Add the stored `let startingCropRect: CGRect` and an explicit `init` (signature in Interfaces) that seeds `_framing` with `ImageFraming(rotationQuarterTurns: 0, cropRect: startingCropRect)`.
 - The Rotate button becomes `framing = framing.rotated(resettingTo: startingCropRect)`.
-- Replace `@State private var dragStartRect: CGRect?` with `@State private var interaction = CropInteraction()`. In `moveGesture` and `resizeGesture`, `onChanged` asks `interaction.dragChanged(from: value.startLocation, current: framing.cropRect)` and returns early on nil; `onEnded` calls `interaction.dragEnded()`.
+- Replace `@State private var dragStartRect: CGRect?` with `@State private var interaction = CropInteraction()`. In `moveGesture` and `resizeGesture`, `onChanged` asks `interaction.dragChanged(from: value.startLocation, current: framing.cropRect)` and returns early on nil; `onEnded` calls `interaction.dragEnded(from: value.startLocation)`.
 - Add the pinch as `.simultaneousGesture` on the `ZStack` inside the `GeometryReader`, so it works anywhere on the screen and alongside the children's drags:
 
 ```swift
@@ -376,7 +417,7 @@ Expected: every test passes, and the count is one higher than the class has on `
 
 - [ ] **Step 6: Run the full unit suite, then an iOS compile check**
 
-Unit command with no `-only-testing`. Expected: main's baseline (Global Constraints) plus 18, same skip count.
+Unit command with no `-only-testing`. Expected: main's baseline (Global Constraints) plus 21, same skip count.
 Then: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'generic/platform=iOS' -derivedDataPath .superpowers/dd-ios CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO build`. Expected: `BUILD SUCCEEDED`.
 
 - [ ] **Step 7: Straggler check**

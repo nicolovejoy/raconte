@@ -177,8 +177,9 @@ struct SearchView: View {
 
 /// The date chip's Custom… sheet: an optional start and an optional end, each a
 /// `PrecisionDatePicker` (the field `JournalSpanEditor` uses), so either end can be a day, a
-/// month or a year. Done writes `.custom(from:to:)`; each bound is a whole unit
-/// (`SearchDateFilter`). An end before the start is refused with a message, never swapped.
+/// month or a year. Done writes `SearchDateFilter.choosing(from:to:)` — custom, or Any time
+/// with both ends off; each bound is a whole unit. An end before the start is refused with a
+/// message, never swapped.
 struct SearchCustomDatesSheet: View {
     let initial: SearchDateFilter
     let onDone: (SearchDateFilter) -> Void
@@ -224,7 +225,7 @@ struct SearchCustomDatesSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        onDone(.custom(from: from, to: until))
+                        onDone(.choosing(from: from, to: until))
                         dismiss()
                     }
                     .disabled(isInverted)

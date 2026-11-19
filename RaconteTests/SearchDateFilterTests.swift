@@ -66,6 +66,18 @@ final class SearchDateFilterTests: XCTestCase {
         XCTAssertTrue(SearchDateFilter.anyTime.contains(date(1987, 3, 3), calendar: cal, now: now))
     }
 
+    /// The Custom… sheet's Done with both toggles off means Any time, not a "Custom" chip
+    /// that filters nothing. Either end on stays custom.
+    func testDoneWithNoEndChosenIsAnyTime() {
+        XCTAssertEqual(SearchDateFilter.choosing(from: nil, to: nil), .anyTime)
+        XCTAssertEqual(SearchDateFilter.choosing(from: PartialDate(year: 2020), to: nil),
+                       .custom(from: PartialDate(year: 2020), to: nil))
+        XCTAssertEqual(SearchDateFilter.choosing(from: nil, to: PartialDate(year: 2024)),
+                       .custom(from: nil, to: PartialDate(year: 2024)))
+        XCTAssertEqual(SearchDateFilter.choosing(from: PartialDate(year: 2020), to: PartialDate(year: 2024)),
+                       .custom(from: PartialDate(year: 2020), to: PartialDate(year: 2024)))
+    }
+
     func testTitlesNameTheFilter() {
         XCTAssertEqual(SearchDateFilter.anyTime.title, "Any time")
         XCTAssertEqual(SearchDateFilter.thisYear.title, "This year")

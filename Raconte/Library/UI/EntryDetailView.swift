@@ -141,8 +141,8 @@ struct EntryDetailView: View {
     var body: some View {
         ScrollViewReader { proxy in
             scrollContent
-                // #194: pinned, not in the scroll: the current match is scrolled to the
-                // middle of the screen, and a bar in the content would scroll away from it.
+                // #194: pinned, not in the scroll: the current match is scrolled into view,
+                // and a bar in the content would scroll away from it.
                 .safeAreaInset(edge: .top) {
                     if let cursor { matchBar(cursor, proxy: proxy) }
                 }

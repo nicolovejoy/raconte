@@ -465,6 +465,7 @@ struct EntryDetailView: View {
         // `LibraryScreenModel.recoverStaleDraftBeforeRead`.
         await model.recoverStaleDraftBeforeRead(captureID)
         transcript = await model.transcript(for: captureID)
+        rebuildCursor()
         // T6c: promote AFTER the first read, not before — `promoteCorpus()` runs the
         // whole corpus with no yield on the actor, so promoting first would make
         // opening an entry during the launch pass block on the entire walk (review
@@ -473,13 +474,7 @@ struct EntryDetailView: View {
         // capture actually gets a fresh canonical revision out of it.
         if case .promoted = await model.promoteIfNeeded(captureID) {
             transcript = await model.transcript(for: captureID)
-        }
-        // #194: rebuilt only when the prose changed (an edit, a revert), so a refresh that
-        // reads the same words keeps the owner's place in the matches. Ranges index into
-        // the texts they were found in, so changed prose always gets a new cursor.
-        let paragraphTexts = Self.searchParagraphTexts(Self.transcriptDisplay(transcript))
-        if cursor?.paragraphTexts != paragraphTexts {
-            cursor = SearchMatchCursor.forEntry(highlight: highlight, paragraphTexts: paragraphTexts)
+            rebuildCursor()
         }
         if playback == nil {
             playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,
@@ -489,6 +484,15 @@ struct EntryDetailView: View {
     }
 
     // MARK: #194 search matches
+
+    /// Call right after every `transcript =`, in the same main-actor turn, never after an
+    /// await: the prose and the ranges that mark it must change together. Prose drawn with
+    /// the previous cursor's ranges would mark the wrong words. Kept when the words are the
+    /// same, so the owner's place survives a refresh (`SearchMatchCursor.refreshed`).
+    private func rebuildCursor() {
+        cursor = SearchMatchCursor.refreshed(cursor, highlight: highlight,
+                                             paragraphTexts: Self.searchParagraphTexts(Self.transcriptDisplay(transcript)))
+    }
 
     /// Paragraph granularity: SwiftUI cannot scroll to a character. The paragraph is
     /// centred. The single text is one paragraph, so it scrolls to its top on arrival and

@@ -237,7 +237,7 @@ struct ContentView: View {
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .search:
-            SearchView(model: services.searchScreen, library: services.library)
+            SearchView(model: services.searchScreen, library: services.library, router: services.router)
                 .tint(InkTone.accent.color)
                 .background(InkTone.paper.color)
         case .about:

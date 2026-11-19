@@ -147,6 +147,23 @@ final class SearchScreenModelTests: XCTestCase {
         XCTAssertEqual(results(hits, entries, date: .custom(from: nil, to: PartialDate(year: 1990))).map(\.id), [old])
     }
 
+    // MARK: Journal chip title
+
+    /// What the journal chip says for each scope. Two journals, so the title is the scoped
+    /// journal's own name and not the first one's.
+    func testTheJournalChipTitleNamesTheScope() {
+        let first = Journal(id: ULID.make(), name: "1987", createdAt: now)
+        let second = Journal(id: ULID.make(), name: "France", createdAt: now.addingTimeInterval(1))
+        let journals = [first, second]
+        XCTAssertEqual(SearchScreenModel.journalScopeTitle(.all, in: journals), "All journals")
+        XCTAssertEqual(SearchScreenModel.journalScopeTitle(.journal(second.id), in: journals), "France")
+        XCTAssertEqual(SearchScreenModel.journalScopeTitle(.journal(first.id), in: journals), "1987")
+        XCTAssertEqual(SearchScreenModel.journalScopeTitle(.unfiled, in: journals), "Unfiled")
+        // A journal that has left the registry (deleted, or a sync not landed yet) still
+        // scopes the list by its id; the chip says so rather than naming another journal.
+        XCTAssertEqual(SearchScreenModel.journalScopeTitle(.journal(ULID.make()), in: journals), "Unknown journal")
+    }
+
     // MARK: Scope seeding
 
     func testAppearedSeedsScopeFromCurrentJournalOnce() async throws {

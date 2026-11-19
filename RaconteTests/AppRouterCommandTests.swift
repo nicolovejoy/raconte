@@ -57,6 +57,20 @@ final class AppRouterCommandTests: XCTestCase {
                       + "inside JournalHeaderView's private @State")
     }
 
+    /// #194: ⌘F asks the Search screen to focus its field, in the Search place only. Anywhere
+    /// else the request is not made, so nothing changes there.
+    func testSearchFieldFocusIsRequestedOnlyInTheSearchPlace() {
+        let router = AppRouter()
+        router.select(.allEntries)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 0, "outside Search, ⌘F asks for nothing")
+        router.select(.search)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 1)
+        router.requestSearchFieldFocus()
+        XCTAssertEqual(router.searchFieldFocusRequest, 2, "each press is a new request, even with the field focused")
+    }
+
     /// Source scan, comments stripped (repo memory: source-scanning-tests-must-strip-comments).
     func testNoGlobalEscapeBinding() throws {
         let source = strippingComments(try String(contentsOf: commandsFileURL))

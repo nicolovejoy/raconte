@@ -63,6 +63,8 @@ final class AppServices {
         // the Capture row (and Home's "New entry", and All Entries' record button) file
         // into the journal the owner was just looking at.
         Self.wireJournalFollowing(router: router, capture: capture)
+        // #194: each arrival at the Search place re-seeds its scope and focuses its field.
+        Self.wireSearchArrival(router: router, searchScreen: searchScreen)
         // #82: `deleteJournal`'s on-demand resolution of a worthless zero-frame blocker
         // must never resolve out from under a capture that is actively recording — this
         // is the only way it can tell. Weak: `capture` already holds `library` strongly
@@ -107,6 +109,12 @@ extension AppServices {
     /// Weak: `capture` already holds `library`, and the router is owned alongside both.
     static func wireJournalFollowing(router: AppRouter, capture: CaptureScreenModel) {
         router.onJournalSelected = { [weak capture] in capture?.adoptViewedJournal($0) }
+    }
+
+    /// #194 (Ruling 34), a function of its own for the same reason: a test pins it with a
+    /// model over a temporary library. Weak, as above.
+    static func wireSearchArrival(router: AppRouter, searchScreen: SearchScreenModel) {
+        router.onSearchArrived = { [weak searchScreen] in searchScreen?.arrived() }
     }
 }
 

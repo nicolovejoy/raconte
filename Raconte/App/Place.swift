@@ -223,7 +223,15 @@ enum PlaceRouting {
 
 @MainActor @Observable
 final class AppRouter {
-    var place: Place = PlaceRouting.launchPlace
+    /// Moving INTO `.search` from another place is an arrival at Search (#194): the one
+    /// moment the Search screen re-seeds its journal scope. Re-selecting
+    /// Search while already there, and Back from an opened result, are not arrivals — the
+    /// place never left `.search`.
+    var place: Place = PlaceRouting.launchPlace {
+        didSet {
+            if place == .search, oldValue != .search { onSearchArrived?() }
+        }
+    }
     /// Bound to the detail `NavigationStack` (`ContentView.swift`, nav T5) — nav T4 shipped
     /// this unbound, since a typed path had no slot for the `RootDestination` pushes still
     /// in use then; T5 retired `RootDestination`, so the stack is homogeneous and the bind
@@ -248,6 +256,10 @@ final class AppRouter {
     /// nothing about capture. Not fired by `apply(_:)` — a background reroute after a
     /// journals pull is not the owner choosing a journal.
     @ObservationIgnored var onJournalSelected: ((String) -> Void)?
+    /// #194: fired on each arrival at the Search place (see `place`). Wired by `AppServices`
+    /// to `SearchScreenModel.arrived`; synchronous, so the screen is seeded before it first
+    /// renders for that visit.
+    @ObservationIgnored var onSearchArrived: (() -> Void)?
 
     func select(_ place: Place) {
         detailPath = PlaceRouting.detailPath(afterSelecting: place, from: self.place, path: detailPath)

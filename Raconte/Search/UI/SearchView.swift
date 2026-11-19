@@ -65,8 +65,9 @@ struct SearchView: View {
         .navigationTitle("Search")
         .searchable(text: $model.text, placement: .automatic, prompt: "Search transcripts")
         .searchFocused($fieldFocused)
+        // The scope is seeded by the router on arrival (`SearchScreenModel.arrived`), never
+        // here: `onAppear` also fires on Back from an opened result.
         .onAppear {
-            model.appeared()
             fieldFocused = true
         }
         .onChange(of: router.searchFieldFocusRequest) { _, _ in fieldFocused = true }

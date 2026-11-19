@@ -311,4 +311,41 @@ final class ImageCaptureUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(screen.maxX - frame.maxX, margin, "right handles too close to the edge")
         XCTAssertGreaterThanOrEqual(screen.maxY - frame.maxY, margin, "bottom handles too close to the edge")
     }
+
+    /// #203: a two-finger pinch on the crop rectangle resizes it around its centre and keeps
+    /// its shape, even though the first finger down also begins the rectangle's move drag.
+    func testPinchingShrinksTheCropRectangleAndKeepsItsShape() {
+        let app = launchApp(seedImageEntry: true)
+        openCapture(app)
+        XCTAssertTrue(app.buttons["capture.record"].firstMatch.waitForExistence(timeout: 30))
+        openPlace(app, "sidebar.allEntries")
+        let entryLink = app.descendants(matching: .any).matching(identifier: "library.entryLink").firstMatch
+        XCTAssertTrue(entryLink.waitForExistence(timeout: 20))
+        waitUntil(20, "seeded image never produced a row thumbnail") { entryLink.label.contains("Entry photo") }
+        press(entryLink)
+        let thumbnails = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'entryDetail.images.thumbnail.'"))
+        XCTAssertTrue(thumbnails.firstMatch.waitForExistence(timeout: 15))
+        press(thumbnails.firstMatch)
+        let crop = app.buttons["entryDetail.images.crop"].firstMatch
+        XCTAssertTrue(crop.waitForExistence(timeout: 15), "the viewer must offer Crop")
+        press(crop)
+
+        let cropRect = app.descendants(matching: .any).matching(identifier: "imageFraming.cropRect").firstMatch
+        XCTAssertTrue(cropRect.waitForExistence(timeout: 15), "the framing screen never appeared")
+        // The preview decodes after the screen appears; until then the rectangle is empty.
+        waitUntil(15, "the crop rectangle never took a size") { cropRect.frame.width > 50 }
+
+        let before = cropRect.frame
+        // Both fingers land ON the rectangle, so the first one begins a move drag: this is the
+        // Review Focus 1 case, not a pinch on blank space.
+        cropRect.pinch(withScale: 0.5, velocity: -1)
+        waitUntil(10, "the pinch never shrank the crop rectangle") { cropRect.frame.width < before.width * 0.8 }
+        let after = cropRect.frame
+        XCTAssertGreaterThan(after.width, before.width * 0.2, "it must not collapse to the minimum")
+        // The seeded image is square, so the rectangle starts square and a pinch must keep it so.
+        XCTAssertEqual(after.width, after.height, accuracy: 3, "a pinch keeps the rectangle's shape")
+        XCTAssertEqual(after.midX, before.midX, accuracy: 6, "a pinch scales around the centre, it does not slide")
+        XCTAssertEqual(after.midY, before.midY, accuracy: 6)
+    }
 }

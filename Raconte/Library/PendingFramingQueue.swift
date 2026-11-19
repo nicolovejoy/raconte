@@ -111,12 +111,14 @@ extension View {
                              onDismiss: @escaping () -> Void) -> some View {
         #if os(iOS)
         fullScreenCover(item: item, onDismiss: onDismiss) { pending in
-            ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+            ImageFramingView(data: pending.data, startingCropRect: pending.startingCropRect,
+                             onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
                 .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #else
         sheet(item: item, onDismiss: onDismiss) { pending in
-            ImageFramingView(data: pending.data, onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
+            ImageFramingView(data: pending.data, startingCropRect: pending.startingCropRect,
+                             onUse: { onUse(pending, $0) }, onCancel: { onCancel(pending) })
                 .id(pending.id)  // an item swap keeps the cover's @State otherwise
         }
         #endif

@@ -71,6 +71,27 @@ final class SearchUITests: XCTestCase {
                       "tapping the result did not open the entry")
     }
 
+    /// Task 12: an entry opened from a result opens on its matches, with the bar above the
+    /// prose. The seeded text holds "heard" once.
+    func testOpeningFromSearchShowsTheMatchBar() {
+        let app = launchApp()
+        openPlace(app, "sidebar.search")
+        let field = searchField(app)
+        pickJournal(app, allJournalsItem(app))
+
+        field.tap()
+        field.typeText("heard")
+        let result = seededResult(app)
+        XCTAssertTrue(result.waitForExistence(timeout: 15), "the seeded entry was never listed")
+
+        result.tap()
+        let count = app.staticTexts["detail.search.count"]
+        XCTAssertTrue(count.waitForExistence(timeout: 15), "the entry opened from Search has no match bar")
+        XCTAssertEqual(count.label, "1 of 1")
+        XCTAssertTrue(app.buttons["detail.search.previous"].exists)
+        XCTAssertTrue(app.buttons["detail.search.next"].exists)
+    }
+
     /// "No matches" only once the index has answered the text in the field, so this wait is
     /// satisfiable by an answered query and nothing else.
     func testNoMatchesState() {

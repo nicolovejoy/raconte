@@ -17,9 +17,13 @@ enum VoiceAttributedText {
     /// segment's own explicit modifiers (weight, colour, italic) survive whatever
     /// `.font(...)` the call site applies to the whole paragraph, which is the mechanism
     /// the voice prefix relies on to stay semibold-secondary inside serif body prose.
+    ///
+    /// `highlighted` (#194) replaces the prose with that marked-up copy of `paragraph.text`
+    /// (an entry opened from Search); the label and the italic are set exactly as without it.
     static func paragraph(_ paragraph: TranscriptAttribution.Paragraph,
-                          voiceLabels: [String: String]) -> Text {
-        let body = Text(paragraph.text)
+                          voiceLabels: [String: String],
+                          highlighted: AttributedString? = nil) -> Text {
+        let body = highlighted.map { Text($0) } ?? Text(paragraph.text)
         let combined: Text
         if let label = VoiceDisplay.label(forVoice: paragraph.voice, voiceLabels: voiceLabels) {
             let prefix = Text("\(label): ")

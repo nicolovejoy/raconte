@@ -31,10 +31,18 @@ struct EntryDetailView: View {
     /// `router.select(.journal(id))`, which pops this screen — the same shape as
     /// `onPage`, and the same no-op default `LibraryView.onEditJournal` uses for previews.
     let onOpenJournal: (String) -> Void
+    /// #194: the query's terms when this entry was opened from a Search result, else nil.
+    /// Paging and `replaceTopEntry` push `.entry(id)` with none, so it never follows the
+    /// owner to another entry.
+    let highlight: SearchHighlight?
 
     @State private var item: EntryListItem
     @State private var playback: CapturePlayback?
     @State private var transcript = EntryTranscript(state: .absent, text: nil, degradations: [])
+    /// #194: the matches of `highlight` in the loaded transcript and which one is current.
+    /// Nil without a highlight, without a non-empty term, or before the transcript loads:
+    /// no match bar and the plain rendering. View state for this pushed screen only.
+    @State private var cursor: SearchMatchCursor?
     @State private var showingBackdatePicker = false
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
@@ -111,12 +119,14 @@ struct EntryDetailView: View {
     @MainActor
     init(model: LibraryScreenModel, item: EntryListItem,
          pagingEnabled: Bool, onPage: @escaping (String) -> Void,
-         onOpenJournal: @escaping (String) -> Void = { _ in }) {
+         onOpenJournal: @escaping (String) -> Void = { _ in },
+         highlight: SearchHighlight? = nil) {
         self.model = model
         self.captureID = item.captureID
         self.pagingEnabled = pagingEnabled
         self.onPage = onPage
         self.onOpenJournal = onOpenJournal
+        self.highlight = highlight
         _item = State(initialValue: item)
         _editorModel = State(initialValue: TranscriptEditorModel(captureID: item.captureID,
                                                                  store: model))
@@ -127,44 +137,28 @@ struct EntryDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                // #148: which journal this is. Coming from All Entries, search or a
-                // receipt card there was nothing on screen that said. Pulled out to its
-                // own computed property (like `imagesSection`/`transcriptSection` below)
-                // — inlined here, the compiler timed out type-checking this VStack.
-                journalRow
-
-                // #71: flagged, never blocked (owner ruling 4) — a quiet sentence only,
-                // never a gate on any control. `isDatedOutsideJournalSpan` already
-                // implies `item.journal?.span != nil`, but the `let` keeps this honest
-                // about the sentence's only inputs.
-                if item.isDatedOutsideJournalSpan, let journal = item.journal {
-                    Text(outOfSpanSentence(journal: journal))
-                        .font(TypeRole.body.font)
-                        .foregroundStyle(InkTone.inkSecondary.color)
-                        .accessibilityIdentifier("detail.outOfSpan")
+        ScrollViewReader { proxy in
+            scrollContent
+                // #194: pinned, not in the scroll: the current match is scrolled to the
+                // middle of the screen, and a bar in the content would scroll away from it.
+                .safeAreaInset(edge: .top) {
+                    if let cursor { matchBar(cursor) }
                 }
-
-                // Task 6 (#55): images strip first (only when non-empty), transcript
-                // immediately after — no header row, no date/journal/trash sections;
-                // all of that now lives in the `⋯` info sheet (`EntryInfoSheet`).
-                // Playback moved out of the scroll entirely (below, pinned via
-                // `.safeAreaInset`), so this VStack no longer decides whether it shows.
-                imagesSection
-                transcriptSection
-            }
-            .padding(24)
-            .frame(maxWidth: 560, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .safeAreaInset(edge: .bottom) {
-            // Playback is omitted entirely for an image-only entry (no `.task`-loaded
-            // audio to play), not merely disabled — same rule as before, just pinned
-            // to the bottom of the screen instead of living in the scroll content.
-            if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
-                playbackBar
-            }
+                .safeAreaInset(edge: .bottom) {
+                    // Playback is omitted entirely for an image-only entry (no `.task`-loaded
+                    // audio to play), not merely disabled — same rule as before, just pinned
+                    // to the bottom of the screen instead of living in the scroll content.
+                    if Self.playbackSectionVisible(hasAudio: item.hasAudio) {
+                        playbackBar
+                    }
+                }
+                // #194: next/previous bring the current match's paragraph into view.
+                .onChange(of: cursor?.current) { _, _ in scrollToCurrentMatch(proxy, arriving: false) }
+                // After the first load, once the images strip above the prose is in.
+                .task {
+                    await refresh()
+                    scrollToCurrentMatch(proxy, arriving: true)
+                }
         }
         #if os(iOS)
         // #101: swipe left = next (page forward, older), right = previous.
@@ -253,7 +247,6 @@ struct EntryDetailView: View {
                 }
             }
         }
-        .task { await refresh() }
         .navigationDestination(isPresented: $showingEditor) {
             TranscriptEditorView(model: editorModel)
         }
@@ -420,6 +413,42 @@ struct EntryDetailView: View {
         }
     }
 
+    /// The scrolling column. Out of `body` so the `ScrollViewReader` around it stays
+    /// within the type-checker's budget.
+    private var scrollContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                // #148: which journal this is. Coming from All Entries, search or a
+                // receipt card there was nothing on screen that said. Pulled out to its
+                // own computed property (like `imagesSection`/`transcriptSection` below)
+                // — inlined here, the compiler timed out type-checking this VStack.
+                journalRow
+
+                // #71: flagged, never blocked (owner ruling 4) — a quiet sentence only,
+                // never a gate on any control. `isDatedOutsideJournalSpan` already
+                // implies `item.journal?.span != nil`, but the `let` keeps this honest
+                // about the sentence's only inputs.
+                if item.isDatedOutsideJournalSpan, let journal = item.journal {
+                    Text(outOfSpanSentence(journal: journal))
+                        .font(TypeRole.body.font)
+                        .foregroundStyle(InkTone.inkSecondary.color)
+                        .accessibilityIdentifier("detail.outOfSpan")
+                }
+
+                // Task 6 (#55): images strip first (only when non-empty), transcript
+                // immediately after — no header row, no date/journal/trash sections;
+                // all of that now lives in the `⋯` info sheet (`EntryInfoSheet`).
+                // Playback moved out of the scroll entirely (below, pinned via
+                // `.safeAreaInset`), so this VStack no longer decides whether it shows.
+                imagesSection
+                transcriptSection
+            }
+            .padding(24)
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     /// Both loads are off the main actor: the transcript is an O(records) parse and
     /// `CapturePlayback`'s convenience init walks the whole captures tree. Opening an
     /// entry used to do both synchronously while the screen was on screen.
@@ -445,11 +474,84 @@ struct EntryDetailView: View {
         if case .promoted = await model.promoteIfNeeded(captureID) {
             transcript = await model.transcript(for: captureID)
         }
+        // #194: rebuilt only when the prose changed (an edit, a revert), so a refresh that
+        // reads the same words keeps the owner's place in the matches. Ranges index into
+        // the texts they were found in, so changed prose always gets a new cursor.
+        let paragraphTexts = Self.searchParagraphTexts(Self.transcriptDisplay(transcript))
+        if cursor?.paragraphTexts != paragraphTexts {
+            cursor = SearchMatchCursor.forEntry(highlight: highlight, paragraphTexts: paragraphTexts)
+        }
         if playback == nil {
             playback = await CapturePlayback.load(capturesRoot: model.capturesRoot,
                                                   captureID: captureID)
         }
         images = await model.images(for: captureID)
+    }
+
+    // MARK: #194 search matches
+
+    /// Paragraph granularity: SwiftUI cannot scroll to a character. The paragraph is
+    /// centred. The single text is one paragraph, so it scrolls to its top on arrival and
+    /// stays put after that: moving back to its top on every next/previous would scroll
+    /// away from the match.
+    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy, arriving: Bool) {
+        guard let paragraph = cursor?.currentParagraph else { return }
+        let singleText: Bool
+        if case .plain = Self.transcriptDisplay(transcript) { singleText = true } else { singleText = false }
+        guard arriving || !singleText else { return }
+        withAnimation {
+            proxy.scrollTo(Self.paragraphScrollID(paragraph), anchor: singleText ? .top : .center)
+        }
+    }
+
+    private static func paragraphScrollID(_ index: Int) -> String { "para.\(index)" }
+
+    /// Paragraph `index`'s prose with its matches marked, the current one stronger; nil
+    /// with no cursor, where the prose renders as it always has.
+    private func highlightedProse(_ text: String, paragraph index: Int) -> AttributedString? {
+        guard let cursor else { return nil }
+        return TranscriptHighlighter.attributed(text, matches: cursor.matches(inParagraph: index),
+                                                current: cursor.currentIndexWithin(index))
+    }
+
+    /// `‹ 1 of 4 ›` above the prose.
+    private func matchBar(_ cursor: SearchMatchCursor) -> some View {
+        HStack(spacing: 16) {
+            Button {
+                self.cursor?.previous()
+            } label: {
+                Label("Previous Match", systemImage: "chevron.left")
+                    .labelStyle(.iconOnly)
+            }
+            .disabled(cursor.total == 0)
+            .accessibilityIdentifier("detail.search.previous")
+
+            Text(cursor.label)
+                .font(TypeRole.label.font)
+                .monospacedDigit()
+                .foregroundStyle(InkTone.inkSecondary.color)
+                .accessibilityIdentifier("detail.search.count")
+
+            Button {
+                self.cursor?.next()
+            } label: {
+                Label("Next Match", systemImage: "chevron.right")
+                    .labelStyle(.iconOnly)
+            }
+            .disabled(cursor.total == 0)
+            .accessibilityIdentifier("detail.search.next")
+
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 24)
+        .background(InkTone.paperInset.color)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(InkTone.hairline.color)
+                .frame(height: 1)
+        }
     }
 
     // MARK: #101 paging
@@ -836,6 +938,18 @@ struct EntryDetailView: View {
         }
     }
 
+    /// #194: the texts a search cursor is built over, one per paragraph `transcriptSection`
+    /// renders for `display` — the paragraph branch's texts, the single text, or none. Pure.
+    /// Read off the display, not the transcript, so the cursor can never hold a different
+    /// number of paragraphs than the screen draws.
+    static func searchParagraphTexts(_ display: TranscriptDisplay) -> [String] {
+        switch display {
+        case .attributed(let paragraphs): return paragraphs.map(\.text)
+        case .plain(let text): return [text]
+        case .absent, .unreadable, .empty: return []
+        }
+    }
+
     /// Absent / unreadable / present-but-empty are three distinct, calm answers — issue
     /// #11's rule, one layer up from the log reader that first drew this line. A short
     /// tail is a fourth: the text is real and there may simply be less of it than was
@@ -901,10 +1015,11 @@ struct EntryDetailView: View {
                     .foregroundStyle(InkTone.inkSecondary.color)
                     .accessibilityIdentifier("detail.transcript.empty")
             case .plain(let text):
-                Text(text)
+                (highlightedProse(text, paragraph: 0).map { Text($0) } ?? Text(text))
                     .font(TypeRole.reading.font)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("detail.transcript.text")
+                    .id(Self.paragraphScrollID(0))
             case .attributed(let paragraphs):
                 // Read once per render, not per paragraph: labels are a property of the
                 // entry's journal, not of any one paragraph. Unfiled/dangling ->
@@ -954,7 +1069,9 @@ struct EntryDetailView: View {
                             // set on a descendant, so the override has to sit on the
                             // element boundary itself to reliably survive.
                             Group {
-                                attributedParagraph(paragraph, voiceLabels: voiceLabels)
+                                attributedParagraph(paragraph, voiceLabels: voiceLabels,
+                                                    highlighted: highlightedProse(paragraph.text,
+                                                                                  paragraph: index))
                             }
                                 .font(TypeRole.reading.font)
                                 .textSelection(.enabled)
@@ -974,6 +1091,7 @@ struct EntryDetailView: View {
                                         "detail.transcript.paragraph.\(index).approximateMark")
                             }
                         }
+                        .id(Self.paragraphScrollID(index))
                     }
                 }
                 // Task 6 review Important 2, continued: `.accessibilityElement(children:
@@ -1030,8 +1148,9 @@ struct EntryDetailView: View {
     /// also renders through — one implementation of what a voice mark looks like, so the
     /// receipt and the entry it opens into can never disagree about who said what.
     private func attributedParagraph(_ paragraph: TranscriptAttribution.Paragraph,
-                                     voiceLabels: [String: String]) -> Text {
-        VoiceAttributedText.paragraph(paragraph, voiceLabels: voiceLabels)
+                                     voiceLabels: [String: String],
+                                     highlighted: AttributedString?) -> Text {
+        VoiceAttributedText.paragraph(paragraph, voiceLabels: voiceLabels, highlighted: highlighted)
     }
 
     /// Stop playback, then await the write and pop only on success. This used to pop

@@ -43,6 +43,8 @@ struct EntryDetailView: View {
     /// Nil without a highlight, without a non-empty term, or before the transcript loads:
     /// no match bar and the plain rendering. View state for this pushed screen only.
     @State private var cursor: SearchMatchCursor?
+    /// #194: the arrival scroll to the first match has happened. It happens once per screen.
+    @State private var arrivedAtMatch = false
     @State private var showingBackdatePicker = false
     @State private var backdateDraft = Date()
     @State private var backdatePrecisionDraft: DatePrecision = .day
@@ -142,7 +144,7 @@ struct EntryDetailView: View {
                 // #194: pinned, not in the scroll: the current match is scrolled to the
                 // middle of the screen, and a bar in the content would scroll away from it.
                 .safeAreaInset(edge: .top) {
-                    if let cursor { matchBar(cursor) }
+                    if let cursor { matchBar(cursor, proxy: proxy) }
                 }
                 .safeAreaInset(edge: .bottom) {
                     // Playback is omitted entirely for an image-only entry (no `.task`-loaded
@@ -152,13 +154,15 @@ struct EntryDetailView: View {
                         playbackBar
                     }
                 }
-                // #194: next/previous bring the current match's paragraph into view.
-                .onChange(of: cursor?.current) { _, _ in scrollToCurrentMatch(proxy) }
-                // After the first load, once the images strip above the prose is in.
-                .task {
-                    await refresh()
-                    scrollToCurrentMatch(proxy)
+                // #194: one scroll, when the first cursor lands. After that only ‹ and ›
+                // scroll: `.task` re-runs on every return from the editor, revision history
+                // or voice marking, and must not take the owner away from where he was reading.
+                .onChange(of: cursor != nil) { _, landed in
+                    guard landed, !arrivedAtMatch, let cursor else { return }
+                    arrivedAtMatch = true
+                    scrollToCurrentMatch(proxy, cursor)
                 }
+                .task { await refresh() }
         }
         #if os(iOS)
         // #101: swipe left = next (page forward, older), right = previous.
@@ -499,8 +503,8 @@ struct EntryDetailView: View {
     /// match's place in the text (Ruling 37). `scrollTo` lines the text's point at that
     /// fraction up with the viewport's point at the same fraction, which puts the match
     /// roughly on screen for evenly wrapped prose. An approximation, not a measurement.
-    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy) {
-        guard let cursor, let paragraph = cursor.currentParagraph else { return }
+    private func scrollToCurrentMatch(_ proxy: ScrollViewProxy, _ cursor: SearchMatchCursor) {
+        guard let paragraph = cursor.currentParagraph else { return }
         let anchor: UnitPoint
         if case .plain = Self.transcriptDisplay(transcript) {
             anchor = UnitPoint(x: 0.5, y: cursor.currentMatchFraction ?? 0)
@@ -510,6 +514,15 @@ struct EntryDetailView: View {
         withAnimation {
             proxy.scrollTo(Self.paragraphScrollID(paragraph), anchor: anchor)
         }
+    }
+
+    /// ‹ or ›: move the current match and bring it into view. The moved value is scrolled
+    /// to directly, not read back from `cursor`.
+    private func moveMatch(_ proxy: ScrollViewProxy, _ move: (inout SearchMatchCursor) -> Void) {
+        guard var moved = cursor else { return }
+        move(&moved)
+        cursor = moved
+        scrollToCurrentMatch(proxy, moved)
     }
 
     private static func paragraphScrollID(_ index: Int) -> String { "para.\(index)" }
@@ -523,10 +536,10 @@ struct EntryDetailView: View {
     }
 
     /// `‹ 1 of 4 ›` above the prose.
-    private func matchBar(_ cursor: SearchMatchCursor) -> some View {
+    private func matchBar(_ cursor: SearchMatchCursor, proxy: ScrollViewProxy) -> some View {
         HStack(spacing: 16) {
             Button {
-                self.cursor?.previous()
+                moveMatch(proxy) { $0.previous() }
             } label: {
                 Label("Previous Match", systemImage: "chevron.left")
                     .labelStyle(.iconOnly)
@@ -541,7 +554,7 @@ struct EntryDetailView: View {
                 .accessibilityIdentifier("detail.search.count")
 
             Button {
-                self.cursor?.next()
+                moveMatch(proxy) { $0.next() }
             } label: {
                 Label("Next Match", systemImage: "chevron.right")
                     .labelStyle(.iconOnly)

@@ -101,6 +101,11 @@ struct ImageCapturePickerSheet: View {
                 Button("OK", role: .cancel) {}
             }
         }
+        #if os(macOS)
+        // An unsized macOS sheet collapses to its intrinsic height, and a List has none: the
+        // title and Cancel showed with no rows at all (#68; owner smoke of build 30).
+        .frame(minWidth: 400, minHeight: 240)
+        #endif
         .framingPresentation(item: $framingQueue.headBinding) { item, framing in
             Task { await resolveHead(item, framing: framing) }
         } onCancel: { item in

@@ -114,7 +114,11 @@ struct ImageFramingView: View {
             .onChange(of: pinching) { _, now in
                 if !now { interaction.pinchEnded() }
             }
+            #if os(macOS)
+            .safeAreaInset(edge: .bottom, spacing: 0) { macControls }
+            #else
             .ignoresSafeArea(edges: .bottom)
+            #endif
             .task {
                 // Decoding is this view's own concern, not load-bearing for anything else, so
                 // `.task` is fine here (the CLAUDE.md lifecycle rule is about capture state).
@@ -127,7 +131,6 @@ struct ImageFramingView: View {
             .navigationTitle("Crop")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onCancel() }
@@ -144,12 +147,41 @@ struct ImageFramingView: View {
                         .accessibilityIdentifier("imageFraming.use")
                 }
             }
+            #endif
         }
         .environment(\.colorScheme, .dark)
         #if os(macOS)
         .frame(minWidth: 520, minHeight: 420)
         #endif
     }
+
+    #if os(macOS)
+    /// The Mac's Cancel, Rotate and Use, drawn by this view on its own black. A macOS sheet's
+    /// toolbar is not this view's to style: it put Cancel and Use on a light bar where the
+    /// pinned-dark Cancel was white on white, and it dropped the `.primaryAction` Rotate
+    /// altogether (owner smoke of build 31).
+    private var macControls: some View {
+        HStack {
+            Button("Cancel") { onCancel() }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("imageFraming.cancel")
+            Spacer()
+            Button("Rotate", systemImage: "rotate.right") {
+                framing = framing.rotated(resettingTo: startingCropRect)
+            }
+            .accessibilityIdentifier("imageFraming.rotate")
+            Spacer()
+            Button("Use") { onUse(framing) }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("imageFraming.use")
+        }
+        .controlSize(.large)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(Color.black)
+    }
+    #endif
 
     // MARK: Preview
 

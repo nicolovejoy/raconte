@@ -19,11 +19,6 @@ on the App Store. Capture, on-device transcription, journals and library, the
 revision chain, the editor, iCloud sync, export and full-text search are built.
 [docs/builds.md](docs/builds.md) lists every build handed over.
 
-Raconte is a native rebuild of
-[recountly](https://github.com/nicolovejoy/recountly), a web app that is now
-frozen. The plan of record is
-[docs/native-rebuild-plan.md](docs/native-rebuild-plan.md).
-
 ## How it is built
 
 The stack is SwiftUI (one multiplatform target, not Catalyst), Swift 6 strict

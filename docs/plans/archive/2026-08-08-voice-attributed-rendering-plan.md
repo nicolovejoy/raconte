@@ -1,4 +1,4 @@
-> **Archived — shipped 2026-08-08 (`8f5c4cb0`).** `TranscriptAttribution` / `VoiceDisplay` are live.
+> **Archived — shipped 2026-08-08 (`07cd172b`).** `TranscriptAttribution` / `VoiceDisplay` are live.
 
 # Voice-attributed transcript rendering (T6 §14 step 7, v1) — implementation plan
 

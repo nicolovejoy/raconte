@@ -42,7 +42,7 @@ Owner rulings, verbatim in substance:
 
 ## Global Constraints
 
-- **Branch per PR, from `main` at or after `f406b276`.** Four branches:
+- **Branch per PR, from `main` at or after `54b5262b`.** Four branches:
   `feat/sync-land-or-park`, `feat/81-unreadable-entry-repair`, `feat/small-debt-2026-09-06`,
   `feat/archive-export`. Each PR's body uses `Closes #N` only for issues it fully resolves.
   #67 is a consolidated issue: PR 3 COMMENTS on it naming items 2, 3, 4 as done and does
@@ -219,7 +219,7 @@ git commit -m "feat(sync): durable parked record names in the bookkeeping store 
 ### Task 2: Split the asset-arrival guards; park each sub-cause; unpark on a clean ingest (#85, part 2)
 
 **Files:**
-- Modify: `Raconte/Sync/SyncIngest.swift` — `ingestAudio` 1686-1720, `ingestLiveLog` 1732-1760, `ingestRevision` 1792-1825, `ingestImage` 2424-2455 (line numbers as of `f406b276`; re-locate by function name)
+- Modify: `Raconte/Sync/SyncIngest.swift` — `ingestAudio` 1686-1720, `ingestLiveLog` 1732-1760, `ingestRevision` 1792-1825, `ingestImage` 2424-2455 (line numbers as of `54b5262b`; re-locate by function name)
 - Modify: `Raconte/Sync/IngestDropReason.swift` (35 lines)
 - Test: `RaconteTests/IngestDropReasonTests.swift`, `RaconteTests/SyncEntryIngestTests.swift`, `RaconteTests/SyncImageIngestTests.swift`
 

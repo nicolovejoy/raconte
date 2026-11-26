@@ -5,7 +5,7 @@ proposal, not an approved plan** — it exists to be argued with. Nothing here i
 and no branch has been cut.
 
 Sources: all 40 open issues, `docs/overview.md`, `docs/native-rebuild-plan.md`, and the
-state of `main` at `b81a3031` (read the code, not the docs, for what is actually built).
+state of `main` at `52317d6f` (read the code, not the docs, for what is actually built).
 
 ## What is actually true today
 

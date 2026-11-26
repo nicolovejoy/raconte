@@ -12,7 +12,7 @@ Execution notes on top of the plan:
   everything succeeds is a vacuous test and will be treated as not done.
 - Branch from CURRENT main (verify `git merge-base --is-ancestor origin/main HEAD`
   after branching — worktrees have silently started from stale bases before). Main
-  must be at or after commit fc3bc24 ("#127 dead code"); if CI on main's tip is
+  must be at or after commit 697fd1c ("#127 dead code"); if CI on main's tip is
   red, stop and say so rather than building on a broken base.
 - Commit per task, not one squashed blob — the review reads better and a bad task
   can be reverted alone.
@@ -25,7 +25,7 @@ not pretend to. Verification is CI:
   runners for any .swift diff. Iterate against CI rather than accumulating five
   unverified tasks.
 - The executed-count rule still applies, read off CI logs: RaconteTests baseline is
-  2032 executed / 1 skipped (main run on fc3bc24's parent); RaconteUITests baseline
+  2032 executed / 1 skipped (main run on 697fd1c's parent); RaconteUITests baseline
   is 61. Your new test files must move those counts UP. Exit code 0 at the old
   count means the file never ran.
 - Cheap local proxies that DO work in your container: brace/paren balance, grep for

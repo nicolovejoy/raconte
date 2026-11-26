@@ -10,7 +10,7 @@ Device: Nico's Big iPad unless noted.
 3. 2026-07-29 — app switch mid-recording (doc test 5) — PASS. Spawned issue #1
    (background recording continues with no user-facing indication).
 4. 2026-07-29 — force-quit mid-recording (doc test 6) — recovery PASS; playback
-   silent. Root cause: cold-launch `.soloAmbient` session; fixed in `11e6dfa`
+   silent. Root cause: cold-launch `.soloAmbient` session; fixed in `8fa0e63`
    (`CapturePlayback.ensurePlaybackSession`). Entry became audible after the fix.
 5. 2026-07-29 — re-test doc test 6 after fix (7s recording) — PASS with caveat:
    jittery robotic cut-outs from ~4-5s (the swipe-out moment), then silence to
@@ -63,7 +63,7 @@ Device: Nico's Big iPad unless noted.
 10. 2026-07-30 — Mac mini, doc test 31 (input-device switch mid-recording) —
    PASS on the issue this test tracks. Counted 1→12 over ~12s, switched input
    device in System Settings → Sound partway through. Both halves present;
-   #5 (total post-switch loss) confirmed fixed by db1ac02 and CLOSED.
+   #5 (total post-switch loss) confirmed fixed by 22ae621 and CLOSED.
    Residual, tracked in #9: ~4s of audio lost across the switch (playback runs
    "six" → "eleven") and the splice is *smooth*, not silent — the timeline
    compresses rather than preserving the gap. Same failure family as #2 but at

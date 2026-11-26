@@ -19,7 +19,7 @@
 - **macOS unit tests:** `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=macOS' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test`
 - **iOS UI tests:** `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test`
 - **Never pipe `xcodebuild` through `head`** — it wedges the simulator's accessibility service and fails unrelated UI tests afterwards. **Run every suite in the FOREGROUND**; do not background a build you intend to wait on.
-- **Baseline (verified 2026-08-18 on `main` at `c7b3b22c`): 1319 unit tests, 1 failure.** That failure is `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage`, a known laptop-local intermittent. Any OTHER failure is yours.
+- **Baseline (verified 2026-08-18 on `main` at `083a22e0`): 1319 unit tests, 1 failure.** That failure is `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage`, a known laptop-local intermittent. Any OTHER failure is yours.
 - **Source-scanning tests MUST call `strippingComments(_:)`** from `RaconteTests/SourceScanning.swift`. This repo documents itself heavily; a raw grep is satisfied by the comment explaining the fix.
 - **Never write a close-verb + issue number** ("fixes #69", "close #69") in a commit message or PR body, including in prose. GitHub closes the issue on merge. Write "for #69" / "part of #69".
 - **Call shared primitives, never copy them.** If a helper is `private` and you need it, lift it — do not duplicate.

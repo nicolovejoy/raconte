@@ -8,7 +8,7 @@
 
 **Tech Stack:** Swift 6 / SwiftUI, XCTest, CKSyncEngine (existing `Raconte/Sync/` layer on `m4/sync`).
 
-**Spec:** `docs/plans/2026-08-17-m4-sync-design.md` (sync design, per-field LWW), CLAUDE.md session 2026-08-20 (merge dry-run: 3 files, 7 hunks), issue #70 (the ~9-site / ~3-compiler-enforced hazard this plan closes). All file:line cites below were re-verified against `main` @ `980a4d8e` and `m4/sync` @ `63651ac3` on 2026-08-20.
+**Spec:** `docs/plans/2026-08-17-m4-sync-design.md` (sync design, per-field LWW), CLAUDE.md session 2026-08-20 (merge dry-run: 3 files, 7 hunks), issue #70 (the ~9-site / ~3-compiler-enforced hazard this plan closes). All file:line cites below were re-verified against `main` @ `24613d6a` and `m4/sync` @ `48c6d9d3` on 2026-08-20.
 
 ## Global Constraints
 
@@ -155,7 +155,7 @@ Expect conflicts in exactly the 3 files above. A 4th conflicted file means the d
 - [ ] **Step 3: Resolve `RaconteTests/JournalStoreTests.swift` — keep both adjacent test blocks**, and bump the Mirror pin at (main-side) `:360` from 5 to **6**, updating its message to mention both `Journal.encode(to:)` and the six sync sites.
 
 - [ ] **Step 4: Resolve `Raconte/App/ContentView.swift` — take MAIN's file structure wholesale** (`let services: AppServices`, sidebar state, no `init()`), discarding m4's `init()` that built library/model/`SyncCoordinator` inline. Then re-home sync:
-  - In `Raconte/App/RaconteApp.swift` (main-side `:8-26`), `AppServices` gains a `let sync: SyncCoordinator?` member, constructed exactly the way m4's pre-merge `ContentView.init()` did (`SyncCoordinator.live(library: library)` — read the pre-merge file at `git show 63651ac3:Raconte/App/ContentView.swift` lines 18-25 for the precise construction, including any transcription/model threading).
+  - In `Raconte/App/RaconteApp.swift` (main-side `:8-26`), `AppServices` gains a `let sync: SyncCoordinator?` member, constructed exactly the way m4's pre-merge `ContentView.init()` did (`SyncCoordinator.live(library: library)` — read the pre-merge file at `git show 48c6d9d3:Raconte/App/ContentView.swift` lines 18-25 for the precise construction, including any transcription/model threading).
   - `ContentView` gains `.task { await services.sync?.launch() }` on its outer view, replacing m4's `:71` launch kick.
   - **The #67 guard at main's `ContentView.swift:108-113` (`.onChange(of: services.library.journals)` → `if resolved != router.place { router.select(resolved) }`) and its rationale comment `:93-107` must survive byte-for-byte.** Read the comment; do not re-derive the guard from any design doc.
 
@@ -236,7 +236,7 @@ Independent reviewer; trusts no task report. Re-derives everything from the comm
 - [ ] **Probe 3 — old-build compatibility:** construct a `CKRecord` with no `span` field and a journals payload an old build would write; ingest must succeed with `span == nil` and merge must not fabricate a stamp for it.
 - [ ] **Probe 4 — deletion LWW:** local non-nil span with old stamp vs remote nil span with newer stamp → nil wins; and the reverse.
 - [ ] **Probe 5 — main's behavior preserved:** the registry-bytes test (span absent from `journals.json` when cleared) and the JournalStore span round-trip tests from main still pass unmodified.
-- [ ] **Audit the merge resolution itself:** `git diff 8799ccf0...m4/sync -- Raconte/App/` — confirm ContentView matches main's structure + only the sync re-homing delta; confirm the guard comment block survived; confirm `AppServices.sync` construction matches what m4's pre-merge `ContentView.init()` built (`git show 63651ac3:Raconte/App/ContentView.swift`).
+- [ ] **Audit the merge resolution itself:** `git diff 21f399f6...m4/sync -- Raconte/App/` — confirm ContentView matches main's structure + only the sync re-homing delta; confirm the guard comment block survived; confirm `AppServices.sync` construction matches what m4's pre-merge `ContentView.init()` built (`git show 48c6d9d3:Raconte/App/ContentView.swift`).
 - [ ] Verdict: READY / BLOCKED with findings. Fix waves go back to the Task-3 implementer via resume, per the SDD loop.
 
 ---
@@ -248,6 +248,6 @@ Independent reviewer; trusts no task report. Re-derives everything from the comm
 
 ## Self-review notes
 
-- Every CLAUDE.md claim this plan argues from was re-verified 2026-08-20 by two read-only agents (main @ `980a4d8e`, m4/sync @ `63651ac3`); the one correction: the uncommitted SyncCoordinator diff is inert scaffolding, not a fetch fix.
+- Every CLAUDE.md claim this plan argues from was re-verified 2026-08-20 by two read-only agents (main @ `24613d6a`, m4/sync @ `48c6d9d3`); the one correction: the uncommitted SyncCoordinator diff is inert scaffolding, not a fetch fix.
 - The deliberate red between Tasks 2 and 3 is the design, not an oversight: writing the tripwire after the merge would mean it never demonstrably fired.
 - `zoneID` fixture spelling and `adopted(remote:)` normalization are the two places implementers must read neighboring code rather than trust this plan's sketch; both are flagged inline at their steps.

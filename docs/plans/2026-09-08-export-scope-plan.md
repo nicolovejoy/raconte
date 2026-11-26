@@ -27,7 +27,7 @@ Format reference: `docs/export-format.md`. Precedent for the picker/runner shape
 
 ## Global Constraints
 
-- Branch `feat/157-export-scope` from `main` at or after `fef9a83a`. Work in a worktree; the
+- Branch `feat/157-export-scope` from `main` at or after `f1b14598`. Work in a worktree; the
   main checkout stays on `main` (`git checkout` of a worktree'd branch fails silently in a
   chain).
 - **Do not run `xcodebuild test` until the orchestrator has said the owner's Mac app is

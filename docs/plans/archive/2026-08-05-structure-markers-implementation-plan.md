@@ -2,8 +2,8 @@
 
 # Capture-time structure markers — implementation plan (T6 §14)
 
-**Status: EXECUTED — steps 1–6 shipped 2026-08-05 (PR #31, merged `6562c6f0`); step 7
-shipped 2026-08-08 via `2026-08-08-voice-attributed-rendering-plan.md` (merged `8f5c4cb0`),
+**Status: EXECUTED — steps 1–6 shipped 2026-08-05 (PR #31, merged `8d3d89c3`); step 7
+shipped 2026-08-08 via `2026-08-08-voice-attributed-rendering-plan.md` (merged `07cd172b`),
 superseding the "deferred" note below.** Kept as the build record. (Original 2026-08-05
 caveat: written on a machine without Xcode, unverified at the time of writing.)
 
@@ -1300,12 +1300,12 @@ document's step numbering:
 ## Verification checklist for the first machine with Xcode
 
 1. `git fetch && git checkout <build branch> && xcodegen generate`.
-2. Confirm the map baseline: this plan's line numbers assume `1f2a44b5`; if main has
+2. Confirm the map baseline: this plan's line numbers assume `fd56fd33`; if main has
    moved, re-check the four seams (tee construction at `CaptureCoordinator.swift:364`,
    `resetCaptureWiring`, `handlePhase`'s `.recording` arm, `EntryMetadata.init(from:)`)
    before trusting any edit anchor.
 3. Run the full unit suite once *before* step 1 to establish the baseline count
-   (632 expected as of `1f2a44b5`).
+   (632 expected as of `fd56fd33`).
 4. Execute steps 1→6, each as a subagent build with the prompt above, parent diff
    review before each commit, red output demanded every time.
 5. After step 5, run the full `RaconteUI` simulator suite, not just the new test.

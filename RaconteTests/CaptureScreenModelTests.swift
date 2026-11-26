@@ -108,7 +108,7 @@ final class CaptureScreenModelTests: XCTestCase {
         // buildReceipt(...)` — which itself awaits a transcript read off disk — and only
         // then `coordinator = spawn()`. So the gate above goes true strictly before this
         // line's subject is set, with real I/O in between. It passed for as long as that
-        // gap was one continuation; the post-stop receipt (a509a1b6) put a disk read in it,
+        // gap was one continuation; the post-stop receipt (77ec05b1) put a disk read in it,
         // and the first loaded CI runner to see the widened window lost the race
         // (run 31928162420, on a docs-only commit, which is the tell that nothing in the
         // product changed).

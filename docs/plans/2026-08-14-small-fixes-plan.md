@@ -1,6 +1,6 @@
 # Small-fixes batch plan — 2026-08-14
 
-Branch `fix/aug14-batch`, worktree `/Users/nico/src/raconte-b5`, base `423d3fed`.
+Branch `fix/aug14-batch`, worktree `/Users/nico/src/raconte-b5`, base `0d524cd6`.
 Closes #42, #58, #49, #48 on merge (close-commands go in the PR body ONLY, never in
 commit subjects/bodies — this repo has closed an issue by accident from prose before).
 

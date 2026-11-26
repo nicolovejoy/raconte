@@ -22,7 +22,7 @@ plan, branched after this merges.
 
 ## Global Constraints
 
-- Branch `feat/162-type-roles` from `main` at or after `deea0f54`. Work in a worktree; the main
+- Branch `feat/162-type-roles` from `main` at or after `8c5a0c1e`. Work in a worktree; the main
   checkout stays on `main` (`git checkout` of a worktree'd branch fails silently in a chain).
 - **The capture screen keeps its sizes** (spec ruling 4). Never edit `CaptureView.swift`,
   `PrecisionDatePicker.swift`, `RecStatusLine.swift`, `RecoveryBanner.swift`,

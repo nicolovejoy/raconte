@@ -9,7 +9,7 @@ and three live M1 bugs it surfaced are filed as issues #7/#8/#9.
 correctness fix forced by the SDK's own documentation, and three factual corrections to
 this document. Where rev 3 contradicts the text below, rev 3 wins.
 
-**Line numbers in this document predate commit `8103e5f` (startCue) and are stale by ~3–9
+**Line numbers in this document predate commit `5fc82e0` (startCue) and are stale by ~3–9
 lines in `CaptureCoordinator.swift` and ~25 in `CaptureView.swift`.** Type and function
 names are correct; grep for those rather than trusting a line. `docs/plans/archive/2026-07-30-next-tasks.md`
 carries a verified mapping.

@@ -49,7 +49,7 @@ xcodebuild -project Raconte.xcodeproj -scheme RaconteUI \
   -only-testing:RaconteUITests/CaptureUITests test
 ```
 
-- **Baseline on main (CI on `cae172bd`, 2026-09-01): 2057 unit (1 skipped), 62 UI.**
+- **Baseline on main (CI on `95219e56`, 2026-09-01): 2057 unit (1 skipped), 62 UI.**
   Re-read the number from main's most recent code-carrying CI run before quoting it; a
   docs-only push skips CI.
 - Switch convention: no `default:` in switches over `CaptureState` / `Place` — a new case

@@ -45,7 +45,7 @@
 Made by the session that ran the plan, before Task 1, from two sources: the prompt-lab research
 reply (`~/src/.handoff/raconte-prompt-lab.md`, 2026-10-08, which landed after this plan was
 written — the spec promises to fold it in) and a conflict scan of the plan against itself, the
-spec and the code at `9587f639`. The owner has NOT reviewed the written spec or this plan; the
+spec and the code at `b9479e38`. The owner has NOT reviewed the written spec or this plan; the
 three PRs are his first look. Each amendment is repeated inside the task it changes, marked
 **Amendment**, and wins over older text in that task where they differ.
 
@@ -1341,7 +1341,7 @@ its folded form `hasPrefix` a folded term; the highlighted range is the first
 the tests pin: `["string", "string"]` in `testWordStartPrefixOnly` means the prefix, not the
 word). RED proof for the elision test: the `.byWords` implementation returns no match.
 
-The four pattern-match sites on `.entry` (line numbers at `9587f639`): `ContentView.swift:31`
+The four pattern-match sites on `.entry` (line numbers at `b9479e38`): `ContentView.swift:31`
 and `EntryPager.swift:40` bind the id (`case .entry(let id)` becomes `case .entry(let id, _)`,
 or binds the highlight where it is needed); `Place.swift:195` and `Place.swift:273` are
 `case .entry = …` and compile unchanged. There is no `== .entry(…)` comparison in either

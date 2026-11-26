@@ -20,7 +20,7 @@ XcodeGen project, XCTest + XCUITest.
 **Spec:** The owner's rulings in the 2026-09-05 evening session, restated per task
 below (there is no separate design doc; each issue body is the spec, plus the ruling).
 Owner rulings, verbatim in substance:
-1. PR #138 is merged; everything branches from `main` at or after `4fa98f8f`.
+1. PR #138 is merged; everything branches from `main` at or after `600d6886`.
 2. Grouped PRs by area, merged in the order listed above, "Update branch" between merges.
 3. #140: delete the WHOLE discard path (model logic, tests, plumbing), not just the button.
    #123 closes as moot.

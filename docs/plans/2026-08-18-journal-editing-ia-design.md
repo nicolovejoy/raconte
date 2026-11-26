@@ -226,7 +226,7 @@ error. See #70 for the probe results behind it.
 
 ## Sequencing
 
-1. ~~Nico merges **PR #64** (nav) to main.~~ **Done 2026-08-18** — main at `20beecc7`;
+1. ~~Nico merges **PR #64** (nav) to main.~~ **Done 2026-08-18** — main at `f0de32c4`;
    `nav/split-view` worktree, local branch and remote branch all deleted.
 2. This work builds on main. **The capture-picker change is task 1**, so #69 dies early
    rather than riding to the end of the branch.
@@ -263,8 +263,8 @@ the control, and our modifiers do not reach inside it.
 
 ## As-built (2026-08-19)
 
-All nine code tasks are built (unit 1319 → 1368, iOS UI 35 → 43; commits `a6fdbc03` ..
-`fee194fe`). This section records where the build differed from the spec above, and why.
+All nine code tasks are built (unit 1319 → 1368, iOS UI 35 → 43; commits `2b089e03` ..
+`a2983808`). This section records where the build differed from the spec above, and why.
 
 ### "Library chip" was already gone before this branch started
 
@@ -366,7 +366,7 @@ The first cut got this wrong in a way worth naming: it built an *inclusive* uppe
 by subtracting a fixed 1.0 second from the exclusive one, which excluded the final second
 of every span (`23:59:59.000`–`23:59:59.999` of the true last day was wrongly outside a
 year- or month-precision end bound). Fixed in the Task 2 review's fix round
-(commit `6e62ce43`) by keeping `calendar.dateInterval(of:for:).end` untouched and switching
+(commit `de513515`) by keeping `calendar.dateInterval(of:for:).end` untouched and switching
 the comparison to strict `<`, plus edge-anchored tests (exact sub-second `DateComponents`
 instants, not noon fixtures, since noon fixtures cannot discriminate an off-by-one).
 Mutation-verified against three distinct regressions: restoring the subtraction, and

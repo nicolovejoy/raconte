@@ -3,7 +3,7 @@
 Date: 2026-08-17. Status: **owner-approved** (in-chat, same day — the paradigm, the map
 of places, and both hack retirements were each ruled on explicitly). Supersedes the
 implicit "capture is the permanently-mounted stack root" architecture. Cites are against
-`m4/sync` @ `63651ac3` (identical to main for every file named here — verified during
+`m4/sync` @ `48c6d9d3` (identical to main for every file named here — verified during
 the freeze investigation).
 
 ## 1. Problem
@@ -187,7 +187,7 @@ Same harness, reshaped as a screen (`DebugMenuView.swift`):
 
 ## 11. As-built (rulings the SDD build made that this design didn't)
 
-Recorded at Task 9, against branch `nav/split-view` @ `9503f0f3`.
+Recorded at Task 9, against branch `nav/split-view` @ `ca5c8418`.
 
 - **Journal chips are gone from `LibraryView`, not just re-homed.** The design's §3
   said journals get sidebar rows; it didn't say the library screen's own filter chips

@@ -235,7 +235,7 @@ open /Applications/Raconte.app
   recent run" is not always the most recent commit). Main after #126+#127: **2029 unit
   (1 skipped), 61 UI**.
 - **Two PRs branched from the same base can both be green and still merge into a red
-  main.** #126 and #127 both had base `1ea4fe8` and merged 52 seconds apart, so neither
+  main.** #126 and #127 both had base `42b514a` and merged 52 seconds apart, so neither
   one's CI ever saw the other's changes; the first run to test the combination was
   main's own, after both were already in. It came out green — the file sets were
   disjoint — but that was luck, not process. When two PRs are open at once: merge one,

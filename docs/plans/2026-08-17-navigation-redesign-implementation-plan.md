@@ -8,7 +8,7 @@
 
 **Tech Stack:** SwiftUI multiplatform (iOS 26 / macOS 26), Swift 6 strict concurrency, `@Observable` + `withObservationTracking`, XcodeGen (`project.yml` is the source of truth), XCTest + XCUITest.
 
-**Spec:** `docs/plans/2026-08-17-navigation-redesign-design.md` — owner-approved 2026-08-17. Read it first; every task argues from it. Its file:line cites were re-verified against main `0286a4f8` while this plan was written and all hold.
+**Spec:** `docs/plans/2026-08-17-navigation-redesign-design.md` — owner-approved 2026-08-17. Read it first; every task argues from it. Its file:line cites were re-verified against main `d4aff5c9` while this plan was written and all hold.
 
 ---
 

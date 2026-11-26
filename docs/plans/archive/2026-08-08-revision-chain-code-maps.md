@@ -2,7 +2,7 @@
 
 # Revision-chain build — code maps (2026-08-08)
 
-Ground truth from three Explore passes over current `main` (`d0c18d2c`), gathered before
+Ground truth from three Explore passes over current `main` (`8bd1ccd1`), gathered before
 writing `2026-08-08-revision-chain-implementation-plan.md`. The T6 design doc
 (`2026-08-03-t6-revision-chain-design.md`) predates the marker work and #25; its code
 citations have drifted. **This file is the citation authority for the implementation plan.**

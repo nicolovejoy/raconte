@@ -6,7 +6,7 @@
 > to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 > Every task: red-first evidence or a mutation check is REQUIRED in the completion report.
 
-**Cites re-verified against merged `main` (`bf0042d5`, PR #45) on 2026-08-09.** Every
+**Cites re-verified against merged `main` (`57ee4880`, PR #45) on 2026-08-09.** Every
 `file:line` below is repo-relative and was opened at the cited line; the T6 worktree
 (`raconte-t6`) is gone and no path here refers to it. The standing rule still applies:
 before dispatching Task 1, re-check the cites you are about to touch — if a cite disagrees
@@ -765,7 +765,7 @@ Named so they are not re-argued mid-build:
 - The one scope item the ledger did **not** name and this plan adds: Task 5. It is not
   optional — without it the editor deletes the voice rendering on first save.
 - Deliberately not sized: Tasks 4 and 6 are the only ones with real UI risk (the repo has
-  no `TextEditor` today — verified on `bf0042d5`, zero hits in `Raconte/` — and no snapshot
+  no `TextEditor` today — verified on `57ee4880`, zero hits in `Raconte/` — and no snapshot
   harness), so both keep their logic in a testable model and their views thin.
 - Post-ruling scope deltas: Task 6 **grew** (the word-anchored boundary-ADD case, ruling 3),
   Task 9 **shrank** (cross-paragraph selection stays parked, ruling 12) and **kept** the

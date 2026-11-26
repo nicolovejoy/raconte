@@ -8,7 +8,7 @@
 
 **Tech Stack:** Swift 6 / SwiftUI, XCTest, CKSyncEngine (`Raconte/Sync/`).
 
-**Spec:** Issues #79 and #80 (they carry the verified mechanism analysis, file:line, from 2026-08-21 @ `082e30e9`); `docs/plans/2026-08-17-m4-sync-design.md` for sync semantics. Owner questions below are pre-ruled with recommended defaults — confirm them at session start (numbered, answer by number) before dispatching Phase B.
+**Spec:** Issues #79 and #80 (they carry the verified mechanism analysis, file:line, from 2026-08-21 @ `5c87b118`); `docs/plans/2026-08-17-m4-sync-design.md` for sync semantics. Owner questions below are pre-ruled with recommended defaults — confirm them at session start (numbered, answer by number) before dispatching Phase B.
 
 ## Owner questions (Phase B only — Phase A needs no rulings)
 
@@ -23,7 +23,7 @@
 - **Run every test suite in the FOREGROUND.** Never background a build/test run — notifications never reach subagents; 10 prior implementers stalled that way. Never pipe xcodebuild through `head`.
 - Unit suite: `xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=iOS Simulator,name=iPhone 17' test`. UI suite: scheme `RaconteUI`, same destination. macOS runs need `CODE_SIGN_ENTITLEMENTS=Raconte/Raconte-nocloud.entitlements`, never `CODE_SIGNING_ALLOWED=NO`.
 - New test file ⇒ `xcodegen generate` first, or `-only-testing` silently passes with "Executed 0 tests".
-- Baseline at `082e30e9`: 1555 unit / 43 UI, all green. Known laptop-local intermittent: `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` (macOS only).
+- Baseline at `5c87b118`: 1555 unit / 43 UI, all green. Known laptop-local intermittent: `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` (macOS only).
 - Commit messages reference issues as "for #79" / "for #80" — never a close-verb + number.
 - **A background sync pull must never change the user's capture target or pop navigation.** (#67's class. `PlaceRouting.resolve` already handles a deleted journal's place; deletion is the one case where a forced `router.select` is CORRECT.)
 - Stash note: `stash@{0}` on the worktree is inert SyncCoordinator scaffolding — leave it alone.

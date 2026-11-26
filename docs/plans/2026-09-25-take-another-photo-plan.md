@@ -25,7 +25,7 @@ a view reading it: `Raconte/Library/ImageDropSource.swift` + `RaconteTests/Image
 
 ## Global Constraints
 
-- Branch `feat/134-take-another` from `main` at or after `6b2c7100`. Work in a worktree
+- Branch `feat/134-take-another` from `main` at or after `d6f75032`. Work in a worktree
   (`../raconte-wt-134`); the main checkout stays on `main`. Run `xcodegen generate` in the
   worktree before the first build.
 - **Do not run `xcodebuild test` until the orchestrator has said the owner's Mac app is

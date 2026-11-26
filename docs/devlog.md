@@ -16,8 +16,8 @@ Session-by-session development history, moved out of CLAUDE.md on 2026-08-22 to 
   the root one on every pick, so every package the owner ever browsed would fail. Fixed on the
   branch: enumerate with `.skipsHiddenFiles`; `testFinderDSStoreFilesAreIgnored` plants three
   `.DS_Store` files plus one non-hidden stray and asserts only the stray is reported (RED with all
-  three listed before the fix, GREEN after). Commit `145e75f5`.
-- **#174 merged** (`d0999afa`). Both SDD worktrees (`raconte-wt-149`, `raconte-wt-157`) and their
+  three listed before the fix, GREEN after). Commit `8991de04`.
+- **#174 merged** (`40d3ed51`). Both SDD worktrees (`raconte-wt-149`, `raconte-wt-157`) and their
   branches removed; `xcodegen generate` re-run on main. Main's CI for the merge was still
   in progress at handoff.
 - Builds 20 and 21 appended to `docs/builds.md`. `/Applications/Raconte.app` is currently
@@ -111,9 +111,9 @@ the combination gate). Final review deferred minors → #173.
 
 ## Session 2026-09-08 (laptop — build 18 smokes 5/5, design-system spec, batch C via SDD → PR #169)
 
-- Build 18: bumped on `dce1837a` (`3ad2b9da`), signed Mac build ditto'd to `~/Desktop/Raconte-latest.app`
+- Build 18: bumped on `037b9ef3` (`b4c9cdf5`), signed Mac build ditto'd to `~/Desktop/Raconte-latest.app`
   (UUID `F4BE56D6`); iOS archived and uploaded to TestFlight via `scripts/upload_testflight.sh`
-  (`5a6276be` notes it). Owner smokes one at a time, all PASS: Home shelf sizes, out-of-span
+  (`7535de71` notes it). Owner smokes one at a time, all PASS: Home shelf sizes, out-of-span
   orange glyph, Trash unreadable block, cover lightbox (Mac), live voice labels `BN:`/`LN:` in
   the band (iPhone, TestFlight processed in ~15 min). Batch B closed.
 - Trash feedback → **#168** with an ASCII-mock decision (two matched headers, "Unreadable entries"
@@ -142,7 +142,7 @@ the combination gate). Final review deferred minors → #173.
 
 ## Session 2026-09-07/08 (laptop — build 17 smokes 4/4, iPhone 4/4, overview #160 merged, Batch B #165/#166 merged, therapist one-pager brief)
 
-- Build 17 (main `05c19d88`, then `3a175a14` bump) built with real signing, ditto'd to
+- Build 17 (main `9958c601`, then `af4bb1c8` bump) built with real signing, ditto'd to
   `~/Desktop/Raconte.app`, UUID `D6248064`. Owner smokes, one at a time, **all PASS**: Verify
   archive… (334 files, no problems), entry→journal link, out-of-span glyph (#153), quarantine
   (#152). **Trap found and fixed in CLAUDE.md:** the quarantine smoke pointed at the bare
@@ -158,10 +158,10 @@ the combination gate). Final review deferred minors → #173.
 - **PR #160 overview refresh merged** — done locally via one Opus implementer (resumed after the
   owner stopped the first) + Sonnet reviewer; every cited claim verified; two extra corrections
   (revert is machine-lineage only).
-- **Batch B via SDD** from plan `docs/plans/2026-09-08-batch-b-plan.md` (base `9109f570`), two
+- **Batch B via SDD** from plan `docs/plans/2026-09-08-batch-b-plan.md` (base `06268a66`), two
   parallel branches in worktrees, Sonnet implementers/task reviewers, Opus whole-branch reviews:
   **#165** (Closes #161, #163; refs #162) and **#166** (Closes #106, #164), both merged evening
-  2026-09-08 (`2e1409d3`, `d095fc7b`). 5 tasks, 0 task-level fix rounds, one fix wave per branch.
+  2026-09-08 (`8849c53f`, `30e25861`). 5 tasks, 0 task-level fix rounds, one fix wave per branch.
   **The Opus review of #165 measured `.dynamicTypeSize` INERT on macOS 26** (harness: `.font(.body)`
   and `@ScaledMetric` unchanged at every size while the environment value propagated) — the
   macOS root bump was dropped; #162 stays open for a point-size token sweep (option b), finding
@@ -188,7 +188,7 @@ the combination gate). Final review deferred minors → #173.
   when the post-capture file pass FAILS, promote `live.jsonl` as a **provisional** revision zero,
   replaced when a later retry succeeds (option a over "no transcript + retry" and "after N
   failures"); the cloud container refreshes `docs/overview.md`; cleanup approved.
-- Plan `docs/plans/2026-09-07-batch-a-plan.md`, run via SDD from `main` `1684b214`: Sonnet
+- Plan `docs/plans/2026-09-07-batch-a-plan.md`, run via SDD from `main` `145824ee`: Sonnet
   implementers and task reviewers, Opus whole-branch reviews, one fix wave + one scoped re-review
   per branch; 4 tasks, zero task-level fix rounds, no stalls. Owner merges **#158 → Update branch
   → #159**.
@@ -247,7 +247,7 @@ the combination gate). Final review deferred minors → #173.
 Reviewed the week, took four rulings from the owner before he left (slate = Phase 1
 hardening + export; #2 held; full-fidelity export with a folder picker; the M4 reinstall
 gate has NEVER been run), wrote `docs/plans/2026-09-06-overnight-hardening-export-plan.md`
-and ran it via SDD: four worktrees from `main` `2a1b4fbd`, two implementers at a time on
+and ran it via SDD: four worktrees from `main` `6faca2d7`, two implementers at a time on
 disjoint branches, Sonnet for implementers and task reviewers, Opus for the four
 whole-branch reviews, one fix wave + one scoped re-review per branch. Owner merges in
 order **#150 → #152 → #153 → #151**, "Update branch" between each.
@@ -297,7 +297,7 @@ plan's prediction exactly). Resolved **#143**'s predicted conflict locally, sinc
 one conflict in `CaptureScreenModel.finishCurrentCapture`, resolved to main's tail plus the
 new line (`buildReceipt(for: transcribed)` → `advanceBackdateForNextEntry()` →
 `coordinator = spawn()`). Straggler grep across all three targets for `discardingID`,
-`showDiscardNotice`, `discardNotice`, `discardNoticeTask`: zero hits. Merge commit `23354e54`
+`showDiscardNotice`, `discardNotice`, `discardNoticeTask`: zero hits. Merge commit `0c7da0e7`
 pushed; #143 is MERGEABLE with unit CI green at 2064.
 
 - **A branch that adds a SOURCE file needs `xcodegen generate` too, not just a test file.**
@@ -319,7 +319,7 @@ run `34046973383`. The #144 and #145 runs show `cancelled` because the merges la
 90 seconds of each other and the tip run superseded them; that is fine here only because the
 tip run tested everything at once.
 
-Built macOS **build 14** from `28dbf0c2`, verified it carried #143/#145/#146 symbols and the
+Built macOS **build 14** from `956a5bc8`, verified it carried #143/#145/#146 symbols and the
 iCloud entitlement, and smoked it: **8/8 pass** — build stamp, sidebar indent, no Discard,
 Copy transcript, next-day backdate (and correctly NOT advancing at Month precision), the live
 ¶ break at the tap, and the break surviving the commit.
@@ -342,7 +342,7 @@ Copy transcript, next-day backdate (and correctly NOT advancing at Month precisi
 
 Owner approved the slate at 21:00 and went to bed; the run ended at 04:00 with five PRs open
 from one plan (`docs/plans/2026-09-05-overnight-fixes-plan.md`), each branched from main
-`95c1c0b5`. PR #142 (#140 Discard path removed, #130, #122 finalize-backlog fix; unit 2051,
+`bbe12075`. PR #142 (#140 Discard path removed, #130, #122 finalize-backlog fix; unit 2051,
 UI 61). PR #143 (#139 sidebar indent, #75 one entry-count rule, #77 round-trip pin, #47
 next-day backdate pre-fill, #105 Copy transcript; unit 2073, UI 63; one expected conflict
 with #142). PR #144 (#141 `build 14: <date>`, `docs/builds.md`, CFBundleVersion 14; unit
@@ -369,7 +369,7 @@ settled/superseded label. Owner Mac smoke: band calm, no flicker; 12 pt serif to
 `CaptureProse.font` pinned to `CaptureSurface.minimumControlPointSize` (16 pt) on macOS,
 iOS keeps `.callout`; second look passed. The `transcript-timing` instrument is stripped
 (measurement recorded in the PR and the plan). **PR #138** ("Closes #118", 7 commits, head
-`21cb8c9a`): unit **2060** against main's 2049, UI 62, both CI jobs green.
+`9799dc38`): unit **2060** against main's 2049, UI 62, both CI jobs green.
 
 Filed during the smoke: **#139** sidebar journal rows indented; **#140 remove the Discard
 button from the capture screen** — the owner hit it by accident and lost a recording;
@@ -397,14 +397,14 @@ button from the capture screen** — the owner hit it by accident and lost a rec
 ## Session 2026-09-04/05 (laptop — #118 planned and PR A shipped via SDD; PR B gated on a Mac measurement)
 
 Wrote `docs/plans/2026-09-04-118-capture-screen-plan.md` (two PRs; §7 already shipped in
-#126) and executed it with subagent-driven development. **PR #135 merged** (`fad8f97f`):
+#126) and executed it with subagent-driven development. **PR #135 merged** (`dfc19e2f`):
 voice switch in every recording with no Two-voices toggle (§4, `CaptureScreenModel.markVoice`
 writes opener → mark → `multiVoice: true` once per capture), Ready = journal + compact
 backdate + bar with FOUR dead layout flags deleted (§3/§6 — `usesCompactBackdateField` went
 too, disclosed), receipt entry is a tappable card and "Record another" is gone (§3), colour
 literals → five `InkTone` studio tones (§8), UI tests migrated (shared `openReceiptEntry`/
 `finishReceipt`). Final review also removed dead `LibraryScreenModel.recent`. Unit 2049 /
-UI 62 on the PR; **main CI on `fad8f97f` was still in progress at handoff — read its count
+UI 62 on the PR; **main CI on `dfc19e2f` was still in progress at handoff — read its count
 before quoting a baseline.** Design doc corrected: Home does NOT render the last entry.
 
 **PR B** (`feat/118-live-transcript`, worktree `.claude/worktrees/118-live`, rebased onto
@@ -444,10 +444,10 @@ contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build d
 ## Session 2026-09-01 (laptop — build 13 on TestFlight, #125 merged, light resync)
 
 Short ops session. **TestFlight build 13 uploaded, both platforms**, from main at
-`cae172bd` (#132, the #125 current-week-times cloud PR, merged that afternoon). iOS
+`95219e56` (#132, the #125 current-week-times cloud PR, merged that afternoon). iOS
 upload succeeded 3:25 PM PT, macOS 3:28 PM PT; the whole two-leg run was ~6 minutes of wall
 clock, with **Xcode GUI not running** — the archive leg cloud-signs fine off the stored
-Xcode account. Build 13 carries #126 + #127 + #128 + #125. Main's CI on `cae172bd` went
+Xcode account. Build 13 carries #126 + #127 + #128 + #125. Main's CI on `95219e56` went
 green after the upload: **2057 unit (1 skipped) / 62 UI** — that is the new baseline.
 
 **Light resync** (2026-09-01): #128 and #125 shipped-but-open, closed 2026-09-02 after the
@@ -458,11 +458,11 @@ callers). Three local branches tracked gone remotes (`feat/bulk-select`, `feat/r
 ## Session 2026-08-31 (cloud → laptop — PR #126 merged: #118 §7 corrections landed)
 
 Cloud session (Linux container), continued onto the laptop at the end. **PR #126 merged**
-(`661e5a0`): build stamp moved to About, stale colorScheme premise corrected. **PR #127
-(#73/#74 dead code) also merged** (`fc3bc24`); the two merges share zero files and no
+(`45523d0`): build stamp moved to About, stale colorScheme premise corrected. **PR #127
+(#73/#74 dead code) also merged** (`697fd1c`); the two merges share zero files and no
 symbols, verified, so order didn't matter — but neither PR's CI saw the other, so main's
 own runs were the first to test the combination. Both since confirmed green, read from the
-job logs: `661e5a0` success, and `fc3bc24` at **2029 unit (1 skipped, 0 failures) / 61 UI
+job logs: `45523d0` success, and `697fd1c` at **2029 unit (1 skipped, 0 failures) / 61 UI
 (0 failures)** — the combined tree is verified, not merely assumed.
 
 **Build stamp now lives in About** — sidebar → About → App section → `Build` row
@@ -494,7 +494,7 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
 29–42 min for the identical 61 tests — duration alone is not evidence of retries.
 
 **Next steps:**
-1. **Bulk select (#128) is MERGED** — PR #129, merge commit `bc344853`, all five plan
+1. **Bulk select (#128) is MERGED** — PR #129, merge commit `761f9f21`, all five plan
    tasks, CI green (unit 2029→2049, UI 61→62). Owner-smoke the select mode on device
    when convenient; #128 can be closed after that smoke (check the issue's item list
    first — repo rule).
@@ -519,9 +519,9 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
 
 ## Session 2026-08-30 late (laptop — PR #124 merged; #118 capture design WRITTEN and committed)
 
-**PR #124 merged by Nico; main green on the merge commit `a917b278`.** Record flow, Discard
+**PR #124 merged by Nico; main green on the merge commit `cee595a0`.** Record flow, Discard
 and the About tutorial are all on main. Three docs commits pushed this session: the handoff
-(`82c81d42`), the #118 design (`eea2d4ff`), a second cloud-task prompt (`0234979b`).
+(`12b828b8`), the #118 design (`e081e78c`), a second cloud-task prompt (`bb063fe8`).
 
 **Design of record: `docs/plans/2026-08-30-118-capture-screen-design.md`** — every decision
 owner-ratified at smoke. It supersedes the capture half of `2026-08-29-ux-redesign-design.md`.
@@ -545,7 +545,7 @@ question is closed, and the design's red is only the live dot and the Discard-fr
 
 **Owner smoke, 5 steps — item 1 CLOSED as no-bug.** The "previous transcript text" was the
 **Last entry card** doing its job, not a stale transcript region; `allEntries` excludes
-trashed, so a discarded entry cannot appear there. The `8edb3db3` fix is sound. The card is
+trashed, so a discarded entry cannot appear there. The `6d75ca96` fix is sound. The card is
 removed by the design anyway. Build stamp on the smoked app reads `built Aug 30, 9:24 AM PT`
 (the 9:14 in the prior handoff was a directory mtime, not a build time — `dwarfdump --uuid`
 remains the only identity worth quoting). Also learned: the sidebar has **All Entries**, not
@@ -586,7 +586,7 @@ About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
 5. **TestFlight build 13 is teed up, NOT uploaded.** `CFBundleVersion` 12 → 13.
    `scripts/upload_testflight.sh ios` then `... macos`, one at a time. Needs the Xcode GUI
    session awake (the archive leg cannot cloud-sign with an API key) and CI green on
-   `1ea4fe81`. Carries #119 + #124 + the About rewrite.
+   `42b514a9`. Carries #119 + #124 + the About rewrite.
 6. **Invite the tester**: when her Apple Account email arrives → ASC Users and Access → Customer
    Support role → TestFlight Internal group.
 7. **Parked**: #122/#123; #125 current-week times; #86 back-destination from an entry;
@@ -640,7 +640,7 @@ session deliberately holds the finished text after a stop, and a fresh coordinat
 clear it — it belongs to the session. On the ordinary path the receipt covers that region, so
 nobody ever saw the stale text; discard nils the receipt and uncovered it, stranding the
 words of a recording that no longer exists on the landing screen. That is the #53-era defect
-`showsLiveTranscript` exists to prevent; the view was simply not asking. Fixed in `8edb3db3`
+`showsLiveTranscript` exists to prevent; the view was simply not asking. Fixed in `6d75ca96`
 (one condition). **Latent since the receipt landed — not introduced by this branch.**
 
 **No automated test pins that fix.** The simulator does not reliably produce transcription
@@ -655,7 +655,7 @@ Decide after the re-smoke: file the coverage gap, or find a seam that makes it r
    known swallowed-tap gap: if it reads as broken rather than merely slow, fix it instead of
    filing it. Step 7 is the About copy — read it as the tester would; it is meant to be rewritten.
 2. **Merge PR #124** once CI is green and the smoke passes (Nico). CI was in flight on
-   `8edb3db3` at handoff; earlier runs on this branch show `cancelled` because each push
+   `6d75ca96` at handoff; earlier runs on this branch show `cancelled` because each push
    supersedes the last, not because anything failed.
 3. **#118 — capture screen design pass** (what is capture now that it isn't the front door,
    and now that arriving there means you are already recording?).
@@ -1402,8 +1402,8 @@ and #88 (#84 fix) both merged by owner. Suite 1750 → 1780 unit, green.
 
 Marathon session: /readup → roadmap discussion → continuous SDD on `m4/sync` (Sonnet
 implementers + Sonnet reviews per the standing cost ruling; every task adversarially
-reviewed, every Important fixed and re-reviewed). Branch `m4/sync` `c592752c..6fcd73b6`,
-**~20 commits, PUSHED**. Main carries the CLAUDE.md restructure (`e6ad36f8`). Both trees
+reviewed, every Important fixed and re-reviewed). Branch `m4/sync` `15615292..9ba04d5b`,
+**~20 commits, PUSHED**. Main carries the CLAUDE.md restructure (`a392ccf5`). Both trees
 clean; `stash@{0}` untouched. **Not merged to main; Task 12 + final review + Gate B remain.**
 
 - **Owner rulings landed this session:** corrupt-sidecar deletion block ACCEPTED as
@@ -1411,7 +1411,7 @@ clean; `stash@{0}` untouched. **Not merged to main; Task 12 + final review + Gat
   journal ruled NOT acceptable → **#82 filed AND BUILT** (on-demand recovery for
   provably-worthless, provably-inactive blockers — planner's own decision is the safety
   valve, owned-decision switch with no `default:`, parked-continuation race pin);
-  CLAUDE.md slimmed to an operating manual (history → `docs/devlog.md`, `e6ad36f8`);
+  CLAUDE.md slimmed to an operating manual (history → `docs/devlog.md`, `a392ccf5`);
   repo STAYS PUBLIC (advice: flipping private bills macOS CI minutes at 10×);
   merged `feat/journal-editing` deleted local + origin.
 - **Empty Trash shipped** (owner asked mid-smoke: emptying one-at-a-time was blocking
@@ -1419,10 +1419,10 @@ clean; `stash@{0}` untouched. **Not merged to main; Task 12 + final review + Gat
   per-entry guard (sidecar re-read per item), one purge + one rescan, honest partial-failure
   alert. Review-approved; the review exposed that the brief's named mutation adversary was
   structurally impossible — adjudicated as a brief defect, and the guard's restore-race
-  branch got its own mutation-verified pin (`abffce0b`).
+  branch got its own mutation-verified pin (`e18a07a7`).
 - **Owner smoke, partial:** journal ordering (#79) PASS on both devices. Tests 2–5 (Empty
   Trash, cross-device empty-journal delete, disabled row + footnote, picker freshness,
-  mis-tap delete) NOT yet run — devices carry builds at `9280adaf` (Mac dylib `08DF35AC`
+  mis-tap delete) NOT yet run — devices carry builds at `39766021` (Mac dylib `08DF35AC`
   at `~/Desktop/Raconte-m4sync.app`, phone `37E561B0`), which include Empty Trash + #82
   but NOT Tasks 6–11. Build fresh at branch head before the next smoke.
 - **m4 SDD Tasks 6–11 all complete** (ledger authoritative:
@@ -1488,7 +1488,7 @@ clean; `stash@{0}` untouched. **Not merged to main; Task 12 + final review + Gat
 
 Ran `docs/plans/2026-08-21-journal-order-and-delete-plan.md` to completion in one sitting,
 subagent-driven (Sonnet implementers + Sonnet task reviews, Opus gate + Opus fix wave).
-Branch `m4/sync` `082e30e9..c592752c`, **12 commits, PUSHED**. Both trees clean;
+Branch `m4/sync` `5c87b118..15615292`, **12 commits, PUSHED**. Both trees clean;
 `stash@{0}` (inert fetch-debounce scaffolding) untouched. **Not merged to main — and the
 owner smoke has not been run.**
 
@@ -1588,16 +1588,16 @@ owner smoke has not been run.**
 ## Session 2026-08-20→21 (laptop — M4/SYNC TOOK MAIN, span synced, GATE A CLOSED; issues #79/#80 + next-session plan; 1555 unit / 43 UI)
 
 Planned AND executed the merge in one sitting, subagent-driven (Sonnet implementers +
-Sonnet task reviews, Opus gate — owner ruling honoured). Plan `6a406542`, branch
-`m4/sync` at `082e30e9`, pushed. Main at `762e672a`. Both trees clean.
+Sonnet task reviews, Opus gate — owner ruling honoured). Plan `03b52cc2`, branch
+`m4/sync` at `5c87b118`, pushed. Main at `dbe8ff47`. Both trees clean.
 
-- **The red-first tripwire design worked exactly as intended.** `35e56229` landed
+- **The red-first tripwire design worked exactly as intended.** `d1be5b1f` landed
   `SyncJournalRoundTripTests` BEFORE the merge (Mirror 5-field pin + whole-value
   equality through journalRecord → RemoteJournal → adopted, mutation-verified both
   directions); the merge turned it red on exactly that one test; the wiring turned it
   green. A `Journal` field skipped by sync can no longer pass silently (#70 comment
   posted — its decoder half stays open; **do not close #70 on the tripwire alone**).
-- **Merge `558809a4`: exactly the dry-run's 3 files / 7 hunks.** All five
+- **Merge `c6aa8672`: exactly the dry-run's 3 files / 7 hunks.** All five
   `Journal.swift` unions kept both `span` and `modified`; both Mirror pins bumped to 6;
   `ContentView` took main's structure with `SyncCoordinator` re-homed into
   `AppServices` (+ one `.task` launch kick — the ONLY delta vs main's file); **the #67
@@ -1616,7 +1616,7 @@ Sonnet task reviews, Opus gate — owner ruling honoured). Plan `6a406542`, bran
   (`JournalEditorView.commitSpan` + `JournalSpanEditor` teardown had no value-changed
   guard), so a no-op visit could clobber an offline peer's genuine edit via LWW. Fixed
   at BOTH layers (view guard + `JournalStore.setSpan` early-returns on unchanged span,
-  no stamp/no hook) `8f1f56f1`, pinned. F2: tripwire now also routes through
+  no stamp/no hook) `5a0d22c5`, pinned. F2: tripwire now also routes through
   `JournalMerge.merge` (a field wired in `adopted` but forgotten in `merge` used to
   pass). Scoped re-review: all addressed. **1555 unit / 43 UI green.**
 - **m4 GATE A CLOSED** (recorded in the m4 ledger): owner smoked the merged builds —
@@ -1633,7 +1633,7 @@ Sonnet task reviews, Opus gate — owner ruling honoured). Plan `6a406542`, bran
   callers, inbound deletions ignored pending T11); resurrection hazard mapped in the
   issue.
 - **Next session is pre-planned for Sonnet:**
-  `docs/plans/2026-08-21-journal-order-and-delete-plan.md` (`762e672a`) — Phase A
+  `docs/plans/2026-08-21-journal-order-and-delete-plan.md` (`dbe8ff47`) — Phase A
   (ordering + picker refresh, no rulings needed) and Phase B (empty-journal delete +
   sync propagation) with **3 owner rulings pre-recommended at the top: confirm by
   number before dispatching Phase B.**
@@ -1663,7 +1663,7 @@ Sonnet task reviews, Opus gate — owner ruling honoured). Plan `6a406542`, bran
 
 ## Session 2026-08-20 (laptop — PR #72 SMOKED AND MERGED; #69/#65 closed, #67 mis-closed then corrected; m4/sync merge DRY-RUN: 3 files, 7 hunks)
 
-Short close-out session. Main at `8799ccf0`, tree clean.
+Short close-out session. Main at `21f399f6`, tree clean.
 
 - **Owner smoked `~/Desktop/Raconte-journaledit.app` and passed** ("pass! looks good"),
   read the PR, **merged #72**. Recorded on the PR.
@@ -1730,11 +1730,11 @@ Short close-out session. Main at `8799ccf0`, tree clean.
 5. Backlog: #67 (10 items remain), #73-78, #71, #70, #66, #63 final smoke, unified-editor
    #60/#59, #29/#50/#51/#54/#55/#18/#35/#47/#46/#44, TestFlight.
 
-## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 merged as `8799ccf0`; #69 dead, #67 item 2 fixed; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
+## Session 2026-08-19 (laptop — JOURNAL-EDITING BRANCH BUILT AND GATED; PR #72 merged as `21f399f6`; #69 dead, #67 item 2 fixed; issues #73-78; 1319 → 1368 unit / 35 → 43 UI)
 
 Ran `docs/plans/2026-08-18-journal-editing-implementation-plan.md` to completion,
 subagent-driven, in one sitting. Branch `feat/journal-editing`, 13 commits
-`5f188ac7..7584afa1`, pushed. **PR #72 open — merge is Nico's.** Owner ruling honoured:
+`6f46d2ac..e537b80a`, pushed. **PR #72 open — merge is Nico's.** Owner ruling honoured:
 Sonnet implementers AND Sonnet task reviews, Opus for the gate only.
 
 - **#69 is dead structurally, in the first commit.** The capture picker is selection-only
@@ -1823,7 +1823,7 @@ Sonnet implementers AND Sonnet task reviews, Opus for the gate only.
 ## Session 2026-08-18 (laptop — #69 ROOT-CAUSED AND PROVEN; PR #64 MERGED; journal-editing IA designed + planned; issues #69-#71)
 
 The cover full-bleed bug that defeated the last session is solved, and the fix is a
-proven empirical result rather than another theory. Main at `3de886d2`, tree clean,
+proven empirical result rather than another theory. Main at `004560ae`, tree clean,
 everything pushed. No code shipped — this session was diagnosis + design + plan.
 
 - **#69 ROOT CAUSE: on macOS a `Menu`'s label discards SwiftUI's sizing of a resizable
@@ -1848,7 +1848,7 @@ everything pushed. No code shipped — this session was diagnosis + design + pla
 - **Lesson worth repeating:** the previous session died chaining unfalsifiable theories
   (accessibility zoom, window vibrancy). What broke the deadlock was picking the
   cheapest **falsifiable** probe and building it — ten minutes, one screenshot, done.
-- **PR #64 (nav) MERGED** by Nico (`20beecc7`). Worktree `/Users/nico/src/raconte-nav`
+- **PR #64 (nav) MERGED** by Nico (`f0de32c4`). Worktree `/Users/nico/src/raconte-nav`
   removed, branch deleted local + remote. Only `m4/sync` remains as a worktree.
   **Baseline measured on the merged tree: 1319 unit tests, 1 failure** — the known
   laptop-local `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage`.
@@ -1943,7 +1943,7 @@ correct. `ContentView.swift` (the actual app root, checked for the first time th
 session) has no cover rendering either — just a plain `books.vertical` SF Symbol toolbar
 button. The installed binary's identity was verified against the source:
 `dwarfdump --uuid` on `Raconte-m4sync.app`'s debug dylib gives `4317692D…`, which matches
-exactly what the m4 ledger recorded for the Gate A build at commit `63651ac3` — so the
+exactly what the m4 ledger recorded for the Gate A build at commit `48c6d9d3` — so the
 running app is provably the reviewed, committed code, not a stale build carrying a
 discarded local experiment. Reflog showed no evidence of one either.
 
@@ -1987,23 +1987,23 @@ smoke checklist wants. The laptop→phone rename direction was never reached thi
 ## Session 2026-08-17 night (laptop — NAV BRANCH FINISHED: T7-T9 + Gate B + fix wave; PR #64 OPEN; issues #65-67; 1313 → 1319 unit + 35 UI)
 
 Ran the nav SDD loop to completion unattended (Sonnet implementers, Opus adversarial
-reviews, owner directive). Branch `nav/split-view` final at `cb0ed9f7`, pushed. **PR #64
+reviews, owner directive). Branch `nav/split-view` final at `8145bb99`, pushed. **PR #64
 open — merge is Nico's.** Every task review caught something real; the SDD workspace
 ledger (kept until merge) has the full record.
 
-- **T7 Debug place** (`e993c1b2`+`658d8559`): build info first, harness fenced below,
+- **T7 Debug place** (`4b62cda6`+`7d62cdce`): build info first, harness fenced below,
   build stamp genuinely async. Review Important: the brief's own off-main test was
   vacuous (a future `@MainActor` annotation would still pass) — fixed with a
   `pthread_main_np()` hook recorded inside the call path, counterfactual-verified
   (`Thread.isMainThread` is unavailable from async contexts; SDK constraint).
-- **T8 Mac menu bar** (`9503f0f3`): Go menu ⌘1-4 (⌘4 DEBUG-gated matching the sidebar
+- **T8 Mac menu bar** (`ca5c8418`): Go menu ⌘1-4 (⌘4 DEBUG-gated matching the sidebar
   row), ⌘[ Back, ⌘N root-level alert. Approved clean — first zero-Important task review
   on the branch. Implementer extracted the shared `strippingComments` helper
   (`RaconteTests/SourceScanning.swift`) from two byte-identical private copies; the Esc
   source-scan is self-adversarial (the doc comment contains `.cancelAction`, so stripper
   regression FAILS the test). Note: `CommandGroup(replacing: .newItem)` removes
   File ▸ New Window — deliberate.
-- **T9 docs** (`d7334b95`+`c4f19bab`): overview nav section + design §11 as-built +
+- **T9 docs** (`29b4f99b`+`b5612264`): overview nav section + design §11 as-built +
   CLAUDE.md conventions (on the branch). Review caught two factual errors — docs claimed
   ⌘[ saves from inside the editor (it only pops `detailPath`; the editor is a
   `navigationDestination(isPresented:)` push ABOVE it), and a fallback citation pointed
@@ -2013,7 +2013,7 @@ ledger (kept until merge) has the full record.
   SURVIVES its entry being popped from underneath** (`onDisappear` + unstructured Task
   finishes the write; iPad probe, typed inside the debounce window), and
   clear-on-place-switch proven on iPad landscape. One Important, fixed same session
-  (`cb0ed9f7`): **re-selecting the current place was a dead click with an entry pushed
+  (`8145bb99`): **re-selecting the current place was a dead click with an entry pushed
   under it — on Mac that's ⌘1-4** (the keep-the-path rule was iPhone-era, where the path
   is provably always empty). Now pops to root; old pin restated, RED+mutation verified.
   Also fixed: the `sidebar.toggle` helper branch was dead code that silently POPPED on
@@ -2093,8 +2093,8 @@ point: the SDD ledger at
 `/Users/nico/src/raconte-nav/.superpowers/sdd/2026-08-17-navigation-redesign-implementation-plan/progress.md`
 — authoritative (pre-flight rulings R1-R6, per-task reviews, deferred minors, issues to
 file). Task 6 was mid-flight at handoff; resume there.** Worktree
-`/Users/nico/src/raconte-nav`, branch `nav/split-view` at `6825f724`, pushed through T5.
-Main carries `0286a4f8` (design) + `a26a4c45` (plan).
+`/Users/nico/src/raconte-nav`, branch `nav/split-view` at `5d7837d4`, pushed through T5.
+Main carries `d4aff5c9` (design) + `7c5be61b` (plan).
 
 - **The Debug "freeze" was never a hang — log-proven.** The Debug sheet has NO dismiss
   affordance, and macOS refuses ⌘Q while a modal sheet is up ("App termination blocked
@@ -2128,14 +2128,14 @@ Main carries `0286a4f8` (design) + `a26a4c45` (plan).
   created/renamed on the capture screen were missing/stale in the sidebar (rescan now
   triggered). `CaptureView.swift` shed `CaptureScreenModel` into its own file (T2,
   byte-verified mechanical).
-- 1311 unit + 33 UI green at `6825f724`. Baseline red: only the laptop-local
+- 1311 unit + 33 UI green at `5d7837d4`. Baseline red: only the laptop-local
   `BuildStampTests.testLoadedImageUUIDFindsARealLoadedMachOImage` (intermittent).
   Two pre-existing production AX bugs queued to file as issues at branch finish
   (journalPicker container-flattening; alert TextField identifier not bridging) —
   details in the ledger.
 
 **Post-handoff, same day: Task 6 DONE, GATE A OPEN, Mac smoke PASSED.** Task 6 landed
-(`d1d447d1`, 1313 unit + 34 UI; two implementer stalls recovered by nudge; review
+(`96f6f17c`, 1313 unit + 34 UI; two implementer stalls recovered by nudge; review
 approved with a CONFIRMED new AX trap variant, now in memory:
 container-identifier-overwrites-descendants). Gate A adversarial review: GATE OPEN —
 probe 1 proved the finalize-with-no-view-mounted path end-to-end in the simulator
@@ -2147,7 +2147,7 @@ sidebar in all three capture states, recording survives navigation, ⌘Q with De
 **Bonus: owner saw his phone's journal names in the nav sidebar — first real-data
 evidence the m4/sync engine works** (nav has no sync code; the m4sync app had synced
 journals into the shared container). Entries absent on the laptop is CORRECT
-(sync T6-T10 unbuilt). Branch pushed through `d1d447d1`.
+(sync T6-T10 unbuilt). Branch pushed through `96f6f17c`.
 
 **Next steps:**
 1. **M4 sync smoke, remaining steps (do FIRST, while the m4sync build is still on the
@@ -2175,8 +2175,8 @@ The owner-ordered sync pivot ran: full brainstorm → design → plan → SDD lo
 session. **Resume point for the next session: the SDD ledger at
 `/Users/nico/src/raconte-m4/.superpowers/sdd/2026-08-17-m4-sync-implementation-plan/progress.md`
 — it is authoritative (rulings, deferred minors, Gate A state), not this summary.**
-Worktree `/Users/nico/src/raconte-m4`, branch `m4/sync` at `63651ac3`, pushed. Main
-carries the two docs commits (`d5f23061` design, `5e8f268e` plan). Both trees clean.
+Worktree `/Users/nico/src/raconte-m4`, branch `m4/sync` at `48c6d9d3`, pushed. Main
+carries the two docs commits (`979e7805` design, `38059f18` plan). Both trees clean.
 
 - **Design owner-approved live** (`docs/plans/2026-08-17-m4-sync-design.md`): full
   replica + restore (delete-app-reinstall-reconstructs is the acceptance test);
@@ -2230,16 +2230,16 @@ carries the two docs commits (`d5f23061` design, `5e8f268e` plan). Both trees cl
 ## Session 2026-08-16 evening (laptop — deep resync (zero drift); #62 CLOSED; error banner + #63 flash + "Library" shipped; editor rulings recorded; 1276 → 1289 tests)
 
 Live owner-in-the-loop session: deep resync, then four builds each ruled → built → smoked
-same-session. Tree clean, main at `2227e97c`, all pushed, CI green. Owner ended with a
+same-session. Tree clean, main at `68c0b933`, all pushed, CI green. Owner ended with a
 **pivot order: next session is device-to-device sync (M4)** — see Next Steps 0.
 
 - **Deep resync (three Explore agents, evidence = file:line + SHA): ZERO drift.** All 22
   open issues genuinely TODO; the tracker is honest. One partial: **#29's BEHAVIOR is
-  fixed** (`CaptureCoordinator.swift:655` deactivates on every path, `3de4307b`) — only
+  fixed** (`CaptureCoordinator.swift:655` deactivates on every path, `fcd0694e`) — only
   the effect-table asymmetry remains, a model-honesty cleanup. **#43 re-scoped** to just
   the `.part` staging collision; its createdAt-ms-truncation half moved into #51 (same
   determinism cluster), both commented. No stale branches; CLAUDE.md claims all verified.
-- **#62 fixed and CLOSED (`0436f55f`, TDD red-verified).** `reconcileReceipt()` clears
+- **#62 fixed and CLOSED (`5068af1d`, TDD red-verified).** `reconcileReceipt()` clears
   the receipt when its captureID leaves `library.allEntries`, wired via
   `onChange(of: allEntries)` on the always-mounted capture root — fires even while the
   trash happens on a pushed screen. Restore deliberately does NOT revive the receipt,
@@ -2251,14 +2251,14 @@ same-session. Tree clean, main at `2227e97c`, all pushed, CI green. Owner ended 
   so the discriminating pins are the three unit tests; the new UI test pins the
   end-to-end repro honestly (its vacuousness against pre-fix sim code is documented in
   the test).
-- **Error banner joined `CaptureLabel` as the model's first non-grey (`e56ba3f2`).**
+- **Error banner joined `CaptureLabel` as the model's first non-grey (`803bb881`).**
   `CaptureLabelColor` carries full sRGB so non-grey contrast stays checkable without
   SwiftUI; greys unchanged. Banner: (1.0, 0.56, 0.52) ≈ 8.8:1 at .callout/.title2 —
   replacing raw `.footnote` + `.red` (10 pt on Mac; dark-mode systemRed measures
   **5.72:1** on this surface, below the 7.0 floor — mutation-verified the floor test
   catches exactly that). Two new RED-verified adversaries: case-must-be-applied +
   raw-`.red` source scan.
-- **#63 built, smoked, retuned same-session (`5cc62a89` + `2227e97c`); issue OPEN
+- **#63 built, smoked, retuned same-session (`35f2b241` + `68c0b933`); issue OPEN
   pending final smoke.** `MarkerFlash` (pure, beside `MarkerHaptic`): the dash-dot as
   light on the tapped marker button — beat times EQUAL the haptic pattern's (pinned, so
   the two senses can't drift), subtle white overlay, hit-test-disabled. Coordinator
@@ -2268,7 +2268,7 @@ same-session. Tree clean, main at `2227e97c`, all pushed, CI green. Owner ended 
   eye than to the thumb), brightness 0.4/0.25 → 0.3/0.2. Owner picked flash over
   trackpad haptic ("no trackpad in use here").
 - **Cosmetics all settled:** timer stays 24 pt (ruled good); library door reads
-  **"Library"** (`68131e25`, owner picked it over "Open the library"/"Past readings").
+  **"Library"** (`9ac4442b`, owner picked it over "Open the library"/"Past readings").
   Owner then couldn't find the door twice — first a receipt was covering the landing
   screen, then he was mid-recording (both states hide it by design). Found on the idle
   screen; his verdict queued as Next Step 1.
@@ -2315,7 +2315,7 @@ Answered last session's queued opener: "what does the capture interface PROVIDE"
 wanted purpose-level discussion, not a layout tweak. Grounded three candidate approaches
 in the actual code (`CaptureView.swift:843-916`, the IA decisions doc, the six rescued
 mocks) rather than proposing in the abstract, then built and TDD'd the one he picked.
-Committed `cc437d12`, pushed. Tree clean.
+Committed `9081e475`, pushed. Tree clean.
 
 - **Root cause, precisely located:** `setupRegion` was ALWAYS a `ScrollView` — sized to
   content when idle, but squeezed into the `setupHeightWhileCapturing = 200` box while
@@ -2387,7 +2387,7 @@ Committed `cc437d12`, pushed. Tree clean.
 
 Owner went to bed after approving all five queued next-steps and asking for a date-picker
 recommendation; the unattended stretch is the first two bullets. He then smoked three times
-across the morning. Tree clean, main at `3fc6fa9b`, pushed.
+across the morning. Tree clean, main at `33428e94`, pushed.
 
 **The session's shape is worth copying: build blind overnight → owner smoke → fix what he
 actually hit.** The overnight guess (a sheet) was structurally sound and still wrong in two
@@ -2395,7 +2395,7 @@ ways only a human at the keyboard could find. Every visual fix this session was 
 confirmed or corrected by smoke within hours — nothing shipped on my judgement alone.
 
 - **Mac backdate control rebuilt: the app now draws its own button and calendar sheet
-  (`2e7c7d34`).** The reco, and the reasoning worth keeping: **two system styles had been
+  (`1c220917`).** The reco, and the reasoning worth keeping: **two system styles had been
   tried and both failed for ONE underlying reason — the calendar was drawn in a
   presentation this app cannot reach.** `.compact` opens an AppKit popover the
   colour-scheme pin does not enter (while the screen's white foreground plausibly does);
@@ -2412,13 +2412,13 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
   was **a white label on a white fill, invisible in every appearance on both platforms**.
   Tint reset inside `PrecisionDatePicker`, not at the call site, because that white tint is
   also what makes the iOS date chip read on near-black.
-- **The journal name was 15 pt on the Mac while the model claimed 22 (`aa31efbc`) — and how
+- **The journal name was 15 pt on the Mac while the model claimed 22 (`3fbfb34e`) — and how
   it was found is the durable part.** Every floor in `CaptureLabelTests` quantifies over
   `allCases`, so **a case no view applies is a guarantee about nothing that reads in the
   suite as coverage**. `journalName` declared `.title` (22 pt macOS) and passed everything
   while `JournalHeaderView` drew the name with a raw `.font(.title3…)` = 15 pt, below the
   16 pt floor, **on the exact platform the "too small on the mac" report came from**.
-  `seeAllLink` was likewise dead (the library door replaced it in `a509a1b6`).
+  `seeAllLink` was likewise dead (the library door replaced it in `77ec05b1`).
   **New test `testEveryLabelCaseIsActuallyAppliedToAView` is the missing adversary** — the
   mirror of the dim-grey-literals scan: that one checks no label escapes the model downward,
   this one checks no case sits in the model unattached to any view.
@@ -2428,15 +2428,15 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
   scanning helpers now **strip `//` comments**, and each has a test that the stripping
   happens. **Rule: a source-scanning test must scan CODE, or this file's own prose will
   satisfy it** — this repo documents itself heavily, which makes it uniquely prone to this.
-- **CI was red on main and it was NOT a docs artifact (`13db861f`).** Run 31928162420 failed
-  on `5dbb8114`, a **docs-only** commit — the tell that nothing in the product changed.
+- **CI was red on main and it was NOT a docs artifact (`4b6cc919`).** Run 31928162420 failed
+  on `bfd54da0`, a **docs-only** commit — the tell that nothing in the product changed.
   Single failure, `testDoneFinalizesInSessionWithoutRelaunch`: it waited for the library to
   refresh, then asserted the coordinator had been replaced — but `finishCurrentCapture` does
   `rescan()` → `buildReceipt(...)` (which awaits a transcript read off disk) → `spawn()`, so
   **the gate went true strictly before its subject, with real I/O in between.** Held while
   that gap was one continuation; **last session's receipt work put a disk read in it**.
   The #4/#22 family again. **8 spinners × 15 iterations would NOT reproduce it here** — too
-  narrow on this laptop — so it was pinned with the probe-sleep method (`a140b7f8`'s
+  narrow on this laptop — so it was pinned with the probe-sleep method (`61774f8e`'s
   technique): a 300 ms sleep in exactly that window reproduces the CI message verbatim, the
   fix passes against that widened window, and deleting `coordinator = spawn()` outright
   still fails the waited version (so the wait is not vacuous). Probe and mutation reverted;
@@ -2444,7 +2444,7 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
 - **Could not see any of it.** `screencapture` now works (the iTerm permission took effect),
   but the app reports **zero windows to the accessibility API** — two launch attempts, and
   the owner's own Raconte instance was left running rather than killed. So the macOS visual
-  claims are dispositive only on re-smoke, same caveat `d3af816c` carried. The difference
+  claims are dispositive only on re-smoke, same caveat `cfef8ded` carried. The difference
   this time: **the fix does not rest on unobservable system behaviour** — every colour in
   the sheet is one this app sets.
 - **Both builds handed over, identity verified.** Mac: `~/Desktop/Raconte-latest.app`,
@@ -2467,7 +2467,7 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
   against code (three Explore agents, evidence = file:line + SHA, never a commit subject).
   **Result: almost no drift — exactly ONE shipped-but-open issue, #53**, verified done at
   `CaptureView.swift:778-797` + `CaptureControlBarMetrics.swift:17-121` with two UI tests
-  measuring rendered frames (`42293da4`). Everything else genuinely TODO. **#58 has code
+  measuring rendered frames (`21ebb7ad`). Everything else genuinely TODO. **#58 has code
   for all four controls it names but its acceptance is VISUAL — left open for smoke.**
   Also confirmed live: **#29 is a real inconsistency**, not a nit — `CaptureMachine` rows
   11/14 omit `.releaseSession` while `CaptureCoordinator.swift:654-659` deactivates on
@@ -2485,7 +2485,7 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
   ONLY there. Cherry-pick those six, then delete both.
 
 - **Owner smoke 2026-08-16 (macOS, light): "mostly pass" — two complaints, both right,
-  both fixed in `b262a270`.**
+  both fixed in `ce8192b3`.**
   1. *"No year picker in the day picker — you have to scroll back month by month."* macOS
      `.graphical` offers only prev/next arrows, so an 1998 page is **~340 clicks**. His own
      workaround (Year precision → pick year → back to Day) proved the controls existed and
@@ -2509,7 +2509,7 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
 - **Smoke round 3 (Mac + iPhone): everything passed. #58 and #53 both CLOSED.** The Mac
   date picker is done — Escape and click-away dismiss, the year dropdown moves the calendar
   without shifting the day. Phone marker smoke passed all six steps.
-- **Marker buttons now stand from the start, greyed until recording (`3fc6fa9b`).** Owner:
+- **Marker buttons now stand from the start, greyed until recording (`33428e94`).** Owner:
   "when I select Two voices, show the switcher button right away, don't wait for me to hit
   record. Just greyed out." He was right and the reason is worth keeping: **the toggle
   looked inert** — you turn on the one thing whose entire purpose is the voice switch, and
@@ -2565,12 +2565,12 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
 5. Unified-editor design pass (#60, #59) — two owner rulings still open (frameless-text
    marks refuse-vs-approximate; atomic tokens vs validated markdown). Real-time voice marks
    and edit-then-continue-recording stay deferred.
-6. ~~Stale design branches~~ **DONE (`520db8b7`)**: the six mock HTMLs that existed only on
+6. ~~Stale design branches~~ **DONE (`bab20d9b`)**: the six mock HTMLs that existed only on
    those branches were taken onto main **as files, not by cherry-picking the commits** —
    the commits carry the 59,288-file `.build` cache with them. Both remotes deleted, both
    local branches deleted, `git gc --prune=now` run. **`.git` is still 750 MB**, and that is
    NOT leftover from these branches: main's own history carries the earlier 738 MB of
-   `.build` blobs from before `ca45e7f7` untracked them. The privacy audit deliberately
+   `.build` blobs from before `7a8d5227` untracked them. The privacy audit deliberately
    ruled against rewriting history (it would break every SHA cited across CLAUDE.md, docs
    and issues), so that stays unless the owner reverses it.
 7. ASC credential hygiene → TestFlight; queued: #54 prev/next, #55 bubble hierarchy,
@@ -2579,9 +2579,9 @@ confirmed or corrected by smoke within hours — nothing shipped on my judgement
 ## Session 2026-08-15 evening (laptop — Option B bar SHIPPED, capture-landing redesigned + BUILT; 1231 → 1252 tests)
 
 Live owner-in-the-loop session, three smoke round-trips, everything pushed. Tree clean,
-main carries `a509a1b6`. The whole session was capture-screen UX driven by owner smoke.
+main carries `77ec05b1`. The whole session was capture-screen UX driven by owner smoke.
 
-- **Control bar rebuilt to Option B (`2ff8fe79`)** — the owner-approved mockup from the
+- **Control bar rebuilt to Option B (`9eb0c81d`)** — the owner-approved mockup from the
   last session. Five rows become three: the 44 pt clock drops to 24 and goes INLINE with
   the status text, **Done joins that row**, and the voice switch + ¶ move out of their own
   row to **flank the record button** (132 → 76). 28 pt gaps → 10. **Measured 190 pt of
@@ -2607,7 +2607,7 @@ main carries `a509a1b6`. The whole session was capture-screen UX driven by owner
     now held by a same-size `Color.clear`. `MarkerControlsModel.reservedForLayout`/
     `.isVisible` deleted (they reserved a ROW's height for marks with no row).
 
-- **Owner smoke found two colour/control bugs, both fixed (`d3af816c`).** The capture
+- **Owner smoke found two colour/control bugs, both fixed (`cfef8ded`).** The capture
   screen sets `.foregroundStyle(.white)` for its near-black surface and that **leaks into
   system-drawn controls on their own light material**. New Journal alert = white-on-white
   ("can't read what I type. but it does work" — the binding was never the problem); the
@@ -2616,7 +2616,7 @@ main carries `a509a1b6`. The whole session was capture-screen UX driven by owner
   that the colour-scheme pin explicitly does not reach — switched macOS to `.field` (typed,
   no popup), which also suits his stated keyboard preference on Mac.
 
-- **Capture-landing redesigned from a 3-option mockup, owner ruled B, BUILT (`a509a1b6`).**
+- **Capture-landing redesigned from a 3-option mockup, owner ruled B, BUILT (`77ec05b1`).**
   Owner smoke on the new bar surfaced the real problem: after Done the finished transcript
   sat on the landing screen as loose text under a Recent list **sliced mid-sentence** —
   "a really messed up user experience that has not been engineering correctly".
@@ -2691,21 +2691,21 @@ main carries `a509a1b6`. The whole session was capture-screen UX driven by owner
 Owner smoke-driven session, three round-trips. #53 is fixed and pushed, but the owner
 rejected the control bar's SIZE on smoke — so the next session's job is a compact rebuild
 against a mockup he has already approved. Tree clean, everything pushed, phone + Mac carry
-`42293da4`.
+`21ebb7ad`.
 
-- **Capture-label legibility, two commits, both from owner smoke.** `d51a1863`: setup
+- **Capture-label legibility, two commits, both from owner smoke.** `f727ec52`: setup
   labels were `.caption` at `Color(white: 0.55)` on the `0.05` background — 5.81:1, a
   PASSING WCAG AA score, which is exactly why no test caught it. New pure `CaptureSurface`
   + `CaptureLabel` carry each label's size/grey with WCAG luminance math, a 7.0:1 (AAA)
   floor, and a source-scanning test asserting the dim literals are GONE from CaptureView —
   without which the model could satisfy every rule while the screen stayed unchanged.
-  Then `dd3ff008`, owner's second report ("still pretty small on the mac"): **the first
+  Then `327303e6`, owner's second report ("still pretty small on the mac"): **the first
   fix was near-worthless on macOS because a semantic style is not a size.** `.callout` is
   16 pt on iPhone but 12 pt on Mac; macOS also renders `.caption`/`.footnote`/`.caption2`
   all at 10 pt. Floor restated in POINTS (16), and each role now maps to a *different*
   style per platform (control labels `.callout` on iOS, `.title2` on macOS) so both render
   the same size. Test asserts no role renders smaller on macOS than iOS.
-- **#53 built and pushed (`42293da4`)**: three bands — scrolling setup region, transcript,
+- **#53 built and pushed (`21ebb7ad`)**: three bands — scrolling setup region, transcript,
   and a control bar OUTSIDE every scroll view. While capturing, Recent + Two-voices hide
   and the transcript loses its 160 pt cap; the setup band keeps a fixed 200 pt scrollable
   slice because **BackdateField is not phase-gated** and writes through mid-recording.
@@ -2742,7 +2742,7 @@ against a mockup he has already approved. Tree clean, everything pushed, phone +
 - **Owner smoke PASSES this session:** the #48/#49 detail nav title on iPhone (title reads
   "Mon, Dec 8, 2025", tap opens the backdate sheet) — that work is confirmed done.
 - **Pre-existing red, NOT from this session:** `BuildStampTests` has 4 failures on this
-  laptop (`/private/var` vs `/var` symlink shape, supposedly fixed in `0035bc1d`),
+  laptop (`/private/var` vs `/var` symlink shape, supposedly fixed in `039b7666`),
   verified failing on a stashed clean tree. CI is green, so it is laptop-local — but main
   is NOT green here despite the last handoff claiming 1215 passing.
 - Screen-recording permission was granted to iTerm mid-session but needs a full ⌘Q to take
@@ -2846,7 +2846,7 @@ wrong; fixed same-session. Then owner asked what's queued for capture, which sur
 #53's severity has changed — that's next session's target, described below for a fresh
 agent to pick up directly.
 
-- **Detail-screen weekday placement fixed** (`c82bb1ef`, TDD red→green,
+- **Detail-screen weekday placement fixed** (`f63872ce`, TDD red→green,
   `EntryDetailViewNavigationTitleTests.swift` new). Owner's complaint: the weekday
   landed in its own caption line below an "Entry date" row that just repeated the nav
   title's date — redundant, and not "up there" where he was looking. Fix: nav title
@@ -2896,7 +2896,7 @@ Owner low on tokens: everything ran on Sonnet subagents (implementers AND review
 owner directive) in one SDD loop, 3 dispatches for 5 items, worktree `raconte-b5`
 (deleted after merge). Both fix rounds were real catches.
 
-- **PR #61 merged by owner** (`43076bae`, closes #42/#48/#49): the five #42 test pins
+- **PR #61 merged by owner** (`c968dc9d`, closes #42/#48/#49): the five #42 test pins
   (allocationCollision via widened `beforeWrite` seam; DeviceIdentity off real
   UserDefaults; F18 seeded/reproducible; closeDraft-on-trashed pinned via the
   equal-text no-op branch — the only path where its own guard is load-bearing;
@@ -2967,17 +2967,17 @@ work, owner smokes).
 - **Privacy audit ran (Opus, read-only) — verdict: keep the repo public.** Zero
   audio/journal/secret ever committed (all 250 commits content-scanned; the ASC .p8
   never entered). Real finding: `.build/` was COMMITTED (738 MB, 59k files — gitignore
-  said `build/`, not `.build/`). **Fixed on main `ca45e7f7`**: untracked + gitignore
+  said `build/`, not `.build/`). **Fixed on main `7a8d5227`**: untracked + gitignore
   hardened (audio, live.jsonl/entry.json/container pulls, *.p8/*.mobileprovision,
   *.xcresult). History deliberately NOT rewritten (content non-sensitive; rewrite would
-  break every cited SHA). **`a40cde0a`**: ASC Key/Issuer IDs out of testflight-deploy.md
+  break every cited SHA). **`5f1a8c1e`**: ASC Key/Issuer IDs out of testflight-deploy.md
   (recipe now derives Key ID from the .p8 filename, Issuer from untracked
   `~/.appstoreconnect/issuer_id` — owner must create that file once), iPhone hardware
   UDID + legal name out of CLAUDE.md. Owner ruled "little/big Nico" in public stays.
   Owner wants ASC key stored in 1Password; **recommended rotating the ASC key** (old
   coordinates are in public history; a fresh key's never were) — queued for tomorrow.
 - **Build-date stamp built via SDD-style loop** (Sonnet implementer, Opus reviewer, two
-  fix rounds — both real): branch `worktree-agent-a299c9dae63bf803a` at `a663ad10`,
+  fix rounds — both real): branch `worktree-agent-a299c9dae63bf803a` at `14bed2c7`,
   1200 unit tests, **UNMERGED — final scoped re-review was in flight at session end**.
   Round 1 Critical: file mtime is COPY time (`cp -R` resets it; the owner's actual
   Desktop app carried 17:56 for a 16:47 link) — "Built" relabelled to "Binary file
@@ -2990,16 +2990,16 @@ work, owner smokes).
   `/var/folders/…`, `FileManager.enumerator` returns `/private/var/…` — resolve
   symlinks on the fixture root), and **both implementer rounds claimed green suites
   never run on the committed tree** (round-1 1192 and round-2 1200 both false; the
-  failing test dates to `def1eeb8`). Production code verdicted correct; fix round 3
+  failing test dates to `9556585c`). Production code verdicted correct; fix round 3
   (symlink resolve + verbatim suite-result evidence) dispatched at session end.
   **Handoff rule: copy builds with `ditto` or `cp -Rp`, never bare `cp -R`** — bare
   copy destroys mtimes; build identity = the debug dylib's LC_UUID (`dwarfdump --uuid`),
   never a timestamp.
 
 **Next steps:**
-1. ~~Land the build-date branch~~ **DONE post-handoff**: fix round 3 (`0035bc1d`,
+1. ~~Land the build-date branch~~ **DONE post-handoff**: fix round 3 (`039b7666`,
    symlink-resolved fixtures) verified INDEPENDENTLY — parent re-ran the full suite on
-   the committed tree, 1201 green — then merged `de9c5503`, worktree + branch deleted.
+   the committed tree, 1201 green — then merged `986069e6`, worktree + branch deleted.
    Fresh macOS build for the owner at `~/Desktop/Raconte-latest.app` (ditto-copied,
    dylib UUID verified against the build products; the stale Raconte-markvoices.app
    was removed). Debug screen now shows "Binary file date … PT · <UUID prefix>".
@@ -3018,7 +3018,7 @@ work, owner smokes).
 ## Session 2026-08-12 evening (laptop — #56 FINISHED AND MERGED; PR #57; 1124 → 1179 unit + 14 UI tests)
 
 Resumed the SDD loop at Task 5 and ran it to the end: Tasks 5-8, adversarial gate, two
-fix waves, **PR #57 merged by Nico** (`6a3c6dfa`), #56 closed. Worktree + branch deleted.
+fix waves, **PR #57 merged by Nico** (`b686dc5a`), #56 closed. Worktree + branch deleted.
 Owner smoke-tested mid-session on a macOS build; feedback filed as #58-#60.
 
 - **Task 5** (VoiceMarkingModel + store seam): review found 3 Importants, one fix round —
@@ -3044,7 +3044,7 @@ Owner smoke-tested mid-session on a macOS build; feedback filed as #58-#60.
   drag-path UI test, but it provably can't discriminate that one line in the simulator
   (two constructions tried, documented); **parked — the flip-merge-then-drag owner smoke
   step is the pin**. Late owner ruling folded in: capture voice switch now speaks the
-  journal's labels via VoiceDisplay (`0ddf6b74`).
+  journal's labels via VoiceDisplay (`ad19f45b`).
 - **Owner smoke (macOS build, partway):** tap-to-flip PASS (wants undo → **#59**);
   drag-to-mark PASS mostly (implied ¶ breaks invisible/uneditable; owner wants a
   text/markdown-style structure editor → **#60**, explicitly NOT ruled out, deferred by
@@ -3088,14 +3088,14 @@ Owner ran the smoke test live and the session pivoted into the thing it surfaced
   hands, no labels), labels opt-in per journal; **explicit "Mark voices" mode** (tap
   paragraph flips, drag words marks a range, WYSIWYG, Done exits) replacing Correct
   markers; owner tests on macOS laptop when built.
-- **Plan committed** (`docs/plans/2026-08-12-mark-voices-plan.md`, `24bfc8df`): 8 tasks +
+- **Plan committed** (`docs/plans/2026-08-12-mark-voices-plan.md`, `b5a19634`): 8 tasks +
   gate. Everything reduces to two append-only records (frame-0 opening-voice add +
   voice-carrying boundary add) planned by pure `VoiceMarkingPlan`; later-seq-wins makes
   re-marking pure appends, no retract/correct.
 - **SDD loop ran Tasks 1-4 to complete** (Sonnet implementers, Opus for Task 4 + all task
   reviews; every task exactly one fix round — the T7 pattern holds). Branch
-  `feat/mark-voices` (worktree `/Users/nico/src/raconte-mv`, base `24bfc8df`) at
-  `40e9a650`, PUSHED, 1171 unit tests green. Review kills, all probe/fixture-confirmed:
+  `feat/mark-voices` (worktree `/Users/nico/src/raconte-mv`, base `b5a19634`) at
+  `3cd80e0a`, PUSHED, 1171 unit tests green. Review kills, all probe/fixture-confirmed:
   Task 1 — old `.correctionVoice` silently overrode newer voice adds at same frame (now
   seq-based precedence, 3 directions pinned); Task 3 — `hasAnyVoiceMarker` hardcoded
   `true` survived all 1155 tests (now pinned both ways, two distinct mutations); Task 4
@@ -3127,7 +3127,7 @@ Owner ran the smoke test live and the session pivoted into the thing it surfaced
 
 Ran the SDD loop from Task 7 to the end unattended (Sonnet implementers, Opus reviews,
 Opus Gate B), opened PR #52, **Nico merged**. Worktree + t7 branch deleted; fresh main
-(`ea0ea4dc`) built and wirelessly installed on the phone — **owner smoke test pending**
+(`ab6d7a06`) built and wirelessly installed on the phone — **owner smoke test pending**
 (steps in PR #52's body). Every task needed exactly one fix round.
 
 - **Task 7 (audit log §7)**: prior session's skeleton kept, its stubbed torn-tail fuse
@@ -3138,7 +3138,7 @@ Opus Gate B), opened PR #52, **Nico merged**. Worktree + t7 branch deleted; fres
   inert. Also: panel ignored `editability`; revert-while-draft-open was silently reversed
   by the later draft close (now a store-level `.draftInProgress` refusal).
 - **Task 9 (§16 docs)**: all six rulings recorded + verified citation-by-citation. Review
-  Critical: commit body said `close #37` as prose — the exact `47d3f37a` accident again;
+  Critical: commit body said `close #37` as prose — the exact `a978dffb` accident again;
   amended + force-pushed. **Watch commit BODIES, not just subjects.**
 - **Task 9b (splice-inherit, owner ruling §16.5)**: zero-overlap replacement inherits the
   replaced word's frames; #37 closed. Review fix: unusable-bounds fallback now `.none`,
@@ -3162,7 +3162,7 @@ Opus Gate B), opened PR #52, **Nico merged**. Worktree + t7 branch deleted; fres
 bundle ID `org.pianohouseproject.raconte` registered (`KJ4D33V27R` — dev builds were on the
 team wildcard, which can never ship); profile `raconte appstore` (`78D2Z6JR83`) minted
 against team cert `89FGBW89NS`, installed both dirs; `scripts/ExportOptions.plist` +
-`docs/testflight-deploy.md` committed (`8ea16c4a`); ASC app record created by owner as
+`docs/testflight-deploy.md` committed (`3bcc723f`); ASC app record created by owner as
 **"Raconte Journal"**; Release archive SUCCEEDED (no optimizer crash). **Upload failed on
 validation: `UISupportedInterfaceOrientations` missing** — the app declares no orientations.
 Fix: add the key (iPhone: portrait; iPad needs all four for multitasking, or opt out) via
@@ -3174,7 +3174,7 @@ command in docs/testflight-deploy.md. Everything else is proven working.
    too many steps at once — each step with exact taps and a stated pass/fail criterion.
    Content: edit round-trip, late-keystroke-at-Done survival, revert from history,
    "Ellen"→"LN" wholesale correction, approximate-boundary asterisk (outside selection).
-   Build already on the phone (`ea0ea4dc`).
+   Build already on the phone (`ab6d7a06`).
 2. **Finish TestFlight upload** — one Info.plist fix, see block above.
 3. **Repo-privacy audit (owner ask, subagent):** verify this repo being PUBLIC is
    appropriate — audit history + tree for anything private (owner's journal content in
@@ -3189,7 +3189,7 @@ command in docs/testflight-deploy.md. Everything else is proven working.
 
 Resumed the T7 SDD loop at Task 4 (Fable controller, Opus implementer for Task 4 per owner
 ruling, Sonnet for 5-6, Opus reviews throughout). **Branch `t7/editor-ui` pushed at
-`80337d99` — 25 commits this session, 1073 unit + 12 UI tests green.** Ledger in the
+`20f6fdd1` — 25 commits this session, 1073 unit + 12 UI tests green.** Ledger in the
 worktree is the authoritative resume point; it now carries a RESUME POINT block.
 
 - **Task 4 (the editor)** + **Gate A** were the session's spine. The gate BLOCKED correctly:
@@ -3233,19 +3233,19 @@ worktree is the authoritative resume point; it now carries a RESUME POINT block.
    #44 device live.jsonl pull.
 
 Ran the T7 editor plan as a subagent-driven SDD loop. **Branch `t7/editor-ui` (worktree
-`/Users/nico/src/raconte-t7`, base `9cf853fa`), 10 commits, pushed. Tasks 1-3 complete and
+`/Users/nico/src/raconte-t7`, base `7bcc45cd`), 10 commits, pushed. Tasks 1-3 complete and
 reviewed clean; Task 4 (the editor itself) is next and NOT started.** Ledger at
 `.superpowers/sdd/2026-08-09-t7-editor-ui-plan/progress.md` in the worktree is the
 authoritative resume point, not this summary. Baseline 930 on main → **986 green**.
 
-- **Task 1** `254e248b`+`a5754c7a` (#41 prereqs). Review found two Importants, both
+- **Task 1** `725238ec`+`b7991ab6` (#41 prereqs). Review found two Importants, both
   probe-confirmed: closing a recovered draft *before* promotion **permanently** blocked the
   machine transcript from ever entering the chain (`promoteIfNeeded` skips on any canonical
   file, and the `.userEdit` the close minted was that file); and the close put an actor hop
   in front of the first transcript paint — the exact regression the T6c comment three lines
   below was warning about (probed: 0.1228 s wait against a 0.1234 s walk at 4k captures).
   One fix: `nonisolated` `hasDraft` fast path, and promote-before-close when a draft exists.
-- **Task 2** `30fdd461`..`9635b93d` (`EntryChainSnapshot`, the editor/history/diagnostics read
+- **Task 2** `9658d745`..`d4f4a3e3` (`EntryChainSnapshot`, the editor/history/diagnostics read
   model). Editability precedence probe-verified against the store's write guards, so "the
   editor let me type and then the save refused" is structurally impossible. Four Importants:
   `isForked` could be hardcoded `false` and all 13 tests passed; `chainByteSize`'s
@@ -3254,7 +3254,7 @@ authoritative resume point, not this summary. Baseline 930 on main → **986 gre
   silently dropped the `dedupedFiles` bucket that Gate A finding N1 exists for**; and a
   corrupt `entry.json` was labelled `.readOnlyTrashed`. Then a fifth: the detached-revision
   ordering was documented but vacuously tested (reversing it passed all 958).
-- **Task 3** `6b69b8fa`..`c6e9e1a6` (#40 read costs, #39 visibility). §15b.15's degraded-chain
+- **Task 3** `42ce3448`..`7035b777` (#40 read costs, #39 visibility). §15b.15's degraded-chain
   refusal fires on every `writeDraft` — reviewer reproduced the bug the issue's wording
   invites and watched the tests catch it. Three fix rounds. **Filed #50** for the residual
   whole-chain-decode-per-write rather than improvising it, per the plan.
@@ -3296,7 +3296,7 @@ Swahili/technical word correction (#37, Task 6). New: **#46** reviewed flag (own
 it explicitly — distinct from editing), **#47** backdate increment (owner ruled *not urgent*:
 "same is good enough"), **#48** weekday on entries (only expressible at `.day` precision —
 `anchorDate`'s day-1 fill would fabricate a confident wrong weekday), **#49** backdate button
-should disappear once set (the sticky half shipped in `e7efb617`; it currently only relabels).
+should disappear once set (the sticky half shipped in `f21ad307`; it currently only relabels).
 
 **Next steps:**
 1. **Resume the SDD loop at Task 4** (the editor). Read the worktree ledger first — it carries
@@ -3314,9 +3314,9 @@ should disappear once set (the sticky half shipped in `e7efb617`; it currently o
 
 Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main.
 
-- **PR #45 merged** (`bf0042d5`), CI green on the merged tree. t6 worktree, both
+- **PR #45 merged** (`57ee4880`), CI green on the merged tree. t6 worktree, both
   `t6/revision-chain` branches, and the SDD ledger dir all deleted.
-- **Flake pair closed (`a140b7f8`, test-only).** The REAL race was the sibling:
+- **Flake pair closed (`61774f8e`, test-only).** The REAL race was the sibling:
   `lastError` is assigned strictly after the `retryCount` disk write in
   `handleReacquireResult`, previously masked by an incidental 150 ms sleep — now waits
   on the actual signal (deterministically reproduced via a probe sleep, reverted).
@@ -3348,7 +3348,7 @@ Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main
   off the icon's #092343); **no dip-switch-style toggles** — traditional switches.
   "Good enough", no further type iteration. Capture-landing is now fully specced:
   IA + type + palette all locked.
-- **Continuation same sitting — T7 PLAN IS BUILD-READY (`2e54ce41` + `ff2243d0`):**
+- **Continuation same sitting — T7 PLAN IS BUILD-READY (`eb5cf7b1` + `1985425d`):**
   all 12 owner questions RULED (every reco accepted: Done-only editor, one flattened
   text view, marker correction as its own mode with corrections AND word-anchored
   boundary-ADDS appended to `markers.jsonl`, refuse-trashed, degraded-chain offers
@@ -3382,40 +3382,40 @@ Subagent-heavy session (Sonnet flake fix, Opus plan + mocks), all landed on main
 
 Resumed the SDD loop at Task 4 per the ledger and ran it to the end: Tasks 4-6 built
 (Sonnet implementers, Opus task reviews, fix rounds via SendMessage-resume), Gate B
-adversarial whole-branch review passed, **PR #45 open at `d4fe63f9` — merge is Nico's.**
+adversarial whole-branch review passed, **PR #45 open at `85e04a09` — merge is Nico's.**
 Branch `t6/revision-chain`, 930 unit tests (771 at branch base). Ledger + worktree kept
 for PR iteration; delete after merge.
 
-- **Task 4 (T6c promotion + loader)** `626c0219`+`cfa04f2b`: one fix round — canonical
+- **Task 4 (T6c promotion + loader)** `f4ad73c0`+`6a21e401`: one fix round — canonical
   branch dropped truncation/unreadable degradations; text-vs-paragraphs source split
   (paragraphs now gated on `.machineLive`, re-attribution deferred to T7); entry-open
   serialized behind the launch corpus walk (now reads transcript first, re-reads on
   `.promoted`).
-- **Task 5 (T6d splice + drafts)** `ee9fafc9`..`3998bd5f`: two fix rounds. Worst finds:
+- **Task 5 (T6d splice + drafts)** `5a3817a5`..`6fa06b6b`: two fix rounds. Worst finds:
   splice didn't round-trip (deleting the space between two `.exact` spans was silently
   reverted — emission rewritten around pendingSeparators; `join(spans)==editedText` now
   asserted in the 200-case F18 property) and draft paths spliced against a degraded
   chain (F5 reintroduced — now refuse on any unreadable revision).
-- **Task 6 (T6e merge minting)** `44d45586`: approved clean. Ruling: adopt is VERBATIM
+- **Task 6 (T6e merge minting)** `24ac378f`: approved clean. Ruling: adopt is VERBATIM
   (anchor preserved) — §6.3's ".exact" prose is descriptive, not an anchor rewrite.
 - **Gate B** (Opus, independent 930-green suite re-run, §10 audited row-by-row, probes):
   one Critical — **promotion doubled whitespace at every run boundary** (AttributedString
   runs partition the text and carry boundary whitespace; join re-inserts). F16/C3 tests
-  were both fixtured runless — the one path where the bug is invisible. Fixed `d4fe63f9`
+  were both fixtured runless — the one path where the bug is invisible. Fixed `85e04a09`
   (trim run text at promotion, re-fixtured RED-first). Verdict: Ready to merge.
   **Gate lesson (now in memory): audit that fixtures exercise the NON-degenerate path** —
   Gate A I2, T6d's vacuous lattice test, and this C1 all shared that shape.
 - **Paperwork:** design **§15b** (rulings 10-15: run-trim, forced-merge of adjacent
   .exact on separator deletion, closeDraft diffs against draft.parentID not current,
   adopt-verbatim, TranscriptDraft's 3 extra fields, degraded-chain refusal) on main
-  `54656196`+`2e40a9ca`. **Issues #40-44** carry every non-blocking finding (#40 scan-path
+  `54656196`+`c829597f`. **Issues #40-44** carry every non-blocking finding (#40 scan-path
   chain-decode cost, #41 T7 prerequisites incl. unwired closeStaleDrafts, #42 test
   hygiene, #43 T9 durability nits, #44 no-whitespace run-split residual — needs device
   live.jsonl data).
 - **Docs for humans (owner ask — PR was unreadable):** `docs/overview.md` — the whole
   system as plain-words mental models with mermaid diagrams (revision chain = "tiny git
   for one entry's transcript"); README rewritten to point at it; three stale
-  "UNVERIFIED" banners on shipped 2026-08-05 build docs retired. `5422ff69`.
+  "UNVERIFIED" banners on shipped 2026-08-05 build docs retired. `319edabf`.
 - /readup resync verified all 9 recently-touched open issues genuinely unshipped; Nico
   deleted merged branch `fix/flake-store-write-precedence`.
 
@@ -3446,7 +3446,7 @@ were §14 markers, not §11's chain. So this session planned and launched the ch
 at `.superpowers/sdd/2026-08-08-revision-chain-implementation-plan/progress.md` is the
 authoritative resume point, NOT this summary.
 
-- **Docs on main (`e14d7f8b`):** `docs/plans/2026-08-08-revision-chain-code-maps.md`
+- **Docs on main (`9d074fb7`):** `docs/plans/2026-08-08-revision-chain-code-maps.md`
   (citation authority — the T6 design doc's file:line cites drifted in ~9 places since
   08-03; also: launch-recovery path writes no TranscriptRef so promotion B1 recurs there,
   `markers.jsonl` contradicts §4.6's writer census, `EntryMetadata` now has six fields)
@@ -3454,10 +3454,10 @@ authoritative resume point, NOT this summary.
   locked decisions incl. honest-nil coverage on launch promotion, Swift `difference(from:)`
   for the T6d splice diff, `TranscriptChainListing` as a deliberate 4th three-answer copy).
 - **Build on branch `t6/revision-chain`** (worktree `/Users/nico/src/raconte-t6`, base
-  `d0c18d2c`), subagent-driven, one fix round in Task 3:
-  Task 1 `eb508165` types/decoders/TranscriptText.join; Task 2 `4102869e`
+  `8bd1ccd1`), subagent-driven, one fix round in Task 3:
+  Task 1 `056c6a8d` types/decoders/TranscriptText.join; Task 2 `be55b7dd`
   `AtomicFile.createExclusively` (RENAME_EXCL, mutation-verified) + three-answer
-  `transcriptDirUnreadable`; Task 3 `61c62aa4` TranscriptChain derivation +
+  `transcriptDirUnreadable`; Task 3 `c3e4da64` TranscriptChain derivation +
   TranscriptRevisionStore (review caught: validatedHead never read head.json — cache
   defeated; `-1` sentinel in persisted arrays → additive `listingUnreadable`).
 - **Gate A (Opus adversarial, suite independently re-run 837 green): BLOCKED — correctly.**
@@ -3481,13 +3481,13 @@ authoritative resume point, NOT this summary.
   (context intact, no re-brief); Gate A's reviewer wrote throwaway probe TESTS to confirm
   findings empirically before reporting — worth demanding in future gate prompts.
 - **Post-handoff continuation (same evening): GATE A CLOSED, FORMAT FROZEN.** Fix wave
-  `94edf7bf` (all 8 findings, each reproduced before fixing — real trap, real EISDIR,
+  `4bb2f7ec` (all 8 findings, each reproduced before fixing — real trap, real EISDIR,
   real resurrection), re-review verdicted all ADDRESSED (reviewer re-ran suite itself),
   freeze APPROVED with one new finding N1 (C1's dedupe dropped duplicate file numbers
-  from `revisionFiles` → permanent cache defeat, probe-confirmed) — fixed `6ca5ab2f`
+  from `revisionFiles` → permanent cache defeat, probe-confirmed) — fixed `2cad0097`
   (dedupedFiles bucket, differential trust-path test), scoped re-review ADDRESSED.
-  **Branch `t6/revision-chain` at `6ca5ab2f`, 849 unit tests green, PUSHED to origin.**
-  Gate rulings written into design **§15** (`b9dd2774` on main): duplicate-id rule,
+  **Branch `t6/revision-chain` at `2cad0097`, 849 unit tests green, PUSHED to origin.**
+  Gate rulings written into design **§15** (`7b249381` on main): duplicate-id rule,
   persistHead silent-no-op ruling + its throw-on-unreadable-sidecar edge, all as-built
   format deltas. Task 4 deliberately NOT dispatched — clean boundary for next session.
 
@@ -3499,7 +3499,7 @@ authoritative resume point, NOT this summary.
    extracted at `.superpowers/sdd/2026-08-08-revision-chain-implementation-plan/task-4-brief.md`,
    code maps `docs/plans/2026-08-08-revision-chain-code-maps.md`, design + §15 amendments
    `docs/plans/2026-08-03-t6-revision-chain-design.md`. Worktree `/Users/nico/src/raconte-t6`
-   (branch `t6/revision-chain`, base `d0c18d2c`, HEAD `6ca5ab2f`, 849 tests).
+   (branch `t6/revision-chain`, base `8bd1ccd1`, HEAD `2cad0097`, 849 tests).
    Sequence: Task 4 (promotion) → 5 (splice+draft) → 6 (merge) → Gate B whole-branch
    review → PR (auto-mode blocks `gh pr merge`; end at an open PR for Nico).
 2. **After Gate B: write the T7 editor-UI plan** (separate doc — carries #37
@@ -3519,16 +3519,16 @@ authoritative resume point, NOT this summary.
 
 The planned "Saturday" marker session happened a day early and turned into a full build
 day: owner smoked, we shipped what the smoke asked for, he smoked again — three
-build-smoke round-trips in one sitting. All on main, phone carries `2f73221b`.
+build-smoke round-trips in one sitting. All on main, phone carries `f0f34c57`.
 
-- **`snapWindowSeconds` tuned 1.5 → 0.75 (`54d4c8c8`) from real device data.** Two
+- **`snapWindowSeconds` tuned 1.5 → 0.75 (`83fc607e`) from real device data.** Two
   sessions, 12 markers: taps trail the true boundary by 0.18–0.37 s and **never lead**.
   Every snap was exact; the 1.5 s guess was ~4× oversized and actively risky (rule 2
   ranks gaps by *size* first, so a distant long pause can steal a tap from the correct
   60 ms gap beside it). Then the evening's real two-voice entries showed the window
   barely matters: **all six voice taps landed inside actual inter-utterance silences** —
   rule 0, exact, snapping never engaged. Reading rhythm puts the tap in the pause.
-- **T6 §14 step 7 (voice-attributed rendering) built and merged (`8f5c4cb0`)** —
+- **T6 §14 step 7 (voice-attributed rendering) built and merged (`07cd172b`)** —
   subagent-driven per `docs/plans/2026-08-08-voice-attributed-rendering-plan.md` (Opus
   plan, Sonnet implementers, Opus task reviews, one fix round, Opus final whole-branch
   review that independently re-ran the suite). `TranscriptAttribution` pure core (one
@@ -3540,7 +3540,7 @@ build-smoke round-trips in one sitting. All on main, phone carries `2f73221b`.
   a test named for the manifest→sampleRate contract never read a manifest (hardcoding
   the fallback passed everything) — now mutation-verified.
 - **Owner smoke, all pass:** improv entry renders BN/LN correctly; then real entries.
-  Feedback shipped same-session (`2f73221b`): labels inline (`BN: text`, semibold
+  Feedback shipped same-session (`f0f34c57`): labels inline (`BN: text`, semibold
   secondary prefix via Text concatenation) instead of a caption line, **BN italic / LN
   regular** (`TranscriptAttribution.isItalic`, display-layer only, ids stay opaque).
 - **Filed #37** (typed-word correction for out-of-vocab words — Swahili; edit-time first,
@@ -3606,8 +3606,8 @@ testing with the owner in the morning. All merged to main; #25 CLOSED.
   never engaged; taps were ~10× more precise).
 - **Marker haptic was silently dead on device: iOS suppresses haptics while the mic
   records.** Fix: `setAllowHapticsAndSystemSoundsDuringRecording(true)` in
-  `IOSAudioSessionController.activate` (`5f21c992`). Then owner found `.impact` too weak
-  → **dash-dot via CoreHaptics** (`fee6e674`): pure `MarkerHaptic` pattern spec (tunable
+  `IOSAudioSessionController.activate` (`bae6a59b`). Then owner found `.impact` too weak
+  → **dash-dot via CoreHaptics** (`068cd723`): pure `MarkerHaptic` pattern spec (tunable
   constants, 0.12 s dash / 0.06 s gap / 0.7-intensity dot) + `MarkerHapticsPlayer`
   engine wrapper. **Dash-dot feel not yet verified on device.** CoreHaptics engine
   handlers fire off-main — hop to @MainActor (parent caught this in review).
@@ -3634,26 +3634,26 @@ testing with the owner in the morning. All merged to main; #25 CLOSED.
 
 ## Session 2026-08-06 evening (laptop — CI red root-caused, #32 found+fixed, phone paired; 706 → 708 tests)
 
-- **Resync caught an accidental issue close.** Docs-only commit `47d3f37a`'s message said
+- **Resync caught an accidental issue close.** Docs-only commit `a978dffb`'s message said
   "carries fixes #25", so the PR #28 merge closed #25 — with zero code shipped (the
   removal walk at `LibraryScreenModel.swift:312` / `TrashSweeper.swift:80` is untouched).
   Reopened. **Never write "fixes #N" in a commit message as prose** — say "build prompts
   for #25". GitHub reads it as a close-command on merge to main.
 - **The "docs-only CI failures" were a mirage — there was never a path bug.** Opus
   subagent over 40 runs: docs commits 5/14 failed vs code 7/26 — statistically the same
-  flake, two populations. (1) The #22 give-up race, dead since `97eb62e8`. (2) UI-test
+  flake, two populations. (1) The #22 give-up race, dead since `92eecb34`. (2) UI-test
   timeouts on contended runners — `testRepeatedRecordStopCyclesProduceSeparateEntries`
   spent 7 s in one wait-for-idle and blew its 30 s finalize budget; it flaked identically
-  on 08-02, pre-markers. Hardened in `1f330f49`: `-retry-tests-on-failure
+  on 08-02, pre-markers. Hardened in `d8099e5f`: `-retry-tests-on-failure
   -test-iterations 2` on the UI step (a twice-failing test still fails the run), the
   Xcode pin fixed (`/Applications/Xcode_26.app` doesn't exist on macos-26 and the
   `|| ls` fallback swallowed the error — the pin was decorative; now 26.6, loud), and
   xcresult upload on failure. Both runs since: green.
   Related tooling trap: `gh run view --log-failed` returns empty (exit 0) when a step
   name contains parentheses — use `gh api repos/…/actions/jobs/<id>/logs`.
-- **Owner smoke tests 1–4 all pass** on `a4779994` (detail-trash, Delete Now, restore
+- **Owner smoke tests 1–4 all pass** on `57506a88` (detail-trash, Delete Now, restore
   round-trip, swipe actions).
-- **#32 found by owner mid-smoke, root-caused, fixed same evening (`c61c0d97`).** Two
+- **#32 found by owner mid-smoke, root-caused, fixed same evening (`391c02bc`).** Two
   symptoms, one defect: capture-screen Recents pushed a blank detail page (with any
   journal chip selected), and move-to-journal blanked the live detail screen in place.
   `LibraryScreenModel.item(_:)` searched only journal-scoped `items` (`?? trashed`) while
@@ -3666,7 +3666,7 @@ testing with the owner in the morning. All merged to main; #25 CLOSED.
   the ContentView gate destroyed the view before its own defence could run.
 - **Phone is now paired to the laptop** (one-time USB-C cable + Trust) — all future
   installs from this machine are wireless (`devicectl device install app`). Fresh main
-  (`c61c0d97`: markers + #32 fix) installed. Remote `process launch` fails on a locked
+  (`391c02bc`: markers + #32 fix) installed. Remote `process launch` fails on a locked
   device — owner taps the icon instead.
 - **Parked for a design session (owner asked, explicitly "later"):** capture landing
   page redesign — Recents styling, the two journal switchers (library vs capture) and
@@ -3694,7 +3694,7 @@ Apple Development cert in Xcode → Settings → Accounts (two now exist, both v
 CI's own workaround also works locally and is what the subagent prompts used:
 `CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO`. iOS 26.5 simulator runtime installed.
 
-- **#22 root-caused and CLOSED (`97eb62e8`, PR #30) — it was three tests, not one.**
+- **#22 root-caused and CLOSED (`92eecb34`, PR #30) — it was three tests, not one.**
   All the same defect as issue #4: `send()` publishes the phase before the commit effects
   reach disk, so a test gating on `phase == .captured` and then reading the artifact races
   it. #4's fix taught the *sibling* tests to poll the on-disk manifest; these kept the old
@@ -3705,7 +3705,7 @@ CI's own workaround also works locally and is what the subagent prompts used:
   was forced with 6–8 `yes > /dev/null` spinners — 3/15 and 1/15 failures unfixed, 15/15 and
   20/20 green after. The two siblings that `await coordinator.done()` directly are *not*
   racy; only the polled give-up paths are.
-- **T6 §14 capture-time structure markers built and merged (`6562c6f0`, PR #31)** — steps
+- **T6 §14 capture-time structure markers built and merged (`8d3d89c3`, PR #31)** — steps
   1–6 of `docs/plans/2026-08-05-structure-markers-implementation-plan.md`, one subagent per
   step on its own branch in its own worktree, parent diff review + mutation check before
   every commit. 640 → 706 unit tests, 9 UI tests. Step 7 stays deferred to T7.
@@ -3734,7 +3734,7 @@ subagents building on a stack must be told explicitly to `git checkout -b <name>
 
 **Next steps:**
 1. **Owner smoke test (next session).** Two things at once: the outstanding
-   `a477999` items (detail-trash, Delete Now, restore round-trip, swipe actions) and the
+   `57506a8` items (detail-trash, Delete Now, restore round-trip, swipe actions) and the
    new marker controls — record a real two-voice page.
 2. **Tune `MarkerSnapping.snapWindowSeconds`** (currently 1.5) from that recording. It is a
    guess no test can validate, and deliberately a single constant.
@@ -3757,10 +3757,10 @@ license-accepted on the laptop — **still unverified by an actual test run**.
   the tree was clean.
 - **The three Explore code maps were recovered** from the dead session's transcript and
   stowed as `docs/plans/2026-08-05-structure-markers-code-maps.md` on branch
-  **`plan/structure-markers`** (`77c55878`). A **cloud session is writing the T6 §14
+  **`plan/structure-markers`** (`457b1270`). A **cloud session is writing the T6 §14
   implementation plan on that branch** (per §9's seven steps, against the maps; it cannot
   build, so the plan is unverified-pending-local-run). Review its output before merging.
-- **CI is red on `main`** at `1f2a44b5` — a docs-only commit, and `f516761` (also
+- **CI is red on `main`** at `fd56fd33` — a docs-only commit, and `5b42ec3` (also
   docs-only) failed on 08-03 while code commits between them passed. Likely flake or a
   docs-path trigger bug; uninvestigated. `gh run view 31022907852 --log-failed`.
 
@@ -3768,7 +3768,7 @@ license-accepted on the laptop — **still unverified by an actual test run**.
 1. Pull `plan/structure-markers`, review the cloud-written implementation plan, then run
    it locally (this machine can now build — verify with a macOS test run first).
 2. Root-cause the red CI on main (docs-only commits failing).
-3. Owner smoke test still outstanding on phone build `a477999` (detail-trash, Delete Now,
+3. Owner smoke test still outstanding on phone build `57506a8` (detail-trash, Delete Now,
    restore round-trip, swipe actions).
 4. `/resync` on the laptop now that Xcode works (never run here).
 5. T7 editor UI (whole-revision accept v1) + audit log; T8 retranscribe.
@@ -3781,11 +3781,11 @@ First session on the **laptop**. It cannot build: only CommandLineTools is insta
 
 - **Machine-local trap, fixed:** `sync-claude-md.sh --check` reported drift and `--apply`
   would have *deleted* the UTC-at-rest/Pacific-on-display convention added on the mini the
-  day before (`a7fae6e4`). Cause: the script reads `~/.claude/claude-md-shared.md`, which is
+  day before (`9ba4e5ce`). Cause: the script reads `~/.claude/claude-md-shared.md`, which is
   **not** git-synced and was two weeks stale here; `~/src/prompt-lab` was current. Refreshed
   the canonical copy from the repo. **On any new machine, read the diff before `--apply`** —
   drift can mean your local canonical is old, not that the repo is behind.
-- **T6 §14 designed and committed** (`d031c213`):
+- **T6 §14 designed and committed** (`c1545f7c`):
   `docs/plans/2026-08-05-capture-structure-markers-design.md`. §14 now points at it.
   Voice + paragraph markers only — **end-sentence dropped** (the transcriber punctuates
   acceptably; per-sentence tapping costs the most flow for the least gain). Owner decisions:
@@ -3813,7 +3813,7 @@ First session on the **laptop**. It cannot build: only CommandLineTools is insta
 2. Structure-markers build — task breakdown is §9 of the new design doc, seven steps,
    step 7 (T7 renders the voice attribute) deferred to T7. Write the implementation plan
    against a machine that can run the tests it specifies.
-3. Owner smoke test still outstanding on phone build `a477999` (detail-trash, Delete Now,
+3. Owner smoke test still outstanding on phone build `57506a8` (detail-trash, Delete Now,
    restore round-trip, swipe actions).
 4. T7 editor UI (whole-revision accept v1) + audit log; T8 retranscribe.
 5. `/resync` on this machine once Xcode works — it was skipped here because nothing could
@@ -3825,25 +3825,25 @@ First session on the **laptop**. It cannot build: only CommandLineTools is insta
 Every build ran through a Sonnet/Opus subagent with parent diff review before commit;
 TDD prompts now require red-first evidence or a mutation check (see memory).
 
-- **No-future-backdates** (`718052f`): `PartialDate.isFuture` (precision-aware, injectable
+- **No-future-backdates** (`41fa368`): `PartialDate.isFuture` (precision-aware, injectable
   clock), `EntryMetadata.setOriginalDate` the single write path (rejects, never clamps),
   detection discards future dates *without* latching. Mutation-verified.
-- **#21** (`675c409`): `detectionRan` latch decodes from the `detectedDate` key's presence,
+- **#21** (`97e81f5`): `detectionRan` latch decodes from the `detectedDate` key's presence,
   independent of value parse; explicit key written only in the ran-but-valueless state.
-- **#19** (`223b6d8`): `endedAt` = system's resumeAvailable receipt only (honestly nil
+- **#19** (`80cd4ae`): `endedAt` = system's resumeAvailable receipt only (honestly nil
   otherwise); new `closedAt` = when we stopped waiting, and is the open/closed marker.
   Legacy records migrate on read.
-- **#20** (`916d47a`): resume's disk half moved into `rebuildAndReacquire` before
+- **#20** (`af8348c`): resume's disk half moved into `rebuildAndReacquire` before
   `.engineReady` — the only spot `.reacquireFailed` is still legal; store rolls back its
   in-memory manifest on a failed segment open. Failure surfaces via rows 10/11 + lastError.
 - **Owner trash bug, root-caused via device forensics** (wireless container pull —
   `devicectl device copy from --domain-type appDataContainer`): detail-view Move to Trash
   was fire-and-forget *during view dismissal* (pop first, write later, `_ = try?`), so the
   tombstone never reached disk and Delete Now correctly-but-silently refused. Swipe path
-  always worked (same model call, no teardown). Fix (`9c90ae8`, `a477999`):
+  always worked (same model call, no teardown). Fix (`3e2ede7`, `57506a8`):
   `trashEntry`/`restoreEntry`/`moveEntry`/`setBackdate` return Bool, every call site
   alerts, detail trash awaits-then-dismisses. deleteEntryPermanently no longer lies.
-- **T6 revision-chain design rev 2 committed** (`5fc0ad0`) after two Opus adversarial
+- **T6 revision-chain design rev 2 committed** (`2089d88`) after two Opus adversarial
   passes killed rev 1's core (stored `detached` + highest-n current = data loss on second
   machine pass and on sync). Rev 2: `(createdAt, ULID)` order, ancestry-derived
   attachment, create-once writes, read-path-never-writes. **All 8 owner questions
@@ -3856,7 +3856,7 @@ TDD prompts now require red-first evidence or a mutation check (see memory).
   #26 (capture pause — owner ask, maps onto interruption machinery).
 
 **Next steps:**
-1. Owner smoke test on phone build 14:29 PT (`a477999`): detail-trash, Delete Now on the
+1. Owner smoke test on phone build 14:29 PT (`57506a8`): detail-trash, Delete Now on the
    fishing entry, restore round-trip, swipe actions. If detail-trash alerts, pull the
    container again.
 2. Voice-markers design pass (§14 of T6 doc) — before T7.

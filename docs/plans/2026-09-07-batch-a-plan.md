@@ -30,7 +30,7 @@ starting its task); owner rulings from the 2026-09-07 afternoon session, restate
 
 ## Global Constraints
 
-- **Branch per PR, from `main` at or after `2192f5db`.** Two branches:
+- **Branch per PR, from `main` at or after `a78ac73e`.** Two branches:
   `feat/154-156-verify-archive-parked-count` (Tasks 1, 2) and
   `feat/155-148-capture-tick-journal-link` (Tasks 3, 4). Each PR body uses `Closes #N` for
   the two issues it fully resolves. PR bodies via `--body-file`, never a heredoc. **Merges

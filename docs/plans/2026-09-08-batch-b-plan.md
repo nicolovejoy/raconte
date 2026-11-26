@@ -48,7 +48,7 @@ before starting its task. Owner rulings from the 2026-09-07/08 sessions, restate
 
 ## Global Constraints
 
-- **Branch per PR, from `main` at or after `8110828f`.** Two branches:
+- **Branch per PR, from `main` at or after `720e6160`.** Two branches:
   `feat/162-161-163-readability` (Tasks 1, 2, 3) and
   `feat/106-164-cover-lightbox-live-voice` (Tasks 4, 5). Each PR body uses `Closes #N` for the
   issues it fully resolves. PR bodies via `--body-file`, never a heredoc. **Merges are the
@@ -77,7 +77,7 @@ xcodebuild -project Raconte.xcodeproj -scheme Raconte -destination 'platform=mac
   120 s default is silently backgrounded and its completion never arrives. Never
   background a test run.
   `xcodebuild -project Raconte.xcodeproj -scheme RaconteUI -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:RaconteUITests/<Class> test`
-- **Baseline from main's latest code-carrying CI run** (the build-17 bump `3a175a14`,
+- **Baseline from main's latest code-carrying CI run** (the build-17 bump `af4bb1c8`,
   2026-09-07): unit **2189** (1 skipped), UI **64**. Each task states its expected delta.
   Two PRs branched from the same base can both be green and still merge red; the owner's
   "Update branch" between merges is the guard.

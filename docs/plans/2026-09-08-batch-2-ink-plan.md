@@ -26,8 +26,8 @@ Issue: `gh issue view 149`.
 
 ## Global Constraints
 
-- Branch `feat/149-ink-roles` from `main` at or after `fef9a83a` (build 19 bump, after the #169
-  merge `52e95f6e`). Work in a worktree; the main checkout stays on `main` (`git checkout` of a
+- Branch `feat/149-ink-roles` from `main` at or after `f1b14598` (build 19 bump, after the #169
+  merge `290f696b`). Work in a worktree; the main checkout stays on `main` (`git checkout` of a
   worktree'd branch fails silently in a chain).
 - **The owner's Mac app must be quit before any `xcodebuild test` or any launch of a built
   app.** `RaconteTests` uses the real app as its test host under the same bundle id, so a local
@@ -374,7 +374,7 @@ enum InkSurface {
 - Modify: `Raconte/Library/UI/VoiceMarkingView.swift` (44, 150, 164)
 - Test: `RaconteTests/InkSurfaceTests.swift` (append one scan test)
 
-Line numbers are from `main` `fef9a83a`; re-grep before editing:
+Line numbers are from `main` `f1b14598`; re-grep before editing:
 `grep -n 'foregroundStyle(\.secondary)\|foregroundStyle(\.tertiary)\|\.tertiary)\|white\.opacity' <file>`.
 
 **Interfaces:**

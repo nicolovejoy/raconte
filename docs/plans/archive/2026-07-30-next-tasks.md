@@ -4,13 +4,13 @@
 
 Planned 2026-07-30 by subagents reading the real sources. Both are ready to execute cold:
 everything needed is here, no session memory required. Line numbers verified against HEAD
-at the time of writing (`8103e5f` + the cue/timestamp commit) — re-grep names if they drift.
+at the time of writing (`5fc82e0` + the cue/timestamp commit) — re-grep names if they drift.
 
 ---
 
 ## Stale line numbers in the M2 design doc
 
-`docs/plans/2026-07-30-m2-transcription-design.md` was written before `8103e5f` (startCue).
+`docs/plans/2026-07-30-m2-transcription-design.md` was written before `5fc82e0` (startCue).
 Verified mapping for the citations that matter:
 
 | design doc | actual HEAD | what |

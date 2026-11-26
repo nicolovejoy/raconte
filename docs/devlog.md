@@ -827,7 +827,7 @@ turns, 1980 unit green + 6-class UI sweep); PR #111 merged. Build 11 (with pagin
 uploaded for the swipe/shortcut smoke, which can't run in a simulator.
 
 Decisions: #107 ruled the purist way — speech remains the ONLY text source; image-first
-entries get text by recording about the image (comment on #107). the tester joins as an
+entries get text by recording about the image (comment on #107). The tester joins as an
 INTERNAL TestFlight tester (Signal note drafted; needs her Apple Account email — the
 ASC invite must go to the address her devices' App Store uses). #91/#85 re-verified and
 kept, both demoted to hardening now the loop is gone.
@@ -949,7 +949,7 @@ systematic debugging, blocked on a piece of evidence the app cannot currently re
   "soonish", after #89. Issue records the open design questions (gesture vs. controls,
   sort-order stability, first/last behavior, All-Entries semantics, and the
   commit-before-page-turn hazard shared with the sidebar-pop rule).
-- **the tester (therapist beta) — owner made the call on the dev-visibility thread**: he will
+- **The beta tester — owner made the call on the dev-visibility thread**: he will
   tell her up front that he may see or hear her entries until he can lock it down and
   confirm otherwise, and let her opt in knowing that. Honest disclosure instead of a
   technical control that does not exist yet. This removes dev-visibility as an invite

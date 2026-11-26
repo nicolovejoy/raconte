@@ -1,56 +1,38 @@
 # CLAUDE.md
 
-Session-by-session history lives in [docs/devlog.md](docs/devlog.md). This file carries only the latest session, project intent, and conventions.
+Session history up to 2026-09-10 is in [docs/devlog.md](docs/devlog.md); later sessions are in
+the history DB (`~/.claude/prompt-history.db`). This file carries the current state, project
+intent and conventions. The system itself is described in [docs/overview.md](docs/overview.md).
 
-## Session 2026-10-05 (laptop — #184 smoked + merged; resync closed 4 issues; the 2026-09-25/26 session is folded in here, it never ran /handoff)
+## State (2026-11-26)
 
-- **2026-09-25/26 (no handoff written):** owner smoke of build 22 (PR #178) found the #175 seed
-  right but the surrounding defaults wrong → #183 filed with five owner rules; SDD in
-  `raconte-wt-183` → PR #184 (capture follows the last-viewed journal; backdate toggle starts
-  on from the journal's history; explicit off is per-journal and spent at commit). Build 23
-  smoke found one more rule — never auto-enable the toggle just to say today — and left the
-  fix uncommitted in the worktree. Also from that session: #178 and #180 merged, #177/#179/
-  #181/#182 filed, the "delete every other macOS Raconte.app" rule above.
-- **Today:** committed that fix (`94b91875`, `BackdateSeed.automatic` returns nil when the seed
-  is today at `.day`; +1 test), build 24 (`771debea`) → `/Applications/Raconte.app`, owner
-  smoke pass on the relaunch path. Note the carry trap: recording a backdated entry and then
-  opening Capture shows #47's advanced carry, not history — a smoke of the automatic path
-  needs a relaunch first. CI at `771debea`: unit **2264** (1 skipped), UI **67**. #184 merged
-  (`369f0b71`).
-- **Deep /resync:** closed #175, #134, #149, #162 as shipped (evidence on each); deleted
-  `origin/feat/149-ink-roles`; worktree and branch for #183 removed. Proposed and agreed
-  phases: (0) this cleanup, (1) prove sync — M4 acceptance gate, (2) transcript integrity —
-  T8 + #44 + #51 + #2, (3) capture-flow batch, (4) design sweep #170/#173/#55/#86, (5) #133,
-  FTS5, crop, #137. Probable duplicates still open: #109/#121 (crop), #27/#83 (swipe-to-trash).
-- **#185 filed** from the build 24 smoke: Mac, the backdate day picker is invisible while
-  recording until a click on blank space; fine once recording stops. Mechanism unconfirmed.
-- Shared-conventions blocks in `CLAUDE.md` and `AGENTS.md` re-synced (v=28022362f01b).
+- `main` is at build 32. `/Applications/Raconte.app` is build 32; TestFlight is build 30.
+  Builds 31 and 32 were Mac-only (#68 picker sheets, the Mac crop screen's own controls,
+  PR #209).
+- Search (#194) is merged in full (#199, #200, #205) and passed its Mac smoke on build 30.
+  The issue stays open until the iPhone look.
+- Crop: #201, #203 and #206 are closed. A new photo starts on a rectangle 10% inside its
+  edges.
+- The repo is public. No license is granted (README, "Rights").
 
-**Next steps** (order agreed 2026-10-08; state as of 2026-10-11):
-1. **Gate 0 — owner smoke.** #197 (#196, EXIF backdate suggestion removed) and #198 (#121 crop +
-   rotate) are merged (`327bc93a`); build 27 is not cut. Its smoke also answers #195's scope and
-   the queued #181 / #83 smokes. #134 has no iPhone smoke on record yet.
-2. **A — search (#194).** Three stacked PRs, to merge in order. A1 index core is merged (#199,
-   `cab33c54`); its Mac smoke is in the PR body and waits for a build of `main`. A2 Search place
-   is draft PR #200 (`feat/194-search-place`, worktree `raconte-wt-194`): Task 8 is in with one
-   review finding open (the model needs an "answered" state, so "No matches" cannot show before
-   the first answer), and Task 9, the real `SearchView`, is not started. A3 in-entry highlight
-   has no branch yet. Design and plan: `docs/plans/2026-10-08-search-design.md`,
-   `-search-plan.md`. The owner has not reviewed the written spec or plan, and has not ruled on
-   GRDB against raw `SQLite3` (#199 "Read first", item 2); the PRs are the review.
-3. **B — #195** (camera stays open for several photos), scoped by the build 27 smoke.
-4. **C — capture-flow batch:** only #107 is left, and it needs a design ruling first (record
+**Next steps:**
+1. **iPhone smoke of build 30** (owner): search, and the library-pick inset. Then close #194.
+2. **#210**: on the Mac, Capture Image opens the file chooser directly, not a one-row sheet.
+3. **#195**: the camera stays open for several photos.
+4. **#107**: add text to an entry that began as a photo. Needs a design ruling first (record
    into the entry, or a new capture whose images move).
-5. **D — transcript integrity:** T8 final pass before editing, with #44, #51, #2.
-6. **E — design sweep:** #170 type hierarchy (+#173), then #55, #86.
-7. **Owner-only, any time:** #187 M4 acceptance gate (`docs/plans/2026-08-17-m4-sync-implementation-plan.md`
-   Gate B; never run) and #189 part 1 (one capture with live transcription on an OS 27 device).
+5. **Transcript integrity:** T8 final pass before editing, with #44, #51, #2.
+6. **Design sweep:** #170 type hierarchy (+#173), then #55, #86.
+7. **#208**: Edit transcript and Mark voices need work (owner, build 30 smoke; undiagnosed).
+8. **Owner-only, any time:** #187 M4 acceptance gate
+   (`docs/plans/2026-08-17-m4-sync-implementation-plan.md` Gate B; never run) and #189 part 1
+   (one capture with live transcription on an OS 27 device).
 
 ## What Raconte is
 
 Native SwiftUI universal app (iOS 26 + macOS 26) for private, single-user spoken-word
-journaling. Full rebuild of the frozen web app at github.com/nicolovejoy/recountly
-(recountly.org). **Audio is ground truth; the transcript is a derived, replaceable
+journaling. It replaces an older web app, now frozen, whose 36 entries migrate in later.
+**Audio is ground truth; the transcript is a derived, replaceable
 interpretation** — that principle drives every design choice.
 
 Plan of record: `docs/native-rebuild-plan.md` (architecture, milestones, migration,

@@ -1009,7 +1009,7 @@ git commit -m "test: library record arrives recording, and discard leaves nothin
 ### Task 8: The About screen explains what Raconte is and how to use it
 
 Owner request 2026-08-29: "be good to have the About page also describe what this is and
-how it works, super short and sweet tutorial. for Lori, and maybe more down the road."
+how it works, super short and sweet tutorial. for the tester, and maybe more down the road."
 
 About is today a pure diagnostics screen (version, CloudKit environment, sync status —
 #89). It is also the only always-visible, Release-built place a *new* person can be told
@@ -1034,7 +1034,7 @@ one navigation helper, never a hard-coded tap:
 
 ```swift
 /// Owner request 2026-08-29: About is the only Release-built screen that can tell a new
-/// person (Lori, and whoever comes after) what this app is. The diagnostics stay; the
+/// person (the tester, and whoever comes after) what this app is. The diagnostics stay; the
 /// explanation goes above them.
 func testAboutExplainsWhatTheAppIsAndHowToUseIt() {
     openPlace(app, "sidebar.about")
@@ -1160,4 +1160,4 @@ What to check:
    journal.
 6. Open About in the sidebar. PASS: it opens with a short "What this is" and a numbered
    "How it works", and the Version / CloudKit / Sync rows are still below them. Read the
-   copy as if you were Lori and say what is wrong with it — it is meant to be rewritten.
+   copy as if you were the tester and say what is wrong with it — it is meant to be rewritten.

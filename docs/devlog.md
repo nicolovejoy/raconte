@@ -389,7 +389,7 @@ button from the capture screen** — the owner hit it by accident and lost a rec
 4. **Device smoke of #135 + #138 on the iPhone** (next TestFlight; bump `CFBundleVersion`
    13 → 14 first): record → BN flips to LN → live band dims/brightens → stop → card, no
    "Record another" → tap card → back to Capture via sidebar → must be Ready.
-5. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; #139;
+5. **Invite the tester** (unchanged). **Parked:** #122/#123; #130; #86; #139;
    `MarkerControlsModel`'s two constant show flags; `transcriptFillsAvailableHeight` ≡
    `showsLiveTranscript`; `TranscriptionSession.displayText` is test-only now; sync
    hardening #91/#85.
@@ -437,7 +437,7 @@ contain the `transcript-timing` category; the earlier `/tmp/raconte-118` build d
    first): record → BN flips to LN → stop → card, no "Record another" → tap card → back to
    Capture via sidebar → must be Ready, NOT the receipt (the card's dismiss is the same
    gesture #62 saw fail on device; "Record another" was the gesture-independent exit).
-4. **Invite Lori** (unchanged). **Parked:** #122/#123; #130; #86; `MarkerControlsModel`'s
+4. **Invite the tester** (unchanged). **Parked:** #122/#123; #130; #86; `MarkerControlsModel`'s
    two now-constant show flags; `transcriptFillsAvailableHeight` ≡ `showsLiveTranscript`;
    sync hardening #91/#85.
 
@@ -508,7 +508,7 @@ false` proves the Build row rendered). (3) UI-suite wall clock on GitHub runners
    real speech (device, not simulator) to measure the provisional window.
 4. **TestFlight build 13**: run `scripts/upload_testflight.sh ios` then `... macos`, one at a time.
    Needs the Xcode GUI session awake. Now also carries #126/#127/#128.
-5. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access →
+5. **Invite the tester**: when her Apple Account email arrives → ASC Users and Access →
    Customer Support role → TestFlight Internal group.
 6. **Parked**: #122/#123; #130 (`selectedJournalCover`, the last of the capture-screen
    cover cluster — check #118 wants no cover there first); #86 back-destination;
@@ -587,7 +587,7 @@ About, three stale doc comments). Both end at an OPEN PR — merges are Nico's.
    `scripts/upload_testflight.sh ios` then `... macos`, one at a time. Needs the Xcode GUI
    session awake (the archive leg cannot cloud-sign with an API key) and CI green on
    `1ea4fe81`. Carries #119 + #124 + the About rewrite.
-6. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+6. **Invite the tester**: when her Apple Account email arrives → ASC Users and Access → Customer
    Support role → TestFlight Internal group.
 7. **Parked**: #122/#123; #125 current-week times; #86 back-destination from an entry;
    NeutralCoverTile non-square overload; `EntryMonthGroup.id` salt; cache the month
@@ -606,7 +606,7 @@ and Home's "New entry" now START recording on arrival (`CaptureScreenModel.begin
 instead of preselecting + routing to capture's idle screen; (2) discard semantics **trash,
 not hard delete** — a mis-tap goes to Trash, restorable 30 days, same rule `delete(_:)`
 refuses to except; (3) About gains a short "what this is / how it works" for a first-time
-TestFlight user (Lori) — copy is written to be rewritten.
+TestFlight user (the tester) — copy is written to be rewritten.
 
 **`Discard` stops through the ORDINARY `done()` path** and lets the capture finalize
 normally — the m4a is verified and promoted exactly as for a kept reading, nothing is left
@@ -653,13 +653,13 @@ Decide after the re-smoke: file the coverage gap, or find a seam that makes it r
    UUID `5E1BAC32` (the failed pass was `FE06F091`; quit the old app first). Re-run step 2,
    then steps 3-7, from the bottom of `docs/plans/2026-08-29-record-flow.md`. Step 6 is the
    known swallowed-tap gap: if it reads as broken rather than merely slow, fix it instead of
-   filing it. Step 7 is the About copy — read it as Lori would; it is meant to be rewritten.
+   filing it. Step 7 is the About copy — read it as the tester would; it is meant to be rewritten.
 2. **Merge PR #124** once CI is green and the smoke passes (Nico). CI was in flight on
    `8edb3db3` at handoff; earlier runs on this branch show `cancelled` because each push
    supersedes the last, not because anything failed.
 3. **#118 — capture screen design pass** (what is capture now that it isn't the front door,
    and now that arriving there means you are already recording?).
-4. **Invite Lori**: when her Apple Account email arrives → ASC Users and Access → Customer
+4. **Invite the tester**: when her Apple Account email arrives → ASC Users and Access → Customer
    Support role → TestFlight Internal group. Next TestFlight build should include #119+#124.
 5. **New issues from this branch:** #122 (phase flips before `enqueueFinalize`, so a finish
    can drain a stale queue and strand the real capture — the branch no longer depends on it),
@@ -713,7 +713,7 @@ image capture).
    detour. The three options and the owner's complaints are in this section above.
 3. **#118 — capture screen design pass** (what is capture now that it isn't the front
    door?). The record-flow decision feeds this.
-4. **Invite Lori** (unchanged): when her Apple Account email arrives → ASC Users and
+4. **Invite the tester** (unchanged): when her Apple Account email arrives → ASC Users and
    Access → Customer Support role → TestFlight Internal group. Build 12 is up; next
    TestFlight build should include #119.
 5. **Parked polish** (post-#119, from reviews): NeutralCoverTile non-square overload +
@@ -761,7 +761,7 @@ Doc fix: `docs/testflight-deploy.md` told you to bump `CFBundleVersion` in
 number 2→1 on 2026-08-24. Now points at `project.yml`.
 
 **Next steps:**
-1. **Invite Lori** (internal tester, all devices): invite email sent 2026-08-29; when her
+1. **Invite the tester** (internal tester, all devices): invite email sent 2026-08-29; when her
    Apple Account email arrives → ASC Users and Access → Customer Support role → TestFlight
    Internal group, automatic distribution on. Build 12 is already up and waiting.
    Fresh-install path: bootstrap mints a default "Journal", so her Home starts with one
@@ -827,7 +827,7 @@ turns, 1980 unit green + 6-class UI sweep); PR #111 merged. Build 11 (with pagin
 uploaded for the swipe/shortcut smoke, which can't run in a simulator.
 
 Decisions: #107 ruled the purist way — speech remains the ONLY text source; image-first
-entries get text by recording about the image (comment on #107). Lori joins as an
+entries get text by recording about the image (comment on #107). The tester joins as an
 INTERNAL TestFlight tester (Signal note drafted; needs her Apple Account email — the
 ASC invite must go to the address her devices' App Store uses). #91/#85 re-verified and
 kept, both demoted to hardening now the loop is gone.
@@ -949,7 +949,7 @@ systematic debugging, blocked on a piece of evidence the app cannot currently re
   "soonish", after #89. Issue records the open design questions (gesture vs. controls,
   sort-order stability, first/last behavior, All-Entries semantics, and the
   commit-before-page-turn hazard shared with the sidebar-pop rule).
-- **Lori (therapist beta) — owner made the call on the dev-visibility thread**: he will
+- **The beta tester — owner made the call on the dev-visibility thread**: he will
   tell her up front that he may see or hear her entries until he can lock it down and
   confirm otherwise, and let her opt in knowing that. Honest disclosure instead of a
   technical control that does not exist yet. This removes dev-visibility as an invite

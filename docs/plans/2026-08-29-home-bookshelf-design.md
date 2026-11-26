@@ -48,7 +48,7 @@ placeholder treatment).
 ### Edge cases
 
 - ≤ 3 journals: all face-out, no spines section.
-- No journals at all (fresh install — Lori): recovery banners if any, then the New
+- No journals at all (fresh install — the tester): recovery banners if any, then the New
   entry invitation with one short line. Capture's existing no-journal/default-journal
   behavior is reused untouched.
 

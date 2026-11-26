@@ -79,7 +79,7 @@ pending saves / pending deletes / last error rows, Refresh button, `Loading…` 
 - Timestamp display: the same local `formatted(date: .abbreviated, time: .standard)`
   the debug screen uses today. Deliberate deviation from the Pacific-display
   convention, recorded: "when did *this device* last push/fetch" is a device-local
-  question (and will be for Lori's devices too); the Pacific rule exists for
+  question (and will be for the tester's devices too); the Pacific rule exists for
   cross-machine build comparison and date bucketing, neither of which applies. Cheap
   to revisit.
 

@@ -32,7 +32,8 @@ notes are in the repo on purpose:
   along the way.
 - [docs/plans/](docs/plans/) holds the design and implementation plan for each
   milestone.
-- [docs/devlog.md](docs/devlog.md) is the session-by-session history.
+- [docs/devlog.md](docs/devlog.md) is the session-by-session history, up to
+  September 2026.
 
 ## Setup
 
